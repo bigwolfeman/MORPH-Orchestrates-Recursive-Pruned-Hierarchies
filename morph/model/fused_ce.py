@@ -333,6 +333,119 @@ def fused_linear_cross_entropy_logit_l2(
                                            mask_token_id, weights, logit_l2_lambda)
 
 
+# ── Per-row log-probability of the label (tul.gram_objective="iw", 2026-09-23) ──
+#
+# The multi-sample bound (morph/model/tul_gram.py::iw_span_bound) needs log p(label) at
+# EVERY position of EVERY rollout, as a tensor with a gradient, because the bound is a
+# log-mean-exp over rollouts of per-span SUMS of these values: its gradient into row i of
+# rollout k is a per-row weight (the rollout's posterior credit for that span) that is
+# only known after every row has been scored. `_FusedLinearCE` cannot serve it: it folds
+# the backward into its forward (it precomputes grad_x / grad_w for a SCALAR loss whose
+# per-row weights are known up front) and returns one number.
+#
+# So this is the other contract: return ``[N]`` fp32 ``log softmax(x W^T)[label]`` (0 on
+# ignored rows) and save only the per-row log-partition ``lse`` ``[N]`` fp32; the backward
+# recomputes each ``[chunk, V']`` logits tile, forms ``g_i * (onehot - softmax)`` from the
+# saved ``lse`` and runs the two grad GEMMs. Peak extra memory is the same as the CE
+# kernel's: ``grad_x [N, d] + grad_w [V', d] fp32 + one [chunk, V'] tile``. Cost: one
+# logits GEMM in the forward and three in the backward (recompute + grad_x + grad_w),
+# against three in `_FusedLinearCE`'s forward.
+#
+# Precision. The forward runs whatever matmul precision the caller's autocast gives it
+# (the `_FusedLinearCE` rule: "match eager autocast matmul precision"), and the backward
+# RE-ENTERS the same autocast state before it recomputes the tile, so the recomputed
+# logits are the forward's logits and ``exp(logit - lse)`` is the forward's softmax. The
+# autograd engine does not carry the autocast state into a custom Function's backward on
+# its own (torch.amp.custom_bwd exists for that, but it is bound to one device type).
+class _FusedLinearLabelLogProb(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, w: Tensor, labels: Tensor, ignore_index: int,
+                chunk_size: int, mask_token_id: int) -> Tensor:
+        N, _d = x.shape
+        dev = x.device.type
+        ctx.ac_enabled = torch.is_autocast_enabled(dev)
+        ctx.ac_dtype = torch.get_autocast_dtype(dev) if ctx.ac_enabled else None
+        w_cast, V, V_pad = _pad_vocab(w.to(x.dtype))
+        neg_inf = torch.finfo(torch.float32).min
+        valid = labels != ignore_index
+        lab_safe = labels.clamp(min=0)
+        out = torch.empty(N, device=x.device, dtype=torch.float32)
+        lse = torch.empty(N, device=x.device, dtype=torch.float32)
+        for s in range(0, N, chunk_size):
+            e = min(s + chunk_size, N)
+            logits = (x[s:e] @ w_cast.t()).float()
+            if V_pad != V:
+                logits[:, V:] = neg_inf
+            if mask_token_id >= 0:
+                logits[:, mask_token_id] = neg_inf
+            lse_c = torch.logsumexp(logits, dim=-1)
+            tgt = logits.gather(-1, lab_safe[s:e].unsqueeze(-1)).squeeze(-1)
+            out[s:e] = torch.where(valid[s:e], tgt - lse_c, torch.zeros_like(lse_c))
+            lse[s:e] = lse_c
+            del logits
+        ctx.save_for_backward(x, w, labels, lse)
+        ctx.ignore_index, ctx.chunk_size = ignore_index, chunk_size
+        ctx.mask_token_id = mask_token_id
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out: Tensor):
+        x, w, labels, lse = ctx.saved_tensors
+        need_x, need_w = ctx.needs_input_grad[0], ctx.needs_input_grad[1]
+        if not (need_x or need_w):
+            return None, None, None, None, None, None
+        dev = x.device.type
+        chunk = ctx.chunk_size
+        N, d = x.shape
+        with torch.autocast(device_type=dev, dtype=ctx.ac_dtype or torch.bfloat16,
+                            enabled=ctx.ac_enabled):
+            w_cast, V, V_pad = _pad_vocab(w.to(x.dtype))
+            neg_inf = torch.finfo(torch.float32).min
+            valid = labels != ctx.ignore_index
+            lab_safe = labels.clamp(min=0)
+            g = torch.where(valid, grad_out.float(), torch.zeros_like(lse))     # [N]
+            grad_x = torch.empty_like(x) if need_x else None
+            grad_w = (torch.zeros((V_pad, d), device=w.device, dtype=torch.float32)
+                      if need_w else None)
+            for s in range(0, N, chunk):
+                e = min(s + chunk, N)
+                x_c = x[s:e]
+                logits = (x_c @ w_cast.t()).float()
+                if V_pad != V:
+                    logits[:, V:] = neg_inf
+                if ctx.mask_token_id >= 0:
+                    logits[:, ctx.mask_token_id] = neg_inf
+                # d log p(y) / d logit = onehot(y) - softmax; times the row's upstream g.
+                probs = torch.exp(logits - lse[s:e].unsqueeze(-1))
+                del logits
+                g_c = g[s:e].unsqueeze(-1)
+                dl = probs.mul_(-g_c)
+                dl.scatter_add_(-1, lab_safe[s:e].unsqueeze(-1), g_c)
+                dl_c = dl.to(x.dtype)
+                del probs, dl
+                if need_x:
+                    grad_x[s:e] = dl_c @ w_cast
+                if need_w:
+                    grad_w += (dl_c.t() @ x_c).float()
+                del dl_c
+        if need_w:
+            grad_w = (grad_w[:V] if V_pad != V else grad_w).to(w.dtype)
+        return grad_x, grad_w, None, None, None, None
+
+
+def fused_linear_label_logprob(
+    x: Tensor, w: Tensor, labels: Tensor, ignore_index: int = -100,
+    chunk_size: int = 1024, mask_token_id: int = -1,
+) -> Tensor:
+    """``[N]`` fp32 ``log softmax(x @ w.T)[label]`` per row, 0 on ``ignore_index`` rows, with
+    an exact gradient to ``x`` and ``w`` for ANY upstream ``[N]`` gradient. Never
+    materialises ``[N, V]`` (see the block comment above). ``mask_token_id`` removes that
+    vocab row from the partition function, exactly as :func:`fused_linear_cross_entropy`
+    does, so ``-out[i]`` equals that kernel's per-row CE."""
+    return _FusedLinearLabelLogProb.apply(x, w, labels, ignore_index, chunk_size,
+                                          mask_token_id)
+
+
 # ── Multi-hot cross-entropy (MCE) for Token-Superposition Training ──────────
 class _FusedLinearMCE(torch.autograd.Function):
     @staticmethod

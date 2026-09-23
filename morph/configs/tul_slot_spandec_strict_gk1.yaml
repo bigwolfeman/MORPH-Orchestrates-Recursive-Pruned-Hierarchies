@@ -1,0 +1,19 @@
+# LXTUL-GK, arm "lxtul-gk1": lxtul-gk4 with K = 1, the WIDTH CONTROL.
+# ONE factor against `lxtul-gk4` (`tul_slot_spandec_strict_gk4.yaml`): tul.gram_iw_k 4 -> 1.
+#
+# At K = 1 the multi-sample bound is the plain weighted CE of ONE prior rollout
+# (logsumexp of one term is the term, log 1 = 0): a noisy slot loop trained consistently,
+# on the same prior it is deployed with, with no reweighting credit. P-3 / P-6 of the
+# prereg read gk4 against this arm. The batch is not expanded and the coda is not
+# checkpointed at K = 1.
+#
+# Prereg: lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md
+defaults:
+  - tul_slot_spandec_strict_gk4
+  - _self_
+
+tul:
+  gram_iw_k: 1
+
+wandb:
+  name: lxtul-gk1

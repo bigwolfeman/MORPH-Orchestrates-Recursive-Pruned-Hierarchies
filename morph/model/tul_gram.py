@@ -59,6 +59,24 @@ Refused (``TULConfig._check_gram`` and ``MORPHTransformer.__init__``): the paid 
 ``core_stage_cond``, ``db_loop``, ``progressive_p``, ``detach_z``, a gathered coda, SCSE, an
 FM planner and ``n_core == 0``. Each bypasses or reshapes ``_tul_core``'s one-state-per-slot
 write, or would make the per-pass KL mean something other than the ELBO term.
+
+The multi-sample objective (``tul.gram_objective: "iw"``, LXTUL-GK, 2026-09-23)
+------------------------------------------------------------------------------
+Prereg ``lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md``. NO posterior and NO
+KL: the step is built without the pool and the posterior heads (``with_posterior=False``;
+the private generator still draws the pool's weights and throws them away, so the prior
+heads are bit-equal to an ``"elbo"`` model's at the same seed). The training forward runs
+the front ONCE, the slot loop and the coda on ``K = tul.gram_iw_k`` PRIOR rollouts per row
+(batch-expanded, rollout-major), and charges
+
+    L = - sum_s log (1/K) sum_k exp( S_k(s) ) / sum_j w_j,   S_k(s) = sum_{j in s} w_j log p_k(tok_j)
+
+(:func:`iw_span_bound`), ``s`` a span (the token positions of one ``bag_id`` in one row,
+the grouping ``lab/divergence/lxtul_g_probe.py::bayes_read`` uses) and ``w_j`` the ruler's
+own CE weight of position ``j``. Summed over a span it equals the per-token Bayesian read
+the probe deploys (``w_k(j) = softmax_k(sum_{i<j} log p_k(tok_i))``), so the model trains
+on the object it is scored on. The gradient into ``S_k(s)`` is ``softmax_k(S(s))``: each
+rollout is paid in proportion to how well it explains the span.
 """
 from __future__ import annotations
 
@@ -72,11 +90,15 @@ from torch import Tensor
 from .tul_layout import SlotLayout
 
 __all__ = ["TULGramStep", "TULGramPool", "gram_kl", "gram_kl_balanced", "gram_has_next",
-           "GRAM_SIGMA_FLOOR", "GRAM_MODES"]
+           "iw_span_bound", "iw_span_groups", "GRAM_SIGMA_FLOOR", "GRAM_MODES",
+           "GRAM_OBJECTIVES"]
 
 _SEED_GRAM = 0x6A4A1
 GRAM_SIGMA_FLOOR = 1e-4
 GRAM_MODES = ("prior", "post", "mean")
+# `tul.gram_objective`: "elbo" = the shipped LXTUL-G (posterior + KL); "iw" = LXTUL-GK, the
+# multi-sample bound over K prior rollouts (no posterior, no KL).
+GRAM_OBJECTIVES = ("elbo", "iw")
 
 
 def _softplus_inv(y: float) -> float:
@@ -237,7 +259,8 @@ def gram_kl_balanced(m_q: Tensor, s_q: Tensor, m_p: Tensor, s_p: Tensor,
 class TULGramStep(nn.Module):
     """The two noise heads and the posterior's pool. See the module docstring."""
 
-    def __init__(self, d_model: int, *, hidden: int, sigma_init: float, use_mean: bool):
+    def __init__(self, d_model: int, *, hidden: int, sigma_init: float, use_mean: bool,
+                 with_posterior: bool = True):
         super().__init__()
         if hidden < 1:
             raise ValueError(f"TULGramStep needs hidden >= 1, got {hidden}")
@@ -246,22 +269,28 @@ class TULGramStep(nn.Module):
                 f"tul.gram_sigma_init must be > {GRAM_SIGMA_FLOOR} (the sigma floor), got "
                 f"{sigma_init}")
         self.use_mean = bool(use_mean)
+        self.with_posterior = bool(with_posterior)
         _rng0 = torch.random.get_rng_state()
         try:
             g = torch.Generator(device="cpu").manual_seed(_SEED_GRAM)
             b_s = _softplus_inv(float(sigma_init) - GRAM_SIGMA_FLOOR)
-            self.pool = TULGramPool(d_model, g)
+            # The pool draws FIRST from the private generator. Without a posterior it is
+            # still constructed (and dropped), so the prior heads below take the same
+            # draws and equal an "elbo" model's prior heads bit for bit.
+            _pool = TULGramPool(d_model, g)
+            self.pool = _pool if self.with_posterior else None
             self.prior_s = _GramHead(d_model, hidden, d_model, g, out_bias=b_s)
             self.prior_m = (_GramHead(d_model, hidden, d_model, g, out_bias=0.0)
                             if self.use_mean else None)
-            self.post_s = _GramHead(d_model, hidden, d_model, g, out_bias=b_s,
-                                    d_extra=d_model)
-            self.post_s.copy_shared_from(self.prior_s)
-            self.post_m = None
-            if self.use_mean:
-                self.post_m = _GramHead(d_model, hidden, d_model, g, out_bias=0.0,
+            self.post_s = self.post_m = None
+            if self.with_posterior:
+                self.post_s = _GramHead(d_model, hidden, d_model, g, out_bias=b_s,
                                         d_extra=d_model)
-                self.post_m.copy_shared_from(self.prior_m)
+                self.post_s.copy_shared_from(self.prior_s)
+                if self.use_mean:
+                    self.post_m = _GramHead(d_model, hidden, d_model, g, out_bias=0.0,
+                                            d_extra=d_model)
+                    self.post_m.copy_shared_from(self.prior_m)
         finally:
             torch.random.set_rng_state(_rng0)
         self._ternary_exclude = True
@@ -278,7 +307,47 @@ class TULGramStep(nn.Module):
         return m, s
 
     def posterior(self, uh: Tensor, e_next: Tensor) -> tuple[Tensor, Tensor]:
+        if not self.with_posterior:
+            raise RuntimeError(
+                "TULGramStep.posterior on a step built without one (tul.gram_objective="
+                "'iw'): the multi-sample objective trains on prior rollouts only.")
         s = self._sigma(self.post_s(uh, e_next))
         m = (self.post_m(uh, e_next).float() if self.post_m is not None
              else torch.zeros_like(s))
         return m, s
+
+
+def iw_span_groups(bag_id: Tensor, n_slots: int) -> Tensor:
+    """``[B, L]`` int64 group index ``row * (n_slots + 1) + bag_id``: one group per (row,
+    span), the dump bin ``bag_id == n_slots`` (tokens past the row's last slot) its own
+    group. On a packed TUL row the token positions of one ``bag_id`` are one contiguous
+    run, so this is the probe's ``bayes_read`` grouping (contiguous runs of one span id)."""
+    B = bag_id.shape[0]
+    off = torch.arange(B, device=bag_id.device).unsqueeze(1) * (n_slots + 1)
+    return bag_id + off
+
+
+def iw_span_bound(lp: Tensor, w: Tensor, group: Tensor, n_groups: int
+                  ) -> tuple[Tensor, Tensor, Tensor]:
+    """The multi-sample bound per span, summed. ``lp`` ``[K, N]`` per-position log p of the
+    label under rollout k (any value where ``w == 0``), ``w`` ``[N]`` the position's CE
+    weight (0 = unscored), ``group`` ``[N]`` its span id in ``[0, n_groups)``.
+
+    Returns ``(bound_sum, S, scored)``: ``bound_sum = sum_g [logsumexp_k S_k(g) - log K]``
+    over the groups with a scored position (a scalar with the graph), ``S`` ``[K, G]`` the
+    per-rollout weighted span log-likelihoods, ``scored`` ``[G]`` bool. ``K = 1`` gives
+    ``sum_j w_j lp_j`` exactly (logsumexp of one element is the element; log 1 = 0).
+
+    The gradient of ``bound_sum`` into ``S_k(g)`` is ``softmax_k(S(g))`` (the credit), so
+    into ``lp_k(j)`` it is ``w_j * softmax_k(S(g_j))``. fp32 throughout."""
+    K = lp.shape[0]
+    wf = w.float()
+    S = lp.float().new_zeros(K, n_groups).index_add_(
+        1, group, lp.float() * wf.unsqueeze(0))
+    scored = torch.zeros(n_groups, dtype=wf.dtype, device=wf.device).index_add_(
+        0, group, (wf != 0).to(wf.dtype)) > 0
+    lme = torch.logsumexp(S, dim=0)
+    if K > 1:
+        lme = lme - math.log(K)
+    bound_sum = torch.where(scored, lme, torch.zeros_like(lme)).sum()
+    return bound_sum, S, scored

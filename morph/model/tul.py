@@ -1860,6 +1860,22 @@ class TULConfig:
     gram_mean: bool = True               # False = the mean-free arm: no m heads, mu == 0
     gram_sigma_init: float = 0.1         # sigma / r at step 0, on every slot
     gram_hidden: int = 256               # SwiGLU hidden width of every noise head
+    # ── LXTUL-GK: the multi-sample objective (2026-09-23) ──────────────────────
+    # `gram_objective: "elbo"` (default) is the LXTUL-G training forward above, unchanged.
+    # `"iw"` trains on the deployed object instead: NO posterior and NO KL (the pool and
+    # the posterior heads are not built), the front runs once, and the slot loop and the
+    # coda run on `gram_iw_k` PRIOR rollouts per row, batch-expanded (the rollouts share
+    # the row's per-slot depth draw and its token-state dropout mask, so they differ in
+    # the Gaussian steps alone). The loss is the multi-sample bound
+    #   - sum over spans s of log (1/K) sum_k exp(sum_{j in s} w_j log p_k(tok_j)) / sum_j w_j
+    # with w_j the ruler's CE weight (`_tul_half_weights`); summed over a span it EQUALS the
+    # per-token Bayesian read `lab/divergence/lxtul_g_probe.py::bayes_read`. K = 1 is the
+    # plain weighted CE of one prior rollout (the width control). Eval is unchanged (one
+    # seeded prior sample); `forward(gram_mode="iw")` scores the bound at eval on K seeded
+    # prior samples (seeds `gram_sample_seed + k`). morph/model/tul_gram.py::iw_span_bound;
+    # prereg lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md.
+    gram_objective: str = "elbo"
+    gram_iw_k: int = 4                   # rollouts per row under "iw"
 
     # ── Spectral decoupling on the coda's token logits (2026-09-23) ──────────────
     #
@@ -3330,7 +3346,8 @@ class TULConfig:
         if not self.gram:
             if (self.gram_beta != 0.1 or self.gram_kl_balance != 0.8
                     or self.gram_free_bits != 0.0 or self.gram_mean is not True
-                    or self.gram_sigma_init != 0.1 or self.gram_hidden != 256):
+                    or self.gram_sigma_init != 0.1 or self.gram_hidden != 256
+                    or self.gram_objective != "elbo" or self.gram_iw_k != 4):
                 raise ValueError(
                     "tul.gram_* set with tul.gram=false: no noise head is built, so the "
                     "knob(s) would be silently ignored.")
@@ -3348,6 +3365,17 @@ class TULConfig:
                 f"{self.gram_sigma_init}")
         if self.gram_hidden < 1:
             raise ValueError(f"tul.gram_hidden must be >= 1, got {self.gram_hidden}")
+        if self.gram_objective not in ("elbo", "iw"):
+            raise ValueError(
+                f"tul.gram_objective must be 'elbo' or 'iw', got {self.gram_objective!r}")
+        if self.gram_iw_k < 1:
+            raise ValueError(f"tul.gram_iw_k must be >= 1, got {self.gram_iw_k}")
+        if self.gram_objective == "elbo" and self.gram_iw_k != 4:
+            raise ValueError(
+                "tul.gram_iw_k set with tul.gram_objective='elbo': the ELBO forward draws "
+                "one posterior rollout, so the knob would be silently ignored.")
+        if self.gram_objective == "iw":
+            self._check_gram_iw()
         _refused = [
             (self.tokens_through_core,
              "tul.tokens_through_core (the paid loop): tokens and slots run the per-sample "
@@ -3394,6 +3422,42 @@ class TULConfig:
 
     def _check_code_target(self) -> None:
         """``tul.code_target`` — the slot loop regressed onto the frozen code (spec §17)."""
+    def _check_gram_iw(self) -> None:
+        """``tul.gram_objective: "iw"`` (LXTUL-GK). Refuses the KL knobs (there is no KL)
+        and every mechanism whose meaning under the K-fold batch expansion was not built:
+        a second coda pass, a reader of the UNexpanded prelude, a batch-level statistic,
+        a label group the bound does not define."""
+        if (self.gram_beta != 0.1 or self.gram_kl_balance != 0.8
+                or self.gram_free_bits != 0.0):
+            raise ValueError(
+                "tul.gram_beta / gram_kl_balance / gram_free_bits set with "
+                "tul.gram_objective='iw': there is no posterior and no KL, so the knob(s) "
+                "would be silently ignored.")
+        _refused = [
+            (self.emit_weight != 0.0,
+             f"emit_weight={self.emit_weight}: the slot's emit position scores span s+1's "
+             f"first token from slot s's cell, a label the per-span bound has no group for "
+             f"(the probe's Bayesian read scores token positions only)"),
+            (self.coda_logit_l2 != 0.0,
+             "tul.coda_logit_l2: the penalty lives in the fused CE kernel, not in the "
+             "per-rollout log-prob kernel the bound reads"),
+            (self.core_token_aux, "tul.core_token_aux: a second coda pass"),
+            (self.grad_pass or self.grad_pass_energy != "own_mux",
+             "tul.grad_pass / grad_pass_energy: the energies replay the coda (critic) or "
+             "read the unexpanded batch"),
+            (self.row_contrast_lambda > 0.0,
+             "tul.row_contrast_lambda > 0: the term reads the unexpanded prelude beside "
+             "the expanded slot states"),
+            (self.sigreg_lambda > 0.0,
+             "tul.sigreg_lambda > 0: a batch-distribution test would see K noisy copies "
+             "of every slot"),
+            (self.coda_span_heads > 0, "tul.coda_span_heads: a second readout of the coda"),
+            (self.gate is not None, "tul.gate: the budget and halting paths were not built"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.gram_objective='iw' with {why}.")
+
     def _check_code_target(self) -> None:
         """``tul.code_target`` — the slot loop regressed onto the frozen code (spec §17)."""
         if not self.code_target:
@@ -4862,8 +4926,8 @@ class TULSlots(nn.Module):
         term = torch.gather(u.reshape(B, S * K, C), 1, flat)             # [B, L, C]
         return torch.where(valid.unsqueeze(-1), term, torch.zeros_like(term))
 
-    def apply_token_dropout(self, x: Tensor, layout: SlotLayout, training: bool
-                            ) -> tuple[Tensor, Tensor | None]:
+    def apply_token_dropout(self, x: Tensor, layout: SlotLayout, training: bool,
+                            n_rep: int = 1) -> tuple[Tensor, Tensor | None]:
         """Replace a fraction ``p`` of TOKEN coda inputs with ``E_mask`` (spec §3.4).
 
         Returns ``(x, keep)`` where ``keep`` is ``[B, L, 1]`` (1.0 kept, 0.0 dropped) or
@@ -4876,11 +4940,21 @@ class TULSlots(nn.Module):
         back and make Bowman's word dropout a no-op after the injection scales train up.
         The stated purpose ("the position must then be decoded from the plan slots and its
         neighbours through attention") requires the token to be genuinely absent.
+
+        ``n_rep > 1`` (``tul.gram_objective="iw"``): the batch is ``n_rep`` rollout-major
+        copies of ``B / n_rep`` rows, and ONE mask is drawn for the base rows and tiled, so
+        the K rollouts of a row differ in their latent alone. The draw then consumes the
+        stream of a ``[B / n_rep, L]`` draw. ``n_rep == 1`` is the line from before.
         """
         p = self.tul.token_state_dropout
         if not training or p <= 0.0:
             return x, None
-        drop = (torch.rand(layout.slot_mask.shape, device=x.device) < p) & (~layout.slot_mask)
+        if n_rep == 1:
+            u = torch.rand(layout.slot_mask.shape, device=x.device)
+        else:
+            _B, _L = layout.slot_mask.shape
+            u = torch.rand((_B // n_rep, _L), device=x.device).repeat(n_rep, 1)
+        drop = (u < p) & (~layout.slot_mask)
         keep = (~drop).to(x.dtype).unsqueeze(-1)                       # [B, L, 1]
         mask_vec = self.E_mask.to(x.dtype)
         if x.dim() == 4:                       # HC carrier [B, L, n, C]

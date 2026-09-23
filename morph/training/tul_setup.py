@@ -90,6 +90,8 @@ KNOWN_TUL_KEYS = frozenset({
     # LXTUL-G (tul.gram, 2026-09-23): the stochastic slot loop, morph/model/tul_gram.py
     "gram", "gram_beta", "gram_kl_balance", "gram_free_bits", "gram_mean",
     "gram_sigma_init", "gram_hidden",
+    # LXTUL-GK (tul.gram_objective, 2026-09-23): the multi-sample bound over K prior rollouts
+    "gram_objective", "gram_iw_k",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
@@ -472,6 +474,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         gram_mean=bool(tc.get("gram_mean", True)),
         gram_sigma_init=float(tc.get("gram_sigma_init", 0.1)),
         gram_hidden=int(tc.get("gram_hidden", 256)),
+        gram_objective=str(tc.get("gram_objective", "elbo")),
+        gram_iw_k=int(tc.get("gram_iw_k", 4)),
         coda_logit_l2=float(tc.get("coda_logit_l2", 0.0)),
         code_grade=bool(tc.get("code_grade", False)),
         code_grade_k=int(tc.get("code_grade_k", 4)),
@@ -693,6 +697,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "gram_mean": model_cfg.gram_mean,
         "gram_sigma_init": model_cfg.gram_sigma_init,
         "gram_hidden": model_cfg.gram_hidden,
+        "gram_objective": model_cfg.gram_objective,
+        "gram_iw_k": model_cfg.gram_iw_k,
         "coda_logit_l2": model_cfg.coda_logit_l2,
         "code_grade": model_cfg.code_grade,
         "code_grade_k": model_cfg.code_grade_k,
@@ -1082,7 +1088,22 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"(.agents/notes/proposed/architecture/"
               f"2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md, Part 2 change 1)",
               flush=True)
-    if model_cfg.gram:
+    if model_cfg.gram and model_cfg.gram_objective == "iw":
+        # LXTUL-GK (tul.gram_objective="iw", 2026-09-23). NOT the LXTUL-G banner below:
+        # there is no posterior and no KL, and train and eval draw from the SAME prior.
+        print(f"  LXTUL-GK ON: the LXTUL-G Gaussian step after every slot-loop pass "
+              f"({'mean + variance heads' if model_cfg.gram_mean else 'MEAN-FREE (m = 0)'}, "
+              f"sigma/r at init {model_cfg.gram_sigma_init}), NO posterior, NO KL. TRAIN "
+              f"runs the front once and the slot loop + coda on K={model_cfg.gram_iw_k} "
+              f"PRIOR rollouts per row (shared depth draw and token dropout; coda "
+              f"checkpointed per block at K > 1); the loss is the multi-sample bound "
+              f"-sum_span log mean_k exp(sum_j w_j log p_k) / sum_j w_j, which summed over "
+              f"a span equals lab/divergence/lxtul_g_probe.py's per-token Bayesian read. "
+              f"EVAL is unchanged: one seeded prior sample. Read `tul/gk_width_gain` "
+              f"(ce_single - ce_iw), `tul/gk_w_entropy`, `tul/gram_sigma_ratio_prior` "
+              f"(prereg lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md)",
+              flush=True)
+    elif model_cfg.gram:
         # LXTUL-G (tul.gram, 2026-09-23). The banner names the two things that make the
         # arm unreadable if forgotten: train and eval draw from DIFFERENT distributions,
         # and the K-curve is read on ONE seeded prior sample.

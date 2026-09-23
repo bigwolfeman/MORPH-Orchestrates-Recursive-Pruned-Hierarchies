@@ -1,0 +1,44 @@
+# LXTUL-GK, arm "lxtul-gk4": the stochastic slot loop trained on K = 4 PRIOR rollouts per
+# row under the multi-sample bound (the deployed per-token Bayesian read's own loss).
+# ONE factor against `lxtul-g` (`tul_slot_spandec_strict_gram.yaml`):
+# `tul.gram_objective: iw` (posterior and KL removed, K prior rollouts, the bound).
+#
+# WHAT IT IS (morph/model/tul_gram.py, "The multi-sample objective"). The same Gaussian
+# step after every slot-loop pass, h_t = u_t + r_t * (m + s * n), drawn from the PRIOR at
+# train as at eval. The posterior pool and heads are NOT built. The front runs ONCE; the
+# slot loop and the coda run on K = 4 rollouts per row, batch-expanded rollout-major; the
+# rollouts of a row share its per-slot depth draw and its token-state dropout mask, so they
+# differ in their Gaussian steps alone. The loss is
+#     - sum over spans s of log (1/K) sum_k exp( sum_{j in s} w_j log p_k(tok_j) ) / sum_j w_j
+# with w_j the ruler's own CE weight. Summed over a span it EQUALS the per-token Bayesian
+# read of lab/divergence/lxtul_g_probe.py (ce_iw@K), so the model trains on the object it
+# is deployed and scored as. Its gradient pays each rollout softmax_k(span log-lik): the
+# credit goes to the rollout that explains the span, with no diversity term.
+#
+# EVERY OTHER TERM, averaged over the K rollouts (they run on the expanded batch): the span
+# decoder reads each rollout's exit state; the fixed-point term (on u_T) and the slot gain
+# hinge read the K loops. train/loss IS the bound (no KL, nothing to subtract for it).
+#
+# KL KNOBS. gram_beta / gram_kl_balance / gram_free_bits are inherited at their defaults
+# and are INERT here; TULConfig refuses any non-default value under `iw`.
+#
+# COST. The coda runs on 4x the rows, one block's activations alive at a time (checkpointed
+# per block and recomputed in backward); the per-rollout log-probs come from a chunked
+# kernel that never builds [4*B*L, V] (morph/model/fused_ce.py::fused_linear_label_logprob).
+#
+# INSTRUMENTS: `tul/gk_ce_iw`, `tul/gk_ce_single`, `tul/gk_width_gain` (single - iw),
+# `tul/gk_w_entropy`, `tul/gram_sigma_ratio_prior`; offline lab/divergence/lxtul_g_probe.py
+# (ce_prior@1, ce_iw@{1,4,16}, the depth corner).
+#
+# Prereg: lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md
+# Parent: lab/experiments/planned/2026-09-23-lxtul-g-panel.md
+defaults:
+  - tul_slot_spandec_strict_gram
+  - _self_
+
+tul:
+  gram_objective: iw
+  gram_iw_k: 4
+
+wandb:
+  name: lxtul-gk4

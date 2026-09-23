@@ -587,6 +587,25 @@ class SlotLayout:
     def max_slots(self) -> int:
         return int(self.slot_index.shape[1])
 
+    def repeat_rows(self, k: int) -> "SlotLayout":
+        """``k`` rollout-major copies of the batch, ``[B, ...] -> [k*B, ...]`` (the
+        ``transformer.repeat_along_batch`` order). ``stats`` is shared, not repeated."""
+        def _r(t):
+            return None if t is None else t.repeat(k, *([1] * (t.dim() - 1)))
+        return SlotLayout(slot_mask=_r(self.slot_mask), bag_id=_r(self.bag_id),
+                          slot_index=_r(self.slot_index), slot_valid=_r(self.slot_valid),
+                          prefix_k=self.prefix_k, stats=self.stats,
+                          span_len=_r(self.span_len), len_supervised=_r(self.len_supervised))
+
+    def head_rows(self, n: int) -> "SlotLayout":
+        """The first ``n`` rows (the base batch of a :meth:`repeat_rows` layout)."""
+        def _h(t):
+            return None if t is None else t[:n]
+        return SlotLayout(slot_mask=_h(self.slot_mask), bag_id=_h(self.bag_id),
+                          slot_index=_h(self.slot_index), slot_valid=_h(self.slot_valid),
+                          prefix_k=self.prefix_k, stats=self.stats,
+                          span_len=_h(self.span_len), len_supervised=_h(self.len_supervised))
+
     @property
     def l_total(self) -> int:
         return int(self.slot_mask.shape[1])

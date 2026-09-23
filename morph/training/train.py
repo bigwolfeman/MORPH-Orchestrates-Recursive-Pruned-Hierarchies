@@ -3802,6 +3802,13 @@ def main(cfg: DictConfig) -> None:
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("gram_") and torch.is_tensor(out[_k]):
                         log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.gram_objective="iw" (LXTUL-GK, 2026-09-23): the bound per token
+                # `gk_ce_iw` (it IS train/loss's CE part; nothing is subtracted for it),
+                # rollout 0's weighted CE `gk_ce_single`, `gk_width_gain` = single - iw,
+                # and `gk_w_entropy`, the per-span credit entropy over log K.
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("gk_") and torch.is_tensor(out[_k]):
+                        log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_grade (spec §17.2): the grades, the cosines to E(best) and
                 # E(true), the degenerate fraction and the per-pass `code_grade_cos_l{t}`.
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
