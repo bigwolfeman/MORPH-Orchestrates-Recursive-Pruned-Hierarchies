@@ -105,3 +105,24 @@ Predictions unchanged. What happened and what changed:
   summation order (1e-11 to 2e-8 relative on the pinned fixtures).
 - **P-7 now carries the recompute.** The coda blocks and the span decode are recomputed in
   the backward at K > 1. P-7 is scored on the tok/s the runner logs at step 200, as frozen.
+
+## Method amendment (2026-09-23 18:59, after the first gk4 run, before its readouts are scored)
+
+Predictions unchanged. **The first gk4 run is confounded by a build defect.** The build
+claimed the K rollouts of a row differ in their Gaussian steps alone. They did not:
+`training.dropout` 0.1 places `nn.Dropout` after every MLP and in every block, and on the
+expanded batch each rollout row drew its own mask in the core and the coda. The bound
+could therefore earn width from dropout, a randomness absent at eval. The run's training
+log shows the signature: prior sigma/r fell to 2.8e-4 (gk1: 3.1e-4) while
+`tul/gk_width_gain` rose from 0.0008 at step 1340 to 0.0065 at 5000. Every GK test ran at
+model dropout 0.0, so no test could see it.
+
+Fixed in 7d44ed7: the core and coda dropout of a K > 1 GK model draws one mask per base
+row and shares it across the rollouts (`morph/model/rollout_dropout.py`, with a test that
+the K rollouts are bit-identical under dropout 0.3 when their noise seeds match).
+
+- **Arm `lxtul-gk4-shared`**: `tul_slot_spandec_strict_gk4.yaml` at 7d44ed7, queued now.
+  P-1..P-7 are scored on this arm.
+- **The first run (`lxtul-gk4`, 43bb234)** is kept and filed as confounded. Its readings
+  are reported beside the rerun's, never as the P-clauses' evidence.
+- **gk1 is unaffected**: at K = 1 there is one rollout per row and nothing to share.
