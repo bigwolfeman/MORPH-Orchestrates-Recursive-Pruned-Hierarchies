@@ -50,7 +50,7 @@ Two readings, both from the ledger's "never built on" list:
    5k. `slot-spandec-strict-20k` (checkpoint kept) pairs with a 20k `norecur`; the
    bcast-all arm pairs with its own d1 twin at 20k.
 
-Prereg: [`lab/experiments/planned/2026-09-22-arc-slot-token-like-read.md`](../../../../lab/experiments/planned/2026-09-22-arc-slot-token-like-read.md).
+Prereg: [`lab/experiments/failures/2026-09-22-arc-slot-token-like-read.md`](../../../../lab/experiments/failures/2026-09-22-arc-slot-token-like-read.md).
 
 ## Alternatives considered
 
@@ -87,3 +87,11 @@ was never the limit.
   first.
 
 Drafted 2026-09-22 20:36; builder branch `bcast-build`.
+
+## Outcome log
+
+- 2026-09-23 02:25: filed as a failure. The per-layer read is used (gates mean abs 0.165)
+  and worth ~0.012 nats; the K-curve is the ruler's (+0.0013 vs +0.0016); bcast alone is
+  0.004 better than bcast-all. Horizon: the looped strict ruler beats its depth-1 twin by a
+  constant 0.0075 from 5k to 20k, no growth. The read and the horizon are both closed as
+  explanations for the flat slot loop.

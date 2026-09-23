@@ -1,6 +1,6 @@
 # Planned: a token-like read of the slot state, and the slot loop's horizon pair
 
-Status: planned
+Status: failure
 
 Date: 2026-09-22 20:37 (frozen before any GPU step of any arm below; the 12-step smokes on the
 builder branch are build checks, not runs). Note:
@@ -87,3 +87,69 @@ committed with this file before any arm starts. Readouts: the runner's sweep at 
 checkpoint, `worth_profile`, `slot_state`, and the pairing scripts under
 `lab/divergence/`; artifacts under `../results/2026-09-22-slot-token-like-read/`
 (json and runlog only).
+
+## Results
+
+Filed 2026-09-23 02:25. Three arms through the recon runner at ed5c5a5, all HEALTHY, no
+NaN. Sweeps on 480 rows; pairing on 501,106 identical tokens in 490 blocks
+(`paired_vs_ruler.py`). Artifacts: `../results/2026-09-22-slot-token-like-read/` (json and
+runlog only). The bcast-all 20k pair (P-6) was not queued.
+
+| reading at 5k | bcast (entry) | bcast-all | strict ruler |
+|---|---|---|---|
+| token K1-K6 | +0.0016 [+0.0014, +0.0019] | +0.0013 [+0.0011, +0.0015] | +0.0016 [+0.0013, +0.0019] |
+| token K3-K6 | +0.0001 | +0.0002 | +0.0002 |
+| paired depth-6 CE minus ruler@6 | -0.0166 [-0.0191, -0.0142] | -0.0123 [-0.0143, -0.0102] | 0 |
+| bcast-all@6 minus bcast@6 | | +0.0044 [+0.0020, +0.0067] | |
+| gates at 5k (coda 0..3) | | -0.40, -0.14, +0.03, +0.08 (mean abs 0.165) | |
+| worth, zero / wrong_seed total | | 0.1925 / 0.0731 | 0.1865 / 0.0426 |
+| wrong_seed worth at offset 0 | | 1.25 | 0.62 |
+| tok/s at step 200 | | 11,087 | ~11.7k |
+
+The horizon pair. `slot-spandec-strict-20k` (the looped ruler, 20k schedule) against
+`slot-spandec-strict-norecur-20k` (the same config trained at slot depth 1, same schedule),
+paired at every checkpoint:
+
+| step | looped@6 minus twin@1 | looped@1 minus twin@1 | looped K1-K6 |
+|---|---|---|---|
+| 5000 | -0.0076 [-0.0103, -0.0047] | -0.0074 [-0.0101, -0.0045] | +0.0001 |
+| 10000 | -0.0075 [-0.0103, -0.0049] | -0.0064 [-0.0091, -0.0038] | +0.0011 |
+| 15000 | -0.0083 [-0.0107, -0.0057] | -0.0071 [-0.0095, -0.0045] | +0.0012 |
+| 20000 | -0.0074 [-0.0104, -0.0045] | -0.0060 [-0.0090, -0.0031] | +0.0014 |
+
+(The twin's own forced-depth curve is negative, -0.0196 at 5k and -0.0851 at 20k: a
+depth-1-trained map applied more times gets worse. It is not a contribution reading.)
+
+Scoring. P-1 HOLDS (0.165). P-2 FAILS. P-3 FAILS (both clauses). P-4 HOLDS on both
+clauses, the second at its CI edge (-0.0123 [-0.0143, -0.0102]). P-5 first clause FAILS
+(0.0074, bar 0.020); second clause HOLDS on its letter (+0.0074 [+0.0045, +0.0104] against
+the 2026-09-12 5k reading +0.0020), but that 5k reading came from a different, 5k-schedule
+twin pair; the matched 20k-schedule pair reads the same +0.0076 at 5k, so the letter holds
+and the thing it was written to detect, growth with horizon, is absent. P-6 not run. P-7
+HOLDS.
+
+## Verdict
+
+Failure on the question. A direct read of the slot loop's exit state is used and worth
+about 0.012-0.017 nats to the coda at 5k, almost all of it at the span's first token, and
+the loop's passes still add nothing: the K-curve is the ruler's to the fourth decimal
+under either read, and re-adding the term at every coda layer is 0.004 WORSE than adding
+it once. The read was not the limit.
+
+The horizon pair is the new reading. Training with the slot loop is worth a constant
+0.0075 nats over the depth-1 twin from 5k to 20k, with no growth, and most of it survives
+when the looped model is itself evaluated at depth 1 (0.006-0.007). The plain loop's twin
+gap grew 0.004 to 0.067 over the same span. So the slot loop's small value is a
+training-time effect on the shared weights, present from 5k, and not a horizon effect the
+5k K-curve was hiding. Every 5k slot-arm verdict on the ledger stands.
+
+## Updated hypothesis
+
+The slot loop's passes have no job that the token loss pays for, on web text, at any
+horizon we have run and with any reader we have built. What the plain loop has and the
+slot loop does not is not the read (this file), not the horizon (this file), not the
+target family (the synthesis note), but the fact that its passes act on the token states
+themselves, the positions the loss is charged on. The next design question is whether a
+think-once slot loop can have passes that change something per token without running the
+tokens through the core; the one tested form (bcast) cannot, because it adds one fixed
+function of the exit state.

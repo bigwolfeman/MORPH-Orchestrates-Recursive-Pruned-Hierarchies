@@ -1,0 +1,481 @@
+[2026-09-22 23:27:46,851][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-22 23:27:46,857][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/config.json "HTTP/1.1 200 OK"
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[2026-09-22 23:27:46,914][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-22 23:27:46,920][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/tokenizer_config.json "HTTP/1.1 200 OK"
+[2026-09-22 23:27:46,977][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+[2026-09-22 23:27:47,032][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+[2026-09-22 23:27:47,130][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-22 23:27:47,136][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/config.json "HTTP/1.1 200 OK"
+[2026-09-22 23:27:47,197][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-22 23:27:47,203][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/tokenizer_config.json "HTTP/1.1 200 OK"
+[2026-09-22 23:27:47,261][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+[2026-09-22 23:27:47,316][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 292.5M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+Model: 292.5M params on cuda
+  [flops] model v1.0.0 nominal A0-shape proxy=44.00 passes/token, realized depth=5.688
+  Core spectral-norm penalty OFF (logging only): cap=0.0 lambda=0.0 log_every=100 include_attn=False on 12 core linears (12 MLP + 0 attention)
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=norm_match group=tensor dtype=fp16 modules=44 ({'backbone': 44, 'attention': 0, 'embeddings': 0}) params_ternary=127.8M (43.7% of model)
+  Embed QAT ON: mode=int6 modules=2 (['embed.hybrid.euc_embed', 'embed.bigram.embed']). LM head: LM head is WEIGHT-TIED to euc_embed (no separate weight). lm_head_quant is a NO-
+  CMS score_mode=taylor on 28 CMSBlockLinear layers
+  [capture] loop_cot_probe=True loop_rank_every=0 batch_dump_every=0 dir=None
+  [probe] pre-clip gradient + loop probe ON, every 1 step(s), mirrored to /home/wolfe/morph-scratch/arc/slot-spandec-strict-norecur-20k/probe.jsonl
+  MLPs compiled (mode=default, core dynamic-batch)
+  Warmup compile [startup thread-free] (TG path, 4 packed TUL passes)...
+  Warmup compile [startup thread-free] done in 4.0s (4 TG passes)
+  torch.compiler stance = eager_on_recompile (rare uncovered shapes run eager, never recompile/fork)
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/wolfe/.netrc.
+wandb: Currently logged in as: austindewolfe (adew-me) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.28.2
+wandb: Run data is saved locally in /home/wolfe/morph-scratch/wandb/run-20260922_232753-s4c8l6pu
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run slot-spandec-strict-norecur-20k
+wandb: ⭐️ View project at https://wandb.ai/adew-me/morph-tul
+wandb: 🚀 View run at https://wandb.ai/adew-me/morph-tul/runs/s4c8l6pu
+  [ckpt] retention: keeping the last 8 step_*.pt (0 already on disk). Set training.ckpt_keep_last=0 to keep all.
+  PhaseSchedule(total_steps=20000, tst=off, tul=step 0); start_step=0 → TrainPhase(bag_size=0, tul_on=True)
+[TUL] layout ACTIVE from step 0; E_slot ← mean(embedding table)
+  [div-guard] ppl ceiling 1000, 2 strikes
+[2026-09-22 23:27:54,458][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-22 23:27:54,465][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/config.json "HTTP/1.1 200 OK"
+[2026-09-22 23:27:54,525][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-22 23:27:54,531][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/tokenizer_config.json "HTTP/1.1 200 OK"
+[2026-09-22 23:27:54,583][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+[2026-09-22 23:27:54,639][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+[data] TUL layout: seq_len=1024 prefix_k=2 max_slots=64 L_total=1152 slot_id=4
+[2026-09-22 23:27:54,811][httpx][INFO] - HTTP Request: HEAD https://s3.amazonaws.com/datasets.huggingface.co/datasets/datasets/arrow/arrow.py "HTTP/1.1 404 Not Found"
+/home/wolfe/morph-to/morph/training/train.py:3592: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  _lv = _lv - float(out[_ak])
+  [spec] step=0 sigma_max=1.92 (core.2.mlp.0.gate_up) mean=1.42
+[      0/20000] loss=22.8127  ppl=485165195.4  lr=0.00e+00  sps=0.98  tok/s=6019  proxy=10.20  tflops=8.5  peak=12.31GB
+  [mem] peak stats reset at step 5 — perf/peak_mem_* now reflects the TRAINING STEP, not the warmup compile
+  [spec] step=100 sigma_max=1.93 (core.2.mlp.0.gate_up) mean=1.42
+  [spec] step=200 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+[    200/20000] loss=14.2508  ppl=1545345.7  lr=2.00e-05  sps=2.74  tok/s=16857  proxy=10.19  tflops=23.6  peak=15.21GB
+[2026-09-22 23:29:28,474][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-22 23:29:28,480][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/config.json "HTTP/1.1 200 OK"
+[2026-09-22 23:29:28,536][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-22 23:29:28,541][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/tokenizer_config.json "HTTP/1.1 200 OK"
+[2026-09-22 23:29:28,598][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+[2026-09-22 23:29:28,663][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+[data] TUL layout: seq_len=1024 prefix_k=2 max_slots=64 L_total=1152 slot_id=4
+[2026-09-22 23:29:28,833][httpx][INFO] - HTTP Request: HEAD https://s3.amazonaws.com/datasets.huggingface.co/datasets/datasets/arrow/arrow.py "HTTP/1.1 404 Not Found"
+  [VAL     250] loss=7.0264  ppl=1125.96  ppl_tok=1125.96  first_tok=7.3377  cf=-1.7273  lp/tok=13.10
+  [spec] step=300 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=400 sigma_max=1.93 (core.2.mlp.0.gate_up) mean=1.42
+[    400/20000] loss=12.4360  ppl=251701.0  lr=4.00e-05  sps=2.65  tok/s=16276  proxy=10.21  tflops=22.9  peak=15.33GB
+  [spec] step=500 sigma_max=1.93 (core.2.mlp.0.gate_up) mean=1.42
+  [VAL     500] loss=6.3707  ppl=584.46  ppl_tok=584.46  first_tok=7.6183  cf=-2.6092  lp/tok=13.01
+  [spec] step=600 sigma_max=1.93 (core.2.mlp.0.gate_up) mean=1.42
+[    600/20000] loss=13.0498  ppl=464995.8  lr=6.00e-05  sps=2.67  tok/s=16420  proxy=10.45  tflops=23.6  peak=15.33GB
+  [spec] step=700 sigma_max=1.92 (core.1.mlp.0.gate_up) mean=1.42
+  [VAL     750] loss=5.6202  ppl=275.96  ppl_tok=275.96  first_tok=7.0311  cf=-2.6937  lp/tok=13.11
+  [spec] step=800 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.42
+[    800/20000] loss=10.9320  ppl=55940.4  lr=8.00e-05  sps=2.69  tok/s=16501  proxy=10.22  tflops=23.2  peak=15.40GB
+  [spec] step=900 sigma_max=1.92 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=1000 sigma_max=1.92 (core.1.mlp.0.gate_up) mean=1.42
+[   1000/20000] loss=11.4130  ppl=90494.7  lr=1.00e-04  sps=2.68  tok/s=16467  proxy=10.20  tflops=23.2  peak=15.40GB
+  [VAL    1000] loss=5.2090  ppl=182.91  ppl_tok=182.91  first_tok=6.8698  cf=-2.6932  lp/tok=13.05
+  [spec] step=1100 sigma_max=1.92 (core.1.mlp.0.gate_up) mean=1.42
+  [spec] step=1200 sigma_max=1.92 (core.1.mlp.0.gate_up) mean=1.42
+[   1200/20000] loss=10.6641  ppl=42792.2  lr=1.00e-04  sps=2.62  tok/s=16108  proxy=10.23  tflops=22.7  peak=15.40GB
+  [VAL    1250] loss=5.0569  ppl=157.10  ppl_tok=157.10  first_tok=7.0512  cf=-3.0220  lp/tok=12.97
+  [spec] step=1300 sigma_max=1.93 (core.1.mlp.0.gate_up) mean=1.43
+  [spec] step=1400 sigma_max=1.94 (core.1.mlp.0.gate_up) mean=1.43
+[   1400/20000] loss=10.3024  ppl=29803.6  lr=1.00e-04  sps=2.62  tok/s=16121  proxy=10.18  tflops=22.6  peak=15.40GB
+  [spec] step=1500 sigma_max=1.95 (core.1.mlp.0.gate_up) mean=1.45
+  [VAL    1500] loss=5.0925  ppl=162.79  ppl_tok=162.79  first_tok=7.2281  cf=-2.9665  lp/tok=13.51
+  [spec] step=1600 sigma_max=1.96 (core.1.mlp.0.gate_up) mean=1.46
+[   1600/20000] loss=10.0808  ppl=23879.4  lr=1.00e-04  sps=2.59  tok/s=15918  proxy=10.21  tflops=22.4  peak=15.40GB
+  [spec] step=1700 sigma_max=1.98 (core.1.mlp.0.gate_up) mean=1.48
+  [VAL    1750] loss=4.9284  ppl=138.16  ppl_tok=138.16  first_tok=7.0516  cf=-2.8585  lp/tok=12.99
+  [spec] step=1800 sigma_max=1.98 (core.1.mlp.0.gate_up) mean=1.52
+[   1800/20000] loss=10.0490  ppl=23132.9  lr=1.00e-04  sps=2.59  tok/s=15938  proxy=10.19  tflops=22.4  peak=15.40GB
+  [spec] step=1900 sigma_max=2.00 (core.2.mlp.0.gate_up) mean=1.55
+  [spec] step=2000 sigma_max=2.01 (core.2.mlp.0.gate_up) mean=1.58
+[   2000/20000] loss=9.5380  ppl=13877.5  lr=1.00e-04  sps=2.56  tok/s=15743  proxy=10.21  tflops=22.1  peak=15.40GB
+  [VAL    2000] loss=5.0788  ppl=160.59  ppl_tok=160.59  first_tok=7.1872  cf=-2.9230  lp/tok=13.06
+  [spec] step=2100 sigma_max=2.04 (core.5.mlp.0.gate_up) mean=1.61
+  [spec] step=2200 sigma_max=2.06 (core.5.mlp.0.gate_up) mean=1.65
+[   2200/20000] loss=10.7962  ppl=48834.1  lr=1.00e-04  sps=2.61  tok/s=16007  proxy=10.26  tflops=22.6  peak=15.40GB
+  [VAL    2250] loss=4.5862  ppl=98.13  ppl_tok=98.13  first_tok=6.7821  cf=-2.9878  lp/tok=13.21
+  [spec] step=2300 sigma_max=2.08 (core.5.mlp.0.gate_up) mean=1.68
+  [spec] step=2400 sigma_max=2.11 (core.5.mlp.0.gate_up) mean=1.70
+[   2400/20000] loss=9.8662  ppl=19267.1  lr=1.00e-04  sps=2.60  tok/s=15973  proxy=10.19  tflops=22.4  peak=15.40GB
+  [spec] step=2500 sigma_max=2.13 (core.5.mlp.0.gate_up) mean=1.71
+  [VAL    2500] loss=4.5873  ppl=98.23  ppl_tok=98.23  first_tok=7.2277  cf=-3.4391  lp/tok=13.13
+  [spec] step=2600 sigma_max=2.15 (core.5.mlp.0.gate_up) mean=1.72
+[   2600/20000] loss=9.5380  ppl=13877.6  lr=1.00e-04  sps=2.63  tok/s=16187  proxy=10.18  tflops=22.7  peak=15.40GB
+  [spec] step=2700 sigma_max=2.17 (core.5.mlp.0.gate_up) mean=1.73
+  [VAL    2750] loss=4.7555  ppl=116.22  ppl_tok=116.22  first_tok=7.0850  cf=-3.1460  lp/tok=13.06
+  [spec] step=2800 sigma_max=2.19 (core.5.mlp.0.gate_up) mean=1.74
+[   2800/20000] loss=10.4366  ppl=34083.9  lr=1.00e-04  sps=2.62  tok/s=16074  proxy=10.21  tflops=22.6  peak=15.40GB
+  [spec] step=2900 sigma_max=2.21 (core.5.mlp.0.gate_up) mean=1.76
+  [spec] step=3000 sigma_max=2.23 (core.5.mlp.0.gate_up) mean=1.78
+[   3000/20000] loss=10.0678  ppl=23572.0  lr=1.00e-04  sps=2.64  tok/s=16216  proxy=10.19  tflops=22.7  peak=15.40GB
+  [VAL    3000] loss=4.5157  ppl=91.44  ppl_tok=91.44  first_tok=7.0851  cf=-3.3586  lp/tok=13.06
+  [spec] step=3100 sigma_max=2.24 (core.5.mlp.0.gate_up) mean=1.82
+  [spec] step=3200 sigma_max=2.26 (core.5.mlp.0.gate_up) mean=1.86
+[   3200/20000] loss=8.5877  ppl=5365.3  lr=1.00e-04  sps=2.58  tok/s=15845  proxy=10.19  tflops=22.2  peak=15.40GB
+  [VAL    3250] loss=4.5352  ppl=93.24  ppl_tok=93.24  first_tok=7.4668  cf=-3.6809  lp/tok=13.10
+  [spec] step=3300 sigma_max=2.28 (core.5.mlp.0.gate_up) mean=1.90
+  [spec] step=3400 sigma_max=2.30 (core.5.mlp.0.gate_up) mean=1.92
+[   3400/20000] loss=9.7966  ppl=17972.2  lr=1.00e-04  sps=2.67  tok/s=16392  proxy=10.19  tflops=23.0  peak=15.40GB
+  [spec] step=3500 sigma_max=2.32 (core.5.mlp.0.gate_up) mean=1.94
+  [VAL    3500] loss=4.5510  ppl=94.73  ppl_tok=94.73  first_tok=7.5257  cf=-3.6357  lp/tok=13.05
+  [spec] step=3600 sigma_max=2.34 (core.5.mlp.0.gate_up) mean=1.95
+[   3600/20000] loss=9.5580  ppl=14157.9  lr=1.00e-04  sps=2.67  tok/s=16414  proxy=10.24  tflops=23.2  peak=15.40GB
+  [spec] step=3700 sigma_max=2.35 (core.5.mlp.0.gate_up) mean=1.96
+  [VAL    3750] loss=4.4173  ppl=82.87  ppl_tok=82.87  first_tok=7.3417  cf=-3.3840  lp/tok=13.05
+  [spec] step=3800 sigma_max=2.37 (core.5.mlp.0.gate_up) mean=1.97
+[   3800/20000] loss=8.4350  ppl=4605.3  lr=1.00e-04  sps=2.88  tok/s=17685  proxy=10.21  tflops=24.9  peak=15.40GB
+  [spec] step=3900 sigma_max=2.38 (core.5.mlp.0.gate_up) mean=1.99
+  [spec] step=4000 sigma_max=2.39 (core.5.mlp.0.gate_up) mean=2.00
+[   4000/20000] loss=8.9417  ppl=7644.1  lr=1.00e-04  sps=3.17  tok/s=19446  proxy=10.19  tflops=27.3  peak=15.40GB
+  [VAL    4000] loss=4.4079  ppl=82.10  ppl_tok=82.10  first_tok=6.9192  cf=-3.2629  lp/tok=13.30
+  [spec] step=4100 sigma_max=2.40 (core.5.mlp.0.gate_up) mean=2.02
+  [spec] step=4200 sigma_max=2.41 (core.5.mlp.0.gate_up) mean=2.04
+[   4200/20000] loss=9.4793  ppl=13086.0  lr=1.00e-04  sps=2.72  tok/s=16711  proxy=10.22  tflops=23.5  peak=15.40GB
+  [VAL    4250] loss=4.2683  ppl=71.40  ppl_tok=71.40  first_tok=6.7959  cf=-3.3409  lp/tok=13.02
+  [spec] step=4300 sigma_max=2.43 (core.5.mlp.0.gate_up) mean=2.06
+  [spec] step=4400 sigma_max=2.44 (core.5.mlp.0.gate_up) mean=2.08
+[   4400/20000] loss=9.0351  ppl=8392.9  lr=1.00e-04  sps=2.96  tok/s=18204  proxy=10.19  tflops=25.5  peak=15.40GB
+  [spec] step=4500 sigma_max=2.46 (core.5.mlp.0.gate_up) mean=2.10
+  [VAL    4500] loss=4.3111  ppl=74.53  ppl_tok=74.53  first_tok=6.9410  cf=-3.4247  lp/tok=13.05
+  [spec] step=4600 sigma_max=2.47 (core.5.mlp.0.gate_up) mean=2.13
+[   4600/20000] loss=8.7665  ppl=6415.9  lr=1.00e-04  sps=3.01  tok/s=18474  proxy=10.20  tflops=26.0  peak=15.40GB
+  [spec] step=4700 sigma_max=2.49 (core.5.mlp.0.gate_up) mean=2.15
+  [VAL    4750] loss=4.3953  ppl=81.07  ppl_tok=81.07  first_tok=7.2313  cf=-3.4258  lp/tok=13.03
+  [spec] step=4800 sigma_max=2.50 (core.5.mlp.0.gate_up) mean=2.17
+[   4800/20000] loss=9.2377  ppl=10277.2  lr=1.00e-04  sps=3.08  tok/s=18895  proxy=10.17  tflops=26.5  peak=15.40GB
+  [spec] step=4900 sigma_max=2.51 (core.5.mlp.0.gate_up) mean=2.20
+  [spec] step=5000 sigma_max=2.52 (core.5.mlp.0.gate_up) mean=2.22
+[   5000/20000] loss=10.1183  ppl=24793.3  lr=1.00e-04  sps=3.20  tok/s=19679  proxy=10.20  tflops=27.7  peak=15.40GB
+  [VAL    5000] loss=4.3847  ppl=80.21  ppl_tok=80.21  first_tok=6.5645  cf=-3.1819  lp/tok=13.50
+  Checkpoint: /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-norecur-20k/step_5000.pt
+  [spec] step=5100 sigma_max=2.53 (core.5.mlp.0.gate_up) mean=2.24
+  [spec] step=5200 sigma_max=2.54 (core.5.mlp.0.gate_up) mean=2.26
+[   5200/20000] loss=8.1835  ppl=3581.3  lr=1.00e-04  sps=3.07  tok/s=18888  proxy=10.21  tflops=26.6  peak=15.40GB
+  [VAL    5250] loss=4.3260  ppl=75.64  ppl_tok=75.64  first_tok=6.5151  cf=-3.1592  lp/tok=13.06
+  [spec] step=5300 sigma_max=2.55 (core.5.mlp.0.gate_up) mean=2.28
+  [spec] step=5400 sigma_max=2.56 (core.5.mlp.0.gate_up) mean=2.31
+[   5400/20000] loss=8.8563  ppl=7018.3  lr=1.00e-04  sps=2.54  tok/s=15578  proxy=10.19  tflops=21.9  peak=15.40GB
+  [spec] step=5500 sigma_max=2.58 (core.5.mlp.0.gate_up) mean=2.33
+  [VAL    5500] loss=4.2539  ppl=70.38  ppl_tok=70.38  first_tok=6.8208  cf=-3.3233  lp/tok=13.12
+  [spec] step=5600 sigma_max=2.59 (core.5.mlp.0.gate_up) mean=2.35
+[   5600/20000] loss=9.1402  ppl=9322.8  lr=1.00e-04  sps=2.62  tok/s=16067  proxy=10.20  tflops=22.6  peak=15.40GB
+  [spec] step=5700 sigma_max=2.61 (core.5.mlp.0.gate_up) mean=2.36
+  [VAL    5750] loss=4.3746  ppl=79.41  ppl_tok=79.41  first_tok=7.1894  cf=-3.2671  lp/tok=12.99
+  [spec] step=5800 sigma_max=2.63 (core.4.mlp.0.down) mean=2.38
+[   5800/20000] loss=8.5086  ppl=4957.1  lr=1.00e-04  sps=2.79  tok/s=17134  proxy=10.18  tflops=24.0  peak=15.40GB
+  [spec] step=5900 sigma_max=2.66 (core.4.mlp.0.down) mean=2.40
+  [spec] step=6000 sigma_max=2.69 (core.4.mlp.0.down) mean=2.42
+[   6000/20000] loss=9.6376  ppl=15330.5  lr=1.00e-04  sps=3.03  tok/s=18611  proxy=10.23  tflops=26.2  peak=15.40GB
+  [VAL    6000] loss=4.2252  ppl=68.39  ppl_tok=68.39  first_tok=7.1885  cf=-3.4544  lp/tok=13.09
+  [spec] step=6100 sigma_max=2.72 (core.4.mlp.0.down) mean=2.44
+  [spec] step=6200 sigma_max=2.75 (core.4.mlp.0.down) mean=2.46
+[   6200/20000] loss=8.9280  ppl=7540.5  lr=1.00e-04  sps=3.06  tok/s=18790  proxy=10.22  tflops=26.4  peak=15.40GB
+  [VAL    6250] loss=4.3457  ppl=77.14  ppl_tok=77.14  first_tok=6.9700  cf=-3.3067  lp/tok=14.49
+  [spec] step=6300 sigma_max=2.78 (core.4.mlp.0.down) mean=2.47
+  [spec] step=6400 sigma_max=2.81 (core.4.mlp.0.down) mean=2.48
+[   6400/20000] loss=9.2443  ppl=10345.4  lr=1.00e-04  sps=3.12  tok/s=19156  proxy=10.25  tflops=27.0  peak=15.40GB
+  [spec] step=6500 sigma_max=2.83 (core.4.mlp.0.down) mean=2.50
+  [VAL    6500] loss=4.0866  ppl=59.54  ppl_tok=59.54  first_tok=6.9461  cf=-3.5121  lp/tok=13.10
+  [spec] step=6600 sigma_max=2.85 (core.4.mlp.0.down) mean=2.51
+[   6600/20000] loss=8.4907  ppl=4869.5  lr=1.00e-04  sps=3.08  tok/s=18909  proxy=10.20  tflops=26.6  peak=15.40GB
+  [spec] step=6700 sigma_max=2.86 (core.4.mlp.0.down) mean=2.52
+  [VAL    6750] loss=4.1326  ppl=62.34  ppl_tok=62.34  first_tok=7.2557  cf=-3.5850  lp/tok=13.03
+  [spec] step=6800 sigma_max=2.88 (core.4.mlp.0.down) mean=2.54
+[   6800/20000] loss=10.9517  ppl=57052.1  lr=1.00e-04  sps=3.07  tok/s=18856  proxy=10.32  tflops=26.8  peak=15.40GB
+  [spec] step=6900 sigma_max=2.88 (core.4.mlp.0.down) mean=2.55
+  [spec] step=7000 sigma_max=2.89 (core.4.mlp.0.down) mean=2.56
+[   7000/20000] loss=8.5740  ppl=5292.4  lr=1.00e-04  sps=3.04  tok/s=18685  proxy=10.19  tflops=26.2  peak=15.40GB
+  [VAL    7000] loss=4.1471  ppl=63.25  ppl_tok=63.25  first_tok=7.0547  cf=-3.4813  lp/tok=13.19
+  [spec] step=7100 sigma_max=2.89 (core.4.mlp.0.down) mean=2.57
+  [spec] step=7200 sigma_max=2.90 (core.4.mlp.0.down) mean=2.58
+[   7200/20000] loss=9.8202  ppl=18402.4  lr=1.00e-04  sps=3.05  tok/s=18712  proxy=10.25  tflops=26.4  peak=15.40GB
+  [VAL    7250] loss=4.1678  ppl=64.57  ppl_tok=64.57  first_tok=6.8245  cf=-3.3592  lp/tok=13.05
+  [spec] step=7300 sigma_max=2.90 (core.4.mlp.0.down) mean=2.59
+  [spec] step=7400 sigma_max=2.92 (core.1.mlp.0.down) mean=2.60
+[   7400/20000] loss=9.4494  ppl=12700.7  lr=1.00e-04  sps=3.02  tok/s=18535  proxy=10.18  tflops=26.0  peak=15.40GB
+  [spec] step=7500 sigma_max=2.93 (core.4.mlp.0.down) mean=2.61
+  [VAL    7500] loss=4.1687  ppl=64.63  ppl_tok=64.63  first_tok=6.6938  cf=-3.2449  lp/tok=13.06
+  [spec] step=7600 sigma_max=2.94 (core.4.mlp.0.down) mean=2.62
+[   7600/20000] loss=9.4818  ppl=13118.4  lr=1.00e-04  sps=2.96  tok/s=18170  proxy=10.19  tflops=25.5  peak=15.40GB
+  [spec] step=7700 sigma_max=2.95 (core.4.mlp.0.down) mean=2.63
+  [VAL    7750] loss=4.2208  ppl=68.09  ppl_tok=68.09  first_tok=6.8700  cf=-3.4496  lp/tok=13.20
+  [spec] step=7800 sigma_max=2.96 (core.4.mlp.0.down) mean=2.64
+[   7800/20000] loss=7.9062  ppl=2714.0  lr=1.00e-04  sps=3.17  tok/s=19488  proxy=10.21  tflops=27.4  peak=15.40GB
+  [spec] step=7900 sigma_max=2.97 (core.4.mlp.0.down) mean=2.65
+  [spec] step=8000 sigma_max=2.99 (core.5.mlp.0.gate_up) mean=2.66
+[   8000/20000] loss=9.3169  ppl=11124.7  lr=1.00e-04  sps=3.14  tok/s=19274  proxy=10.19  tflops=27.0  peak=15.40GB
+  [VAL    8000] loss=4.2177  ppl=67.88  ppl_tok=67.88  first_tok=6.7297  cf=-3.4268  lp/tok=14.15
+  [spec] step=8100 sigma_max=3.02 (core.5.mlp.0.gate_up) mean=2.66
+  [spec] step=8200 sigma_max=3.04 (core.5.mlp.0.gate_up) mean=2.67
+[   8200/20000] loss=8.9006  ppl=7336.1  lr=1.00e-04  sps=3.09  tok/s=18959  proxy=10.18  tflops=26.6  peak=15.40GB
+  [VAL    8250] loss=4.0321  ppl=56.38  ppl_tok=56.38  first_tok=7.1037  cf=-3.7025  lp/tok=13.10
+  [spec] step=8300 sigma_max=3.06 (core.5.mlp.0.gate_up) mean=2.68
+  [spec] step=8400 sigma_max=3.09 (core.5.mlp.0.gate_up) mean=2.69
+[   8400/20000] loss=4.5072  ppl=90.7  lr=1.00e-04  sps=3.17  tok/s=19471  proxy=13.78  tflops=35.4  peak=15.50GB
+  [spec] step=8500 sigma_max=3.10 (core.5.mlp.0.gate_up) mean=2.69
+  [VAL    8500] loss=4.2423  ppl=69.56  ppl_tok=69.56  first_tok=7.2500  cf=-3.5632  lp/tok=13.13
+  [spec] step=8600 sigma_max=3.12 (core.5.mlp.0.gate_up) mean=2.70
+[   8600/20000] loss=8.7996  ppl=6631.9  lr=1.00e-04  sps=2.96  tok/s=18194  proxy=10.20  tflops=25.6  peak=15.50GB
+  [spec] step=8700 sigma_max=3.14 (core.5.mlp.0.gate_up) mean=2.71
+  [VAL    8750] loss=4.0584  ppl=57.88  ppl_tok=57.88  first_tok=7.1000  cf=-3.6500  lp/tok=12.98
+  [spec] step=8800 sigma_max=3.17 (core.5.mlp.0.gate_up) mean=2.72
+[   8800/20000] loss=7.8961  ppl=2686.7  lr=1.00e-04  sps=3.06  tok/s=18778  proxy=10.24  tflops=26.5  peak=15.50GB
+  [spec] step=8900 sigma_max=3.19 (core.5.mlp.0.gate_up) mean=2.73
+  [spec] step=9000 sigma_max=3.21 (core.5.mlp.0.gate_up) mean=2.74
+[   9000/20000] loss=9.0033  ppl=8130.0  lr=1.00e-04  sps=2.95  tok/s=18146  proxy=10.20  tflops=25.5  peak=15.50GB
+  [VAL    9000] loss=4.0856  ppl=59.48  ppl_tok=59.48  first_tok=7.1072  cf=-3.6933  lp/tok=13.00
+  [spec] step=9100 sigma_max=3.23 (core.5.mlp.0.gate_up) mean=2.75
+  [spec] step=9200 sigma_max=3.24 (core.5.mlp.0.gate_up) mean=2.76
+[   9200/20000] loss=8.0416  ppl=3107.5  lr=1.00e-04  sps=2.96  tok/s=18160  proxy=10.21  tflops=25.6  peak=15.50GB
+  [VAL    9250] loss=4.0829  ppl=59.32  ppl_tok=59.32  first_tok=7.1263  cf=-3.5469  lp/tok=13.05
+  [spec] step=9300 sigma_max=3.26 (core.5.mlp.0.gate_up) mean=2.77
+  [spec] step=9400 sigma_max=3.28 (core.5.mlp.0.gate_up) mean=2.78
+[   9400/20000] loss=7.7489  ppl=2319.0  lr=1.00e-04  sps=2.91  tok/s=17851  proxy=10.20  tflops=25.1  peak=15.50GB
+  [spec] step=9500 sigma_max=3.31 (core.5.mlp.0.gate_up) mean=2.79
+  [VAL    9500] loss=4.1514  ppl=63.52  ppl_tok=63.52  first_tok=7.0547  cf=-3.6908  lp/tok=13.30
+  [spec] step=9600 sigma_max=3.33 (core.5.mlp.0.gate_up) mean=2.80
+[   9600/20000] loss=8.4014  ppl=4453.2  lr=1.00e-04  sps=2.81  tok/s=17252  proxy=10.18  tflops=24.2  peak=15.50GB
+  [spec] step=9700 sigma_max=3.34 (core.5.mlp.0.gate_up) mean=2.81
+  [VAL    9750] loss=3.8775  ppl=48.30  ppl_tok=48.30  first_tok=6.7599  cf=-3.2904  lp/tok=13.62
+  [spec] step=9800 sigma_max=3.36 (core.5.mlp.0.gate_up) mean=2.82
+[   9800/20000] loss=8.2555  ppl=3848.8  lr=1.00e-04  sps=2.94  tok/s=18082  proxy=10.19  tflops=25.4  peak=15.50GB
+  [spec] step=9900 sigma_max=3.37 (core.5.mlp.0.gate_up) mean=2.83
+  [spec] step=10000 sigma_max=3.39 (core.5.mlp.0.gate_up) mean=2.84
+[  10000/20000] loss=8.3972  ppl=4434.8  lr=1.00e-04  sps=2.91  tok/s=17860  proxy=10.21  tflops=25.1  peak=15.50GB
+  [VAL   10000] loss=4.1427  ppl=62.97  ppl_tok=62.97  first_tok=7.1048  cf=-3.5209  lp/tok=13.24
+  Checkpoint: /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-norecur-20k/step_10000.pt
+  [spec] step=10100 sigma_max=3.41 (core.5.mlp.0.gate_up) mean=2.85
+  [spec] step=10200 sigma_max=3.43 (core.5.mlp.0.gate_up) mean=2.87
+[  10200/20000] loss=8.5710  ppl=5276.5  lr=1.00e-04  sps=3.15  tok/s=19369  proxy=10.19  tflops=27.2  peak=15.50GB
+  [VAL   10250] loss=4.0118  ppl=55.25  ppl_tok=55.25  first_tok=7.0118  cf=-3.5648  lp/tok=13.01
+  [spec] step=10300 sigma_max=3.46 (core.5.mlp.0.gate_up) mean=2.88
+  [spec] step=10400 sigma_max=3.48 (core.5.mlp.0.gate_up) mean=2.90
+[  10400/20000] loss=8.1721  ppl=3540.8  lr=1.00e-04  sps=2.87  tok/s=17641  proxy=10.39  tflops=25.2  peak=15.50GB
+  [spec] step=10500 sigma_max=3.51 (core.5.mlp.0.gate_up) mean=2.91
+  [VAL   10500] loss=4.0300  ppl=56.26  ppl_tok=56.26  first_tok=7.1969  cf=-3.6003  lp/tok=13.04
+  [spec] step=10600 sigma_max=3.54 (core.5.mlp.0.gate_up) mean=2.93
+[  10600/20000] loss=9.3751  ppl=11790.6  lr=1.00e-04  sps=3.09  tok/s=18989  proxy=11.68  tflops=29.9  peak=15.50GB
+  [spec] step=10700 sigma_max=3.57 (core.5.mlp.0.gate_up) mean=2.94
+  [VAL   10750] loss=4.0997  ppl=60.32  ppl_tok=60.32  first_tok=6.8581  cf=-3.4740  lp/tok=13.00
+  [spec] step=10800 sigma_max=3.60 (core.5.mlp.0.gate_up) mean=2.97
+[  10800/20000] loss=8.5366  ppl=5097.9  lr=1.00e-04  sps=3.12  tok/s=19148  proxy=10.28  tflops=27.1  peak=15.50GB
+  [spec] step=10900 sigma_max=3.63 (core.5.mlp.0.gate_up) mean=2.99
+  [spec] step=11000 sigma_max=3.65 (core.5.mlp.0.gate_up) mean=3.00
+[  11000/20000] loss=9.0406  ppl=8438.8  lr=1.00e-04  sps=3.10  tok/s=19039  proxy=10.23  tflops=26.8  peak=15.50GB
+  [VAL   11000] loss=4.1397  ppl=62.78  ppl_tok=62.78  first_tok=7.0872  cf=-3.4387  lp/tok=13.87
+  [spec] step=11100 sigma_max=3.67 (core.5.mlp.0.gate_up) mean=3.01
+  [spec] step=11200 sigma_max=3.69 (core.5.mlp.0.gate_up) mean=3.02
+[  11200/20000] loss=8.4628  ppl=4735.5  lr=1.00e-04  sps=3.03  tok/s=18622  proxy=10.47  tflops=26.7  peak=15.50GB
+  [VAL   11250] loss=4.0297  ppl=56.25  ppl_tok=56.25  first_tok=7.0023  cf=-3.6391  lp/tok=13.11
+  [spec] step=11300 sigma_max=3.72 (core.5.mlp.0.gate_up) mean=3.04
+  [spec] step=11400 sigma_max=3.74 (core.5.mlp.0.gate_up) mean=3.05
+[  11400/20000] loss=8.2329  ppl=3762.9  lr=1.00e-04  sps=3.04  tok/s=18692  proxy=10.20  tflops=26.3  peak=15.50GB
+  [spec] step=11500 sigma_max=3.75 (core.5.mlp.0.gate_up) mean=3.07
+  [VAL   11500] loss=4.0802  ppl=59.16  ppl_tok=59.16  first_tok=7.0150  cf=-3.6287  lp/tok=13.04
+  [spec] step=11600 sigma_max=3.78 (core.5.mlp.0.gate_up) mean=3.08
+[  11600/20000] loss=9.6405  ppl=15374.6  lr=1.00e-04  sps=3.15  tok/s=19370  proxy=10.19  tflops=27.2  peak=15.50GB
+  [spec] step=11700 sigma_max=3.81 (core.5.mlp.0.gate_up) mean=3.09
+  [VAL   11750] loss=3.7351  ppl=41.89  ppl_tok=41.89  first_tok=7.0361  cf=-3.6887  lp/tok=13.23
+  [spec] step=11800 sigma_max=3.83 (core.5.mlp.0.gate_up) mean=3.11
+[  11800/20000] loss=8.4556  ppl=4701.2  lr=1.00e-04  sps=3.04  tok/s=18668  proxy=10.18  tflops=26.2  peak=15.50GB
+  [spec] step=11900 sigma_max=3.86 (core.5.mlp.0.gate_up) mean=3.12
+  [spec] step=12000 sigma_max=3.89 (core.5.mlp.0.gate_up) mean=3.14
+[  12000/20000] loss=8.6045  ppl=5456.0  lr=1.00e-04  sps=3.04  tok/s=18666  proxy=10.18  tflops=26.2  peak=15.50GB
+  [VAL   12000] loss=3.8613  ppl=47.53  ppl_tok=47.53  first_tok=7.0589  cf=-3.6635  lp/tok=13.58
+  [spec] step=12100 sigma_max=3.92 (core.5.mlp.0.gate_up) mean=3.16
+  [spec] step=12200 sigma_max=3.94 (core.5.mlp.0.gate_up) mean=3.18
+[  12200/20000] loss=8.4649  ppl=4745.4  lr=1.00e-04  sps=3.10  tok/s=19021  proxy=10.25  tflops=26.8  peak=15.50GB
+  [VAL   12250] loss=3.6263  ppl=37.58  ppl_tok=37.58  first_tok=6.8513  cf=-3.6377  lp/tok=13.04
+  [spec] step=12300 sigma_max=3.97 (core.5.mlp.0.gate_up) mean=3.20
+  [spec] step=12400 sigma_max=3.99 (core.5.mlp.0.gate_up) mean=3.22
+[  12400/20000] loss=8.9301  ppl=7555.8  lr=1.00e-04  sps=3.15  tok/s=19383  proxy=10.22  tflops=27.3  peak=15.50GB
+  [spec] step=12500 sigma_max=4.03 (core.5.mlp.0.gate_up) mean=3.23
+  [VAL   12500] loss=3.7796  ppl=43.80  ppl_tok=43.80  first_tok=7.0684  cf=-3.7527  lp/tok=13.37
+  [spec] step=12600 sigma_max=4.04 (core.5.mlp.0.gate_up) mean=3.25
+[  12600/20000] loss=8.7630  ppl=6393.1  lr=1.00e-04  sps=3.09  tok/s=19005  proxy=10.18  tflops=26.7  peak=15.50GB
+  [spec] step=12700 sigma_max=4.07 (core.5.mlp.0.gate_up) mean=3.27
+  [VAL   12750] loss=3.7571  ppl=42.83  ppl_tok=42.83  first_tok=7.1228  cf=-3.7787  lp/tok=13.05
+  [spec] step=12800 sigma_max=4.10 (core.5.mlp.0.gate_up) mean=3.28
+[  12800/20000] loss=8.5327  ppl=5078.2  lr=1.00e-04  sps=3.02  tok/s=18525  proxy=10.19  tflops=26.0  peak=15.50GB
+  [spec] step=12900 sigma_max=4.13 (core.5.mlp.0.gate_up) mean=3.29
+  [spec] step=13000 sigma_max=4.15 (core.5.mlp.0.gate_up) mean=3.31
+[  13000/20000] loss=9.0243  ppl=8302.1  lr=1.00e-04  sps=3.04  tok/s=18703  proxy=10.20  tflops=26.3  peak=15.50GB
+  [VAL   13000] loss=3.7945  ppl=44.46  ppl_tok=44.46  first_tok=6.7894  cf=-3.3946  lp/tok=13.09
+  [spec] step=13100 sigma_max=4.18 (core.5.mlp.0.gate_up) mean=3.32
+  [spec] step=13200 sigma_max=4.21 (core.5.mlp.0.gate_up) mean=3.33
+[  13200/20000] loss=8.8918  ppl=7272.2  lr=1.00e-04  sps=3.07  tok/s=18844  proxy=10.21  tflops=26.5  peak=15.50GB
+  [VAL   13250] loss=3.8762  ppl=48.24  ppl_tok=48.24  first_tok=6.9339  cf=-3.6361  lp/tok=13.04
+  [spec] step=13300 sigma_max=4.23 (core.5.mlp.0.gate_up) mean=3.35
+  [spec] step=13400 sigma_max=4.26 (core.5.mlp.0.gate_up) mean=3.37
+[  13400/20000] loss=8.0569  ppl=3155.3  lr=1.00e-04  sps=3.10  tok/s=19053  proxy=10.28  tflops=27.0  peak=15.50GB
+  [spec] step=13500 sigma_max=4.29 (core.5.mlp.0.gate_up) mean=3.39
+  [VAL   13500] loss=3.9278  ppl=50.79  ppl_tok=50.79  first_tok=7.2730  cf=-3.7637  lp/tok=13.04
+  [spec] step=13600 sigma_max=4.31 (core.5.mlp.0.gate_up) mean=3.40
+[  13600/20000] loss=6.9629  ppl=1056.7  lr=1.00e-04  sps=2.76  tok/s=16967  proxy=10.67  tflops=24.8  peak=15.50GB
+  [spec] step=13700 sigma_max=4.33 (core.5.mlp.0.gate_up) mean=3.42
+  [VAL   13750] loss=3.9827  ppl=53.66  ppl_tok=53.66  first_tok=6.9464  cf=-3.6979  lp/tok=13.86
+  [spec] step=13800 sigma_max=4.36 (core.5.mlp.0.gate_up) mean=3.44
+[  13800/20000] loss=9.1434  ppl=9352.4  lr=1.00e-04  sps=3.13  tok/s=19260  proxy=10.22  tflops=27.1  peak=15.50GB
+  [spec] step=13900 sigma_max=4.39 (core.5.mlp.0.gate_up) mean=3.46
+  [spec] step=14000 sigma_max=4.41 (core.5.mlp.0.gate_up) mean=3.49
+[  14000/20000] loss=7.9481  ppl=2830.2  lr=1.00e-04  sps=2.94  tok/s=18061  proxy=10.21  tflops=25.4  peak=15.50GB
+  [VAL   14000] loss=3.7994  ppl=44.67  ppl_tok=44.67  first_tok=6.9543  cf=-3.8476  lp/tok=13.30
+  [spec] step=14100 sigma_max=4.44 (core.5.mlp.0.gate_up) mean=3.51
+  [spec] step=14200 sigma_max=4.45 (core.5.mlp.0.gate_up) mean=3.53
+[  14200/20000] loss=8.0500  ppl=3133.9  lr=1.00e-04  sps=2.90  tok/s=17846  proxy=10.37  tflops=25.5  peak=15.50GB
+  [VAL   14250] loss=3.7841  ppl=44.00  ppl_tok=44.00  first_tok=6.9608  cf=-3.6503  lp/tok=12.98
+  [spec] step=14300 sigma_max=4.47 (core.5.mlp.0.gate_up) mean=3.55
+  [spec] step=14400 sigma_max=4.49 (core.5.mlp.0.gate_up) mean=3.57
+[  14400/20000] loss=8.7570  ppl=6355.2  lr=1.00e-04  sps=2.92  tok/s=17952  proxy=10.21  tflops=25.3  peak=15.50GB
+  [spec] step=14500 sigma_max=4.51 (core.5.mlp.0.gate_up) mean=3.59
+  [VAL   14500] loss=3.7793  ppl=43.79  ppl_tok=43.79  first_tok=7.0655  cf=-3.6801  lp/tok=13.13
+  [spec] step=14600 sigma_max=4.53 (core.5.mlp.0.gate_up) mean=3.60
+[  14600/20000] loss=8.1037  ppl=3306.6  lr=1.00e-04  sps=3.20  tok/s=19657  proxy=10.19  tflops=27.6  peak=15.50GB
+  [spec] step=14700 sigma_max=4.54 (core.5.mlp.0.gate_up) mean=3.62
+  [VAL   14750] loss=3.8355  ppl=46.32  ppl_tok=46.32  first_tok=6.8624  cf=-3.6453  lp/tok=13.10
+  [spec] step=14800 sigma_max=4.56 (core.5.mlp.0.gate_up) mean=3.63
+[  14800/20000] loss=7.9569  ppl=2855.1  lr=1.00e-04  sps=3.21  tok/s=19745  proxy=10.20  tflops=27.7  peak=15.50GB
+  [spec] step=14900 sigma_max=4.58 (core.5.mlp.0.gate_up) mean=3.65
+  [spec] step=15000 sigma_max=4.58 (core.5.mlp.0.gate_up) mean=3.67
+[  15000/20000] loss=7.6664  ppl=2135.4  lr=1.00e-04  sps=3.20  tok/s=19668  proxy=10.20  tflops=27.6  peak=15.50GB
+  [VAL   15000] loss=3.7831  ppl=43.95  ppl_tok=43.95  first_tok=6.9154  cf=-3.6010  lp/tok=12.96
+  Checkpoint: /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-norecur-20k/step_15000.pt
+  [spec] step=15100 sigma_max=4.59 (core.5.mlp.0.gate_up) mean=3.68
+  [spec] step=15200 sigma_max=4.61 (core.5.mlp.0.gate_up) mean=3.69
+[  15200/20000] loss=8.0308  ppl=3074.3  lr=1.00e-04  sps=3.19  tok/s=19607  proxy=10.24  tflops=27.7  peak=15.50GB
+  [VAL   15250] loss=3.7965  ppl=44.54  ppl_tok=44.54  first_tok=6.8865  cf=-3.5582  lp/tok=13.03
+  [spec] step=15300 sigma_max=4.63 (core.5.mlp.0.gate_up) mean=3.71
+  [spec] step=15400 sigma_max=4.65 (core.5.mlp.0.gate_up) mean=3.72
+[  15400/20000] loss=8.1811  ppl=3572.6  lr=1.00e-04  sps=3.20  tok/s=19678  proxy=10.20  tflops=27.7  peak=15.50GB
+  [spec] step=15500 sigma_max=4.66 (core.5.mlp.0.gate_up) mean=3.73
+  [VAL   15500] loss=3.8031  ppl=44.84  ppl_tok=44.84  first_tok=7.0713  cf=-3.7153  lp/tok=13.18
+  [spec] step=15600 sigma_max=4.68 (core.5.mlp.0.gate_up) mean=3.74
+[  15600/20000] loss=8.6292  ppl=5592.6  lr=1.00e-04  sps=3.21  tok/s=19743  proxy=10.18  tflops=27.7  peak=15.50GB
+  [spec] step=15700 sigma_max=4.70 (core.5.mlp.0.gate_up) mean=3.76
+  [VAL   15750] loss=3.9347  ppl=51.15  ppl_tok=51.15  first_tok=6.9942  cf=-3.5986  lp/tok=13.19
+  [spec] step=15800 sigma_max=4.72 (core.5.mlp.0.gate_up) mean=3.78
+[  15800/20000] loss=8.2243  ppl=3730.6  lr=1.00e-04  sps=3.22  tok/s=19800  proxy=10.21  tflops=27.9  peak=15.50GB
+  [spec] step=15900 sigma_max=4.74 (core.5.mlp.0.gate_up) mean=3.80
+  [spec] step=16000 sigma_max=4.76 (core.5.mlp.0.gate_up) mean=3.81
+[  16000/20000] loss=9.1017  ppl=8970.9  lr=1.00e-04  sps=3.19  tok/s=19617  proxy=10.18  tflops=27.5  peak=15.50GB
+  [VAL   16000] loss=3.6492  ppl=38.45  ppl_tok=38.45  first_tok=6.6136  cf=-3.4320  lp/tok=14.35
+  [spec] step=16100 sigma_max=4.78 (core.5.mlp.0.gate_up) mean=3.83
+  [spec] step=16200 sigma_max=4.80 (core.5.mlp.0.gate_up) mean=3.85
+[  16200/20000] loss=8.4033  ppl=4461.7  lr=1.00e-04  sps=3.12  tok/s=19172  proxy=10.20  tflops=27.0  peak=15.50GB
+  [VAL   16250] loss=3.6132  ppl=37.08  ppl_tok=37.08  first_tok=6.8593  cf=-3.6954  lp/tok=14.13
+  [spec] step=16300 sigma_max=4.82 (core.5.mlp.0.gate_up) mean=3.87
+  [spec] step=16400 sigma_max=4.83 (core.5.mlp.0.gate_up) mean=3.89
+[  16400/20000] loss=8.2217  ppl=3720.9  lr=1.00e-04  sps=3.27  tok/s=20069  proxy=10.29  tflops=28.4  peak=15.50GB
+  [spec] step=16500 sigma_max=4.83 (core.5.mlp.0.gate_up) mean=3.91
+  [VAL   16500] loss=3.9493  ppl=51.90  ppl_tok=51.90  first_tok=7.1700  cf=-3.6536  lp/tok=13.06
+  [spec] step=16600 sigma_max=4.85 (core.5.mlp.0.gate_up) mean=3.93
+[  16600/20000] loss=9.2458  ppl=10360.6  lr=1.00e-04  sps=3.17  tok/s=19484  proxy=10.18  tflops=27.3  peak=15.50GB
+  [spec] step=16700 sigma_max=4.86 (core.5.mlp.0.gate_up) mean=3.95
+  [VAL   16750] loss=3.8317  ppl=46.14  ppl_tok=46.14  first_tok=7.1413  cf=-3.7216  lp/tok=13.06
+  [spec] step=16800 sigma_max=4.88 (core.5.mlp.0.gate_up) mean=3.97
+[  16800/20000] loss=8.4320  ppl=4591.8  lr=1.00e-04  sps=3.18  tok/s=19553  proxy=10.18  tflops=27.4  peak=15.50GB
+  [spec] step=16900 sigma_max=4.89 (core.5.mlp.0.gate_up) mean=3.98
+  [spec] step=17000 sigma_max=4.91 (core.5.mlp.0.gate_up) mean=4.00
+[  17000/20000] loss=8.8941  ppl=7289.1  lr=1.00e-04  sps=3.20  tok/s=19660  proxy=10.19  tflops=27.6  peak=15.50GB
+  [VAL   17000] loss=4.0198  ppl=55.69  ppl_tok=55.69  first_tok=7.1989  cf=-3.4442  lp/tok=13.47
+  [spec] step=17100 sigma_max=4.92 (core.5.mlp.0.gate_up) mean=4.02
+  [spec] step=17200 sigma_max=4.94 (core.5.mlp.0.gate_up) mean=4.03
+[  17200/20000] loss=8.5264  ppl=5046.3  lr=1.00e-04  sps=3.19  tok/s=19600  proxy=10.31  tflops=27.8  peak=15.50GB
+  [VAL   17250] loss=3.7662  ppl=43.22  ppl_tok=43.22  first_tok=6.8964  cf=-3.5797  lp/tok=13.04
+  [spec] step=17300 sigma_max=4.95 (core.5.mlp.0.gate_up) mean=4.05
+  [spec] step=17400 sigma_max=4.97 (core.5.mlp.0.gate_up) mean=4.07
+[  17400/20000] loss=8.5078  ppl=4953.5  lr=1.00e-04  sps=3.21  tok/s=19700  proxy=10.20  tflops=27.7  peak=15.50GB
+  [spec] step=17500 sigma_max=4.99 (core.5.mlp.0.gate_up) mean=4.09
+  [VAL   17500] loss=3.8381  ppl=46.44  ppl_tok=46.44  first_tok=6.7180  cf=-3.5626  lp/tok=13.16
+  [spec] step=17600 sigma_max=5.00 (core.5.mlp.0.gate_up) mean=4.10
+[  17600/20000] loss=7.9672  ppl=2884.7  lr=1.00e-04  sps=3.20  tok/s=19684  proxy=10.18  tflops=27.6  peak=15.50GB
+  [spec] step=17700 sigma_max=5.02 (core.5.mlp.0.gate_up) mean=4.12
+  [VAL   17750] loss=3.6831  ppl=39.77  ppl_tok=39.77  first_tok=6.6985  cf=-3.5073  lp/tok=13.04
+  [spec] step=17800 sigma_max=5.05 (core.5.mlp.0.gate_up) mean=4.14
+[  17800/20000] loss=8.5064  ppl=4946.2  lr=1.00e-04  sps=3.20  tok/s=19686  proxy=10.18  tflops=27.6  peak=15.50GB
+  [spec] step=17900 sigma_max=5.07 (core.5.mlp.0.gate_up) mean=4.15
+  [spec] step=18000 sigma_max=5.09 (core.5.mlp.0.gate_up) mean=4.17
+[  18000/20000] loss=8.2031  ppl=3652.2  lr=1.00e-04  sps=2.79  tok/s=17131  proxy=10.27  tflops=24.2  peak=15.50GB
+  [VAL   18000] loss=3.8025  ppl=44.81  ppl_tok=44.81  first_tok=6.7654  cf=-3.6655  lp/tok=13.54
+  [spec] step=18100 sigma_max=5.10 (core.5.mlp.0.gate_up) mean=4.19
+  [spec] step=18200 sigma_max=5.12 (core.5.mlp.0.gate_up) mean=4.21
+[  18200/20000] loss=8.4044  ppl=4466.7  lr=1.00e-04  sps=3.16  tok/s=19429  proxy=10.19  tflops=27.3  peak=15.50GB
+  [VAL   18250] loss=3.7924  ppl=44.36  ppl_tok=44.36  first_tok=7.1416  cf=-3.8321  lp/tok=13.06
+  [spec] step=18300 sigma_max=5.14 (core.5.mlp.0.gate_up) mean=4.23
+  [spec] step=18400 sigma_max=5.15 (core.5.mlp.0.gate_up) mean=4.25
+[  18400/20000] loss=8.3545  ppl=4249.4  lr=1.00e-04  sps=3.28  tok/s=20172  proxy=10.20  tflops=28.4  peak=15.50GB
+  [spec] step=18500 sigma_max=5.16 (core.5.mlp.0.gate_up) mean=4.27
+  [VAL   18500] loss=3.6762  ppl=39.50  ppl_tok=39.50  first_tok=7.0378  cf=-3.8309  lp/tok=13.01
+  [spec] step=18600 sigma_max=5.17 (core.5.mlp.0.gate_up) mean=4.28
+[  18600/20000] loss=8.7592  ppl=6369.1  lr=1.00e-04  sps=3.20  tok/s=19664  proxy=10.23  tflops=27.7  peak=15.50GB
+  [spec] step=18700 sigma_max=5.18 (core.5.mlp.0.gate_up) mean=4.30
+  [VAL   18750] loss=3.8715  ppl=48.01  ppl_tok=48.01  first_tok=6.8804  cf=-3.5135  lp/tok=13.01
+  [spec] step=18800 sigma_max=5.19 (core.5.mlp.0.gate_up) mean=4.32
+[  18800/20000] loss=8.1585  ppl=3493.0  lr=1.00e-04  sps=3.20  tok/s=19665  proxy=10.21  tflops=27.7  peak=15.50GB
+  [spec] step=18900 sigma_max=5.20 (core.5.mlp.0.gate_up) mean=4.34
+  [spec] step=19000 sigma_max=5.20 (core.5.mlp.0.gate_up) mean=4.36
+[  19000/20000] loss=8.3497  ppl=4229.1  lr=1.00e-04  sps=3.22  tok/s=19756  proxy=10.20  tflops=27.7  peak=15.50GB
+  [VAL   19000] loss=3.7512  ppl=42.57  ppl_tok=42.57  first_tok=6.9681  cf=-3.7738  lp/tok=13.03
+  [spec] step=19100 sigma_max=5.21 (core.5.mlp.0.gate_up) mean=4.37
+  [spec] step=19200 sigma_max=5.22 (core.5.mlp.0.gate_up) mean=4.39
+[  19200/20000] loss=9.2495  ppl=10399.7  lr=1.00e-04  sps=3.20  tok/s=19634  proxy=10.47  tflops=28.2  peak=15.50GB
+  [VAL   19250] loss=3.8274  ppl=45.94  ppl_tok=45.94  first_tok=6.9731  cf=-3.5774  lp/tok=13.05
+  [spec] step=19300 sigma_max=5.23 (core.5.mlp.0.gate_up) mean=4.41
+  [spec] step=19400 sigma_max=5.25 (core.5.mlp.0.gate_up) mean=4.44
+[  19400/20000] loss=8.3631  ppl=4286.0  lr=1.00e-04  sps=3.23  tok/s=19875  proxy=10.19  tflops=27.9  peak=15.50GB
+  [spec] step=19500 sigma_max=5.26 (core.5.mlp.0.gate_up) mean=4.46
+  [VAL   19500] loss=3.8925  ppl=49.03  ppl_tok=49.03  first_tok=7.1503  cf=-3.6938  lp/tok=13.14
+  [spec] step=19600 sigma_max=5.27 (core.5.mlp.0.gate_up) mean=4.48
+[  19600/20000] loss=8.3015  ppl=4030.0  lr=1.00e-04  sps=3.18  tok/s=19540  proxy=10.21  tflops=27.5  peak=15.50GB
+  [spec] step=19700 sigma_max=5.28 (core.5.mlp.0.gate_up) mean=4.50
+  [VAL   19750] loss=3.8631  ppl=47.61  ppl_tok=47.61  first_tok=7.0640  cf=-3.6370  lp/tok=13.30
+  [spec] step=19800 sigma_max=5.30 (core.5.mlp.0.gate_up) mean=4.52
+[  19800/20000] loss=8.0678  ppl=3190.1  lr=1.00e-04  sps=2.99  tok/s=18354  proxy=10.19  tflops=25.7  peak=15.50GB
+  [spec] step=19900 sigma_max=5.31 (core.5.mlp.0.gate_up) mean=4.54
+Final checkpoint: /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-norecur-20k/step_20000.pt
+Final val_loss=3.8425  ppl=46.64  val/attn_lift=0.5214  val/attn_lift_alllayers=0.6933  val/attn_lift_first_tok=1.0000  val/attn_lift_first_tok_alllayers=1.0000  val/attn_lift_n_calls=8.0000  val/attn_slot_mass=0.3516  val/attn_slot_mass_first_tok=1.0000  val/attn_slot_share=0.6643  val/ce_tokens=3.8425  val/first_tok_ce=7.1944  val/first_tok_counterfactual=-3.7987  val/layer_passes_per_token=13.0503  val/plan_worth_shuffle=0.2022  val/plan_worth_wrong_seed=0.0324  val/plan_worth_zero=0.3050  val/ppl_tokens=46.6398  val/slot_component_mean=0.0069  val/slot_component_std=1.2514  val/slot_eff_rank=19.3200  val/slot_norm_mean=40.0437  val/slot_pairwise_cos=0.6230  val/span_cap_frac=0.2612  val/span_mean_span=19.9048  val/span_one_tok_frac=0.0088  val/span_pad_frac=0.0026  val/span_spans=52.3500  val/span_tokens=1044.2667  val/spandec=3.9970  val/spandec_ce=3.9970  val/spandec_n_tokens=6072.8000  val/spandec_target_offset=1.0000
+wandb: 
+wandb: Run history:
+wandb:   gradnorm/coda ▁██▇▇▆▇▆▆▆▆▇▇▇▆▆▇▆▇▆▆▇▆▆▆▆▆▇▇▇▆▇▇▇▅▆▆▆▆▆
+wandb: gradnorm/coda.0 ▇▂▁▃▃▃▄▅▇▅▂▄▅▃▂▄▃▅▅▃▅▅▃▄▄▄▅▃▄▅▅▄▄▄▂▃▄▂▄█
+wandb: gradnorm/coda.1 ▁▆▆▇▆▇▆█▆▆▇▇▇▇▇▆█▇▆▇▆█▇▇▆▇▇▇▇▇▇█▇▇▇▇▇▇▇▆
+wandb: gradnorm/coda.2 █▂▂▁▂▃▂▂▂▁▃▂▃▃▄▄▄▃▄▃▃▃▃▂▃▄▃▃▃▅▃▃▃▃▃▄▄▂▄▂
+wandb: gradnorm/coda.3 ▇▅▄▄▅▄▃▄▅▄▄▃▃▃▃▅▃▃▃▃▃▃▃▄▃▃▄█▃▄▂▁▂▃▃▂▂▃▃▁
+wandb:   gradnorm/core ▁▄▆▃▄▃▄▅▇▄▅▆▅▆▆▅▇▇▆▅▇▇▆▇█▆▇▆▅▆▇█▆█▆▆█▇▇▅
+wandb: gradnorm/core.0 ▁▂▁▃▂▃▄▄▃▃▃▄█▄▅▄▄▅▆▅▄▇▆▃▄▆▅█▄▄▅▅▅▆▄▆▆▆▆▅
+wandb: gradnorm/core.1 █▁▁▂▃▂▃▂▂▄▄▄▃▃▂▄▃▃▃▃▃▃▃▃▃▄▃▃▄▄▃▃▄▃▄▃▃▄▂▄
+wandb: gradnorm/core.2 ▃▁▁▁▁▃▂▁▂▂▂▃▂▃▃▄▄▄▅▄▅▅▅▅▆▅▅▅▃▅▅▅▅▇▇█▅▆▆▆
+wandb: gradnorm/core.3 ▁▅▂▄▂▂▃▃▃▃▃▄▃▄▃▄▃▄▆▅▇█▆▅▇▇▅▆▅▆▆▅▅▇▆▇▆█▇▆
+wandb:            +201 ...
+wandb: 
+wandb: Run summary:
+wandb:   gradnorm/coda 0.33596
+wandb: gradnorm/coda.0 0.12964
+wandb: gradnorm/coda.1 0.1502
+wandb: gradnorm/coda.2 0.1573
+wandb: gradnorm/coda.3 0.22081
+wandb:   gradnorm/core 0.20002
+wandb: gradnorm/core.0 0.07745
+wandb: gradnorm/core.1 0.04076
+wandb: gradnorm/core.2 0.06262
+wandb: gradnorm/core.3 0.0956
+wandb:            +202 ...
+wandb: 
+wandb: 🚀 View run slot-spandec-strict-norecur-20k at: https://wandb.ai/adew-me/morph-tul/runs/s4c8l6pu
+wandb: ⭐️ View project at: https://wandb.ai/adew-me/morph-tul
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: /home/wolfe/morph-scratch/wandb/run-20260922_232753-s4c8l6pu/logs
