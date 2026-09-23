@@ -166,3 +166,6 @@ holds on Sudoku (94.88) and collapses on N-Queens (50.27).
 It does not carry a stability story for a shared core under full BPTT. Their gradient is
 truncated to the last transition of each supervision step, which is the opposite of the
 full-BPTT recipe MORPH runs.
+
+
+> **Correction 2026-09-23:** a full re-read of the PDF is in [gram-2026-09-23-reread.md](gram-2026-09-23-reread.md). The ARC numbers above came from the LLM bars in Figure 3; GRAM scores 52.0 on ARC-AGI-1 and 11.1 on ARC-AGI-2. Posterior collapse is guarded by KL balancing at 0.8, not free bits or annealing; beta is 0.04 to 0.5 (0.1 on Sudoku).

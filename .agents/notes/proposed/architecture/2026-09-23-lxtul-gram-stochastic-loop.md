@@ -114,3 +114,38 @@ Drafted 2026-09-23 with Wolfe ("Yes, this is very good. Save it to a doc."). Sou
 `/home/wolfe/morph-scratch/arc/notes/2026-09-23-latent-exploration-prior-work.md`,
 `/home/wolfe/morph-scratch/arc/notes/2026-09-23-slot-loop-large-readings.md`,
 `docs/9-26-TUL-run-history-IMPORTANT.md`.
+
+## Paper refresh (2026-09-23 10:39)
+
+An opus agent read GRAM (re-read from the PDF, all appendices), Variational Reasoning
+(arXiv 2509.22637), ReGuLaR (2601.23184), Search Inertness (2607.19635) and Emergent Search
+and Backtracking (2602.08100) in full. Reading notes are under
+`docs/references/looping-depth/latent-exploration/`; the design synthesis is
+`/home/wolfe/morph-scratch/arc/notes/2026-09-23-lxtul-g-paper-synthesis.md`. What it
+changes in the proposal above, before any prereg:
+
+- **Posterior input.** An attention pool over the NEXT span's prelude states, copy-initialised
+  from the prior head so the KL is exactly 0 at step 0 (GRAM Eq. 12-13, VR Table 4, ReGuLaR
+  Table 10).
+- **KL.** Per pass, summed over passes (the exact ELBO under full BPTT), with GRAM's KL
+  BALANCING at 0.8 and beta 0.1. GRAM uses no free bits and no annealing, and neither do
+  the other four; free bits move from the design to a fallback (1 nat per slot) if the KL
+  collapses. This corrects the Proposal's "free bits per slot".
+- **Noise.** A learned mean and variance, scaled by each slot's detached RMS, so the step
+  cannot escape by scale (the fan4-all-noise failure).
+- **The fixed-point term must be computed on the deterministic part u_T, not on h_T.**
+  On h_T it includes the Gaussian step and pays the model to shrink sigma to zero.
+- **Selection at inference: the exact Bayesian per-token read.** Decode the coda once per
+  prior sample; weight sample n at token j by softmax over n of its log-likelihood of the
+  span's EARLIER tokens. Causal, no training, and its summed log-likelihood equals the
+  multi-sample bound exactly, so the deployed CE and the exposure-gap instrument are one
+  number. It also decodes each sample alone, the format the coda trains on. Cost: N coda
+  passes per span at inference; the one-pass N-cell read (`fan_mix: all`) is the cheaper
+  alternative, scored against it as its ceiling. A GRAM-style value head is an instrument
+  until its ranking beats chance.
+- **Controls** (from Search Inertness and GRAM): width gain against span entropy with a
+  mean-free arm (stochasticity only) and an identical-sample null beside it; and the
+  first-pass contingency (is the outcome decided at pass 1) on a depth x N factorial.
+- **GRAM facts corrected** in the re-read note: ARC-AGI-1 52.0 and ARC-AGI-2 11.1 (the
+  earlier note read the LLM bars); no official code; how the posterior reads the target is
+  not stated.
