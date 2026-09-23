@@ -88,3 +88,23 @@ spectral decoupling separately), merged by me, gate tests on CPU, then the runne
 posterior-leak perturbation test is a build gate: in prior mode, the cells must not move
 when the next span's tokens change. Artifacts under
 `../results/2026-09-23-lxtul-g/` (json and runlog only).
+
+## Method amendment (2026-09-23 11:52, after the build review, before any run)
+
+Predictions unchanged. What the review of the two builds fixed or recorded:
+
+- **fan4-all-sd lambda is 2e-7, not the builder's 1e-5.** Measured on the trained 5k ruler
+  and fan4-all-fp0 checkpoints, mean ||z||^2 per token is 1.03e6 / 1.04e6 (per-logit rms
+  4.6); 1e-5 would be a 5.1-nat penalty (125 % of CE). 2e-7 is 0.10 nats, about 2.5 %.
+- **The fixed-point term reads u_T** (the deterministic part), so it puts no gradient on
+  the LAST pass's sigma. At depth >= 2 it still reaches earlier passes' steps through
+  h_{T-1}; left in by design (the loop is meant to stay contractive around its noise) and
+  watched through `tul/gram_sigma_ratio_prior` / `_post`. If sigma/r falls toward the
+  1e-4 floor, that is the cause to test first.
+- **The Bayesian read resets at every span.** Each span's tokens are reweighted over the N
+  joint prior samples by that span's own earlier tokens only. It is a valid causal
+  predictor and equals the multi-sample bound per span; it is not the whole-row
+  sequential importance weight.
+- Build commits: gram e75e78c, spectral decoupling 3221610, merge (this commit's parent).
+  Review: 44 + 131 + 58 tests passed on the branches, 185 on the merge; five sabotages
+  caught; 40-step GPU smokes of gram and meanfree exit 0.
