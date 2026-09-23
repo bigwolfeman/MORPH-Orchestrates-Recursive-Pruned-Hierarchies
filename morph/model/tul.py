@@ -1861,10 +1861,41 @@ class TULConfig:
     gram_sigma_init: float = 0.1         # sigma / r at step 0, on every slot
     gram_hidden: int = 256               # SwiGLU hidden width of every noise head
 
+    # ── Spectral decoupling on the coda's token logits (2026-09-23) ──────────────
+    #
+    # Pezeshki et al., "Gradient Starvation", arXiv 2011.09468: an L2 penalty on the
+    # classifier's OUTPUT (not its weights) — `lambda/2 * mean(||z||^2)` over the
+    # labelled positions — that stops one discriminative direction from starving the
+    # gradient to the others. Applied here to the coda's token logits `z` on the
+    # weighted-CE branch of `_tul_group_losses` (morph/model/fused_ce.py has the exact
+    # fused/gradient derivation; `morph/model/transformer.py::_tul_group_losses` is the
+    # one wiring site). Folded straight into the fused CE kernel — never a second
+    # `[N, V]` logits tensor.
+    #
+    # Default 0.0, and 0.0 is BIT-IDENTICAL: `_tul_group_losses` calls the ORIGINAL
+    # `fused_linear_cross_entropy` (this file's penalty kernel is never even invoked),
+    # proven with `torch.equal` on loss and every parameter's grad in
+    # tests/test_coda_logit_l2.py, not merely "the added term is ~0".
+    #
+    # `layout is None` (the arm-A4 plan-nats gather, `_tul_group_losses`'s OTHER
+    # branch) is NOT implemented and RAISES at that call site rather than silently
+    # skipping the penalty — it is a different (unweighted) reduction this key was
+    # never wired into.
+    coda_logit_l2: float = 0.0
+
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
         # and not about a rule of the refused mode it never meant to run.
         self._check_gram()
+        # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
+        # Checked FIRST, unconditionally: every other block below this point guards an
+        # OFF-by-default feature with its own early `return` (see `tul.vq_codes` at the
+        # tail of this method for the precedent), so a check placed after one of those
+        # would silently never run under the default configuration.
+        if self.coda_logit_l2 < 0.0:
+            raise ValueError(
+                f"tul.coda_logit_l2 must be >= 0, got {self.coda_logit_l2}")
+
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
         if self.loop_carry not in LOOP_CARRY_MODES:
             raise ValueError(

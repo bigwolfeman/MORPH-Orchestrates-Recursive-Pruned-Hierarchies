@@ -158,7 +158,11 @@ def evaluate(
                           # tul.gram (LXTUL-G, 2026-09-23): beta * KL / n_tokens. At
                           # eval the default draw is the PRIOR and no KL is built, so it
                           # is absent there; listed so a posterior eval stays the CE.
-                          "gram_kl_weighted"):
+                          "gram_kl_weighted",
+                          # tul.coda_logit_l2 (spectral decoupling, 2026-09-23): folded
+                          # straight into the fused CE kernel, so subtracted the same
+                          # way so val loss stays the MODEL's CE.
+                          "coda_logit_l2_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -198,6 +202,10 @@ def evaluate(
                         # TARGET-side collapse reading (code_tgt_std) runs whenever
                         # code_target is on, lambda 0 or not.
                         "code_enc_var", "code_enc_std", "code_enc_active", "code_tgt_std",
+                        # tul.coda_logit_l2 (spectral decoupling, 2026-09-23): the raw
+                        # mean ||z||^2 over labelled token positions. The weighted term
+                        # is train-side only (it is subtracted back out of val/loss).
+                        "coda_logit_sq",
                         # tul.loop_denoise: no per-pass TERM is built at eval (the
                         # rollout has no teacher), so only the exit readings above
                         # appear there; `loop_denoise*` is train-side only.
@@ -3590,10 +3598,13 @@ def main(cfg: DictConfig) -> None:
                                               # reported CE + flow as train/loss)
                         "code_sigreg_weighted",   # LeJEPA SIGReg on the code cells
                         "gram_kl_weighted",   # tul.gram (LXTUL-G), 2026-09-23
-                        "code_enc_var_weighted"):  # LCTUL-J Stage 1, 2026-09-22: the
+                        "code_enc_var_weighted",  # LCTUL-J Stage 1, 2026-09-22: the
                                                    # online variance floor, its own weight
                                                    # (code_enc_var_lambda), separate from
                                                    # code_target_weight
+                        "coda_logit_l2_weighted"):  # tul.coda_logit_l2 (spectral
+                                                     # decoupling, 2026-09-23): folded
+                                                     # into the fused CE kernel
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -3764,7 +3775,10 @@ def main(cfg: DictConfig) -> None:
                            "code_t_mean",
                            "code_sigreg", "code_sigreg_weighted",
                            "code_mdm_nats", "code_mask_frac", "code_sub_frac",
-                           "horizon_n_tokens"):
+                           "horizon_n_tokens",
+                           # tul.coda_logit_l2 (spectral decoupling, 2026-09-23):
+                           # `tul/coda_logit_sq` (the raw stat) and its weighted twin.
+                           "coda_logit_sq", "coda_logit_l2_weighted"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_target: the term, its weighted twin, the exit cosine and the
