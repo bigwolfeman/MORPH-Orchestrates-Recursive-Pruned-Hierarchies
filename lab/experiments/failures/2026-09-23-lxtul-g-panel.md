@@ -216,7 +216,7 @@ Bayesian read's own loss, with no posterior and no KL: LXTUL-GK,
 gain survives and the depth-under-width reading grows, that is the loop contributing
 through search. Spectral decoupling is closed as a lever on the fan4-all read.
 
-## Addendum (2026-09-23 16:14): b1 at step 2500
+## Addendum (2026-09-23 16:13): b1 at step 2500
 
 The probe finished after filing. lxtul-g-b1 at 2500: ce_post 4.6084, ce_prior@1 4.6092,
 ce_iw@4 4.6089, ce_iw@16 4.6089, ce_zero 4.7247, KL 0.018 per token. The gap is 0.0008
