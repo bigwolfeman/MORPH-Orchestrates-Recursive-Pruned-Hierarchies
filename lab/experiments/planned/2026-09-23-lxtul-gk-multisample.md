@@ -78,3 +78,30 @@ paid on web text at this scale.
 
 Opus builder on a worktree at HEAD; review, gate tests and sabotages by me before merge;
 then the runner. Artifacts under `../results/2026-09-23-lxtul-gk/`.
+
+## Method amendment (2026-09-23 16:03, after the gk4 smoke failed, before any gk4 step)
+
+Predictions unchanged. What happened and what changed:
+
+- **Build and review.** Merged as 1416d4d. My review added two tests the builder's suite
+  lacked (the loop's depth table is the base draw tiled rollout-major; identical rollouts
+  give the K = 1 gradient on every parameter). Two of my five sabotages (depth
+  `repeat_interleave`, the front fed by rollout 0 only) passed the builder's suite and fail
+  only these tests.
+- **The gk4 smoke ran out of memory** (runner 15:46:13, the compile warmup's first backward,
+  24.6 GB in the process). The runner skipped it and started gk1 at 1416d4d, so **gk1 runs
+  first**. A CUDA allocator trace of one training step on the Spark put the K = 4 step at
+  26.64 GB against 12.68 GB at K = 1. The largest item was a pre-existing waste in
+  `TULSlots.prefix_project`: its broadcast matmul expanded `W_prefix` to `[B, S, K, C, C]`
+  and saved it for the backward (1.5 GB at K = 1, 6.0 GB at K = 4). Fixed in 911ef4e for
+  every arm (forward bit-identical, gradient summation order only). The span decoder on
+  the K rollouts' exit states was the next item (~4.4 GB); its decode is checkpointed at
+  K > 1 in 43bb234. The K = 4 step now traces at 15.17 GB.
+- 911ef4e also fixes a regression 1416d4d put on master: the GK keywords `n_rep` and
+  `checkpoint_blocks` went to every forward and broke wrappers with the old signature,
+  among them the instrument `lab/divergence/slot_path_worth.py::token_tax`.
+- **gk4 is re-queued at 43bb234**, after gk1. The two arms therefore run at different
+  commits. The K = 1 arithmetic differs between them only in the W_prefix gradient's fp32
+  summation order (1e-11 to 2e-8 relative on the pinned fixtures).
+- **P-7 now carries the recompute.** The coda blocks and the span decode are recomputed in
+  the backward at K > 1. P-7 is scored on the tok/s the runner logs at step 200, as frozen.
