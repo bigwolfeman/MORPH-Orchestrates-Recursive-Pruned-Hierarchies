@@ -8419,7 +8419,16 @@ class MORPHTransformer(nn.Module):
         # table that the slot's own seed (`E_slot` + a bag-mean OF that table) is built
         # from — the feedback loop `TULConfig.mux_detach_head` records. `SpanDecoder.tok_in`
         # is the learnable map that lets the decoder adapt without writing into the table.
-        st = dec.decode(z, ids, valid, w_tied.detach(), mem=mem)       # [B, S, J, C]
+        if self._gram_iw_k > 1 and self.training:
+            # LXTUL-GK (tul.gram_objective="iw", K > 1): the decoder runs on K rollouts'
+            # exit states, and its activations were ~4.4 GB of a 20 GB step at B=6, K=4
+            # (memory trace 2026-09-23). The decode is checkpointed, as the per-pass
+            # decoder's is below; `checkpoint` recomputes, it does not re-weight. Every
+            # other forward takes the plain call.
+            st = checkpoint(dec.decode, z, ids, valid, w_tied.detach(), mem=mem,
+                            use_reentrant=False)
+        else:
+            st = dec.decode(z, ids, valid, w_tied.detach(), mem=mem)   # [B, S, J, C]
         C = st.shape[-1]
         lab = torch.where(valid, ids, torch.full_like(ids, -100))
         loss = fused_linear_cross_entropy(

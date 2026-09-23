@@ -369,7 +369,8 @@ def test_loop_depth_table_is_the_base_draw_tiled_rollout_major():
         assert torch.equal(used[k * B:(k + 1) * B], base), k
 
 
-def test_identical_rollouts_give_the_k1_gradient_on_every_parameter():
+@pytest.mark.parametrize("spandec", [False, True])
+def test_identical_rollouts_give_the_k1_gradient_on_every_parameter(spandec):
     """All K rollouts drawn from ONE seed are the same function, so the bound is that
     rollout's weighted CE and each rollout carries credit 1/K. The gradient summed back
     through the repeats must then equal the K = 1 gradient on EVERY parameter: the front
@@ -378,7 +379,7 @@ def test_identical_rollouts_give_the_k1_gradient_on_every_parameter():
     _ids, inp, lab, layout = _pack()
     grads, losses = {}, {}
     for K in (1, 4):
-        m = _gk(K, token_state_dropout=0.0)
+        m = _gk(K, token_state_dropout=0.0, spandec=spandec)
         real = m._gram_ctx
 
         def patched(xn, lay, gram_mode, gram_seed, n_nograd, iw_rollouts=1, _r=real):
@@ -397,6 +398,9 @@ def test_identical_rollouts_give_the_k1_gradient_on_every_parameter():
     assert grads[1].keys() == grads[4].keys()
     front = [n for n in grads[1] if n.startswith("prelude.")]
     assert front and all(float(grads[1][n].abs().sum()) > 0 for n in front[:1])
+    if spandec:     # the decoder (checkpointed at K > 1) is in the compared set
+        assert any(n.startswith("tul_spandec.") or ".spandec" in n or "spandec" in n
+                   for n in grads[1]), sorted(grads[1])[:5]
     for n in grads[1]:
         torch.testing.assert_close(grads[4][n], grads[1][n], rtol=1e-4, atol=1e-6,
                                    msg=lambda e, _n=n: f"{_n}: {e}")
