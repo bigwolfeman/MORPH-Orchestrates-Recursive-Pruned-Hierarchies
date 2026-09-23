@@ -123,13 +123,13 @@ def test_exit_is_the_default_and_builds_no_parameter():
 
 @pytest.mark.parametrize("tag,kw,loss,logit_sum,grad_sum,n_keys", [
     ("strict_k2", dict(tg_geometry="strict"),
-     5.044249534606934, 842.074198674527, 968.7720451547807, 211),
+     5.044249534606934, 842.074198674527, 968.7720451450658, 211),
     ("strict_k4", dict(tg_geometry="strict", prefix_k=4),
-     5.020976543426514, 1136.2373420511503, 962.8389480001819, 211),
+     5.020976543426514, 1136.2373420511503, 962.8389462181175, 211),
     ("restrict_k2", dict(tg_geometry="restrict"),
-     4.719430446624756, 802.7991237437302, 865.1620777147477, 211),
+     4.719430446624756, 802.7991237437302, 865.1620777188826, 211),
     ("plain_tul_k2", dict(tg_restrict=False, tg_geometry="restrict"),
-     4.7814178466796875, 1107.3154941663088, 912.4137765960858, 256),
+     4.7814178466796875, 1107.3154941663088, 912.4137765946576, 256),
 ])
 def test_exit_is_pinned_to_the_pre_knob_values(tag, kw, loss, logit_sum, grad_sum, n_keys):
     """The OFF state, pinned to numbers measured on the tree BEFORE `prefix_source`.
@@ -137,6 +137,12 @@ def test_exit_is_pinned_to_the_pre_knob_values(tag, kw, loss, logit_sum, grad_su
     Produced 2026-09-13 by running this exact fixture in a `git worktree` of `d778845`
     (the commit this change sits on) and again on the working tree: identical. The pin is
     here so a later refactor of `prefix_project` cannot move the shipped write in silence.
+
+    2026-09-23: the `cells is None` write moved from a broadcast matmul (which expanded
+    W_prefix to [B, S, K, C, C] and saved it for the backward: 1.5 GB at the panel shape,
+    6.0 GB under LXTUL-GK) to K plain matmuls. Loss and logits are unchanged bit for bit;
+    the four grad sums moved by 1e-11 to 2e-9 relative (fp32 summation order of the
+    W_prefix gradient) and are re-pinned to the new tree's values.
     """
     k = int(kw.get("prefix_k", 2))
     _ids0, inp, lab, layout = _batch(k)

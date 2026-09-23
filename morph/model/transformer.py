@@ -10411,8 +10411,11 @@ class MORPHTransformer(nn.Module):
             x_coda = scatter_positions(base, pos, values)
 
         # Under "iw" ONE dropout mask per base row, shared by its K rollouts (n_rep).
-        x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training,
-                                                    n_rep=max(_iw_k, 1))
+        # `n_rep` is passed ONLY on that path, so every other forward calls
+        # `apply_token_dropout` with exactly the arguments it always had (instruments such
+        # as lab/divergence/slot_path_worth.py::token_tax wrap it with that signature).
+        x_coda, keep = self.tul.apply_token_dropout(
+            x_coda, layout, self.training, **({"n_rep": _iw_k} if _iw_k > 1 else {}))
         if tc.coda_token_input == "embed" or self._tg_strict:
             # The arm's contract: in the coda a slot cell carries z and NOTHING else. The
             # per-layer coda injections at the slot cells (x0 = the seed, bigram = the
@@ -10470,7 +10473,8 @@ class MORPHTransformer(nn.Module):
             # other forward: the loop in `_back_region` is then the one from before.
             xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
                                    attn_kwargs=_coda_kw, ret_reset_mask=tg_reset,
-                                   checkpoint_blocks=_iw_k > 1, **_bcast_kw)
+                                   **({"checkpoint_blocks": True} if _iw_k > 1 else {}),
+                                   **_bcast_kw)
             if _iw_k:
                 groups = self._gram_iw_losses(xh, labels, layout, _iw_k)
             else:

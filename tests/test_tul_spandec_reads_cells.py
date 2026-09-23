@@ -54,16 +54,19 @@ DOT = 10
 
 # Measured 2026-09-13 with `lab/divergence/spandec_off_pin.py`, first on the parent commit
 # f89256d (this change's four source files stashed) and then on this tree. Identical to the
-# last printed digit on all four fixtures.
+# last printed digit on all four fixtures. 2026-09-23: the fourth column (grad sum) is
+# re-pinned after `prefix_project` dropped its broadcast matmul (an expanded [B,S,K,C,C]
+# weight copy); the forward columns are unchanged, the grad sums moved by <2e-8 relative
+# (fp32 summation order of the W_prefix gradient).
 OFF_PIN = {
     (1, 0): (9.975275039672852, 588.597041240384, 4.661545753479004,
-             -13.439470961329107, 221),
+             -13.439470942660298, 221),
     (1, 1): (9.963083267211914, 584.2413757609356, 4.579278945922852,
-             2.661492524126192, 221),
+             2.661492524187061, 221),
     (4, 0): (9.907234191894531, 556.8746325914599, 4.609741687774658,
-             -13.70600261135484, 226),
+             -13.706002625373948, 226),
     (4, 1): (9.939682006835938, 595.9072399611105, 4.568795680999756,
-             -1.6188369267384528, 226),
+             -1.6188369479138378, 226),
 }
 
 

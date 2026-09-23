@@ -4865,10 +4865,14 @@ class TULSlots(nn.Module):
                 "(tul.tokens_through_core) has no projection to write through.")
         w = self.W_prefix.to(h_slots.dtype)
         if cells is None:
-            # [B,S,M,C] ⊗ [K,C,C] → [B,S,K,M,C] by broadcast matmul (batch dims
-            # (B,S,1)×(1,1,K)).
+            # [B,S,M,C] through each W_prefix[k] → [B,S,K,M,C]. K plain matmuls, each one
+            # GEMM over the folded [B·S·M, C] rows, NOT the broadcast matmul
+            # `hm.unsqueeze(2) @ w.view(1, 1, K, C, C)`: that form expands `w` to
+            # [B, S, K, C, C] and keeps the copy for the backward. Measured 2026-09-23 on
+            # the strict panel shape (B=6, prefix_k=2, C=768): 1.5 GB of a 12.7 GB step,
+            # and 6.0 GB of 26.6 GB under LXTUL-GK's 4-fold batch (which OOMed the 5090).
             hm = h_slots.reshape(B, S, -1, C)
-            proj = torch.matmul(hm.unsqueeze(2), w.view(1, 1, K, C, C))
+            proj = torch.stack([torch.matmul(hm, w[k]) for k in range(K)], dim=2)
         else:
             if cells.shape[:3] != (B, S, K) or cells.shape[3:] != h_slots.shape[2:]:
                 raise ValueError(
