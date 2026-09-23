@@ -1,0 +1,143 @@
+{
+ "label": "ema",
+ "step": 5000,
+ "rows": 96,
+ "n_slots": 4900,
+ "M": 2,
+ "C": 1024,
+ "eval_depth": 0,
+ "by_depth": {
+  "1": {
+   "depth": 1,
+   "cells": [
+    {
+     "cos_own": 0.5898220539093018,
+     "cos_shuf": 0.47502392530441284,
+     "cos_pred_zbar": 0.8968439102172852,
+     "cos_z_zbar": 0.5294776558876038,
+     "cos_pbar_zbar": 0.9975340962409973,
+     "cos_centred_own": 0.296748548746109,
+     "cos_centred_shuf": 0.0014317899476736784,
+     "pair_pred": 0.8091503381729126,
+     "pair_z": 0.28403714299201965,
+     "eff_rank_pred": 16.067731801568943,
+     "eff_rank_z": 39.78050451465282,
+     "norm_pbar_over_rms": 0.8990609645843506,
+     "norm_zbar_over_rms": 0.5294777154922485,
+     "rms_pred": 1.0,
+     "cos_to_d0": 1.0,
+     "delta_rel": 0.0,
+     "cos_delta_zbar": 0.0,
+     "cos_delta_z": 0.0
+    },
+    {
+     "cos_own": 0.5799279808998108,
+     "cos_shuf": 0.4472804665565491,
+     "cos_pred_zbar": 0.8793482780456543,
+     "cos_z_zbar": 0.5095663070678711,
+     "cos_pbar_zbar": 0.9973657131195068,
+     "cos_centred_own": 0.3023405969142914,
+     "cos_centred_shuf": 0.0007927000988274813,
+     "pair_pred": 0.7773435711860657,
+     "pair_z": 0.2602476179599762,
+     "eff_rank_pred": 15.542808175614734,
+     "eff_rank_z": 38.278831758182946,
+     "norm_pbar_over_rms": 0.8816708326339722,
+     "norm_zbar_over_rms": 0.5095663666725159,
+     "rms_pred": 1.0,
+     "cos_to_d0": 1.0,
+     "delta_rel": 0.0,
+     "cos_delta_zbar": 0.0,
+     "cos_delta_z": 0.0
+    }
+   ]
+  },
+  "6": {
+   "depth": 6,
+   "cells": [
+    {
+     "cos_own": 0.5909468531608582,
+     "cos_shuf": 0.4647851586341858,
+     "cos_pred_zbar": 0.8772947192192078,
+     "cos_z_zbar": 0.5294776558876038,
+     "cos_pbar_zbar": 0.9972894191741943,
+     "cos_centred_own": 0.3003588914871216,
+     "cos_centred_shuf": 0.001710780430585146,
+     "pair_pred": 0.774508535861969,
+     "pair_z": 0.28403714299201965,
+     "eff_rank_pred": 16.63098046770102,
+     "eff_rank_z": 39.78050451465282,
+     "norm_pbar_over_rms": 0.8796792030334473,
+     "norm_zbar_over_rms": 0.5294777154922485,
+     "rms_pred": 1.0,
+     "cos_to_d0": 0.9956073760986328,
+     "delta_rel": 0.08915770053863525,
+     "cos_delta_zbar": -0.2109973430633545,
+     "cos_delta_z": 0.009588931687176228
+    },
+    {
+     "cos_own": 0.5817835927009583,
+     "cos_shuf": 0.4373970627784729,
+     "cos_pred_zbar": 0.859458327293396,
+     "cos_z_zbar": 0.5095663070678711,
+     "cos_pbar_zbar": 0.9975993633270264,
+     "cos_centred_own": 0.3068758249282837,
+     "cos_centred_shuf": 0.0010966506088152528,
+     "pair_pred": 0.7426799535751343,
+     "pair_z": 0.2602476179599762,
+     "eff_rank_pred": 16.288925164953355,
+     "eff_rank_z": 38.278831758182946,
+     "norm_pbar_over_rms": 0.8615264892578125,
+     "norm_zbar_over_rms": 0.5095663666725159,
+     "rms_pred": 1.0,
+     "cos_to_d0": 0.995039165019989,
+     "delta_rel": 0.09458373486995697,
+     "cos_delta_zbar": -0.19793687760829926,
+     "cos_delta_z": 0.015827007591724396
+    }
+   ]
+  }
+ },
+ "cells": [
+  {
+   "cos_own": 0.5898220539093018,
+   "cos_shuf": 0.47502392530441284,
+   "cos_pred_zbar": 0.8968439102172852,
+   "cos_z_zbar": 0.5294776558876038,
+   "cos_pbar_zbar": 0.9975340962409973,
+   "cos_centred_own": 0.296748548746109,
+   "cos_centred_shuf": 0.0014317899476736784,
+   "pair_pred": 0.8091503381729126,
+   "pair_z": 0.28403714299201965,
+   "eff_rank_pred": 16.067731801568943,
+   "eff_rank_z": 39.78050451465282,
+   "norm_pbar_over_rms": 0.8990609645843506,
+   "norm_zbar_over_rms": 0.5294777154922485,
+   "rms_pred": 1.0,
+   "cos_to_d0": 1.0,
+   "delta_rel": 0.0,
+   "cos_delta_zbar": 0.0,
+   "cos_delta_z": 0.0
+  },
+  {
+   "cos_own": 0.5799279808998108,
+   "cos_shuf": 0.4472804665565491,
+   "cos_pred_zbar": 0.8793482780456543,
+   "cos_z_zbar": 0.5095663070678711,
+   "cos_pbar_zbar": 0.9973657131195068,
+   "cos_centred_own": 0.3023405969142914,
+   "cos_centred_shuf": 0.0007927000988274813,
+   "pair_pred": 0.7773435711860657,
+   "pair_z": 0.2602476179599762,
+   "eff_rank_pred": 15.542808175614734,
+   "eff_rank_z": 38.278831758182946,
+   "norm_pbar_over_rms": 0.8816708326339722,
+   "norm_zbar_over_rms": 0.5095663666725159,
+   "rms_pred": 1.0,
+   "cos_to_d0": 1.0,
+   "delta_rel": 0.0,
+   "cos_delta_zbar": 0.0,
+   "cos_delta_z": 0.0
+  }
+ ]
+}

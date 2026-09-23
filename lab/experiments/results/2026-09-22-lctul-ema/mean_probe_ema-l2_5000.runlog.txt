@@ -1,0 +1,21 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.0 slot_seed='boundary'
+  LCTUL-J ON: EMA target, momentum m=0.996 (the twin lerps toward the live model after every optimizer step, weight 1-m=0.0040); variance floor L_enc: lambda=0.2, gamma=1.0 (own weight, NOT scaled by code_target_weight). Read `tul/code_tgt_std` (the target-side collapse instrument, always on with code_target) beside `tul/code_enc_std` and `tul/code_enc_active`.
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 269.9M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+    [code_ref] frozen VAE-stage twin resume: 269.9M parameters; every code target and every grade is measured against it
+[data] local arrow source: 1 shards (first=openwebtext-train-00000-of-00080.arrow)
+ema-l2: step 5000, 96 rows, N=4900 valid slots, M=2, C=1024
+  [depth 1] cell 0: cos own 0.5882  shuf 0.4432  pred·zbar 0.8454  z·zbar 0.5227  centred own 0.3138 shuf 0.0046  pair pred 0.7194 z 0.2762  rank pred 16.6 z 39.6  rms 1.000
+             to-d0 1.0000  |delta|/|p| 0.0000  delta.zbar +0.0000  delta.z +0.0000
+  [depth 1] cell 1: cos own 0.5862  shuf 0.4237  pred·zbar 0.8303  z·zbar 0.5099  centred own 0.3266 shuf 0.0038  pair pred 0.6940 z 0.2619  rank pred 16.5 z 37.1  rms 1.000
+             to-d0 1.0000  |delta|/|p| 0.0000  delta.zbar +0.0000  delta.z +0.0000
+  [depth 6] cell 0: cos own 0.5869  shuf 0.4278  pred·zbar 0.8151  z·zbar 0.5227  centred own 0.3174 shuf 0.0052  pair pred 0.6674 z 0.2762  rank pred 17.1 z 39.6  rms 1.000
+             to-d0 0.9929  |delta|/|p| 0.1148  delta.zbar -0.2556  delta.z -0.0131
+  [depth 6] cell 1: cos own 0.5855  shuf 0.4082  pred·zbar 0.7993  z·zbar 0.5099  centred own 0.3304 shuf 0.0043  pair pred 0.6412 z 0.2619  rank pred 16.8 z 37.1  rms 1.000
+             to-d0 0.9922  |delta|/|p| 0.1188  delta.zbar -0.2489  delta.z -0.0076
+wrote /home/wolfe/morph-instruments/out-0922-ema/mean_probe_ema-l2_5000.json

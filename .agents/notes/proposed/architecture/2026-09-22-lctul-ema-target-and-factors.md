@@ -204,3 +204,24 @@ Run (the prereg in `lab/experiments/planned/` states the bars; the shape):
   about 1.1 GB. No new memory; the step cost is measured in the smoke.
 - The paper reports no text result; its gains are 5 to 35 % relative on other domains,
   and control is "environment-dependent" in its own words.
+
+## Outcome log
+
+**Stage 1 outcome (2026-09-22 19:12), a failure with two named errors.** Filed under
+[`failures/2026-09-22-lctul-ema-target.md`](../../../../lab/experiments/failures/2026-09-22-lctul-ema-target.md)
+(build 13a9535, retry config a55ddae; wandb twx0472q / okcopzg0 / y6k36fqo). The EMA
+target moved on both draws (rank 77 → 40 per cell, cosine to the corpus mean 0.06 →
+0.53) and the reader saw none of it: val loss equal to three decimals against the frozen
+twin, cell worth 0.165 / 0.168 / 0.174 nats, token K1−K6 at the floor (+0.0006 / +0.0016
+/ +0.0014), paired token CE inside ±0.005. The floor at ten times the paper's weight held
+the online cells' spread and changed nothing else. Error 1: Stage 1 put `L_enc` on the
+predictor's output; the paper floors the online ENCODER's output, which in this mapping
+is the front's token states E pools (the tensor whose EMA is the target). Error 2:
+`val/ce_tf` collapses to the token CE on the frozen control too, so it is a reader
+statement, not a target statement. Wolfe's call, 2026-09-22: no arm passes or fails on a
+cosine. Consequences: Stage 2 (the factor split) is NOT built on this target; the
+corrected floor placement is a separate arm, not run under the filed prereg, and is
+Wolfe's call to open. What is settled: with a stop-gradient cell and a token-trained
+coda, the code target's identity is decoupled from the token loss, so no target, fixed
+or moving, changes what the reader gets unless the cell's route into the token loss
+changes.

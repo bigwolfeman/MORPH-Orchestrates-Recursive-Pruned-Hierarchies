@@ -1,6 +1,6 @@
 # Planned: LCTUL-J Stage 1, the EMA code target with the online variance floor
 
-Status: planned
+Status: failure
 
 Date: 2026-09-22 (drafted 16:40 while the build ran; frozen and committed before any
 GPU step of either arm). Design note:
@@ -158,3 +158,98 @@ at 17:14; it stands on the nats reading alone (the reader lost the whole worth o
 true code and the rank halved), so it runs. The health readings for the retry are
 `val/ce_tf` staying clear of the token CE and the rank staying up; the cosines are read
 as diagnostics of why.
+
+## Results
+
+Three arms on the runner at 13a9535 (the retry at a55ddae, config only), each seeded from
+`tul-code-vae/step_10000.pt`, 5000 steps, whole model training, the coda reading the
+predicted cells with stop-gradient. Sweeps on 480 rows at 2500 and 5000; worth profile
+and slot-state probe at 5000; the corpus-mean probe on the Spark (8c00cf3, `tg_seg` 24)
+at 5000, 96 rows, depths 1 and 6. Artifacts: `../results/2026-09-22-lctul-ema/`. wandb
+runs: `ema` twx0472q, `ema0` okcopzg0, `ema-l2` y6k36fqo. Per the 17:19 amendment the
+verdict rests on nats and rank; the cosine clauses are scored for the record only.
+
+| instrument at 5000 | ema (m 0.996, floor 0.02) | ema0 (frozen twin) | ema-l2 (floor 0.2) |
+|---|---|---|---|
+| paired depth-6 token CE, arm − ema0 (500 blocks) | +0.0038 [+0.0020, +0.0058] | 0 | −0.0049 [−0.0068, −0.0030] |
+| paired depth-1 token CE, arm − ema0 | +0.0028 [+0.0009, +0.0048] | 0 | −0.0051 [−0.0071, −0.0032] |
+| token K1−K6 (self-paired, 480 rows) | +0.0006 [+0.0002, +0.0010] | +0.0016 [+0.0012, +0.0020] | +0.0014 [+0.0010, +0.0018] |
+| worth of the predicted cell, zeroed, total / first token | +0.168 / +0.608 | +0.165 / +0.591 | +0.174 / +0.609 |
+| worth, shuffled, total / first token | +0.142 / +1.259 | +0.122 / +1.048 | +0.152 / +1.434 |
+| `val/loss` at 4750 (the runner's val batches) | 4.104 | 4.103 | 4.101 |
+| `val/ce_tf` (the coda on the TRUE code) 250 → 4750 | 1.73 → 4.02 | 1.67 → 4.12 | 4.29 → 3.98 (already at the token CE by the first val) |
+| target per-coordinate spread `val/code_tgt_std` 250 → 4750 | 0.985 → 0.837 | 0.987 → 0.987 | 0.984 → 0.830 |
+| target effective rank per cell (Spark probe, depth 6) | 39.8 / 38.3 | 77.5 / 70.2 | 39.6 / 37.1 |
+| target's cosine to the corpus mean (probe) | 0.53 / 0.51 | 0.06 / 0.09 | 0.52 / 0.51 |
+| prediction effective rank per cell (probe) / `val/code_eff_rank` | 16.6 / 16.3; 24.0 | 17.2 / 18.0; 25.9 | 17.1 / 16.8; 22.5 |
+| online cell spread `tul/code_enc_std` 0 → last-500 mean | 0.499 → 0.442 | not charged | 0.499 → 0.541 |
+| own / shuffled cosine (record only) | 0.575 / 0.448 | 0.150 / 0.037 | 0.588 / 0.424 |
+| centred own / shuffled cosine (probe, depth 6, record only) | 0.300 / 0.002 | 0.141 / 0.002 | 0.317 / 0.005 |
+| per-pass cosine l6 − l1, last 500 steps (record only) | +0.0017 | +0.0011 | −0.0009 |
+| tok/s at step 200 | 12,419 | 12,625 | 12,451 |
+| `preclip/total` max at step ≥ 200; entry-norm growth | 24.3; 1.16x | 22.1; 1.17x | 21.8; 1.15x |
+
+Against the strict ruler and `fan4-all-fp0` at 5k on the same rows, `ema` reads −0.228
+[−0.234, −0.222] and −0.175 [−0.182, −0.170] at depth 6: the VAE stage's 10k-step head
+start, shared by all three arms, not the target.
+
+Scoring of the frozen clauses (for the record). P-1 clause 1 holds on `ema` (spread ratio
+0.85) and clause 2 fails (shuffled 0.448); P-2 holds on the raw cosine (gap 0.127 against
+`ema0`'s 0.113 is +0.014, under the 0.05 bar: FAILS); P-3 holds (4.02 against 4.12); P-4
+fails (+0.0017); P-5 fails (+0.0006); P-6 holds (+0.0038); P-7 holds (0.98x); P-8 holds.
+Retry: P-1 clause 1 holds (ratio 0.84), clause 2 fails (0.424); P-2 fails (gap 0.164 against 0.113 is +0.051, at the bar's edge, and it is a cosine); P-3 holds; P-4 fails (−0.0009); P-5 fails (+0.0014); P-6 holds (−0.0049); P-7 holds (0.99x); P-8 holds. The retry is scored the same as the first draw..
+
+What the nats and rank say. The EMA target moved: its rank halved (77 → 40 per cell) and
+half of the movement went onto one shared direction (cosine to the corpus mean 0.06 →
+0.53). Nothing of that reached the reader: the two arms have the same val loss to three
+decimals through the whole run, the same cell worth within 0.02 nats, the same K-curve at
+the floor, and `ema` is 0.004 nats WORSE paired at both depths. The coda's read of the true
+code collapses to the token CE on the CONTROL as well (1.67 → 4.12), so `val/ce_tf` is a
+reader statement (the coda trained on detached predicted cells forgets E's code, the
+target-unfreeze finding) and not a target statement; it is not used. The retry at ten
+times the floor weight held the online cells' spread at 0.54 (the first draw's fell to 0.44) and changed nothing else: the target drifted to the same rank (39.6 / 37.1) and the same mean axis (0.52), the paired token CE moved 0.005 the other way, the cell worth 0.174 against 0.165..
+
+Why the floor did not hold the target, found while the retry ran and recorded here as an
+error of the Stage 1 mapping: the paper's `L_enc` floors the ONLINE ENCODER's output, the
+representation whose EMA is the target (eq. 9: "the online context representations z_c;
+for token-valued contexts, over all valid context tokens"). In LCTUL the encoder whose EMA
+makes the target is the front plus E, so the floor belongs on the online FRONT's token
+states (what E pools), and Stage 1 put it on the loop's predicted cells (the predictor's
+output) instead. That floor bounds the predictor, which never collapsed; the target
+collapses through the twin front following the live front, which the regression pushes
+toward representations whose next-span code is easy to predict. A weight of 0.2 held the
+online cells' spread at 0.55 (against 0.44 at 0.02) and the target drifted the same. The
+corrected placement is a different arm and is not run under this file.
+
+## Verdict
+
+**Failure**, the first draw and the one retry alike. On the instruments the 17:19 amendment
+names: the EMA target moved (rank 77 → 40 per cell, cosine to the corpus mean 0.06 → 0.53,
+on both draws) and the reader saw none of it (val loss equal to three decimals, cell worth
+0.165 / 0.168 / 0.174, K-curve at the slot-loop floor on all three, paired token CE inside
+±0.005 of the control). The binding's first branch applies as written: the retry failed
+too, so both go to `failures/`, Stage 2 is not built on this target, and the note's first
+Risk ("the floor acts on the online cells; the target inherits the online front by EMA, so
+a slow drift of the target into a low-rank code is still possible") is the finding, with
+one correction: the drift is not slow. Half the target's rank is gone by step 1500.
+
+Two errors of my own are on this record. (1) The floor was placed on the predictor's
+output; the paper floors the encoder's output (see Results, last paragraph). A weight
+ten times the paper's could not reach the target from there, and the retry measured that.
+(2) I named `val/ce_tf` as a verdict instrument at 17:19; the control showed within the
+hour that it collapses on a frozen target too, so it is a reader statement. Wolfe's call
+that no arm passes or fails on a cosine stands and was applied.
+
+## Updated hypothesis
+
+A code target that can move will move toward what the predictor finds easy, and with the
+predictor's output as the only floored tensor it moves onto a shared direction. Whether a
+floor on the FRONT's states (the tensor whose EMA is the target) holds the target's rank
+is a different arm and an open question; it is not run under this file. What is settled
+here for the slot loop: with the coda reading a stop-gradient cell and trained on tokens,
+the identity of the code target is decoupled from the token loss, so no target, fixed or
+moving, can change what the reader gets unless the cell's route into the token loss
+changes. The 0.13-cosine span-specific part the loop predicts in one pass showed up on the
+fixed target (centred 0.14) and doubled on the moved one (0.30 to 0.33) without any
+change on the token side; per Wolfe it is not read as a result. The token K-curve on every
+LCTUL-J arm is the floor (+0.0006 to +0.0016); the passes still do nothing.
