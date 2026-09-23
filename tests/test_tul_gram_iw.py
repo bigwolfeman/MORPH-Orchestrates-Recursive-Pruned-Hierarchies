@@ -603,3 +603,49 @@ def test_the_probe_runs_on_a_model_without_a_posterior():
     with torch.no_grad():
         o = m(inp, labels=lab, slot_layout=layout, gram_mode="iw", gram_sample_seed=3)
     assert abs(res["ce_iw@4"] - float(o["loss"])) < 2e-5, (res["ce_iw@4"], float(o["loss"]))
+
+
+def test_rollouts_share_every_dropout_mask():
+    """Model dropout ON (0.3) and every rollout on the SAME noise seed: the K rollouts are
+    then the same function, so the coda readout's K row blocks must be bit-identical and
+    the width gain 0 to fp32 rounding. With per-row nn.Dropout masks in the core and coda they are
+    not (the 2026-09-23 defect this guards)."""
+    _ids, inp, lab, layout = _pack()
+    B, K = inp.shape[0], 4
+    m = _gk(K, token_state_dropout=0.15)
+    m2 = _gk(K, token_state_dropout=0.15, core_kw={"dropout": 0.3})
+    from morph.model.rollout_dropout import RolloutSharedDropout
+    n_shared = sum(isinstance(x, RolloutSharedDropout) for x in m2.modules())
+    assert n_shared == m2._n_rollout_dropout > 0
+    assert not any(isinstance(x, RolloutSharedDropout) for x in m2.prelude.modules())
+    assert m._n_rollout_dropout == 0            # dropout 0: nothing to share
+    real, seen = m2._gram_ctx, {}
+
+    def patched(xn, lay, gram_mode, gram_seed, n_nograd, iw_rollouts=1):
+        ctx = real(xn, lay, gram_mode, gram_seed, n_nograd, iw_rollouts)
+        ctx["gen"] = torch.Generator(device=xn.device)
+        ctx["iw_seeds"] = [7] * iw_rollouts
+        return ctx
+    m2._gram_ctx = patched
+    real_loss = m2._gram_iw_losses
+
+    def cap(xh, labels, lay, K_):
+        seen["xh"] = xh.detach().clone()
+        return real_loss(xh, labels, lay, K_)
+    m2._gram_iw_losses = cap
+    out = _train(m2, inp, lab, layout, seed=5)
+    xh = seen["xh"].reshape(K, B, *seen["xh"].shape[1:])
+    for k in range(1, K):
+        assert torch.equal(xh[0], xh[k]), f"rollout {k} differs from rollout 0"
+    assert abs(float(out["gk_width_gain"])) < 1e-5     # fp32 logsumexp - log K
+
+
+def test_gk_training_forward_without_labels_raises():
+    _ids, inp, lab, layout = _pack()
+    m = _gk(4, core_kw={"dropout": 0.1})
+    m.train()
+    with pytest.raises(RuntimeError, match="needs labels"):
+        m(inp, labels=None, slot_layout=layout)
+    m.eval()
+    with torch.no_grad():
+        m(inp, labels=None, slot_layout=layout)

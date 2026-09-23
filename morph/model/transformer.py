@@ -2666,6 +2666,16 @@ class MORPHTransformer(nn.Module):
         self._gram_iw_k = (int(cfg.tul.gram_iw_k)
                            if cfg.tul is not None and cfg.tul.gram
                            and cfg.tul.gram_objective == "iw" else 0)
+        # The K rollouts must differ in their Gaussian steps ALONE: the core and the coda
+        # run on the expanded batch, so their dropout draws ONE mask per base row
+        # (morph/model/rollout_dropout.py). The prelude runs once on the base batch and
+        # keeps nn.Dropout. Every other model is untouched.
+        self._n_rollout_dropout = 0
+        if self._gram_iw_k > 1:
+            from .rollout_dropout import share_dropout_across_rollouts
+            self._n_rollout_dropout = (
+                share_dropout_across_rollouts(self.core, self._gram_iw_k)
+                + share_dropout_across_rollouts(self.coda, self._gram_iw_k))
 
         self.tul_chain: TULSlotChain | None = None
         if cfg.tul is not None and cfg.tul.slot_chain:
@@ -9704,6 +9714,14 @@ class MORPHTransformer(nn.Module):
         # arguments), so nothing below changes there. K = 1 expands nothing.
         _iw_k = (self._gram_iw_k if self._gram_iw_k and labels is not None
                  and (self.training or gram_mode == "iw") else 0)
+        if self._gram_iw_k > 1 and self.training and labels is None:
+            # The core and coda dropout of a K > 1 GK model share masks across K
+            # rollout-major rows; without labels the batch is not expanded, and the shared
+            # mask would tie unrelated rows together.
+            raise RuntimeError(
+                "tul.gram_objective='iw' with gram_iw_k > 1: a training-mode forward needs "
+                "labels (it runs on the K-fold expanded batch). Call model.eval() for a "
+                "label-free forward.")
         _layout_base, _B_base = layout, B
         if _iw_k > 1:
             x0 = repeat_along_batch(x0, _iw_k)
