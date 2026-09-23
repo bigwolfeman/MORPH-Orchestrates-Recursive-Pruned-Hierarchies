@@ -185,6 +185,154 @@ def fused_linear_cross_entropy(
                                 weights)
 
 
+# ── Spectral decoupling: an L2 penalty on the coda's TOKEN logits ───────────
+# (Pezeshki et al., "Gradient Starvation: A Learning Proclivity in Neural Networks",
+# arXiv 2011.09468. `tul.coda_logit_l2`, docs/tul-... none — see morph/model/tul.py.)
+#
+# A SEPARATE autograd.Function/entry point from `_FusedLinearCE` above, not a branch
+# inside it: `fused_linear_cross_entropy` is called from a dozen sites across
+# `transformer.py`, several of them hot; this keeps every one of them, and the default
+# (`tul.coda_logit_l2 == 0.0`) path of `_tul_group_losses`, byte-for-byte untouched —
+# bit-identical by construction, not by a runtime `if` inside the shared kernel.
+#
+# WHAT IT ADDS: `lambda/2 * mean_i row_w_i * ||z_i||^2 / n_valid_f`, where `z_i` is the
+# position's RAW (pre-softmax, pre-mask) logit vector over the real vocab — i.e. the
+# same weighted-mean convention `_FusedLinearCE` already uses for the CE term (so
+# "labelled token positions" means exactly the positions the CE reduction already
+# counts, TUL's half-weight double label included). `z_i` is read straight out of the
+# chunk tile BEFORE the pad-column and `mask_token_id` overrides — the pad columns are
+# exactly 0 there (the padded weight ROWS are zero, so the matmul already gives 0, no
+# masking needed for them to contribute 0 to the sum), and the `mask_token_id` COLUMN
+# (TUL's structural slot id) is included: it is a real learned output of the tied head
+# and "the coda's token logits" is the full vocab vector, not the vocab the CE actually
+# scores. That is a deliberate reading, not an oversight — the reference in
+# tests/test_coda_logit_l2.py encodes the same choice, so the exactness check pins it.
+#
+# Exact gradient (no [N, V] materialised beyond the one-chunk tile already needed for
+# the CE): with S = lambda / n_valid_f,
+#   dLoss_l2/dz_i = S * row_w_i * z_i            (V-dim; 0 at every pad column already)
+#   dLoss_l2/dh_i = (dLoss_l2/dz_i) @ W           (same contraction the CE grad uses)
+#   dLoss_l2/dW   = sum_i row_w_i * z_i ⊗ h_i * S (same accumulation pattern as grad_w)
+# so it is folded into the SAME per-chunk `grad_x` / `grad_w` accumulation as the CE
+# term, at the cost of one extra `[chunk, V']` elementwise buffer per chunk.
+
+class _FusedLinearCEWithLogitL2(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, w: Tensor, labels: Tensor, ignore_index: int,
+                chunk_size: int, mask_token_id: int, weights: Tensor | None,
+                logit_l2_lambda: float) -> tuple[Tensor, Tensor]:
+        N, d = x.shape
+        compute_dtype = x.dtype
+
+        valid = labels != ignore_index
+        if weights is None:
+            n_valid = int(valid.sum().item())
+            n_valid_f = float(max(n_valid, 1))
+            row_w = None
+        else:
+            row_w = weights.to(torch.float32) * valid.to(torch.float32)
+            n_valid_f = float(max(float(row_w.sum().item()), 1e-6))
+
+        w_cast, V, V_pad = _pad_vocab(w.to(compute_dtype))
+        neg_inf = torch.finfo(torch.float32).min
+
+        grad_x = torch.empty_like(x)
+        grad_w = torch.zeros((V_pad, d), device=w.device, dtype=torch.float32)
+        loss_sum = torch.zeros((), device=x.device, dtype=torch.float32)
+        logit_sq_sum = torch.zeros((), device=x.device, dtype=torch.float32)
+
+        for start in range(0, N, chunk_size):
+            end = min(start + chunk_size, N)
+            x_c = x[start:end]
+            lab_c = labels[start:end]
+            valid_c = valid[start:end].float().unsqueeze(-1)
+            w_c = valid_c if row_w is None else row_w[start:end].unsqueeze(-1)
+
+            # RAW logits — kept apart from the masked copy used for the softmax/CE so
+            # the penalty reads the true (unmasked) coda output. Pad columns are 0 by
+            # construction (zero-padded weight rows); the mask_token_id column is real.
+            z_c = (x_c @ w_cast.t()).float()             # [c, V'] fp32
+            logits_c = z_c.clone()
+            if V_pad != V:
+                logits_c[:, V:] = neg_inf
+            if mask_token_id >= 0:
+                logits_c[:, mask_token_id] = neg_inf
+
+            lse = torch.logsumexp(logits_c, dim=-1)
+            lab_safe = lab_c.clamp(min=0)
+            tgt = logits_c.gather(-1, lab_safe.unsqueeze(-1)).squeeze(-1)
+            loss_c = (lse - tgt) * w_c.squeeze(-1)
+            loss_sum = loss_sum + loss_c.sum()
+
+            sq_c = z_c.pow(2).sum(dim=-1)                 # [c], real V only (pad = 0)
+            logit_sq_sum = logit_sq_sum + (sq_c * w_c.squeeze(-1)).sum()
+
+            probs = torch.softmax(logits_c, dim=-1)
+            probs.scatter_add_(
+                -1, lab_safe.unsqueeze(-1),
+                -torch.ones_like(lab_safe, dtype=probs.dtype).unsqueeze(-1),
+            )
+            probs = probs * w_c
+            del logits_c
+
+            # raw (pre n_valid_f-division) dLoss/dz: CE term + penalty term, summed
+            # BEFORE the shared matmul into grad_x / grad_w (same accumulation the CE
+            # alone uses, extended by one elementwise term).
+            grad_z = probs + logit_l2_lambda * w_c * z_c  # [c, V']
+            del probs, z_c
+
+            grad_z_c = grad_z.to(compute_dtype)
+            grad_x[start:end] = grad_z_c @ w_cast
+            grad_w += (grad_z_c.t() @ x_c).float()
+            del grad_z, grad_z_c
+
+        loss_sum = loss_sum + (logit_l2_lambda / 2.0) * logit_sq_sum
+        loss = loss_sum / n_valid_f
+        grad_x.div_(n_valid_f)
+        grad_w = grad_w[:V] if V_pad != V else grad_w
+        grad_w.div_(n_valid_f)
+        logit_sq_mean = (logit_sq_sum / n_valid_f).detach()
+
+        ctx.save_for_backward(grad_x, grad_w)
+        ctx.x_dtype = x.dtype
+        ctx.w_dtype = w.dtype
+        ctx.mark_non_differentiable(logit_sq_mean)
+        return loss, logit_sq_mean
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor, _grad_logit_sq_mean=None):
+        grad_x, grad_w = ctx.saved_tensors
+        go = grad_output
+        gx = (grad_x * go).to(ctx.x_dtype)
+        gw = (grad_w * go).to(ctx.w_dtype)
+        return gx, gw, None, None, None, None, None, None
+
+
+def fused_linear_cross_entropy_logit_l2(
+    x: Tensor,
+    w: Tensor,
+    labels: Tensor,
+    logit_l2_lambda: float,
+    ignore_index: int = -100,
+    chunk_size: int = 1024,
+    mask_token_id: int = -1,
+    weights: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
+    """CE + the spectral-decoupling logit penalty (``tul.coda_logit_l2``), fused.
+
+    Returns ``(loss, logit_sq_mean)``: ``loss`` is the single differentiable scalar
+    ``CE + lambda/2 * mean(row_w * ||z||^2) / n_valid_f`` (gradient exact, see module
+    comment above); ``logit_sq_mean`` is a DETACHED fp32 scalar, the same weighted mean
+    of ``||z||^2`` WITHOUT the ``lambda`` scale — the raw ``tul/coda_logit_sq`` stat.
+
+    Never materialises ``[N, V]``: same chunked-row contract as
+    :func:`fused_linear_cross_entropy`, one extra ``[chunk, V']`` fp32 tile held per
+    chunk iteration (freed before the next).
+    """
+    return _FusedLinearCEWithLogitL2.apply(x, w, labels, ignore_index, chunk_size,
+                                           mask_token_id, weights, logit_l2_lambda)
+
+
 # ── Multi-hot cross-entropy (MCE) for Token-Superposition Training ──────────
 class _FusedLinearMCE(torch.autograd.Function):
     @staticmethod

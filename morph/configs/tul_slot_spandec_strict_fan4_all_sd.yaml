@@ -1,0 +1,45 @@
+# Spectral decoupling on the coda's token logits (Pezeshki et al., "Gradient
+# Starvation", arXiv 2011.09468). ONE factor against the strict fan4-all ruler
+# (`tul_slot_spandec_strict_fan4_all.yaml`): `tul.coda_logit_l2`.
+#
+# WHAT. `lambda/2 * mean_i row_w_i ||z_i||^2` over the coda's TOKEN logits (the same
+# row-weighted "labelled position" convention the CE reduction already uses), folded
+# into the fused CE kernel (`morph/model/fused_ce.py::fused_linear_cross_entropy_logit_l2`,
+# wired in `morph/model/transformer.py::_tul_group_losses`). No new parameter, no new
+# RNG draw; `tul.coda_logit_l2: 0.0` is bit-identical to the ruler
+# (tests/test_coda_logit_l2.py proves it with torch.equal on loss and every grad).
+#
+# LAMBDA, and why. Measured (this arm's build, CPU, `morph/model/embeddings.py`'s real
+# init at V=49169, d_model=768, lorentz_fraction=0.25): a freshly-initialised tied head
+# gives mean ||z||^2 per token ≈ 49,270 on a unit-RMS coda state (RMSNorm's own
+# contract at init, weight=1). The un-penalised CE at init is ≈ ln(V) ≈ 10.80 nats
+# (uniform-ish logits before any training). Pezeshki et al. use lambda in
+# [1e-4, 1e-2] on classification heads with O(10-100) classes, where ||z||^2 is three
+# to four orders of magnitude smaller than it is on a 49,169-way tied vocab head — the
+# penalty scales with V at fixed per-element logit variance, so lambda must shrink by
+# roughly the same factor to land in the same REGIME (a small but present fraction of
+# the loss, not a rounding error and not a competing objective). Solving
+# `lambda/2 * 49270 ≈ [0.01, 0.05] * 10.80` gives `lambda ≈ [4.4e-6, 2.2e-5]`;
+# `1e-5` sits in the middle of that band (penalty ≈ 0.246 nats ≈ 2.3% of the init CE).
+# The tiny fixture in tests/test_coda_logit_l2.py (V=48, d=16) measures the SAME
+# quantity at its own scale for the exactness check — that number is not this one and
+# is not meant to be; only the real model's V and d_model decide the shipped lambda.
+#
+# UNMEASURED beyond the exactness/off-path unit tests and a Hydra compose: no GPU run
+# of this arm exists yet (build-only per the task that produced this config, 2026-09-23).
+# Prereg: lab/experiments/planned/2026-09-23-lxtul-g-panel.md, arm P-8.
+# CORRECTION (orchestrator review, 2026-09-23): the 1e-5 above was calibrated on INIT
+# logits at d_model 768. Measured on the TRAINED 5k checkpoints this arm starts from
+# (scratchpad ln/logit_norm.py, 12 rows): strict ruler mean ||z||^2 per token 1.03e6
+# (per-logit rms 4.57, CE 4.121), fan4-all-fp0 1.04e6 (rms 4.60, CE 4.081). At 1e-5 the
+# penalty is 5.1-5.2 nats, 125-128 % of the CE: it would crush the logits, not rebalance
+# them. Shipped lambda 2e-7: 0.10 nats at trained scale (~2.5 % of CE); negligible at init.
+defaults:
+  - tul_slot_spandec_strict_fan4_all
+  - _self_
+
+tul:
+  coda_logit_l2: 2.0e-7
+
+wandb:
+  name: slot-spandec-strict-fan4-all-sd

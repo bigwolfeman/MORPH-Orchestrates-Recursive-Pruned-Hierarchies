@@ -30,6 +30,7 @@ from .diffusion_blocks import euler_step
 from .embeddings import MORPHEmbedding
 from .fused_ce import (
     fused_linear_cross_entropy,
+    fused_linear_cross_entropy_logit_l2,
     fused_linear_cross_entropy_mce,
     multi_hot_cross_entropy_reference,
 )
@@ -8971,19 +8972,45 @@ class MORPHTransformer(nn.Module):
         flat = x.reshape(-1, C)
         lab = labels.reshape(-1)
         BL = flat.shape[0]
+        logit_l2 = self.cfg.tul.coda_logit_l2
 
         if layout is None:
+            if logit_l2 != 0.0:
+                raise NotImplementedError(
+                    "tul.coda_logit_l2 with layout=None (the arm-A4 plan-nats gather "
+                    "branch of _tul_group_losses): that branch is the plain unweighted "
+                    "CE reduction and the penalty was never wired into it — only the "
+                    "weighted-CE branch (a real SlotLayout) has the fused logit_l2 "
+                    "kernel. Raises rather than silently running without the penalty.")
             ce = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
                                             chunk_size=chunk, mask_token_id=mask_id)
             return {"loss": ce, "ce_main": ce, "ce_tokens": ce,
                     "n_targets": (lab != -100).sum().to(ce.dtype)}
 
         row_w, p_idx, z_idx = self._tul_half_weights(labels, layout)
-        loss = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
-                                          chunk_size=chunk, mask_token_id=mask_id,
-                                          weights=row_w)
+        if logit_l2 != 0.0:
+            # tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. arXiv 2011.09468):
+            # an L2 penalty on the coda's raw token logits, folded into the SAME fused
+            # CE kernel call — see morph/model/fused_ce.py for the exact derivation.
+            # "labelled token positions" = the same `row_w`-weighted positions the CE
+            # term already reduces over (TUL's half-weight double label included).
+            loss, logit_sq_mean = fused_linear_cross_entropy_logit_l2(
+                flat, w_head, lab, logit_l2, ignore_index=-100, chunk_size=chunk,
+                mask_token_id=mask_id, weights=row_w)
+        else:
+            loss = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
+                                              chunk_size=chunk, mask_token_id=mask_id,
+                                              weights=row_w)
         valid = (lab != -100).to(row_w.dtype)
         out = {"loss": loss, "n_targets": (row_w * valid).sum()}
+        if logit_l2 != 0.0:
+            # Same contract as `spandec_weighted` / `code_enc_var_weighted`: the term is
+            # ALREADY inside `out["loss"]` (folded into the fused kernel above, not a
+            # second addition here), and the detached weighted value is exposed only so
+            # train.py can subtract it back out for train/loss and the val ppl guard —
+            # keeping both on the MODEL's CE, the spectral-penalty precedent.
+            out["coda_logit_sq"] = logit_sq_mean
+            out["coda_logit_l2_weighted"] = (logit_l2 / 2.0 * logit_sq_mean).detach()
         if not want_groups:
             return out
 
