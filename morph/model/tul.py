@@ -1835,8 +1835,36 @@ class TULConfig:
                                          # grid for now: a second grid is a second arm, and
                                          # an unknown name raises here.
     loop_denoise_weight: float = 1.0     # weight of the per-pass sum in the loss
+    # ── LXTUL-G: the slot loop as a stochastic latent-variable model (2026-09-23) ─────
+    #
+    # GRAM shape (arXiv 2605.19376). At every pass t of `_tul_core` the deterministic
+    # core update u_t = f(h_{t-1}) is followed by a learned Gaussian step,
+    # h_t = u_t + r_t * (m + s * n), r_t the slot's DETACHED RMS. The PRIOR heads read
+    # u_t / r_t; the POSTERIOR heads also read `e_next`, a one-query attention pool over
+    # the prelude states of the span the slot precedes (train only). The loss adds
+    # `gram_beta * sum over valid slots and passes of KL_bal / n_tokens`, with KL balancing
+    # `gram_kl_balance` (0.8 = GRAM App. B.2) and n_tokens the CE's own token count, so
+    # beta 1 is exactly the negative ELBO per token (Synthesis Decision 2). Training draws
+    # POSTERIOR samples; eval draws PRIOR samples from a per-forward seeded generator
+    # (`MORPHTransformer.gram_eval_seed`, `forward(gram_mode=, gram_sample_seed=)`), so a
+    # forced-depth sweep reuses the same noise per pass at every depth. The fixed-point
+    # term reads the DETERMINISTIC part u_T (on h_T it would pay sigma to shrink), and the
+    # gain hinge probes f alone. morph/model/tul_gram.py; note
+    # .agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md; prereg
+    # lab/experiments/planned/2026-09-23-lxtul-g-panel.md.
+    # Default off, and off is BIT-IDENTICAL (no module, no RNG draw, no branch).
+    gram: bool = False
+    gram_beta: float = 0.1               # KL weight against the per-token CE
+    gram_kl_balance: float = 0.8         # alpha in alpha*KL(sg q||p) + (1-alpha)*KL(q||sg p)
+    gram_free_bits: float = 0.0          # per-slot nats floor on the summed KL (fallback)
+    gram_mean: bool = True               # False = the mean-free arm: no m heads, mu == 0
+    gram_sigma_init: float = 0.1         # sigma / r at step 0, on every slot
+    gram_hidden: int = 256               # SwiGLU hidden width of every noise head
 
     def __post_init__(self) -> None:
+        # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
+        # and not about a rule of the refused mode it never meant to run.
+        self._check_gram()
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
         if self.loop_carry not in LOOP_CARRY_MODES:
             raise ValueError(
@@ -3262,6 +3290,79 @@ class TULConfig:
                 "passes are independent — a cut prefix would silently drop those passes' "
                 "own per-pass terms rather than truncating a chain.")
 
+    def _check_gram(self) -> None:
+        """``tul.gram`` — LXTUL-G, the stochastic slot loop (morph/model/tul_gram.py).
+
+        Every refusal names a mode that bypasses or reshapes `_tul_core`'s ONE state per
+        slot written 1:1 through `prefix_project`, or that would make the per-pass KL
+        something other than the ELBO term it is charged as."""
+        if not self.gram:
+            if (self.gram_beta != 0.1 or self.gram_kl_balance != 0.8
+                    or self.gram_free_bits != 0.0 or self.gram_mean is not True
+                    or self.gram_sigma_init != 0.1 or self.gram_hidden != 256):
+                raise ValueError(
+                    "tul.gram_* set with tul.gram=false: no noise head is built, so the "
+                    "knob(s) would be silently ignored.")
+            return
+        if self.gram_beta < 0.0:
+            raise ValueError(f"tul.gram_beta must be >= 0, got {self.gram_beta}")
+        if not 0.0 <= self.gram_kl_balance <= 1.0:
+            raise ValueError(
+                f"tul.gram_kl_balance must be in [0, 1], got {self.gram_kl_balance}")
+        if self.gram_free_bits < 0.0:
+            raise ValueError(f"tul.gram_free_bits must be >= 0, got {self.gram_free_bits}")
+        if not self.gram_sigma_init > 1e-4:
+            raise ValueError(
+                f"tul.gram_sigma_init must be > 1e-4 (the sigma floor), got "
+                f"{self.gram_sigma_init}")
+        if self.gram_hidden < 1:
+            raise ValueError(f"tul.gram_hidden must be >= 1, got {self.gram_hidden}")
+        _refused = [
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop): tokens and slots run the per-sample "
+             "`_core_region`, there is no per-slot pass to add a step to"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens (the token path): the loop runs `_core_region` over every "
+             "position and writes nothing through `prefix_project`"),
+            (self.code, "tul.code: no slot loop runs; the cells are the flow thinker's code"),
+            (self.code_target,
+             "tul.code_target: the cells are a projection regressed onto a frozen code, "
+             "not the slot state the posterior steers"),
+            (self.loop_denoise,
+             "tul.loop_denoise: every pass enters at a noised frozen code, not at the "
+             "previous pass's state"),
+            (self.fan_k > 0,
+             "tul.fan_k > 0: K streams per span and a mixture/select/write-all seam; the "
+             "LXTUL-G width axis is N prior samples of ONE stream"),
+            (self.slot_cells > 1,
+             "tul.slot_cells > 1 (the Thought Register): M cells per slot and a mean "
+             "before the readers"),
+            (self.vq_codes > 0, "tul.vq_codes: the write is a dequantised code, not the state"),
+            (self.prefix_source != "exit",
+             f"tul.prefix_source={self.prefix_source!r}: the write is per-pass cells, "
+             f"not the exit state"),
+            (self.pass_readout != "last",
+             f"tul.pass_readout={self.pass_readout!r}: the write is a mixture of passes"),
+            (self.core_stage_cond != "none",
+             f"tul.core_stage_cond={self.core_stage_cond!r}: the db1 step and the Euler "
+             f"ladder bypass `_tul_core`"),
+            (self.db_loop,
+             "tul.db_loop: the carry is detached, so the per-pass KL would not be the ELBO "
+             "of the trajectory the coda reads"),
+            (self.progressive_p > 0.0,
+             "tul.progressive_p > 0: a detached prefix pass would still charge its KL"),
+            (self.detach_z,
+             "tul.detach_z: the coda's CE must reach the loop and both heads"),
+            (not (self.coda_sees_slots and self.coda_token_cut == 0),
+             "a gathered coda (coda_sees_slots=false or coda_token_cut > 0): the coda "
+             "does not read the full-axis write"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.gram with {why}.")
+
+    def _check_code_target(self) -> None:
+        """``tul.code_target`` — the slot loop regressed onto the frozen code (spec §17)."""
     def _check_code_target(self) -> None:
         """``tul.code_target`` — the slot loop regressed onto the frozen code (spec §17)."""
         if not self.code_target:

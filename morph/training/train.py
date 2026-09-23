@@ -154,7 +154,11 @@ def evaluate(
                           # tul.loop_denoise (LXTUL-P change 1, 2026-09-21): the
                           # per-pass denoising sum. Subtracted so val loss stays the
                           # MODEL's CE and the ppl guard fires on the language model.
-                          "loop_denoise_weighted"):
+                          "loop_denoise_weighted",
+                          # tul.gram (LXTUL-G, 2026-09-23): beta * KL / n_tokens. At
+                          # eval the default draw is the PRIOR and no KL is built, so it
+                          # is absent there; listed so a posterior eval stays the CE.
+                          "gram_kl_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -3427,6 +3431,7 @@ def main(cfg: DictConfig) -> None:
                             "oracle_z", "oracle_z_weighted",
                             "code_target", "code_target_weighted",
                             "loop_denoise", "loop_denoise_weighted",
+                            "gram_kl", "gram_kl_weighted",
                             "code_grade", "code_grade_weighted",
                             "spandec_pass", "spandec_pass_weighted",
                             "coda_span", "coda_span_weighted",
@@ -3584,6 +3589,7 @@ def main(cfg: DictConfig) -> None:
                                               # subtracts it; the tul-code draw at 2b6b321
                                               # reported CE + flow as train/loss)
                         "code_sigreg_weighted",   # LeJEPA SIGReg on the code cells
+                        "gram_kl_weighted",   # tul.gram (LXTUL-G), 2026-09-23
                         "code_enc_var_weighted"):  # LCTUL-J Stage 1, 2026-09-22: the
                                                    # online variance floor, its own weight
                                                    # (code_enc_var_lambda), separate from
@@ -3773,6 +3779,14 @@ def main(cfg: DictConfig) -> None:
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if (_k.startswith("code_enc") or _k == "code_tgt_std") \
                             and out[_k] is not None:
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.gram (LXTUL-G, 2026-09-23): the KL per slot summed over passes
+                # (`gram_kl`, collapse reads below 0.5 nats), its per-pass split
+                # `gram_kl_t{t}` (pass t = 1..T, a VARIABLE number of keys), its p90, the
+                # weighted term and the KL per token, sigma/r and |mu|/r for the prior and
+                # the posterior, and the RMS of u_t and h_t (before / after the step).
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("gram_") and torch.is_tensor(out[_k]):
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_grade (spec §17.2): the grades, the cosines to E(best) and
                 # E(true), the degenerate fraction and the per-pass `code_grade_cos_l{t}`.

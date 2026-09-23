@@ -63,6 +63,7 @@ from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        code_grade_distinct2, code_grade_pref_loss, code_enc_var_floor,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_denoise import (TULLoopDenoiseIn, loop_denoise_interp, loop_denoise_levels)
+from .tul_gram import GRAM_MODES, TULGramStep, gram_kl_balanced
 from .tul_layout import (SlotLayout, span_reach_allow, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
@@ -1474,6 +1475,24 @@ class MORPHTransformer(nn.Module):
     # never sees it.
     _denoise_capture: list | None = None
 
+    # ── tul.gram (LXTUL-G, morph/model/tul_gram.py) ───────────────────────────────
+    # `gram_eval_seed`: the seed of the PRIOR noise at eval when the forward is given no
+    # `gram_sample_seed`. Pass t of a forward draws its noise from a generator seeded
+    # `seed * 100003 + t`, so a forced-depth sweep sees the SAME noise at pass t at every
+    # depth (the runner's K-curve is paired on ONE seeded prior sample) and two eval
+    # forwards with one seed are identical.
+    gram_eval_seed: int = 0
+    # The training step's KL sum (graph) and readings, written by `_tul_core` and
+    # consumed + cleared by `_forward_tul` (the `_loop_denoise` contract). None elsewhere.
+    _gram_train: dict | None = None
+    # The eval forward's per-slot, per-pass KL `[B, S, T]` (post mode only), its mask
+    # and the sigma readings, written by `_tul_core` at eval and moved into `out` by
+    # `_forward_tul`. None elsewhere.
+    _gram_eval: dict | None = None
+    # Test hook (the `_trigger_capture` pattern): attach a list and `_tul_core` appends
+    # ``{"t", "u", "h", "eps", "mode"}`` (detached) once per pass. None by default.
+    _gram_capture: list | None = None
+
     # `tul.fan_mix="all"`'s test hook (the `_trigger_capture` pattern): attach a list
     # and `_tul_fan_all` appends the per-stream span-CE table ``[B, S, K]`` (detached)
     # once per train step, right after the batched no-grad coda pass builds it — the
@@ -2607,6 +2626,30 @@ class MORPHTransformer(nn.Module):
                     "skipped entirely (spec D3), and an RMS match against a deviation is "
                     "a match against a quantity that is meant to shrink.")
             self.tul_carry = TULLoopCarry(d, cfg.tul.loop_carry)
+
+        # ── LXTUL-G (tul.gram; morph/model/tul_gram.py) ─────────────────────────────
+        # Off — every other model — builds nothing and draws no RNG. On, the heads and the
+        # pool draw from a PRIVATE generator with the global stream restored around the
+        # build, so a gram model shares every base weight with its same-seed ruler. The
+        # TULConfig refusals cover the TUL-side modes; the three below are MODEL-side.
+        self.tul_gram: TULGramStep | None = None
+        if cfg.tul is not None and cfg.tul.gram:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.gram needs a core loop (model.n_core > 0): the step follows a "
+                    "pass of the slot loop, and there are no passes.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.gram under SCSE is not defined: the loop carrier is the "
+                    "DEVIATION from a fixed anchor, so a step scaled to the carrier's RMS "
+                    "would be scaled to a quantity that is meant to shrink.")
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.gram with an FM planner (cfg.fm) is not defined: the planner "
+                    "replaces `_tul_core` and detaches its plan.")
+            self.tul_gram = TULGramStep(
+                d, hidden=int(cfg.tul.gram_hidden),
+                sigma_init=float(cfg.tul.gram_sigma_init), use_mean=bool(cfg.tul.gram_mean))
 
         self.tul_chain: TULSlotChain | None = None
         if cfg.tul is not None and cfg.tul.slot_chain:
@@ -4487,8 +4530,16 @@ class MORPHTransformer(nn.Module):
     def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
                   halt: bool = False, input_ids: Tensor | None = None,
                   slot_depths: Tensor | None = None,
-                  code_x0: Tensor | None = None, code_ok: Tensor | None = None):
+                  code_x0: Tensor | None = None, code_ok: Tensor | None = None,
+                  gram_mode: str | None = None, gram_seed: int | None = None):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
+
+        ``gram_mode`` / ``gram_seed`` (``tul.gram`` ONLY, EVAL ONLY): which noise the
+        LXTUL-G step draws at eval — ``"prior"`` (the default when ``None``), ``"post"``
+        (the posterior, an instrument: it reads the next span) or ``"mean"`` (the prior
+        mean, no noise) — and the seed of the per-pass generator (``None`` reads
+        ``self.gram_eval_seed``). Training always draws the posterior from the global
+        stream and refuses both. See :meth:`_gram_step`.
 
         ``code_x0`` ``[B, S, M, C]`` / ``code_ok`` ``[B, S]`` (``tul.loop_denoise`` ONLY,
         and REQUIRED there): the frozen reference encoder's code of each slot's next span,
@@ -5312,6 +5363,11 @@ class MORPHTransformer(nn.Module):
                                  dtype=torch.float32) * layout.slot_valid.view(
                                      *layout.slot_valid.shape, 1, 1).float()
             _dn_src = code_x0.float()
+        # ── tul.gram (LXTUL-G): the per-forward context of the Gaussian step ───────
+        # `None` on every other model: a Python-level constant, so nothing here is traced
+        # and the loop below is the one from before the key. See `_gram_ctx`.
+        _gctx = (self._gram_ctx(xn, layout, gram_mode, gram_seed, n_nograd)
+                 if self.tul_gram is not None else None)
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
@@ -5623,6 +5679,30 @@ class MORPHTransformer(nn.Module):
                     g_r = self.tul_recur_gate(h, _e_arg)
                     h_new = g_r * h + (1.0 - g_r) * h_new
 
+            # ── tul.gram: THE GAUSSIAN STEP (LXTUL-G) ─────────────────────────────
+            # `_h_det` is u_t, the DETERMINISTIC output of the map this pass ran: the
+            # core step, the renorm, the gain clip and the recurrence gate above. The
+            # step is added AFTER all of them and OUTSIDE `_core_step`, so:
+            #   * the gain hinge (`_slot_gain_penalty`, above) probes f alone — it calls
+            #     `_core_step` at the operating point `_h_in`, and the noise of THIS pass
+            #     is not inside what it applies;
+            #   * `slot_state_renorm` (off in the strict ruler chain) pins the norm of
+            #     u_t, BEFORE the step — the step then moves the state off the pinned
+            #     norm by ~sigma, and both RMS values are logged (`gram_u_rms`,
+            #     `gram_h_rms`);
+            #   * the fixed-point term and the per-pass residual below read `_h_det`
+            #     (Synthesis Decision 4: on h_T they would pay the model to shrink sigma),
+            #     and so do the loop probes (`loop/core_gain`, `loop/delta_*`,
+            #     `loop/eff_rank`), so those instruments measure the map f on both a gram
+            #     arm and its ruler;
+            #   * the halting gate's readout, the cotangent hooks and the carried state
+            #     (`db_traj`, the exit) see the state WITH the step: it is the state the
+            #     loop carries.
+            # Off the key `_h_det` is `h_new` itself and nothing below changes.
+            _h_det = h_new
+            if _gctx is not None:
+                h_new = self._gram_step(h_new, t, active, layout, _gctx)
+
             # ── gate readout (docs/tul-gate-spec.md §4) ────────────────────────
             # OUTSIDE the checkpoint / no_grad block on purpose: it then shapes the core
             # state on exactly the iterations inside the truncated-BPTT window and is a
@@ -5643,7 +5723,7 @@ class MORPHTransformer(nn.Module):
                     # frozen, so including it would dilute the runaway we are looking for.
                     _am = active.view(*active.shape, *([1] * (h.dim() - 2))).to(h.dtype)
                     _hi = (h * _am).flatten(1).float().norm(dim=1)
-                    _ho = (h_new * _am).flatten(1).float().norm(dim=1)
+                    _ho = (_h_det * _am).flatten(1).float().norm(dim=1)
                     _pr_gain.append((_ho / (_hi + 1e-6)).max().detach())
                     # SEPARATE the ratio's numerator from its denominator. A gain of 17 at
                     # iteration 0 and 1.1 everywhere else has two readings that this ratio
@@ -5655,9 +5735,9 @@ class MORPHTransformer(nn.Module):
                     # carrier's scale, so it is the term a residual stream actually controls.
                     _pr_in.append(_hi.max().detach())
                     _pr_out.append(_ho.max().detach())
-                    _pr_delta.append((((h_new - h) * _am).flatten(1).float().norm(dim=1)
+                    _pr_delta.append((((_h_det - h) * _am).flatten(1).float().norm(dim=1)
                                       / (_hi + 1e-6)).max().detach())
-                    _pr_dmean.append((((h_new - h) * _am).flatten(1).float().norm(dim=1)
+                    _pr_dmean.append((((_h_det - h) * _am).flatten(1).float().norm(dim=1)
                                       / (_hi + 1e-6)).mean().detach())
                     _pr_ret.append((rs_new if (track_ret and rs_new is not None)
                                     else h.new_zeros(())).float().norm().detach())
@@ -5666,7 +5746,7 @@ class MORPHTransformer(nn.Module):
                         # effective rank of its singular values (1 = every active slot
                         # holds the same vector, n = an orthogonal set). Uncentred: the
                         # question is the dimension the states span, not their spread.
-                        _z = (h_new.mean(dim=2) if self._is_hc else h_new)[active].float()
+                        _z = (_h_det.mean(dim=2) if self._is_hc else _h_det)[active].float()
                         if _z.shape[0] > 1:
                             _sv = torch.linalg.svdvals(_z)
                             _p = _sv / (_sv.sum() + 1e-12)
@@ -5686,7 +5766,7 @@ class MORPHTransformer(nn.Module):
                 if _prog:
                     _prm = _prm & ~_pfx
                 if bool(_prm.any()):
-                    _pn = h_new.flatten(2).float()
+                    _pn = _h_det.flatten(2).float()
                     _po = h.flatten(2).float()
                     _pd = _po if _scse is None else _po + h_star.flatten(2).float()
                     _pr = (_pn - _po).pow(2).sum(-1) / (_pd.pow(2).sum(-1) + 1e-6)
@@ -5699,7 +5779,9 @@ class MORPHTransformer(nn.Module):
                     # stated where it is relied on, not only where the draw is made.
                     _fin = _fin & ~_pfx
                 if bool(_fin.any()):
-                    _fn = h_new.flatten(2).float()
+                    # `_h_det`: u_T, the deterministic part (tul.gram; `h_new` itself on
+                    # every other arm) — ||u_T - h_{T-1}||^2 / ||u_T||^2.
+                    _fn = _h_det.flatten(2).float()
                     _fo = h.flatten(2).float()
                     _fd = _fn if _scse is None else _fn + h_star.flatten(2).float()
                     _rel = (_fn - _fo).pow(2).sum(-1) / (_fd.pow(2).sum(-1) + 1e-6)   # [B, S]
@@ -5836,6 +5918,8 @@ class MORPHTransformer(nn.Module):
             # than returned for the `_loop_gradpass` reason: this function's return tuple
             # is unpacked positionally by the probes and the tests.
             self._loop_carry_stats = _carry_stats
+        if _gctx is not None:
+            self._gram_finish(_gctx, layout)
         if _dn is not None and _dn_terms:
             # The per-pass sum, stashed for `_forward_tul` to fold into `groups` at the
             # SAME seam `code_target` is folded (and NOT through `_core_aux`, which the
@@ -5933,6 +6017,180 @@ class MORPHTransformer(nn.Module):
         hinge = torch.relu(gain - float(self.cfg.slot_gain_target))
         pen = lam * (hinge * hinge).mean()
         return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen}
+
+    # ── LXTUL-G (tul.gram; morph/model/tul_gram.py) ───────────────────────────────
+
+    def _gram_ctx(self, xn: Tensor, layout: SlotLayout, gram_mode: str | None,
+                  gram_seed: int | None, n_nograd: int) -> dict:
+        """The per-forward context of the LXTUL-G step: WHICH noise, the posterior's
+        input, the eval generator, and the lists the passes append to.
+
+        Mode. Training draws the POSTERIOR from the global stream and refuses
+        ``gram_mode`` / ``gram_seed`` (the ``code_mode`` rule: a training step's noise is
+        not a caller's choice). Eval defaults to ``"prior"``; ``"post"`` and ``"mean"``
+        are instruments. A truncated-BPTT window is refused at train: a no-grad pass would
+        still add a step whose KL trains nothing, so the charged sum would not be the ELBO
+        of the trajectory the coda reads.
+
+        ``e_next`` is built only where a posterior is drawn (train, eval ``"post"``): in
+        ``"prior"`` / ``"mean"`` nothing reads the next span's tokens at all, which is
+        what the posterior-leak gate in tests/test_tul_gram.py checks by perturbation.
+        """
+        if self.training:
+            if gram_mode is not None or gram_seed is not None:
+                raise ValueError(
+                    "gram_mode / gram_sample_seed are EVAL-ONLY: a training step always "
+                    "draws the posterior from the global stream.")
+            if n_nograd > 0:
+                raise NotImplementedError(
+                    f"tul.gram with a truncated BPTT window ({n_nograd} no-grad passes): "
+                    f"the KL of a no-grad pass trains nothing, so the charged sum would "
+                    f"not be the ELBO of the trajectory the coda reads. Set "
+                    f"model.bptt_depth >= the slot loop's max depth.")
+            mode = "post"
+        else:
+            mode = "prior" if gram_mode is None else gram_mode
+        if mode not in GRAM_MODES:
+            raise ValueError(f"gram_mode must be one of {GRAM_MODES} or None, got {mode!r}")
+        e_next = has = None
+        if mode == "post":
+            e_next, has = self.tul_gram.pool(xn.mean(dim=2) if self._is_hc else xn, layout)
+        gen = None
+        seed = int(self.gram_eval_seed if gram_seed is None else gram_seed)
+        if not self.training and mode != "mean":
+            gen = torch.Generator(device=xn.device)
+        return {"mode": mode, "e_next": e_next, "has": has, "gen": gen, "seed": seed,
+                "kl_bal": [], "kl_raw": [], "kl_mask": [], "stats": [],
+                "alpha": float(self.cfg.tul.gram_kl_balance)}
+
+    def _gram_step(self, u: Tensor, t: int, active: Tensor, layout: SlotLayout,
+                   ctx: dict) -> Tensor:
+        """``h_t = u_t + r_t * (m + s * n)`` on the valid slots (Synthesis Decision 4).
+
+        ``r_t`` is the per-slot RMS of the whole carrier over (streams, channels),
+        DETACHED; the heads read the stream mean of ``u_t`` over ``r_t``; the step is
+        single-stream and broadcast into the Hyper-Connection streams by
+        :meth:`_apply_injection`, the way every injection is. Pads get exactly 0. At a
+        slot with no next span the posterior is replaced by the prior (its ``e_next`` is
+        0 and nothing trains it there) and its KL is masked out, as it is at every slot
+        whose realised depth does not reach this pass.
+
+        The noise: training ``torch.randn`` on the global device stream; eval a
+        generator seeded ``seed * 100003 + t``, so pass ``t`` draws the same tensor at
+        every forced depth and under every forward with one seed.
+        """
+        g = self.tul_gram
+        valid = layout.slot_valid
+        r = u.detach().float().flatten(2).pow(2).mean(-1).add(1e-12).sqrt()      # [B, S]
+        ubar = u.mean(dim=2) if self._is_hc else u
+        uh = (ubar.float() / r.unsqueeze(-1)).to(u.dtype)
+        m_p, s_p = g.prior(uh)
+        mode = ctx["mode"]
+        m_q = s_q = None
+        if mode == "post":
+            m_q, s_q = g.posterior(uh, ctx["e_next"])
+            hv = ctx["has"].unsqueeze(-1)
+            m_use = torch.where(hv, m_q, m_p)
+            s_use = torch.where(hv, s_q, s_p)
+            kl_bal, kl_raw = gram_kl_balanced(m_q, s_q, m_p, s_p, ctx["alpha"])
+            msk = active & ctx["has"]
+            ctx["kl_bal"].append(torch.where(msk, kl_bal.sum(-1), kl_bal.new_zeros(())))
+            ctx["kl_raw"].append(torch.where(msk, kl_raw.sum(-1), kl_raw.new_zeros(())))
+            ctx["kl_mask"].append(msk)
+        else:
+            m_use, s_use = m_p, s_p
+        shape = s_p.shape
+        if mode == "mean":
+            z = m_use
+        else:
+            if ctx["gen"] is None:
+                n = torch.randn(shape, device=u.device, dtype=torch.float32)
+            else:
+                ctx["gen"].manual_seed(ctx["seed"] * 100003 + t)
+                n = torch.randn(shape, device=u.device, dtype=torch.float32,
+                                generator=ctx["gen"])
+            z = m_use + s_use * n
+        eps = z * r.unsqueeze(-1) * valid.unsqueeze(-1).float()
+        h = self._apply_injection(u, eps.to(u.dtype))
+        with torch.no_grad():
+            av = (active & valid).float()
+            nav = av.sum().clamp(min=1.0)
+            st = {"sigma_prior": (s_p.mean(-1) * av).sum() / nav,
+                  "mu_prior": (m_p.pow(2).mean(-1).sqrt() * av).sum() / nav,
+                  "u_rms": (r * av).sum() / nav,
+                  "h_rms": (h.detach().float().flatten(2).pow(2).mean(-1).sqrt() * av).sum()
+                  / nav}
+            if m_q is not None:
+                msk_f = ctx["kl_mask"][-1].float()
+                nm = msk_f.sum().clamp(min=1.0)
+                st["sigma_post"] = (s_q.mean(-1) * msk_f).sum() / nm
+                st["mu_post"] = (m_q.pow(2).mean(-1).sqrt() * msk_f).sum() / nm
+                st["kl"] = (ctx["kl_raw"][-1] * msk_f).sum() / nm
+            ctx["stats"].append(st)
+        if self._gram_capture is not None:
+            self._gram_capture.append({"t": t, "mode": mode, "u": u.detach(),
+                                       "h": h.detach(), "eps": eps.detach()})
+        return h
+
+    def _gram_finish(self, ctx: dict, layout: SlotLayout) -> None:
+        """Assemble the forward's KL and readings; stash them for `_forward_tul`.
+
+        Training: ``_gram_train = {"kl_sum": sum over valid slots of the balanced KL summed
+        over the slot's realised passes (graph), "stats": {...}}``; the per-slot free-bits
+        floor ``max(KL_slot, gram_free_bits)`` applies to the balanced sum only when the
+        knob is above 0 (a clamp at 0 would still change the gradient of a float-negative
+        KL, so it is not applied at all at 0). Eval: ``_gram_eval`` with the per-slot,
+        per-pass raw KL ``[B, S, T]`` and its mask (post mode only) and the pass-mean
+        sigma / mu readings.
+        """
+        stats = ctx["stats"]
+        T = len(stats)
+        if T == 0:
+            return
+        red: dict[str, Tensor] = {}
+        for k in ("sigma_prior", "mu_prior", "u_rms", "h_rms", "sigma_post", "mu_post"):
+            vals = [st[k] for st in stats if k in st]
+            if vals:
+                red[k] = torch.stack(vals).mean()
+        kl_slot = None
+        if ctx["kl_raw"]:
+            kl_slot = torch.stack(ctx["kl_raw"], dim=-1).sum(-1)                 # [B, S]
+        if self.training:
+            out_stats: dict[str, Tensor] = {
+                "gram_sigma_ratio_prior": red["sigma_prior"],
+                "gram_mu_ratio_prior": red["mu_prior"],
+                "gram_u_rms": red["u_rms"], "gram_h_rms": red["h_rms"]}
+            has = ctx["has"]
+            kl_bal = torch.stack(ctx["kl_bal"], dim=-1).sum(-1)                  # [B, S]
+            fb = float(self.cfg.tul.gram_free_bits)
+            if fb > 0.0:
+                kl_bal = torch.where(has, kl_bal.clamp(min=fb), kl_bal.new_zeros(()))
+            with torch.no_grad():
+                hf = has.float()
+                nh = hf.sum().clamp(min=1.0)
+                out_stats["gram_sigma_ratio_post"] = red["sigma_post"]
+                out_stats["gram_mu_ratio_post"] = red["mu_post"]
+                out_stats["gram_kl"] = (kl_slot * hf).sum() / nh
+                out_stats["gram_kl_p90"] = torch.nanquantile(
+                    torch.where(has, kl_slot, torch.full_like(kl_slot, float("nan"))
+                                ).flatten(), 0.9)
+                out_stats["gram_n_slots"] = hf.sum()
+                if fb > 0.0:
+                    out_stats["gram_free_bits_frac"] = (
+                        ((kl_slot < fb) & has).float().sum() / nh)
+                for i, st in enumerate(stats):
+                    out_stats[f"gram_kl_t{i + 1}"] = st["kl"]
+            self._gram_train = {"kl_sum": kl_bal.sum(), "stats": out_stats}
+        else:
+            ev: dict = {"gram_sigma_ratio_prior": red["sigma_prior"].detach(),
+                        "gram_mu_ratio_prior": red["mu_prior"].detach(),
+                        "gram_mode": ctx["mode"], "gram_passes": T}
+            if kl_slot is not None:
+                ev["gram_kl_pass"] = torch.stack(ctx["kl_raw"], dim=-1).detach()   # [B,S,T]
+                ev["gram_kl_mask"] = torch.stack(ctx["kl_mask"], dim=-1).detach()
+                ev["gram_sigma_ratio_post"] = red["sigma_post"].detach()
+                ev["gram_mu_ratio_post"] = red["mu_post"].detach()
+            self._gram_eval = ev
 
     # ── TUL-Code (docs/tul-code-spec.md) ─────────────────────────────────────────
 
@@ -9091,8 +9349,16 @@ class MORPHTransformer(nn.Module):
                      code_seed: int | None = None,
                      code_given: Tensor | None = None,
                      code_given_mask: Tensor | None = None,
-                     coda_state_only: bool = False) -> dict:
+                     coda_state_only: bool = False,
+                     gram_mode: str | None = None,
+                     gram_sample_seed: int | None = None) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis.
+
+        ``gram_mode`` / ``gram_sample_seed`` (``tul.gram``, EVAL ONLY): the LXTUL-G noise
+        — ``None``/``"prior"`` a seeded prior sample, ``"post"`` a posterior sample (an
+        instrument that reads the next span; its per-slot KL comes back as
+        ``out["gram_kl_pass"]``), ``"mean"`` the prior mean. ``None`` on every other
+        model; a non-gram model given either RAISES. See :meth:`_gram_ctx`.
 
         ``coda_state_only`` (eval only, ``labels=None``): return the coda's readout as
         ``out["coda_state"]`` ``[B, L, C]`` and compute NO logits. The graded-continuation
@@ -9122,6 +9388,16 @@ class MORPHTransformer(nn.Module):
         # tul.loop_denoise's per-pass term: reset at the head of EVERY forward, so a
         # label-less or eval forward can never hand the next training step a stale sum.
         self._loop_denoise = None
+        # tul.gram's stashes: reset at the head of EVERY forward (the `_loop_denoise` rule).
+        self._gram_train = None
+        self._gram_eval = None
+        if self.tul_gram is None and (gram_mode is not None or gram_sample_seed is not None):
+            raise ValueError(
+                "gram_mode / gram_sample_seed need a model built with tul.gram=true.")
+        if self.tul_gram is not None and tul_step_mode == "db1":
+            raise NotImplementedError(
+                "tul.gram with tul_step_mode='db1': the one-pass db1 step bypasses "
+                "`_tul_core`, where the Gaussian step lives.")
         if self.tul is None:
             raise RuntimeError(
                 "forward(slot_layout=...) requires a model built with MORPHConfig(tul=...); "
@@ -9463,9 +9739,13 @@ class MORPHTransformer(nn.Module):
                 # as it always has.
                 if self.tul_loop_denoise is not None:
                     _ct_z, _ct_ok = self._tul_code_target_encode_pre(x, layout, input_ids)
+                # `gram_mode` / `gram_seed` are passed only to a gram model, so every other
+                # model calls `_tul_core` with exactly the arguments it always had.
+                _gram_kw = ({"gram_mode": gram_mode, "gram_seed": gram_sample_seed}
+                            if self.tul_gram is not None else {})
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
                     x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids,
-                    slot_depths=slot_depths, code_x0=_ct_z, code_ok=_ct_ok)
+                    slot_depths=slot_depths, code_x0=_ct_z, code_ok=_ct_ok, **_gram_kw)
             # ── the Thought Register (tul.slot_cells) ─────────────────────────────
             # `_tul_core` returns the compact CELL axis, [B, S*M, …]. M == 1 — every model
             # before the knob — leaves `_reg_cells` None and this block traces out.
@@ -10303,6 +10583,24 @@ class MORPHTransformer(nn.Module):
             _ww = tc.fan_all_wta_lambda * fan_wta_loss
             groups["fan_wta_weighted"] = _ww.detach()
             groups["loss"] = groups["loss"] + _ww
+        _gr = self._gram_train
+        # Consumed here and CLEARED here (the `_core_aux` contract): the stash holds a
+        # graph tensor.
+        self._gram_train = None
+        if _gr is not None and groups is not None and labels is not None:
+            # tul.gram (LXTUL-G): beta * (sum over valid slots of the balanced KL summed
+            # over each slot's realised passes) / n_tokens, n_tokens the TOKEN positions
+            # with a label — the CE's own count, so beta 1 is exactly the negative ELBO
+            # per token (Synthesis Decision 2). `gram_kl_weighted` is subtracted from
+            # train/loss and val/loss in train.py like every other auxiliary term.
+            groups = dict(groups)
+            _n_tok = ((~layout.slot_mask) & (labels >= 0)).sum().clamp(min=1).float()
+            _gw = tc.gram_beta * _gr["kl_sum"] / _n_tok
+            groups["gram_kl_per_token"] = (_gr["kl_sum"] / _n_tok).detach()
+            groups["gram_kl_weighted"] = _gw.detach()
+            groups["loss"] = groups["loss"] + _gw
+            for _k, _v in _gr["stats"].items():
+                groups[_k] = _v.detach().to(groups["loss"].dtype)
         if self.tul_carry is not None and groups is not None and self._loop_carry_stats:
             # `tul.loop_carry`'s per-pass readings. A VARIABLE number of keys (the
             # batch's realised max depth decides how many), so it is a scan and not a
@@ -10491,6 +10789,12 @@ class MORPHTransformer(nn.Module):
                 # tokens the plan it just built covers (§8). It is the same tensor the
                 # coda was conditioned on, never a second, separately-decoded one.
                 out["gate_k"] = budget_ids
+        if self._gram_eval is not None and not self.training:
+            # tul.gram at eval: the mode that ran, the sigma / mu readings and, under
+            # gram_mode="post", the per-slot per-pass KL `[B, S, T]` with its mask — what
+            # lab/divergence/lxtul_g_probe.py reads for ce_elbo and the KL distribution.
+            out.update(self._gram_eval)
+            self._gram_eval = None
         out["layer_passes"] = self._tul_layer_passes(layout, depths, coda_positions)
         out["n_tokens"] = (~layout.slot_mask).sum()
         if _code_cells_out is not None and not self.training:
@@ -10791,8 +11095,13 @@ class MORPHTransformer(nn.Module):
                             slot_depths: Tensor | None = None,
                             code_mode: str | None = None,
                             code_steps: int | None = None,
-                            code_seed: int | None = None) -> dict:
+                            code_seed: int | None = None,
+                            gram_mode: str | None = None,
+                            gram_sample_seed: int | None = None) -> dict:
         """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
+
+        ``gram_mode`` / ``gram_sample_seed``: the LXTUL-G noise (``tul.gram`` only), passed
+        through to :meth:`forward`'s; ``None`` is the seeded prior sample.
 
         ``normal`` — the shipped path.
         ``zero``   — the slot values written into the coda are zeroed. Removes the
@@ -10841,7 +11150,9 @@ class MORPHTransformer(nn.Module):
                                         tul_step_mode=tul_step_mode,
                                         _slot_depths=slot_depths,
                                         _code_mode=code_mode, _code_steps=code_steps,
-                                        _code_seed=code_seed)
+                                        _code_seed=code_seed,
+                                        _gram_mode=gram_mode,
+                                        _gram_sample_seed=gram_sample_seed)
         if self.tul_code_enc is not None:
             raise NotImplementedError(
                 "plan_mode='wrong_seed' on a code model: the seed feeds the thinker, not the "
@@ -10853,7 +11164,9 @@ class MORPHTransformer(nn.Module):
         try:
             return self._forward_single(input_ids, labels, 0, None, layout,
                                         tul_step_mode=tul_step_mode,
-                                        _slot_depths=slot_depths)
+                                        _slot_depths=slot_depths,
+                                        _gram_mode=gram_mode,
+                                        _gram_sample_seed=gram_sample_seed)
         finally:
             tc.slot_seed = orig
 
@@ -11419,7 +11732,9 @@ class MORPHTransformer(nn.Module):
                 code_mode: str | None = None, code_steps: int | None = None,
                 code_seed: int | None = None,
                 code_given: Tensor | None = None,
-                code_given_mask: Tensor | None = None) -> dict:
+                code_given_mask: Tensor | None = None,
+                gram_mode: str | None = None,
+                gram_sample_seed: int | None = None) -> dict:
         """``slot_depths`` ``[B, max_slots]``: the EVAL-ONLY per-slot depth table, the
         ``slot_layout`` pattern — ``None`` is bit-identical to before it existed. See
         :meth:`_slot_depth_override`.
@@ -11429,14 +11744,20 @@ class MORPHTransformer(nn.Module):
         and under "generate" ``code_given`` ``[B, S, M, C]`` + ``code_given_mask``
         ``[B, S]`` hand the forward already-sampled cells (the generator's cache for the
         open span) so a span is written from ONE sample. ``None`` everywhere is the
-        shipped path."""
+        shipped path.
+
+        ``gram_mode`` / ``gram_sample_seed`` (``tul.gram``, eval only): which LXTUL-G
+        noise the slot loop draws (``None``/``"prior"``, ``"post"``, ``"mean"``) and its
+        seed (``None`` = ``self.gram_eval_seed``); see :meth:`_gram_ctx`."""
         return self._forward_single(input_ids, labels, bag_size, seq_lens, slot_layout,
                                     tul_step_mode=tul_step_mode,
                                     _slot_depths=slot_depths,
                                     _code_mode=code_mode, _code_steps=code_steps,
                                     _code_seed=code_seed,
                                     _code_given=code_given,
-                                    _code_given_mask=code_given_mask)
+                                    _code_given_mask=code_given_mask,
+                                    _gram_mode=gram_mode,
+                                    _gram_sample_seed=gram_sample_seed)
 
     def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,
                                    slot_layout: SlotLayout) -> dict:
@@ -11475,7 +11796,9 @@ class MORPHTransformer(nn.Module):
                         _code_seed: int | None = None,
                         _code_given: Tensor | None = None,
                         _code_given_mask: Tensor | None = None,
-                        _coda_state_only: bool = False) -> dict:
+                        _coda_state_only: bool = False,
+                        _gram_mode: str | None = None,
+                        _gram_sample_seed: int | None = None) -> dict:
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "
@@ -11496,7 +11819,13 @@ class MORPHTransformer(nn.Module):
                                      code_seed=_code_seed,
                                      code_given=_code_given,
                                      code_given_mask=_code_given_mask,
-                                     coda_state_only=_coda_state_only)
+                                     coda_state_only=_coda_state_only,
+                                     gram_mode=_gram_mode,
+                                     gram_sample_seed=_gram_sample_seed)
+        if _gram_mode is not None or _gram_sample_seed is not None:
+            raise ValueError(
+                "gram_mode / gram_sample_seed require slot_layout: the LXTUL-G step lives "
+                "in the slot loop.")
         if _coda_state_only:
             raise ValueError(
                 "coda_state_only requires slot_layout: it is the graded-continuation "

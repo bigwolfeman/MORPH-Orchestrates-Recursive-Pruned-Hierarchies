@@ -87,6 +87,9 @@ KNOWN_TUL_KEYS = frozenset({
     "code_grade_every", "code_grade_loss", "code_grade_grader", "code_grade_weight",
     "code_grade_temp", "code_grade_tau", "code_grade_min_distinct2",
     "loop_denoise", "loop_denoise_grid", "loop_denoise_weight",
+    # LXTUL-G (tul.gram, 2026-09-23): the stochastic slot loop, morph/model/tul_gram.py
+    "gram", "gram_beta", "gram_kl_balance", "gram_free_bits", "gram_mean",
+    "gram_sigma_init", "gram_hidden",
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
@@ -462,6 +465,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         loop_denoise=bool(tc.get("loop_denoise", False)),
         loop_denoise_grid=str(tc.get("loop_denoise_grid", "linear")),
         loop_denoise_weight=float(tc.get("loop_denoise_weight", 1.0)),
+        gram=bool(tc.get("gram", False)),
+        gram_beta=float(tc.get("gram_beta", 0.1)),
+        gram_kl_balance=float(tc.get("gram_kl_balance", 0.8)),
+        gram_free_bits=float(tc.get("gram_free_bits", 0.0)),
+        gram_mean=bool(tc.get("gram_mean", True)),
+        gram_sigma_init=float(tc.get("gram_sigma_init", 0.1)),
+        gram_hidden=int(tc.get("gram_hidden", 256)),
         code_grade=bool(tc.get("code_grade", False)),
         code_grade_k=int(tc.get("code_grade_k", 4)),
         code_grade_tokens=int(tc.get("code_grade_tokens", 16)),
@@ -675,6 +685,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "loop_denoise": model_cfg.loop_denoise,
         "loop_denoise_grid": model_cfg.loop_denoise_grid,
         "loop_denoise_weight": model_cfg.loop_denoise_weight,
+        "gram": model_cfg.gram,
+        "gram_beta": model_cfg.gram_beta,
+        "gram_kl_balance": model_cfg.gram_kl_balance,
+        "gram_free_bits": model_cfg.gram_free_bits,
+        "gram_mean": model_cfg.gram_mean,
+        "gram_sigma_init": model_cfg.gram_sigma_init,
+        "gram_hidden": model_cfg.gram_hidden,
         "code_grade": model_cfg.code_grade,
         "code_grade_k": model_cfg.code_grade_k,
         "code_grade_tokens": model_cfg.code_grade_tokens,
@@ -1063,6 +1080,24 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"(.agents/notes/proposed/architecture/"
               f"2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md, Part 2 change 1)",
               flush=True)
+    if model_cfg.gram:
+        # LXTUL-G (tul.gram, 2026-09-23). The banner names the two things that make the
+        # arm unreadable if forgotten: train and eval draw from DIFFERENT distributions,
+        # and the K-curve is read on ONE seeded prior sample.
+        print(f"  LXTUL-G ON: a learned Gaussian step after every slot-loop pass, "
+              f"h_t = u_t + r_t*(m + s*n) with r_t the slot's detached RMS; "
+              f"{'mean + variance heads' if model_cfg.gram_mean else 'MEAN-FREE (m = 0)'}, "
+              f"sigma/r at init {model_cfg.gram_sigma_init}, head width "
+              f"{model_cfg.gram_hidden}. TRAIN draws the POSTERIOR (it sees the next "
+              f"span's prelude states through a one-query pool); EVAL draws the PRIOR from "
+              f"a seeded generator (gram_eval_seed), so a forced-depth sweep is paired per "
+              f"pass. Loss += beta={model_cfg.gram_beta} * sum KL_bal / n_tokens, KL "
+              f"balancing {model_cfg.gram_kl_balance}, free bits "
+              f"{model_cfg.gram_free_bits} nats per slot. The fixed-point term reads the "
+              f"DETERMINISTIC u_T. Read `tul/gram_kl` (collapse below 0.5 nats per slot), "
+              f"then the exposure gap ce_prior@1 - ce_post from "
+              f"lab/divergence/lxtul_g_probe.py (prereg "
+              f"lab/experiments/planned/2026-09-23-lxtul-g-panel.md)", flush=True)
     if model_cfg.vq_codes > 0:
         _dc = model_cfg.vq_dim or (int(cfg.model.d_model) // model_cfg.vq_codes)
         print(f"  TUL DISCRETE THOUGHT ON: vq_codes={model_cfg.vq_codes} "

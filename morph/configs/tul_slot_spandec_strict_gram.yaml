@@ -1,0 +1,51 @@
+# LXTUL-G panel, arm "lxtul-g": the strict spandec ruler with the slot loop made a
+# STOCHASTIC, contractive recursion trained as a latent-variable model (GRAM shape,
+# arXiv 2605.19376). ONE factor against `slot-spandec-strict`
+# (`tul_slot_spandec_strict.yaml`): `tul.gram`.
+#
+# WHAT IT IS (morph/model/tul_gram.py). After every pass t of `_tul_core` the deterministic
+# update u_t = f(h_{t-1}) takes a learned Gaussian step, h_t = u_t + r_t * (m + s * n), with
+# r_t the slot's DETACHED RMS (so the step cannot escape by scale). The PRIOR heads read
+# u_t / r_t; the POSTERIOR heads also read `e_next`, a one-query attention pool over the
+# prelude states of the span the slot precedes. Training decodes the coda from the
+# POSTERIOR trajectory and charges beta * sum over slots and passes of KL(q || p) / n_tokens
+# with KL balancing 0.8 (GRAM App. B.2). Eval draws the PRIOR from a seeded generator, so
+# the runner's forced-depth sweep reads the K-curve on ONE seeded prior sample (the same
+# noise at pass t at every depth).
+#
+# WHY. During training the latent carries information about the next span that the tokens
+# cannot supply, so the coda's cheapest route to the loss goes THROUGH the loop's latent;
+# the KL teaches the prior to propose what the posterior used. Depth use is not charged.
+#
+# INIT. The posterior is a copy of the prior with a zero-init e_next path, so at step 0
+# q == p exactly and the KL is 0; m starts at 0 and sigma/r at 0.1 on every slot. The heads
+# and the pool draw from a private generator: every base weight equals the ruler's at seed 1.
+#
+# COLLISIONS HANDLED IN THE CODE. The fixed-point term (`core_fixed_point_lambda` 1.0)
+# reads the deterministic u_T, not h_T (on h_T it would pay sigma to shrink); the slot gain
+# hinge probes f alone (the step is added outside `_core_step`); the loop probes read u_t.
+#
+# NO free bits (GRAM uses KL balancing and no floor). Fallback rule, Synthesis Decision 3:
+# if the median per-slot KL is below 0.5 nats at step 2000, rerun with gram_free_bits 1.0
+# as a NEW prereg.
+#
+# INSTRUMENTS: `tul/gram_kl`, `tul/gram_kl_t{t}`, `tul/gram_kl_p90`,
+# `tul/gram_sigma_ratio_{prior,post}`, `tul/gram_mu_ratio_{prior,post}`; offline
+# `lab/divergence/lxtul_g_probe.py` (ce_post, ce_prior@1, ce_iw@{1,4,16}, identity null,
+# ce_elbo, ce_zero, per-pass KL).
+#
+# Prereg: lab/experiments/planned/2026-09-23-lxtul-g-panel.md
+# Note: .agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  gram: true
+  gram_beta: 0.1
+  gram_kl_balance: 0.8
+  gram_free_bits: 0.0
+  gram_sigma_init: 0.1
+
+wandb:
+  name: lxtul-g

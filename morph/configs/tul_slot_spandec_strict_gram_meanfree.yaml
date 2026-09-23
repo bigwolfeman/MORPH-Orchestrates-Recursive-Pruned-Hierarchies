@@ -1,0 +1,26 @@
+# LXTUL-G panel, arm "lxtul-g-meanfree": GRAM's "stochasticity only" control (Synthesis
+# Controls A1). ONE factor against `lxtul-g` (`tul_slot_spandec_strict_gram.yaml`):
+# `tul.gram_mean: false` — neither the prior nor the posterior builds a mean head, so
+# mu == 0 on both sides and the step is N(0, sigma^2) with a LEARNED, input-dependent
+# sigma.
+#
+# WHAT IT ISOLATES. The posterior can no longer steer the step toward the next span; it
+# can only change how much noise a slot takes. Its latent therefore carries (almost) no
+# span information, and its width gain ce_prior@1 - ce_iw@N is the NOISE FLOOR the
+# lxtul-g width gain is read against (prereg P-4). GRAM Table 3b: without the mean the
+# multi-solution task falls from 99.69 to 50.27.
+#
+# Parameter count: smaller than lxtul-g by the two mean heads (the sigma heads and the
+# e_next pool are kept, so the posterior still sees the next span through sigma).
+#
+# Prereg: lab/experiments/planned/2026-09-23-lxtul-g-panel.md
+# Note: .agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md
+defaults:
+  - tul_slot_spandec_strict_gram
+  - _self_
+
+tul:
+  gram_mean: false
+
+wandb:
+  name: lxtul-g-meanfree
