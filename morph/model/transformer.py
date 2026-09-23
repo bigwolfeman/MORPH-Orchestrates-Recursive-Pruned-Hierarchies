@@ -1998,7 +1998,7 @@ class MORPHTransformer(nn.Module):
             (cfg.fm is not None)
             or not (cfg.tul.tokens_through_core or cfg.tul.loop_reads_tokens))
         self.tul: TULSlots | None = (
-            TULSlots(d, cfg.tul, with_prefix=_wants_prefix)
+            TULSlots(d, cfg.tul, with_prefix=_wants_prefix, n_coda=cfg.n_coda)
             if cfg.tul is not None else None)
         # The gate is built AFTER TULSlots for the same reason and with the same
         # discipline: every one of its inits is a deterministic zero/one, so building it
@@ -3332,7 +3332,9 @@ class MORPHTransformer(nn.Module):
                      attn_kwargs: dict | None = None,
                      ret_reset_mask: Tensor | None = None,
                      checkpoint_blocks: bool = False,
-                     attn_kwargs_at: dict[int, dict] | None = None) -> Tensor:
+                     attn_kwargs_at: dict[int, dict] | None = None,
+                     extra_term: Tensor | None = None,
+                     extra_gates: Tensor | None = None) -> Tensor:
         """BACK region: coda blocks → HC stream mean → lm_mixer → final_norm.
         input_ids is only threaded into _build_injection_term for signature parity —
         value-embeds fire exclusively in the prelude (gi ≥ n_prelude+n_core is never in
@@ -3355,7 +3357,20 @@ class MORPHTransformer(nn.Module):
 
         ``attn_kwargs_at`` (``model.span_reach_layer`` only): see :meth:`_front_tail` —
         keyed by the coda block's GLOBAL index ``gi``, not its local ``i``. ``None`` on
-        every other path → the loop below is exactly the one above, bit-identical."""
+        every other path → the loop below is exactly the one above, bit-identical.
+
+        ``extra_term`` / ``extra_gates`` (``tul.bcast_layers="all"`` only, passed together):
+        a ``[B, S, C]`` term (the unpack, ``TULSlots.unpack``) and a ``[n_coda]`` gate
+        vector; coda block ``i`` adds ``extra_gates[i] * extra_term`` to its injection term.
+        Added AFTER the ``inject_keep`` multiply, so it is NOT zeroed at a dropped token:
+        the entry add in ``_forward_tul`` happens after the token-state dropout and is not
+        multiplied by ``keep`` either ("the dropped token loses itself, not the thought it
+        is decoding"), and the per-layer add follows the same rule. The strict geometry's
+        slot-cell zeroing inside ``keep`` needs no help: the unpack is exactly zero at every
+        slot cell (``unpack_index``'s ``valid`` covers token positions only). ``None`` on
+        every other caller → the loop below is unchanged, bit-identical."""
+        if (extra_term is None) != (extra_gates is None):
+            raise ValueError("_back_region: extra_term and extra_gates go together")
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             term = self._build_injection_term(
@@ -3363,6 +3378,8 @@ class MORPHTransformer(nn.Module):
             )
             if inject_keep is not None:
                 term = term * inject_keep.to(term.dtype)
+            if extra_term is not None:
+                term = term + extra_gates[i].to(term.dtype) * extra_term.to(term.dtype)
             _akw = attn_kwargs_at[gi] if attn_kwargs_at and gi in attn_kwargs_at else attn_kwargs
             if checkpoint_blocks:
                 # ``checkpoint_blocks`` (tul.fan_mix="all"'s winner replay, 2026-09-20):
@@ -9940,11 +9957,17 @@ class MORPHTransformer(nn.Module):
             # strict arm (tests/test_tul_strict_geometry.py).
             _slot_keep = slot_cell_inject_keep(layout, x_coda.dtype)
             keep = _slot_keep if keep is None else keep * _slot_keep
+        _bcast_term = None
         if tc.bcast and not tc.tokens_through_core:
             # The unpack: z_{i} through the offset-indexed linears, ADDED to span i+1's
             # token inputs (every stream). After the dropout on purpose: the dropped token
-            # loses itself, not the thought it is decoding.
-            x_coda = self._apply_injection(x_coda, self.tul.unpack(h_slots, layout))
+            # loses itself, not the thought it is decoding. Computed ONCE; under
+            # `bcast_layers="all"` the same tensor is re-added at every coda layer below.
+            _bcast_term = self.tul.unpack(h_slots, layout)
+            x_coda = self._apply_injection(x_coda, _bcast_term)
+        _bcast_kw: dict = {}
+        if self.tul.bcast_gates is not None:
+            _bcast_kw = dict(extra_term=_bcast_term, extra_gates=self.tul.bcast_gates)
 
         # `all_slots` (the route split of the 2026-09-11 budget result): the prefix write is
         # already zeroed in `_tul_plan_ablate`; this cuts the cells' own injections and
@@ -9973,7 +9996,8 @@ class MORPHTransformer(nn.Module):
             coda_positions = 0
         elif tc.coda_sees_slots and tc.coda_token_cut == 0:
             xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
-                                   attn_kwargs=_coda_kw, ret_reset_mask=tg_reset)
+                                   attn_kwargs=_coda_kw, ret_reset_mask=tg_reset,
+                                   **_bcast_kw)
             groups = (self._tul_group_losses(xh, labels, layout, want_groups=not self.training)
                       if labels is not None else None)
             coda_positions = L
@@ -11155,6 +11179,13 @@ class MORPHTransformer(nn.Module):
         why one function now serves both arms with no new indexing logic (spec §"the
         change": "Reuse compact_index, gather_positions, and its _g padding helper").
         """
+        if self.tul is not None and self.tul.bcast_gates is not None:
+            # Reached by arm A4 / CW (refused at config) and by `plan_nats` (a forward
+            # argument). The per-layer unpack is not re-gathered for this index space.
+            raise NotImplementedError(
+                "tul.bcast_layers='all' with a gathered coda (coda_sees_slots=false, "
+                "coda_token_cut>0 or plan_nats): the per-layer unpack term is not "
+                "re-gathered for the subset, so the coda would silently lose it.")
         cidx = compact_index(drop_mask)
         B, L = drop_mask.shape
 

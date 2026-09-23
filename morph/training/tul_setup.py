@@ -33,7 +33,7 @@ __all__ = ["TulRuntime", "build_tul_runtime", "build_boundary_rule",
 # name that promises something else (runtime-invariants §6b). Built from the `tc.get(...)`
 # reads below; tests/test_tul_setup_keys.py checks every shipped config against it.
 KNOWN_TUL_KEYS = frozenset({
-    "activate_at", "bcast", "boundary_chars", "boundary_substrings", "carry",
+    "activate_at", "bcast", "bcast_layers", "boundary_chars", "boundary_substrings", "carry",
     "center_bag_mean", "center_exit", "coda_sees_slots", "coda_span_heads",
     "coda_span_source",
     "coda_span_weight", "coda_token_cut", "coda_token_input", "cond_layers",
@@ -278,6 +278,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         carry=bool(tc.get("carry", False)),
         xattn=bool(tc.get("xattn", False)),
         bcast=bool(tc.get("bcast", False)),
+        bcast_layers=str(tc.get("bcast_layers", "entry")),
         reread=bool(tc.get("reread", False)),
         reread_heads=int(tc.get("reread_heads", 8)),
         reread_scope=str(tc.get("reread_scope", "causal")),
@@ -611,6 +612,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "oracle_z_max_tokens": model_cfg.oracle_z_max_tokens,
         "coda_token_input": model_cfg.coda_token_input,
         "bcast": model_cfg.bcast,
+        "bcast_layers": model_cfg.bcast_layers,
         "reread": model_cfg.reread,
         "reread_heads": model_cfg.reread_heads,
         "reread_scope": model_cfg.reread_scope,

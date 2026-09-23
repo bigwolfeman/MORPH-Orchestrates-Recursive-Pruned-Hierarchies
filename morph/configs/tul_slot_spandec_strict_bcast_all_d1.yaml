@@ -1,0 +1,24 @@
+# Slot-loop panel, arm "slot-spandec-strict-bcast-all-d1": the DEPTH-1-TRAINED twin of
+# `slot-spandec-strict-bcast-all`. ONE factor against it
+# (`tul_slot_spandec_strict_bcast_all.yaml`): `tul.slot_depth_fixed: 1`.
+#
+# WHAT IT ISOLATES. The same weights, seed, target, reader and per-layer read, with every
+# valid slot given EXACTLY one core application, train and eval (the precedent and its full
+# reasoning: `tul_slot_spandec_norecur.yaml`). A looped arm's forced-depth sweep already
+# reports its own depth-1 column; this arm is a model TRAINED at depth 1. If
+# `bcast-all` beats this twin by no more than `slot-spandec-strict` beats
+# `slot-spandec-strict-norecur`, the per-layer read made the loop's output more useful
+# without making the ITERATION more useful.
+#
+# COST. Identical parameters to the parent; fewer core passes per step (one per slot).
+#
+# Record: lab/experiments/planned/2026-09-22-arc-slot-token-like-read.md
+defaults:
+  - tul_slot_spandec_strict_bcast_all
+  - _self_
+
+tul:
+  slot_depth_fixed: 1
+
+wandb:
+  name: slot-spandec-strict-bcast-all-d1

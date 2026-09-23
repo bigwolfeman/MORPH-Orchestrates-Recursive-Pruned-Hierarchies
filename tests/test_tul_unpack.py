@@ -273,3 +273,179 @@ def test_segment_causal_conv_matches_the_reference_and_cuts_at_boundaries():
     # and inside a segment the taps are the reference's (the first segment alone)
     ref1 = causal_conv_reference(x[:, :, :9], w_dw, w_gp, k)
     assert torch.allclose(a[:, :, :9], ref1, atol=1e-5)
+
+
+# ── tul.bcast_layers="all": the unpack re-added at every coda layer (2026-09-22) ──
+#
+# The arm `slot-spandec-strict-bcast-all` (morph/configs/tul_slot_spandec_strict_bcast_all
+# .yaml). The contracts: the gates are built only where they act and are zero at init, so
+# the arm is the entry arm AND the ruler bit for bit at step 0; the gates receive gradient
+# once W_bcast is nonzero; both adds are functions of z alone (plan_mode="zero" removes
+# both); and the strict leak gate still holds with the per-layer route live.
+
+_N_CODA = 2
+
+
+def _strict(**kw) -> TULConfig:
+    """The strict ruler's geometry on this file's fixture."""
+    base = dict(tg_restrict=True, tg_restrict_scope="all", tg_geometry="strict",
+                tg_coda_prefix_reach="all", emit_weight=0.0, mux_beta=0.0)
+    base.update(kw)
+    return _tul(**base)
+
+
+def _m(tul: TULConfig):
+    return _model(tul, n_coda=_N_CODA)
+
+
+def _train_loss_grads(model, x, y, lay, seed=7):
+    """Training-mode loss (the fused CE builds no logits) and every parameter's grad."""
+    model.train()
+    model.zero_grad(set_to_none=True)
+    torch.manual_seed(seed)                  # the slot-depth draw
+    loss = model(x, labels=y, slot_layout=lay)["loss"]
+    loss.backward()
+    return loss.detach(), {n: p.grad for n, p in model.named_parameters()}
+
+
+def test_bcast_layers_config_contract():
+    assert _tul(bcast=True).bcast_layers == "entry"
+    _tul(bcast=True, bcast_layers="all")
+    with pytest.raises(ValueError, match="bcast_layers"):
+        _tul(bcast=True, bcast_layers="every")
+    with pytest.raises(ValueError, match="needs tul.bcast=true"):
+        _tul(bcast_layers="all")
+    with pytest.raises(NotImplementedError, match="bcast_layers='all'"):
+        _tul(bcast=True, bcast_layers="all", coda_sees_slots=False)
+    with pytest.raises(NotImplementedError, match="bcast_layers='all'"):
+        _tul(bcast=True, bcast_layers="all", core_token_aux=True)
+
+
+def test_bcast_layers_all_builds_zero_gates_of_length_n_coda():
+    entry = _m(_strict(bcast=True))
+    arm = _m(_strict(bcast=True, bcast_layers="all"))
+    assert entry.tul.bcast_gates is None
+    g = arm.tul.bcast_gates
+    assert g is not None and tuple(g.shape) == (_N_CODA,) and torch.equal(g, torch.zeros(_N_CODA))
+    assert _m(_strict()).tul.bcast_gates is None
+
+
+def test_bcast_layers_all_is_entry_is_the_ruler_at_init():
+    """Same seed, same ids: loss and logits equal across the three models (torch.equal),
+    and the parameter sets differ ONLY by W_bcast (entry) and W_bcast + bcast_gates (all)."""
+    x, y, lay = _pack(_ids())
+    ruler, entry, arm = (_m(_strict()), _m(_strict(bcast=True)),
+                         _m(_strict(bcast=True, bcast_layers="all")))
+    lr, gr = _train_loss_grads(ruler, x, y, lay)
+    le, ge = _train_loss_grads(entry, x, y, lay)
+    la, ga = _train_loss_grads(arm, x, y, lay)
+    assert torch.equal(lr, le) and torch.equal(le, la)
+    for n, g in gr.items():                  # the shared parameters' grads, bit for bit
+        if g is None:
+            assert ge[n] is None and ga[n] is None, n
+        else:
+            assert torch.equal(g, ge[n]) and torch.equal(g, ga[n]), n
+    zr, ze, za = (_logits(m, x, lay) for m in (ruler, entry, arm))
+    assert torch.equal(zr, ze) and torch.equal(ze, za)
+    pr, pe, pa = (dict(m.named_parameters()) for m in (ruler, entry, arm))
+    assert set(pe) - set(pr) == {"tul.W_bcast"} and set(pr) <= set(pe)
+    assert set(pa) - set(pr) == {"tul.W_bcast", "tul.bcast_gates"} and set(pr) <= set(pa)
+    for n, p in pr.items():                  # the gates drew no RNG: base weights shared
+        assert torch.equal(p, pe[n]) and torch.equal(p, pa[n]), n
+
+
+def _set_bcast(model, w_seed=3, gates=None):
+    g = torch.Generator().manual_seed(w_seed)
+    with torch.no_grad():
+        model.tul.W_bcast.copy_(0.3 * torch.randn(model.tul.W_bcast.shape, generator=g))
+        if gates is not None:
+            model.tul.bcast_gates.copy_(torch.as_tensor(gates, dtype=torch.float32))
+
+
+def test_bcast_gates_train_and_then_move_the_forward():
+    x, y, lay = _pack(_ids())
+    entry = _m(_strict(bcast=True))
+    arm = _m(_strict(bcast=True, bcast_layers="all"))
+    _set_bcast(entry)
+    _set_bcast(arm)
+    # nonzero W_bcast, zero gates: still the entry arm bit for bit
+    assert torch.equal(_logits(entry, x, lay), _logits(arm, x, lay))
+    arm.train()
+    torch.manual_seed(7)
+    arm(x, labels=y, slot_layout=lay)["loss"].backward()
+    g = arm.tul.bcast_gates.grad
+    assert g is not None and bool((g != 0).all()), g
+    opt = torch.optim.SGD([arm.tul.bcast_gates], lr=1.0)
+    opt.step()
+    assert bool((arm.tul.bcast_gates != 0).all())
+    a, b = _logits(entry, x, lay), _logits(arm, x, lay)
+    _, _, valid = unpack_index(lay)
+    assert (a[valid] - b[valid]).abs().max() > 1e-4
+    span0 = (lay.bag_id == 0) & ~lay.slot_mask   # no previous slot: no unpack term there
+    assert torch.equal(a[span0], b[span0])
+
+
+def test_plan_zero_removes_both_adds():
+    """Both the entry add and the per-layer adds are functions of z: with the write zeroed
+    (`_tul_plan_ablate` runs before `TULSlots.unpack` reads h_slots) the arm equals the arm
+    with W_bcast and the gates zeroed — and the per-layer route is live (two-sided)."""
+    x, _, lay = _pack(_ids())
+    arm = _m(_strict(bcast=True, bcast_layers="all"))
+    _set_bcast(arm, gates=[0.7, -1.3])
+    live_zero = _logits(arm, x, lay, plan_mode="zero")
+    live_norm = _logits(arm, x, lay)
+    with torch.no_grad():
+        arm.tul.W_bcast.zero_()
+        arm.tul.bcast_gates.zero_()
+    assert torch.equal(live_zero, _logits(arm, x, lay, plan_mode="zero"))
+    assert not torch.equal(live_norm, _logits(arm, x, lay))
+
+
+def test_strict_leak_gate_holds_with_bcast_all():
+    """tests/test_tul_strict_geometry.py's probe on the bcast-all model with a live
+    W_bcast and live gates: with the loop's write zeroed a token id in span 0 moves
+    NOTHING outside span 0 (bit-exact, CPU fp32); with the write live it moves span 1."""
+    import tests.test_tul_strict_geometry as sg
+    m = sg._model(tg_geometry="strict", bcast=True, bcast_layers="all")
+    assert m.tul.bcast_gates is not None
+    _set_bcast(m, gates=[0.9, -0.6])
+    ids, *_ = sg._pack()
+    out_d, own_d = sg._leak(m, ids)
+    assert own_d > 0, "the edited token moved nothing — the fixture is inert"
+    assert out_d == 0.0, f"LEAK through the bcast-all route: {out_d:.3e}"
+    # the positive control, on span 1 specifically
+    _, _, _, layout = sg._pack()
+    edited = sg._edit(ids, layout, 0, 0)
+    a, lay = sg._logits(m, ids, "normal")
+    b, _ = sg._logits(m, edited, "normal")
+    span1 = (~lay.slot_mask[0]) & (lay.bag_id[0] == 1)
+    d = (a[0] - b[0]).abs().nan_to_num(0.0)
+    d = torch.where(a[0] != b[0], d, torch.zeros_like(d))
+    assert float(d[span1].max()) > 0, "with the write live, span 0's edit did not reach span 1"
+
+
+def test_bcast_layers_all_inherits_the_bcast_refusals():
+    with pytest.raises(NotImplementedError, match="bcast"):
+        _tul(bcast=True, bcast_layers="all", tokens_through_core=True)
+    with pytest.raises(NotImplementedError, match="bcast"):
+        _tul(bcast=True, bcast_layers="all", loop_reads_tokens=True)
+    with pytest.raises(NotImplementedError, match="bcast"):
+        _strict(bcast=True, bcast_layers="all", code_target=True)
+    # The fan's coda replays never add the unpack. The register's own rule already refuses
+    # bcast at slot_cells > 1, and fan_k forces slot_cells == fan_k, so the combination
+    # cannot be built for entry OR all; asserted here so a relaxation of that rule is seen.
+    with pytest.raises(NotImplementedError, match="bcast"):
+        _tul(bcast=True, fan_k=4, slot_cells=4)
+    with pytest.raises(NotImplementedError, match="bcast"):
+        _tul(bcast=True, bcast_layers="all", fan_k=4, slot_cells=4)
+
+
+def test_gathered_coda_raises_under_bcast_all():
+    """plan_nats is a forward argument, so the config cannot refuse it: the gathered coda
+    must raise rather than silently drop the per-layer term."""
+    x, y, lay = _pack(_ids())
+    arm = _m(_tul(bcast=True, bcast_layers="all"))
+    arm.eval()
+    with pytest.raises(NotImplementedError, match="gathered coda"):
+        with torch.no_grad():
+            arm.tul_forward_with_plan_nats(x, y, lay)

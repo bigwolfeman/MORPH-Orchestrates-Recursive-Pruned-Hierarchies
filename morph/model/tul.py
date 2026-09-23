@@ -546,6 +546,15 @@ class TULConfig:
     #    ADDED to the coda input of every token of span i+1, offset = the token's index
     #    inside its span. The "unpack" of Thought Unpack Loop. `TULSlots.W_bcast`.
     bcast: bool = False
+    # bcast_layers (2026-09-22, the "token-like read", arm `slot-spandec-strict-bcast-all`):
+    #    WHERE the unpack term enters the coda. "entry" = once, added to the coda INPUT (the
+    #    shipped `bcast`, bit-identical). "all" = the entry add stays AND the SAME term is
+    #    added again at EVERY coda block's injection, scaled by a per-coda-layer learned
+    #    scalar `TULSlots.bcast_gates[i]` (init 0), so z reaches every token of the next span
+    #    at every coda layer the way the token's own x0 does. Requires `bcast`; refused with
+    #    every coda path that does not run the ONE full-axis `_back_region` the shipped
+    #    forward runs (gathered coda, core_token_aux, the critic replay).
+    bcast_layers: str = "entry"
     # reread (2026-09-10, the slot-map levers panel's structural arm): inside `_tul_core`
     #    the compact sequence holds only slot cells, so a pass has nothing new to read —
     #    the paid loop, the one arm that earns depth, re-reads every token state every
@@ -2848,6 +2857,34 @@ class TULConfig:
                 "the paid loop (tokens_through_core): there is no per-slot looped state to "
                 "unpack and no separate coda input for the tokens. Raises rather than "
                 "silently picking a behaviour.")
+        if self.bcast_layers not in ("entry", "all"):
+            raise ValueError(
+                f"tul.bcast_layers must be 'entry' or 'all', got {self.bcast_layers!r}")
+        if self.bcast_layers == "all":
+            if not self.bcast:
+                raise ValueError(
+                    "tul.bcast_layers='all' needs tul.bcast=true: the per-layer gates scale "
+                    "the unpack term, and without bcast there is no term (a gate on "
+                    "nothing).")
+            if not self.coda_sees_slots or self.coda_token_cut > 0:
+                raise NotImplementedError(
+                    "tul.bcast_layers='all' with coda_sees_slots=false / coda_token_cut>0: "
+                    "the per-layer add is threaded into the ONE full-axis coda call; the "
+                    "gathered coda (arm A4 / CW) runs on a subset index space the term is "
+                    "not re-gathered for. Raises rather than silently dropping the "
+                    "per-layer add.")
+            if self.core_token_aux:
+                raise NotImplementedError(
+                    "tul.bcast_layers='all' with tul.core_token_aux: the aux coda replays "
+                    "the CORE's token states and never adds the unpack (not even at "
+                    "entry), so the per-layer term has no defined place there. Not "
+                    "specified, so this raises.")
+            if self.grad_pass and self.grad_pass_energy == "critic":
+                raise NotImplementedError(
+                    "tul.bcast_layers='all' with grad_pass_energy='critic': the critic's "
+                    "no-grad coda replays write a CANDIDATE state into the prefix, and the "
+                    "per-layer term is a function of the slot state too, so it would have "
+                    "to be recomputed per candidate. Not built, so this raises.")
         if self.tg_span_comp and not self.tg_restrict:
             raise ValueError(
                 "tul.tg_span_comp=true requires tul.tg_restrict=true (E-SAC replaces "
@@ -4413,7 +4450,8 @@ class TULSlots(nn.Module):
     same way in ``tests/test_slot_seed_modes.py``).
     """
 
-    def __init__(self, d_model: int, tul: TULConfig, with_prefix: bool = True):
+    def __init__(self, d_model: int, tul: TULConfig, with_prefix: bool = True,
+                 n_coda: int = 0):
         super().__init__()
         self.tul = tul
         # [d] shared, or [per_slot_embed, d] one row per slot INDEX. The shared shape stays
@@ -4446,6 +4484,15 @@ class TULSlots(nn.Module):
         self.W_bcast: nn.Parameter | None = None
         if tul.bcast:
             self.W_bcast = nn.Parameter(torch.zeros(tul.bound_span_cap, d_model, d_model))
+        # bcast_gates [n_coda] — `tul.bcast_layers="all"`: the per-coda-layer scalar on the
+        # SAME unpack term, re-added at every coda block's injection (`_back_region`'s
+        # `extra_term`). Init ZERO and RNG-neutral: step 0 is the `"entry"` arm bit for bit.
+        self.bcast_gates: nn.Parameter | None = None
+        if tul.bcast and tul.bcast_layers == "all":
+            if n_coda < 1:
+                raise ValueError(
+                    f"tul.bcast_layers='all' needs a coda to gate (n_coda={n_coda})")
+            self.bcast_gates = nn.Parameter(torch.zeros(n_coda))
         self.W_sent: nn.Linear | None = None
         if tul.slot_seed == "boundary":
             self.W_sent = nn.Linear(d_model, d_model, bias=False)

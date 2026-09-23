@@ -1,0 +1,34 @@
+# Slot-loop panel, arm "slot-spandec-strict-bcast-all": THE TOKEN-LIKE READ (Wolfe
+# 2026-09-22). ONE factor against `slot-spandec-strict-bcast`
+# (`tul_slot_spandec_strict_bcast.yaml`): `tul.bcast_layers: all`.
+#
+# WHAT IT IS. The one-shot unpack stays, AND the SAME unpack term is added again at EVERY
+# coda block's injection, scaled by a per-coda-layer learned scalar
+# (`TULSlots.bcast_gates`, `[n_coda]`, init 0; `_back_region`'s `extra_term`). So the
+# slot's exit state enters every token of the next span at every coda layer, the way a
+# token's own `x0` embedding is injected at every block. Every loop that earns depth on
+# this tree (plain 0.185, paid 0.168, `core_token_aux` +0.0102) has the token CE read the
+# loop's output at every token position; this arm gives the slot loop that read.
+# The per-layer term is NOT multiplied by the token-state dropout's keep mask, the same
+# rule the entry add follows (a dropped token loses itself, not the thought it decodes).
+#
+# COST. `n_coda` scalar parameters on top of the bcast arm, and `n_coda` extra
+# `[B, L, C]` adds per forward. No RNG draw: at step 0 this arm equals the bcast arm and
+# the ruler bit for bit (tests/test_tul_unpack.py). The gates only move once `W_bcast` is
+# nonzero, so the per-layer read starts one optimizer step behind the entry read.
+#
+# WHAT TO EXPECT. If the missing ingredient is a re-supplied direct read, token K1-K6
+# should rise above the slot-loop floor (~+0.002) and above the bcast twin. If it reads
+# flat beside its twin, the read's form is not the limit. Read the K-curve and
+# worth_profile, not the final CE.
+#
+# Record: lab/experiments/planned/2026-09-22-arc-slot-token-like-read.md
+defaults:
+  - tul_slot_spandec_strict_bcast
+  - _self_
+
+tul:
+  bcast_layers: all
+
+wandb:
+  name: slot-spandec-strict-bcast-all
