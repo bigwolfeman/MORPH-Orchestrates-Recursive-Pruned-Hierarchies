@@ -1,0 +1,39 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  LXTUL-GK ON: the LXTUL-G Gaussian step after every slot-loop pass (mean + variance heads, sigma/r at init 0.1), NO posterior, NO KL. TRAIN runs the front once and the slot loop + coda on K=4 PRIOR rollouts per row (shared depth draw and token dropout; coda checkpointed per block at K > 1); the loss is the multi-sample bound -sum_span log mean_k exp(sum_j w_j log p_k) / sum_j w_j, which summed over a span equals lab/divergence/lxtul_g_probe.py's per-token Bayesian read. EVAL is unchanged: one seeded prior sample. Read `tul/gk_width_gain` (ce_single - ce_iw), `tul/gk_w_entropy`, `tul/gram_sigma_ratio_prior` (prereg lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 294.1M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+lxtul-gk4-shared step 5000: 24339 spans, 486031 tokens, gram_prior_seed=0
+  top1  spans= 8583  p_true=0.7051800489425659
+  top2  spans= 1702  p_true=0.1281818449497223
+  other spans=14054  p_true=0.01309763640165329
+  worth[xrow ] top1  pos1+ +0.2169 [+0.2075, +0.2258] n=175143   pos0 +1.7518 [+1.6543, +1.8515] n=8583
+  worth[xrow ] top2  pos1+ +0.2514 [+0.2371, +0.2670] n=31043   pos0 +2.2390 [+2.0109, +2.4662] n=1702
+  worth[xrow ] other pos1+ +0.2458 [+0.2347, +0.2569] n=255506   pos0 +2.2675 [+2.1262, +2.4199] n=14054
+  worth[xrow ] all   pos1+ +0.2352 [+0.2261, +0.2442] n=461692   pos0 +2.0837 [+1.9847, +2.1809] n=24339
+  ratio[xrow] top2/top1 = +1.159 [+1.098, +1.225]
+  worth[xrow2] top1  pos1+ +0.2180 [+0.2083, +0.2276] n=175143   pos0 +1.7603 [+1.6586, +1.8593] n=8583
+  worth[xrow2] top2  pos1+ +0.2363 [+0.2220, +0.2519] n=31043   pos0 +2.0817 [+1.8729, +2.2966] n=1702
+  worth[xrow2] other pos1+ +0.2421 [+0.2322, +0.2530] n=255506   pos0 +2.2674 [+2.1257, +2.4251] n=14054
+  worth[xrow2] all   pos1+ +0.2326 [+0.2236, +0.2417] n=461692   pos0 +2.0756 [+1.9763, +2.1821] n=24339
+  ratio[xrow2] top2/top1 = +1.084 [+1.022, +1.150]
+  worth[row  ] top1  pos1+ +0.0808 [+0.0761, +0.0854] n=175143   pos0 +1.5040 [+1.4115, +1.5993] n=8583
+  worth[row  ] top2  pos1+ +0.1122 [+0.1025, +0.1226] n=31043   pos0 +1.7895 [+1.5717, +2.0077] n=1702
+  worth[row  ] other pos1+ +0.1098 [+0.1047, +0.1148] n=255506   pos0 +1.9412 [+1.8259, +2.0612] n=14054
+  worth[row  ] all   pos1+ +0.0989 [+0.0949, +0.1030] n=461692   pos0 +1.7764 [+1.6886, +1.8652] n=24339
+  ratio[row] top2/top1 = +1.389 [+1.256, +1.537]
+  worth[zero ] top1  pos1+ +0.1517 [+0.1464, +0.1572] n=175143   pos0 +0.7110 [+0.6744, +0.7508] n=8583
+  worth[zero ] top2  pos1+ +0.1766 [+0.1664, +0.1874] n=31043   pos0 +1.1249 [+1.0453, +1.2069] n=1702
+  worth[zero ] other pos1+ +0.1808 [+0.1740, +0.1882] n=255506   pos0 +0.9095 [+0.8535, +0.9670] n=14054
+  worth[zero ] all   pos1+ +0.1695 [+0.1639, +0.1754] n=461692   pos0 +0.8546 [+0.8176, +0.8907] n=24339
+  ratio[zero] top2/top1 = +1.164 [+1.099, +1.235]
+  ctx top1  spans= 6109  worth[xrow] pos1+ +0.1983 [+0.1887, +0.2077] n=129424
+  ctx top2  spans= 1249  worth[xrow] pos1+ +0.2456 [+0.2304, +0.2621] n=22776
+  ctx other spans=16981  worth[xrow] pos1+ +0.2499 [+0.2396, +0.2600] n=309492
+  DECISION_CTX: {'control': 'xrow', 'positions': 'offsets 1..n', 'bucket': 'xrow-cell rank', 'verdict': 'superposition', 'ci_supported': True}
+  DECISION: {'control': 'xrow', 'positions': 'offsets 1..n', 'bucket': 'own-cell rank', 'verdict': 'superposition', 'ci_supported': True}  n_blocks=490
+  decode clusters: {"n_draw": 16, "unit": "first token (offset-0 label), not a bigram", "own": {"mean_clusters": 9.775298902995193, "frac_ge2_positive": 0.7994987468671679}, "by_bucket": {"top1": {"frac_ge2_positive_own": 0.4493766748223232, "frac_ge2_positive_null": 0.5269719212396597}, "top2": {"frac_ge2_positive_own": 0.9694477085781433, "frac_ge2_positive_null": 0.9065804935370153}, "other": {"frac_ge2_positive_own": 0.9927422797779991, "frac_ge2_positive_null": 0.8769033727052796}}, "null_xrow2": {"mean_clusters": 9.593615185504746, "frac_ge2_positive": 0.755577468260816}, "excess_frac_ge2_positive": 0.04392127860635198}
+  wall: {'load': 6.2, 'probe': 101.5}
+wrote /home/wolfe/morph-scratch/superpos/superpos_gk4shared.json and /home/wolfe/morph-scratch/superpos/superpos_gk4shared.lxtul-gk4-shared.tokens.npz

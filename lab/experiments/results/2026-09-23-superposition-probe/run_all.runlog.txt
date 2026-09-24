@@ -1,0 +1,9 @@
+[21:29:47] start ruler
+[21:31:32] done ruler exit=0
+[21:31:32] start gk1
+[21:33:20] done gk1 exit=0
+[21:33:20] start gk4shared
+[21:35:09] done gk4shared exit=0
+[21:35:09] start fan4all
+[21:37:14] done fan4all exit=0
+ALL_DONE
