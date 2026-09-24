@@ -1,7 +1,7 @@
 # Anatomy of a Sound Neural Reasoner (first-pass poisoning, search inertness): reading note
 
 Read 2026-09-23, for the controls of the LXTUL-G build
-([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)).
+([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../../.agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)).
 The brief asked for the instruments only; the architecture (CoLT) is summarised just
 enough to read them.
 

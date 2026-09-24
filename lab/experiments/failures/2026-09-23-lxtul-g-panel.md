@@ -3,7 +3,7 @@
 Status: failure
 
 Date: 2026-09-23 11:07 (frozen before any build or GPU step). Note:
-[`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)
+[`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../.agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)
 (Proposal + Paper refresh). Design synthesis:
 `/home/wolfe/morph-scratch/arc/notes/2026-09-23-lxtul-g-paper-synthesis.md`. Wolfe
 (2026-09-23): build the arms with subagents, then run them.
@@ -131,7 +131,7 @@ against the ruler's 4.3474; span-decoder CE 8.66 -> 9.24 with depth), so their r
 would measure a known exposure gap, not search against noise. Their configs stay in the
 tree. P-4 and P-7 are therefore NOT RUN. The design moves to training on K prior rollouts
 under the multi-sample bound (Wolfe's go, 2026-09-23 13:27): new prereg
-`lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md`.
+`lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md`.
 
 ## Results (filed 2026-09-23 16:06)
 
@@ -212,7 +212,7 @@ readings sit on a trajectory the model was not trained to produce.
 A stochastic slot loop has to be trained on the rollouts it will be deployed with. The
 next arm trains on K prior rollouts under the multi-sample bound, which is the deployed
 Bayesian read's own loss, with no posterior and no KL: LXTUL-GK,
-[`2026-09-23-lxtul-gk-multisample.md`](../planned/2026-09-23-lxtul-gk-multisample.md). If its width
+[`2026-09-23-lxtul-gk-multisample.md`](../failures/2026-09-23-lxtul-gk-multisample.md). If its width
 gain survives and the depth-under-width reading grows, that is the loop contributing
 through search. Spectral decoupling is closed as a lever on the fan4-all read.
 

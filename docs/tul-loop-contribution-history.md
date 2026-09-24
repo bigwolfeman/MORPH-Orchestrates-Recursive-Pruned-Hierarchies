@@ -110,13 +110,16 @@ that.
   (`lxtul_g_probe_lxtul-gk1_5000.json`: `sigma_ratio_prior` 0.000339, `width_gain@4`
   6.84e-5).
 - **The first gk4 run is confounded.** Its K rollouts drew independent dropout masks, so
-  the bound could earn "width" from dropout. Training width gain 0.0065 ([planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md) ln 116-117; vlt entry 140).
+  the bound could earn "width" from dropout. Training width gain 0.0065 ([failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) ln 116-117; vlt entry 140).
   At eval, with dropout off, the width gain is 0.00006 and the noise scale 0.00029
   (`lxtul_g_probe_lxtul-gk4_5000.json`: `width_gain@4` 6.22e-5, `sigma_ratio_prior`
   0.000290). Fixed in 7d44ed7 (shared dropout masks across rollouts); prereg amendment
-  f53e988 ([planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md) ln 113-124).
-- **lxtul-gk4-shared is PENDING.** It trains at 7d44ed7 and has no readings. P-1 to P-7
-  of the GK prereg are scored on it.
+  f53e988 ([failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) ln 113-124).
+- **GK filed as a failure (2026-09-23 21:24, [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)).** On lxtul-gk4-shared the exposure
+  gap is gone (ce_iw@4 0.7533 better than lxtul-g's ce_prior@1), but the noise switched
+  itself off (sigma/r 0.00026), width gain is 0.00005, and K1−K6 is +0.0036, at the top
+  edge of the slot-loop floor. It sits 0.0033 to 0.0044 ahead of the ruler at depth 6,
+  inside the ~0.004 seed floor. Learned-Gaussian loop arms are closed.
 
 ## 2. Era overview
 
@@ -141,7 +144,7 @@ its source. The era sections below carry every other number.
 | B6 | 09-19 to 09-20 | LXTUL fan: K streams, diversity terms, select, write-all | fan4-all 0.0342 better than pk4 (a reader gain); K1−K6 +0.0049 ([successes/2026-09-20-lxtul-fan4-all.md](../lab/experiments/successes/2026-09-20-lxtul-fan4-all.md)) | fixes the reader and selector, not depth |
 | B7 | 09-21 | LXTUL-P ladder (fp0, trig, noise, lineage, denoise), np0, cfg-tlow, pk8 | fp0 +0.0102, all of it pass 1's ([failures/2026-09-21-lxtul-fan4-all-fp0.md](../lab/experiments/failures/2026-09-21-lxtul-fan4-all-fp0.md)) | state levers closed; teacher forcing is a bypass; the depth law |
 | B8 | 09-21 to 09-22 | reach split, LXTUL-R, seed twin, LCTUL-J, synthesis, token-like read, 20k horizon pair | LXTUL-R 1b +0.0261 (a refund of a tax); plain reach 1 +0.0554 ([failures/2026-09-21-span-reach-split.md](../lab/experiments/failures/2026-09-21-span-reach-split.md) ln 171) | relay closes; Conditions A and B; slot vs twin a constant 0.0075 |
-| B9 | 09-23 | LXTUL-G (posterior-trained stochastic loop), LXTUL-GK (multi-sample bound) | LXTUL-G width gain 0.159, qualified ([failures/2026-09-23-lxtul-g-panel.md](../lab/experiments/failures/2026-09-23-lxtul-g-panel.md) ln 205) | exposure gap; GK noise collapses; gk4-shared pending |
+| B9 | 09-23 | LXTUL-G (posterior-trained stochastic loop), LXTUL-GK (multi-sample bound) | LXTUL-G width gain 0.159, qualified ([failures/2026-09-23-lxtul-g-panel.md](../lab/experiments/failures/2026-09-23-lxtul-g-panel.md) ln 205) | exposure gap; GK noise collapses (filed failure) |
 
 ## 3. Glossary
 
@@ -1407,7 +1410,7 @@ depth 1 for 20k steps beside the looped strict ruler.
 ### B9. 2026-09-23: LXTUL-G and LXTUL-GK, a stochastic contractive loop
 
 **What we tried and why.** The central failure is the coda ignoring the loop. LXTUL-G
-(note [.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md](../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md))
+(note [.agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md](../.agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md))
 makes the slot loop a stochastic recursion trained as a latent-variable model in the GRAM
 shape: each pass takes a learned Gaussian step; at training a posterior that sees the next
 span proposes the steps; a KL (balancing 0.8, beta 0.1) ties the posterior to the loop's
@@ -1417,7 +1420,7 @@ contractive passes to reach what the posterior proposes. The named risk was the 
 gap. A beta-1 arm (`lxtul-g-b1`) was added mid-run; the mean-free and depth-1 controls
 were pulled. A spectral-decoupling arm (`fan4-all-sd`) ran beside them.
 
-LXTUL-GK ([planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md)) drops the posterior and the KL
+LXTUL-GK ([failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)) drops the posterior and the KL
 and trains on the deployed object: K prior rollouts per row under the multi-sample bound,
 L = - sum over spans of log (1/K) sum_k exp(sum over the span's tokens of log p(tok | z_k)).
 Arms: `lxtul-gk4` (K = 4) and `lxtul-gk1` (K = 1, the width control).
@@ -1436,12 +1439,13 @@ Arms: `lxtul-gk4` (K = 4) and `lxtul-gk1` (K = 1, the width control).
 | gap 2.0686; ce_iw@4 +1.3275 worse than ruler; K1-K6 -0.3580; loss/total 9.26 to 12.88 after step 3000 | exposure gap; paired; K-curve; objective | lxtul-g-b1 | 5000 | same | stands; the optimizer ascended its own objective by about 3.6 nats |
 | gap 0.0008; width gain 0.0003; ce_zero - ce_post +0.116 | exposure gap; width gain; worth | lxtul-g-b1 | 2500 | same (addendum 16:13) | stands; the collapsed phase is a near-deterministic loop whose cells the coda uses |
 | K1-K6 +0.0043 [+0.0038, +0.0047] (fan4-all +0.0049); +0.0141 worse vs fan4-all | K-curve; paired CE | fan4-all-sd | 5000 | same | stands; spectral decoupling closed as a lever |
-| final val 4.4238 (ruler 4.4249); K1-K6 +0.0037 [0.0034, 0.0041]; d6 vs ruler +0.0038 [0.0014, 0.0062] worse | val; K-curve; paired CE | lxtul-gk1 (K = 1) | 5000 | vlt thread lxtul-fan4, entry 139 (not yet filed) | stands as an unfiled reading |
+| final val 4.4238 (ruler 4.4249); K1-K6 +0.0037 [0.0034, 0.0041]; d6 vs ruler +0.0038 [0.0014, 0.0062] worse | val; K-curve; paired CE | lxtul-gk1 (K = 1) | 5000 | [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) (filed 2026-09-23 21:24) | stands |
 | prior sigma/r 0.1 to 0.00031 (trainer, vlt entry 139); probe sigma/r 0.000339; width gain at 4 samples 0.0000684; worth(zero) 0.1833 | noise scale; eval width gain; worth | lxtul-gk1 | 5000 | `/home/wolfe/morph-scratch/arc/results/2026-09-23-lxtul-gk/lxtul_g_probe_lxtul-gk1_5000.json` (outside the repo, 192 rows) | stands; "noise switched off" (vlt entry 139) |
-| val 4.4277; sigma/r 2.8e-4; training width gain 0.0065 (0.0008 at step 1340) | val; noise; training width gain | lxtul-gk4, first run (43bb234) | 5000 | vlt lxtul-fan4 entry 140; [planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md) (amendment 18:59) | retracted as evidence: CONFOUNDED; the K rollouts drew independent dropout masks, so the bound could earn width from dropout; fixed in 7d44ed7 |
+| val 4.4277; sigma/r 2.8e-4; training width gain 0.0065 (0.0008 at step 1340) | val; noise; training width gain | lxtul-gk4, first run (43bb234) | 5000 | vlt lxtul-fan4 entry 140; [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) (amendment 18:59) | retracted as evidence: CONFOUNDED; the K rollouts drew independent dropout masks, so the bound could earn width from dropout; fixed in 7d44ed7 |
 | width gain at 4 samples 0.0000622; probe sigma/r 0.000290; worth(zero) 0.1891; ce_iw@4 at depth 1 4.2646 vs depth 6 4.2616 | eval probe, dropout off | lxtul-gk4, first run (43bb234) | 5000 | `/home/wolfe/morph-scratch/arc/results/2026-09-23-lxtul-gk/lxtul_g_probe_lxtul-gk4_5000.json` (outside the repo, 192 rows) | stands as an eval reading of a confounded run: with dropout off the width is noise only, and the noise had collapsed |
 | 4,999 tok/s = 0.43x the ruler | rate at step 200 | lxtul-gk4 first run | 200 | vlt lxtul-fan4 entry 139 | stands for that run; P-7 is scored on the rerun |
-| no readings | all GK instruments | lxtul-gk4-shared (7d44ed7) | training | [planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md) | PENDING: P-1 to P-7 are scored on this arm |
+| ce_iw@4 −0.7533 [−0.7664, −0.7413] vs lxtul-g ce_prior@1; −0.0044 [−0.0079, −0.0007] vs ruler d6; −0.0083 vs gk1 | paired CE, probe tokens | lxtul-gk4-shared (7d44ed7) | 5000 | [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) | stands; the ruler and gk1 gaps are n = 1 and inside the ~0.004 seed floor; identical rollouts give the K = 1 gradient, so the gk1 gap is not width |
+| sigma/r 0.00026; width gain at 4 samples 0.00005; ce_iw@4 depth 1 − 6 +0.0035 [0.0029, 0.0041]; K1−K6 +0.0036 [0.0032, 0.0039]; 5,594 tok/s = 0.476x | noise; width; depth; rate | lxtul-gk4-shared | 5000 | same | stands; P-3, P-4, P-5, P-7 failed |
 
 **What we concluded then.**
 
@@ -1462,8 +1466,10 @@ Arms: `lxtul-gk4` (K = 4) and `lxtul-gk1` (K = 1, the width control).
 **What later corrected it.** The first gk4 run was found confounded the same evening
 (dropout masks drew per rollout; every GK test ran at dropout 0.0). Its training width
 gain (0.0065) is not evidence for width. Its eval width gain with dropout off is 0.00006
-(`/home/wolfe/morph-scratch/arc/results/2026-09-23-lxtul-gk/lxtul_g_probe_lxtul-gk4_5000.json`). The rerun `lxtul-gk4-shared` is training and has
-no readings. Nothing else in this era has been corrected yet.
+(`/home/wolfe/morph-scratch/arc/results/2026-09-23-lxtul-gk/lxtul_g_probe_lxtul-gk4_5000.json`). The rerun `lxtul-gk4-shared`
+confirmed entry 139's reading and the panel is filed as a failure ([failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)): the smooth
+multi-sample bound pays for spread only at second order, so learned sigma collapses (XM,
+arXiv 2607.27372 App. F.1).
 
 ## 6. Positive readings, by date
 
@@ -1613,10 +1619,12 @@ One row per positive reading from both parts, sorted by date (stable within a da
 | B79 | 09-23 | width gain 0.47 (4), 0.77 (16) | ce_prior@1 - ce_iw@N | lxtul-g-b1 | 5000 | [failures/2026-09-23-lxtul-g-panel.md](../lab/experiments/failures/2026-09-23-lxtul-g-panel.md) | qualified: same; the run ascended its own objective after step 3000 |
 | B80 | 09-23 | ce_zero - ce_post +0.116 (gap 0.0008) | worth of the cells in the collapsed phase | lxtul-g-b1 | 2500 | [failures/2026-09-23-lxtul-g-panel.md](../lab/experiments/failures/2026-09-23-lxtul-g-panel.md) (addendum 16:13) | qualified: a near-deterministic loop; no verdict change |
 | B81 | 09-23 | +0.0037 [0.0034, 0.0041] | token K1-K6 | lxtul-gk1 (K = 1) | 5000 | vlt thread lxtul-fan4 entry 139 (unfiled) | qualified: the loop switched its noise off (sigma/r 0.1 to 0.00031); +0.0038 worse than the ruler at depth 6 |
-| B82 | 09-23 | training width gain 0.0065 | tul/gk_width_gain | lxtul-gk4, first run (43bb234) | 5000 | vlt thread lxtul-fan4 entry 140; [planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md) (amendment 18:59) | retracted: confounded, per-rollout dropout masks; fixed in 7d44ed7 |
+| B82 | 09-23 | training width gain 0.0065 | tul/gk_width_gain | lxtul-gk4, first run (43bb234) | 5000 | vlt thread lxtul-fan4 entry 140; [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) (amendment 18:59) | retracted: confounded, per-rollout dropout masks; fixed in 7d44ed7 |
 | B83 | 09-23 | width gain at 4 samples 0.00006 (gk4 first run), 0.00007 (gk1) | eval width gain ce_prior@1 − ce_iw@4, dropout off | lxtul-gk4 (first run) / lxtul-gk1 | 5000 | `/home/wolfe/morph-scratch/arc/results/2026-09-23-lxtul-gk/lxtul_g_probe_lxtul-gk4_5000.json`, `lxtul_g_probe_lxtul-gk1_5000.json` (outside the repo) | qualified: the prior noise had collapsed (sigma/r 0.00029 / 0.00034); gk4 first run confounded (7d44ed7); added at merge |
 
-Pending, not a row: lxtul-gk4-shared (7d44ed7) is training and has no readings.
+lxtul-gk4-shared (filed 2026-09-23, [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)) adds no positive row: its K1−K6 +0.0036 sits at
+the floor's top edge and its width gain is 0.00005. Its −0.0044 against the ruler is inside
+the seed floor.
 
 ## 7. Retractions and qualifications
 
@@ -1671,7 +1679,7 @@ the second column.
 | Math-corpus slot K-curves (Olympiad +0.0111, Sudoku +0.0049) | [failures/2026-09-12-arc-math-under-norm-match.md](../lab/experiments/failures/2026-09-12-arc-math-under-norm-match.md) | set aside: "math and Sudoku were red herrings", [docs/9-26-TUL-run-history-IMPORTANT.md](9-26-TUL-run-history-IMPORTANT.md) ln 13 | 2026-09-22 |
 | Matched-compute nats as a verdict (slot 0.2536 behind plain) | [successes/2026-09-11-arc-span-decoder.md](../lab/experiments/successes/2026-09-11-arc-span-decoder.md) ln 363 | the number stands; the standing call removes it as a verdict instrument, [.agents/notes/implemented/architecture/2026-09-22-slot-loop-campaign-synthesis.md](../.agents/notes/implemented/architecture/2026-09-22-slot-loop-campaign-synthesis.md) | not dated in any repo file |
 | LXTUL-G width gain 0.159, depth gain 0.0123 | [failures/2026-09-23-lxtul-g-panel.md](../lab/experiments/failures/2026-09-23-lxtul-g-panel.md) ln 205, 207 | qualified: "on a trajectory the model was not trained to produce", same file | 2026-09-23 |
-| gk4 (first run) training width gain 0.0065 | [planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md) ln 116-117; vlt `lxtul-fan4` entry 140 | retracted as evidence: rollouts drew independent dropout masks; fixed 7d44ed7, amendment f53e988, [planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md) ln 113-124. Eval width gain with dropout off: 0.00006 (`lxtul_g_probe_lxtul-gk4_5000.json`) | 2026-09-23 |
+| gk4 (first run) training width gain 0.0065 | [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) ln 116-117; vlt `lxtul-fan4` entry 140 | retracted as evidence: rollouts drew independent dropout masks; fixed 7d44ed7, amendment f53e988, [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) ln 113-124. Eval width gain with dropout off: 0.00006 (`lxtul_g_probe_lxtul-gk4_5000.json`) | 2026-09-23 |
 | E13 "+0.0172 forecast K6−K12" | [docs/9-26-TUL-run-history-IMPORTANT.md](9-26-TUL-run-history-IMPORTANT.md) ln 79 | mislabel: +0.0172 is forecast K3−K6; forecast K6−K12 is +0.0020, [failures/2026-09-07-arc-e13-m12-panel.md](../lab/experiments/failures/2026-09-07-arc-e13-m12-panel.md) ln 129 | 2026-09-23 (this history) |
 
 ## 8. Docs that still state a retracted number
@@ -1741,7 +1749,9 @@ merged here. The source part is named after each lesson.
     select gate cashed 0.014 of 0.113; writing all cells cashed 0.056 of 0.099. The
     oracle-over-streams gap has a floor of about 0.04 on near-copies. (B)
 12. **Train on what you deploy.** The fan's select arm (oracle write vs gate write) and
-    LXTUL-G (posterior cells vs prior cells) failed the same way. GK tests the fix. (B)
+    LXTUL-G (posterior cells vs prior cells) failed the same way. GK applied the fix
+    and closed the gap (0.7533 nats), but its learned noise then collapsed, so the fix
+    alone earned no width or depth. (B)
 13. **Horizon matters only for the loop that acts on tokens.** The paid loop's earning
     grew 0.041 to 0.104 over 20k steps; the norm_match plain loop grew 0.136 to 0.170 and
     its value over the depth-1 twin reached 0.0674. The slot loop's value over its twin
@@ -1761,7 +1771,8 @@ merged here. The source part is named after each lesson.
     matched-step win over its twin (0.0674 at 20k), the plain loop under reach 1
     (+0.0554), the core's token read (+0.0102), the math-corpus slot K-curves (+0.0111,
     +0.0049, set aside), and the width and depth leads under LXTUL-G's Bayesian read
-    (0.159, 0.0123), which GK now tests on deployed rollouts. (B)
+    (0.159, 0.0123). GK tested them on deployed rollouts: they did not survive, because
+    the learned noise collapses when the model trains on its own rollouts. (B)
 
 ## 10. What could not be verified
 
@@ -1771,15 +1782,14 @@ From the merge (2026-09-23):
   0.00031; the probe JSON gives 0.000339. Entry 140 and the GK prereg amendment give gk4
   2.8e-4 at step 4980 (gk1 3.1e-4); the probe JSON gives 0.000290. The vlt numbers are trainer logs and the JSON numbers are
   eval probes on 192 rows. Both are cited.
-- The gk1 final val (4.4238) and K1−K6 (+0.0037) exist only in vlt entry 139. They are
-  not in the probe JSONs and not filed in the repo. I did not open the sweep JSONs in the
-  same folder. (The gk4 training width gain, 0.0065, is in the GK prereg amendment,
-  [planned/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md) ln 116-117.)
+- The gk1 final val (4.4238) and K1−K6 (+0.0037) were only in vlt entry 139 at the merge.
+  They are now filed with the GK panel and recomputed from the sweep JSON. (The gk4 training width gain, 0.0065, is in the GK prereg amendment,
+  [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md) ln 116-117.)
 - The depth-ladder prereg quotes "0.004 at 5k" for the plain loop against its depth-1
   twin ([failures/2026-09-13-arc-depth-ladder-ship.md](../lab/experiments/failures/2026-09-13-arc-depth-ladder-ship.md) ln 73). I did not
   find the filing that measured it.
-- lxtul-gk4-shared has no readings. Everything said about GK's multi-sample bound at
-  K = 4 waits on it.
+- Resolved 2026-09-23 21:24: lxtul-gk4-shared is filed ([failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)); the GK sweeps, probes
+  and paired readings now live in `lab/experiments/results/2026-09-23-lxtul-gk/`.
 
 From Part A:
 

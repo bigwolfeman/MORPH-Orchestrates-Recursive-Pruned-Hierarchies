@@ -1,0 +1,49 @@
+{
+ "n_tokens": 200719,
+ "seed": 0,
+ "n_list": [
+  1,
+  4,
+  16
+ ],
+ "has_posterior": false,
+ "ce_post": null,
+ "ce_prior@1": 4.2661088581387645,
+ "ce_prior_mean": 4.266086195522808,
+ "ce_iw@1": 4.2661088581387645,
+ "ce_iw@4": 4.266040500961903,
+ "ce_iw@16": 4.2660497073763795,
+ "ce_iw_identity@4": 4.2661088581387645,
+ "ce_zero": 4.44936718475278,
+ "ce_elbo": null,
+ "kl_per_token": null,
+ "exposure_gap": null,
+ "width_gain@4": 6.835717686115572e-05,
+ "worth_zero": 0.1832583266140153,
+ "sigma_ratio_prior": 0.00033885027914948296,
+ "sigma_ratio_post": NaN,
+ "kl_slot": {
+  "mean": NaN,
+  "p50": NaN,
+  "p90": NaN,
+  "n_slots": 0
+ },
+ "kl_pass": {},
+ "depths": {
+  "1": {
+   "ce_prior@1": 4.269825734839457,
+   "ce_iw@4": 4.269824725115945
+  },
+  "6": {
+   "ce_prior@1": 4.2661088581387645,
+   "ce_iw@4": 4.266040500961903
+  }
+ },
+ "label": "morph-instruments",
+ "config": "tul_slot_spandec_strict_gk1",
+ "ckpt": "/home/wolfe/morph-instruments/lxtul-gk1_5000_g.pt",
+ "step": 5000,
+ "rows": 192,
+ "batch": 3,
+ "tokens_npz": "/home/wolfe/morph-instruments/results/lxtul_g_probe_lxtul-gk1_5000.morph-instruments.tokens.npz"
+}

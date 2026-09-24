@@ -1,6 +1,6 @@
 """`tul.gram_objective: "iw"` — LXTUL-GK, the multi-sample bound over K prior rollouts.
 
-Prereg lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md; model
+Prereg lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md; model
 morph/model/tul_gram.py ("The multi-sample objective"); the per-token Bayesian read it must
 equal is lab/divergence/lxtul_g_probe.py::bayes_read.
 

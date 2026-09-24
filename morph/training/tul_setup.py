@@ -1101,7 +1101,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"a span equals lab/divergence/lxtul_g_probe.py's per-token Bayesian read. "
               f"EVAL is unchanged: one seeded prior sample. Read `tul/gk_width_gain` "
               f"(ce_single - ce_iw), `tul/gk_w_entropy`, `tul/gram_sigma_ratio_prior` "
-              f"(prereg lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md)",
+              f"(prereg lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)",
               flush=True)
     elif model_cfg.gram:
         # LXTUL-G (tul.gram, 2026-09-23). The banner names the two things that make the

@@ -1,7 +1,7 @@
 # Emergent Search and Backtracking in Latent Reasoning Models: reading note
 
 Read 2026-09-23, for the controls of the LXTUL-G build
-([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)).
+([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../../.agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)).
 The brief asked for instruments only.
 
 ## Citation (verified)

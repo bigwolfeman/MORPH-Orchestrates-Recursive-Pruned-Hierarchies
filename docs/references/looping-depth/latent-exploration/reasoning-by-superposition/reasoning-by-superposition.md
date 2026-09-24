@@ -174,7 +174,7 @@ It does not address stochasticity. Every thought here is deterministic given the
 ## Re-read 2026-09-23
 
 Re-read for the LXTUL-GK prereg
-([`2026-09-23-lxtul-gk-multisample.md`](../../../../../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md))
+([`2026-09-23-lxtul-gk-multisample.md`](../../../../../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md))
 and the LXTUL-G failure
 ([`2026-09-23-lxtul-g-panel.md`](../../../../../lab/experiments/failures/2026-09-23-lxtul-g-panel.md)).
 The question was whether this paper solves the noise collapse: the slot loop's learned

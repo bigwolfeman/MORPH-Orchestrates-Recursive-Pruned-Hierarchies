@@ -1,7 +1,7 @@
 # GRAM re-read for LXTUL-G: the mechanism, the training recipe, and corrections
 
 Read 2026-09-23. This is a second, full read of the paper, done because the LXTUL-G note
-([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md))
+([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../../.agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md))
 was drafted from the first reading note ([`gram.md`](gram.md)). This file does not replace
 `gram.md`. It adds the recipe details the build needs and corrects three errors in it.
 

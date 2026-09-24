@@ -1850,7 +1850,7 @@ class TULConfig:
     # forced-depth sweep reuses the same noise per pass at every depth. The fixed-point
     # term reads the DETERMINISTIC part u_T (on h_T it would pay sigma to shrink), and the
     # gain hinge probes f alone. morph/model/tul_gram.py; note
-    # .agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md; prereg
+    # .agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md; prereg
     # lab/experiments/failures/2026-09-23-lxtul-g-panel.md.
     # Default off, and off is BIT-IDENTICAL (no module, no RNG draw, no branch).
     gram: bool = False
@@ -1873,7 +1873,7 @@ class TULConfig:
     # plain weighted CE of one prior rollout (the width control). Eval is unchanged (one
     # seeded prior sample); `forward(gram_mode="iw")` scores the bound at eval on K seeded
     # prior samples (seeds `gram_sample_seed + k`). morph/model/tul_gram.py::iw_span_bound;
-    # prereg lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md.
+    # prereg lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md.
     gram_objective: str = "elbo"
     gram_iw_k: int = 4                   # rollouts per row under "iw"
 

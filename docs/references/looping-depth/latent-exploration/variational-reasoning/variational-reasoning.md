@@ -1,7 +1,7 @@
 # Variational Reasoning for Language Models: reading note
 
 Read 2026-09-23, for the LXTUL-G build
-([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../../.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)).
+([`2026-09-23-lxtul-gram-stochastic-loop.md`](../../../../../.agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md)).
 
 ## Citation (verified)
 

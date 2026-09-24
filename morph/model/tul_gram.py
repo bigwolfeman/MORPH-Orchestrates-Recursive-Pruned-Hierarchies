@@ -1,7 +1,7 @@
 """``tul.gram`` — LXTUL-G: the slot loop as a stochastic, contractive latent-variable model.
 
 GRAM shape (Generative Recursive Reasoning, arXiv 2605.19376; design note
-``.agents/notes/proposed/architecture/2026-09-23-lxtul-gram-stochastic-loop.md``, Proposal
+``.agents/notes/rejected/architecture/2026-09-23-lxtul-gram-stochastic-loop.md``, Proposal
 and Paper refresh; prereg ``lab/experiments/failures/2026-09-23-lxtul-g-panel.md``; design
 synthesis ``/home/wolfe/morph-scratch/arc/notes/2026-09-23-lxtul-g-paper-synthesis.md``,
 Decisions 1-7).
@@ -62,7 +62,7 @@ write, or would make the per-pass KL mean something other than the ELBO term.
 
 The multi-sample objective (``tul.gram_objective: "iw"``, LXTUL-GK, 2026-09-23)
 ------------------------------------------------------------------------------
-Prereg ``lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md``. NO posterior and NO
+Prereg ``lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md``. NO posterior and NO
 KL: the step is built without the pool and the posterior heads (``with_posterior=False``;
 the private generator still draws the pool's weights and throws them away, so the prior
 heads are bit-equal to an ``"elbo"`` model's at the same seed). The training forward runs

@@ -1,6 +1,6 @@
 # Agent Note: LXTUL as one stochastic, contractive slot loop trained as a latent-variable model (GRAM shape)
 
-Status: proposed
+Status: rejected — a learned Gaussian step collapses to a deterministic loop under both the ELBO (exposure gap) and the multi-sample bound (sigma/r 0.00026); see the two outcomes.
 
 ## Problem
 
@@ -159,5 +159,17 @@ read 0.32 nats worse than a zeroed cell. At beta 1 the posterior sat on the prio
 step ~2750, then the run went unstable and climbed its own loss. The Gaussian step itself
 stays: the note remains `proposed`, and its training objective moves to K prior rollouts
 under the multi-sample bound (LXTUL-GK,
-[`2026-09-23-lxtul-gk-multisample.md`](../../../../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md)).
-The posterior, the KL and KL balancing are the parts this outcome rejects.
+[`2026-09-23-lxtul-gk-multisample.md`](../../../../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)).
+The posterior, the KL and KL balancing are the parts this outcome rejects. (Superseded
+by the next outcome: the Gaussian step itself is rejected.)
+
+## Outcome of the multi-sample arms (2026-09-23 21:24)
+
+Filed as a failure: [`2026-09-23-lxtul-gk-multisample.md`](../../../../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md).
+Training on K = 4 prior rollouts removes the exposure gap (ce_iw@4 0.75 nats better than
+lxtul-g's prior sample). The learned noise then switches itself off: prior sigma/r falls
+from 0.1 to 0.00026, the four rollouts read as one (width gain 0.00005), and depth reads
+like the deterministic ruler's (K1−K6 +0.0036). The smooth bound pays for spread only at
+second order in sigma (XM, arXiv 2607.27372, App. F.1). The Gaussian step is rejected
+with it. The code (`morph/model/tul_gram.py`, `tul.gram_*`, the `*_gram*` and `*_gk*`
+configs) stays in the tree as the record of the arms; no production config composes it.

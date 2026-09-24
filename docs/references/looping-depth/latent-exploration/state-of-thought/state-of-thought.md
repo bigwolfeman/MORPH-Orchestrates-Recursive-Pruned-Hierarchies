@@ -1,7 +1,7 @@
 # State of Thought Enables Endogenous Reasoning: reading note
 
 Read 2026-09-23, for the LXTUL-GK prereg
-([`2026-09-23-lxtul-gk-multisample.md`](../../../../../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md))
+([`2026-09-23-lxtul-gk-multisample.md`](../../../../../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md))
 and the LXTUL-G failure
 ([`2026-09-23-lxtul-g-panel.md`](../../../../../lab/experiments/failures/2026-09-23-lxtul-g-panel.md)).
 Wolfe pointed at it with Reasoning by Superposition while asking which paper solves the
