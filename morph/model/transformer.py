@@ -57,6 +57,9 @@ from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
+from .tul_code_enum import TULCodeEnum
+from .rollout_mixture import (evidence_labels, mixture_label_nll, mixture_logprobs,
+                              sequential_log_weights, span_segment_start)
 from .tul_vq import TULThoughtVQ
 from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        cfm_null_floor, cfm_pair, code_rmsnorm, code_target_infonce,
@@ -2185,19 +2188,25 @@ class MORPHTransformer(nn.Module):
         # layers and J cap as the span decoder above, so the two readers differ in the
         # token path alone. RNG-neutral (private generators, global RNG forked), so the
         # arm's base weights are byte-identical to its ruler's.
+        # The geometry comes from the decoder's keys, read the way `SpanDecoder` reads
+        # them, so with `tul.spandec` on (Stage 0) both readers grade the same J tokens of
+        # the same span, and with it off (Stage 1) the head keeps that geometry alone.
         self.tul_spandec_par: ParallelSpanHead | None = None
         if cfg.tul is not None and cfg.tul.spandec_parallel:
-            assert self.tul_spandec is not None      # TULConfig refuses it without spandec
             self.tul_spandec_par = ParallelSpanHead(
                 d_model=d,
                 n_heads=int(cfg.tul.spandec_heads or cfg.n_heads),
                 d_ff=int(cfg.d_ff),
                 n_layers=int(cfg.tul.spandec_layers),
-                max_tokens=self.tul_spandec.per_span_tokens,
+                max_tokens=int(cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap),
                 n_codes=int(cfg.tul.spandec_parallel_k),
-                target_offset=self.tul_spandec.target_offset,
+                target_offset=int(cfg.tul.spandec_target_offset),
                 code_init=float(cfg.tul.spandec_parallel_code_init),
             )
+            if self.tul_spandec is not None:
+                assert (self.tul_spandec_par.max_tokens == self.tul_spandec.per_span_tokens
+                        and self.tul_spandec_par.target_offset
+                        == self.tul_spandec.target_offset)
 
         # ── Parallel span decoding from the coda (TULConfig.coda_span_heads) ──────
         # J offset heads on the coda's FINAL state at each slot's emitting position. The
@@ -2692,12 +2701,47 @@ class MORPHTransformer(nn.Module):
         # run on the expanded batch, so their dropout draws ONE mask per base row
         # (morph/model/rollout_dropout.py). The prelude runs once on the base batch and
         # keeps nn.Dropout. Every other model is untouched.
+        # ── LXTUL-E: the enumerated loop code (tul.code_enum_k; tul_code_enum.py) ──
+        # `_code_enum_k` is K > 1 or 0, a build-time int, so every `if self._code_enum_k`
+        # below traces out on every other model. It REUSES GK's rollout machinery: the
+        # batch expansion in `_forward_tul`, `_tul_core(iw_rollouts=)`, the shared depth
+        # draw, the shared token-state dropout, the shared core/coda dropout just below
+        # and the per-block coda checkpoint. Unlike GK it is part of the MAP, so it runs at
+        # train AND eval, with or without labels.
+        self.tul_code_enum: TULCodeEnum | None = None
+        self._code_enum_k = 0
+        if cfg.tul is not None and int(cfg.tul.code_enum_k) > 1:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.code_enum_k > 1 needs a core loop (model.n_core > 0): the code is "
+                    "re-added at the end of every pass, and there are no passes.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.code_enum_k > 1 under SCSE: the loop carries the DEVIATION, so "
+                    "`rms(f(h))` would size the code by the deviation, not the slot state.")
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.code_enum_k > 1 with an FM planner (cfg.fm): the planner replaces "
+                    "`_tul_core`.")
+            if int(cfg.mtp_heads) > 1:
+                raise NotImplementedError(
+                    "tul.code_enum_k > 1 with model.mtp_heads > 1: the MTP heads read the "
+                    "coda at every rollout's token positions and were not built for the "
+                    "K-fold batch expansion (GK's refusal).")
+            self._code_enum_k = int(cfg.tul.code_enum_k)
+            self.tul_code_enum = TULCodeEnum(d, self._code_enum_k,
+                                             float(cfg.tul.code_enum_ratio))
+        # The K rollouts must differ in their Gaussian steps (GK) or their codes (LXTUL-E)
+        # ALONE: the core and the coda run on the expanded batch, so their dropout draws ONE
+        # mask per base row (morph/model/rollout_dropout.py). The prelude runs once on the
+        # base batch and keeps nn.Dropout. Every other model is untouched.
         self._n_rollout_dropout = 0
-        if self._gram_iw_k > 1:
+        _n_rep = self._gram_iw_k or self._code_enum_k
+        if _n_rep > 1:
             from .rollout_dropout import share_dropout_across_rollouts
             self._n_rollout_dropout = (
-                share_dropout_across_rollouts(self.core, self._gram_iw_k)
-                + share_dropout_across_rollouts(self.coda, self._gram_iw_k))
+                share_dropout_across_rollouts(self.core, _n_rep)
+                + share_dropout_across_rollouts(self.coda, _n_rep))
 
         self.tul_chain: TULSlotChain | None = None
         if cfg.tul is not None and cfg.tul.slot_chain:
@@ -4650,6 +4694,16 @@ class MORPHTransformer(nn.Module):
         """
         B, L = x.shape[0] * iw_rollouts, x.shape[1]
         np_, n_core = self.cfg.n_prelude, self.cfg.n_core
+        # tul.code_enum_k (LXTUL-E): the loop IS the K rollouts. A caller that hands the
+        # base batch (a lab probe calling `_tul_core` directly) would run every row on code
+        # 0 — a silent one-code model — so it raises here, before any pass.
+        _enum = self.tul_code_enum
+        if _enum is not None and iw_rollouts != self._code_enum_k:
+            raise RuntimeError(
+                f"tul.code_enum_k={self._code_enum_k}: `_tul_core` must run on the "
+                f"{self._code_enum_k}-fold rollout batch (iw_rollouts={self._code_enum_k}, "
+                f"x0/bigram/layout/input_ids expanded rollout-major, as `_forward_tul` "
+                f"does), got iw_rollouts={iw_rollouts}.")
         # ── THE THOUGHT REGISTER (tul.slot_cells) ─────────────────────────────────
         # M == 1 — every model before this key — binds `layout` to itself and `_m_cells`
         # to 1, so every branch below traces exactly the graph it traced before.
@@ -5766,6 +5820,29 @@ class MORPHTransformer(nn.Module):
             #     (`db_traj`, the exit) see the state WITH the step: it is the state the
             #     loop carries.
             # Off the key `_h_det` is `h_new` itself and nothing below changes.
+            # ── tul.code_enum_k: THE CODE, RE-ADDED AT THE END OF EVERY PASS (LXTUL-E) ──
+            # `h <- f(h) + r * rms(f(h)).detach() * u_k`, rollout k = rows k*B0..(k+1)*B0-1.
+            # HERE, and nowhere else, because this is the one line every pass of the slot
+            # loop runs through, whatever decided its depth (the Poisson draw, a forced
+            # `slot_depths` table, `slot_mean_depth` at eval, `halt`), with or without grad,
+            # and it is inside `_tul_core` only, so the prelude and the coda never see a code
+            # except through the exit state the loop writes.
+            #   * AFTER the core step, the renorm, the gain clip and the recurrence gate:
+            #     `f` above is the whole deterministic map, so the code rides on top of it.
+            #   * BEFORE `_h_det`: the code is part of the map g(h) = f(h) + c_k, so the
+            #     fixed-point and pass-residual terms and the loop probes read g. At a fixed
+            #     point of g, f(h*) - h* = -c_k, and charging THAT would push against the
+            #     code every step.
+            #   * OUTSIDE `_core_step`: the gain hinge probes `_core_step` alone. With the
+            #     RMS detached the code is a constant shift in h, so g and f have the same
+            #     Jacobian and the hinge reads the same gain either way.
+            #   * RMS of f(h), the carrier the term is added to (the `inject_term` rule of
+            #     tul.loop_carry), per slot over streams and channels; pads get 0.
+            #   * A slot whose depth is spent is frozen by the `torch.where` below, so it
+            #     keeps the code of its last realised pass and gets no extra copy.
+            if _enum is not None:
+                h_new = self._apply_injection(
+                    h_new, _enum.term(h_new, layout.slot_valid, iw_rollouts))
             _h_det = h_new
             if _gctx is not None:
                 h_new = self._gram_step(h_new, t, active, layout, _gctx)
@@ -8451,8 +8528,9 @@ class MORPHTransformer(nn.Module):
         # table that the slot's own seed (`E_slot` + a bag-mean OF that table) is built
         # from — the feedback loop `TULConfig.mux_detach_head` records. `SpanDecoder.tok_in`
         # is the learnable map that lets the decoder adapt without writing into the table.
-        if self._gram_iw_k > 1 and self.training:
-            # LXTUL-GK (tul.gram_objective="iw", K > 1): the decoder runs on K rollouts'
+        if (self._gram_iw_k > 1 or self._code_enum_k) and self.training:
+            # LXTUL-GK (tul.gram_objective="iw", K > 1) and LXTUL-E (tul.code_enum_k > 1,
+            # when a teacher-forced decoder is kept beside it): the decoder runs on K rollouts'
             # exit states, and its activations were ~4.4 GB of a 20 GB step at B=6, K=4
             # (memory trace 2026-09-23). The decode is checkpointed, as the per-pass
             # decoder's is below; `checkpoint` recomputes, it does not re-weight. Every
@@ -8500,7 +8578,8 @@ class MORPHTransformer(nn.Module):
         return loss
 
     def _tul_spandec_par_loss(self, h_slots: Tensor, input_ids: Tensor,
-                              layout: SlotLayout, stats: dict | None = None) -> Tensor:
+                              layout: SlotLayout, stats: dict | None = None,
+                              n_rollouts: int = 1) -> Tensor:
         """LXTUL-E's parallel span head: the exact K-code mixture likelihood of the span
         decoder's own target, read from the slot's exit state with NO token input.
 
@@ -8523,27 +8602,76 @@ class MORPHTransformer(nn.Module):
         ~40 k head rows per step.
 
         ``stats`` gets DETACHED 0-dim tensors (no host sync): ``par_ce`` (the mixture CE
-        per span token, the term itself), ``par_n_tokens``, ``par_k`` and, at K > 1, the
-        code-usage readings of :func:`code_usage_stats`.
+        per span token, the term itself), ``par_n_tokens``, ``par_k`` (the number of
+        readers: head codes at Stage 0, loop rollouts at Stage 1) and, at more than one
+        reader, the code-usage readings of :func:`code_usage_stats`.
+
+        ``n_rollouts`` (``tul.code_enum_k``, Stage 1): ``h_slots``, ``input_ids`` and
+        ``layout`` are the rollout-major K-fold batch. Each rollout's exit state carries its
+        code INSIDE the state, so the head (built with no code table) reads the K exit
+        states of a slot as K readers of the base row's target span, and the loss is the
+        exact mixture over them. The targets come from the base rows (rollout 0; the K
+        copies are identical). At K > 1 in training the head's pass is checkpointed (GK's
+        decoder rule), so its [K, M, J, C] activations are recomputed, not held.
         """
         tc = self.cfg.tul
         head = self.tul_spandec_par
         assert head is not None
-        z = self._readout(h_slots)                                    # [B, S, C]
-        ids, valid = head.targets(input_ids, layout)
+        z = self._readout(h_slots)                                    # [R*B, S, C]
         w = self.embed.lm_weight().detach()
-        logp_slot, n_tok, _sup = head.slot_logp(z, ids, valid, w,
-                                                chunk_size=self.cfg.ce_chunk_size,
-                                                mask_token_id=tc.slot_id)
+        if n_rollouts > 1:
+            if head.n_codes > 1:
+                raise NotImplementedError(
+                    "a head code table on top of loop rollouts (refused in TULConfig)")
+            B0 = z.shape[0] // n_rollouts
+            ids, valid = head.targets(input_ids[:B0], layout.head_rows(B0))
+            zr = z.view(n_rollouts, B0, *z.shape[1:])
+            _kw = dict(chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id)
+            if self.training:
+                logp_slot, n_tok, _sup = checkpoint(head.rollout_logp, zr, ids, valid, w,
+                                                    use_reentrant=False, **_kw)
+            else:
+                logp_slot, n_tok, _sup = head.rollout_logp(zr, ids, valid, w, **_kw)
+            n_read = n_rollouts
+        else:
+            ids, valid = head.targets(input_ids, layout)
+            logp_slot, n_tok, _sup = head.slot_logp(z, ids, valid, w,
+                                                    chunk_size=self.cfg.ce_chunk_size,
+                                                    mask_token_id=tc.slot_id)
+            n_read = head.n_codes
         n = n_tok.clamp_min(1.0)
         loss = mixture_span_nll(logp_slot, n)
         if stats is not None:
             stats["par_ce"] = loss.detach()
             stats["par_n_tokens"] = n_tok.detach()
-            stats["par_k"] = loss.new_tensor(float(head.n_codes))
-            if head.n_codes > 1:
+            stats["par_k"] = loss.new_tensor(float(n_read))
+            if n_read > 1:
                 stats.update(code_usage_stats(logp_slot.detach(), n, loss))
         return loss
+
+    @torch.no_grad()
+    def _enum_exit_stats(self, h_slots: Tensor, layout: SlotLayout, K: int,
+                         stats: dict) -> None:
+        """``enum_exit_sep``: the mean over valid slots of the RMS distance between the K
+        rollouts' exit states, averaged over the K(K-1)/2 pairs, over the mean exit-state
+        RMS (``tul.code_enum_k``). A ratio of two RMS values, so it is scale-free; its
+        depth-6 over depth-1 value is the note's separation diagnostic (linear theory
+        (1 - g^6)/(1 - g) = 4.6 at gain 0.89, with one pass's separation
+        ``r * |u_k - u_l|_rms = r sqrt(2K/(K-1))``). Detached 0-dim tensors, no sync."""
+        B0 = h_slots.shape[0] // K
+        hv = h_slots.detach().float().flatten(2).view(K, B0, h_slots.shape[1], -1)
+        valid = layout.slot_valid[:B0].float()                            # [B0, S]
+        nv = valid.sum().clamp_min(1.0)
+        d2 = torch.zeros_like(valid)
+        n_pairs = 0
+        for a in range(K):
+            for b in range(a + 1, K):
+                d2 = d2 + (hv[a] - hv[b]).pow(2).mean(-1).sqrt()
+                n_pairs += 1
+        sep = (d2 / n_pairs * valid).sum() / nv
+        rms = (hv.pow(2).mean(-1).sqrt().mean(0) * valid).sum() / nv
+        stats["enum_exit_sep"] = sep / rms.clamp_min(1e-12)
+        stats["enum_exit_rms"] = rms
 
     def _spandec_pass_decode(self, z: Tensor, ids: Tensor, valid: Tensor,
                              emb: Tensor) -> Tensor:
@@ -9508,6 +9636,139 @@ class MORPHTransformer(nn.Module):
                 "gk_ce_single": ce_single, "gk_width_gain": ce_single - loss.detach(),
                 "gk_w_entropy": w_ent}
 
+    def _enum_mix_losses(self, xh: Tensor, labels: Tensor, input_ids: Tensor,
+                         layout: SlotLayout, K: int, want_groups: bool) -> dict:
+        """The coda's token loss under ``tul.code_enum_k``: the EXACT per-span mixture over
+        the ``K`` enumerated code rollouts, and at eval the ruler's metric breakdown read
+        under the same mixture.
+
+        ``xh`` ``[K*B, L, C]``, ``labels`` / ``input_ids`` / ``layout`` the rollout-major
+        expanded batch. The scored positions and weights are the ruler's
+        (:meth:`_tul_half_weights`; ``TULConfig`` pins ``emit_weight`` 0 and ``plast_weight``
+        1, so every scored position is a token position at weight 1). The loss is
+        :func:`iw_span_bound` over :func:`iw_span_groups`, GK's read and its code, so
+        ``loss = -sum_span log mean_k prod_{j in span} p_k(tok_j) / n_tokens``. Exact, not a
+        bound: the K codes are enumerated, so the mean over k IS the model's mixture.
+
+        Readings (detached): ``enum_ce_mix`` (= the loss), ``enum_ce_code{k}`` the CE of
+        code k ALONE on the same positions, ``enum_width_gain`` = mean_k ce_code - ce_mix
+        and ``enum_width_gain_best`` = min_k ce_code - ce_mix (the note's P-2 reads the
+        best single code), ``enum_w_entropy`` the mean per-span entropy of the rollout
+        credit ``softmax_k S_k`` over log K, ``enum_code_win{k}`` the fraction of scored
+        spans rollout k explains best.
+
+        ``want_groups`` (eval): ``ce_main`` / ``ce_plast`` / ``ce_emit`` / ``ce_tokens`` and
+        the first-token keys of :meth:`_tul_group_losses`, each read from the per-position
+        sequential Bayes read (``rollout_mixture.py``: the posterior over rollouts after the
+        span's earlier tokens). Summed over a span's scored positions it equals the span's
+        mixture term exactly, so ``ce_tokens`` equals the loss up to rounding
+        (tests/test_tul_lxtul_e.py). ``ce_emit`` scores the slot's emit label with the same
+        posterior (a span's last token is never evidence: its label is the NEXT span's
+        first token, the one being predicted)."""
+        BK, L, C = xh.shape
+        B = BK // K
+        row_w, _p, _z = self._tul_half_weights(labels, layout)
+        lab = labels.reshape(-1)
+        w_all = row_w * (lab != -100).to(row_w.dtype)
+        # Every LABELLED position, the weight-0 emit position included (the eval breakdown
+        # reads it; its weight keeps it out of the loss).
+        lp = fused_linear_label_logprob(xh.reshape(-1, C), self.embed.lm_weight(), lab,
+                                        ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
+                                        mask_token_id=self.cfg.tul.slot_id).view(K, B * L)
+        w = w_all.view(K, B * L)[0]                    # tiled labels: one weight row per base
+        grp = iw_span_groups(layout.bag_id[:B], layout.max_slots).reshape(-1)
+        bound_sum, S, scored = iw_span_bound(lp, w, grp, B * (layout.max_slots + 1))
+        n_w = w.sum().clamp(min=1e-6)
+        loss = -bound_sum / n_w
+        out: dict = {"loss": loss, "n_targets": w.sum()}
+        with torch.no_grad():
+            mix = loss.detach()
+            ce_code = -(lp.detach() * w.unsqueeze(0)).sum(1) / n_w                 # [K]
+            out["enum_ce_mix"] = mix
+            for k in range(K):
+                out[f"enum_ce_code{k}"] = ce_code[k]
+            out["enum_width_gain"] = ce_code.mean() - mix
+            out["enum_width_gain_best"] = ce_code.min() - mix
+            sf = scored.float()
+            n_sc = sf.sum().clamp(min=1.0)
+            pw = torch.softmax(S.detach(), dim=0)
+            ent = -(pw * torch.log(pw.clamp_min(1e-30))).sum(0) / math.log(K)
+            out["enum_w_entropy"] = (ent * sf).sum() / n_sc
+            win = S.detach().argmax(dim=0)
+            for k in range(K):
+                out[f"enum_code_win{k}"] = ((win == k).float() * sf).sum() / n_sc
+        if not want_groups:
+            return out
+        with torch.no_grad():
+            lab0 = labels[:B]
+            lay0 = layout.head_rows(B)
+            nll = self._enum_position_nll(lp.detach().view(K, B, L), input_ids[:B], lay0)
+            _w0, p_idx, z_idx = self._tul_half_weights(lab0, lay0)
+            BL = B * L
+            lab_f = lab0.reshape(-1)
+            nll_f = nll.reshape(-1)
+            is_p = torch.zeros(BL + 1, dtype=torch.bool, device=xh.device)
+            is_z = torch.zeros(BL + 1, dtype=torch.bool, device=xh.device)
+            is_p[p_idx] = True
+            is_z[z_idx] = True
+            is_p, is_z = is_p[:BL], is_z[:BL]
+            has = lab_f != -100
+            groups_m = {"main": has & ~is_p & ~is_z, "plast": has & is_p, "emit": has & is_z}
+            for tag, m in groups_m.items():
+                n = m.sum().to(torch.float32)
+                out[f"ce_{tag}"] = (nll_f * m).sum() / n.clamp(min=1.0)
+                out[f"n_{tag}"] = n
+            out["ce_tokens"] = ((out["ce_main"] * out["n_main"]
+                                 + out["ce_plast"] * out["n_plast"])
+                                / (out["n_main"] + out["n_plast"]).clamp(min=1.0))
+            out["ce_first_tok"] = out["ce_emit"]
+            out["ce_first_tok_plain"] = out["ce_plast"]
+            out["first_tok_counterfactual"] = out["ce_plast"] - out["ce_emit"]
+        return out
+
+    @staticmethod
+    def _enum_position_nll(lp: Tensor, input_ids: Tensor, layout: SlotLayout) -> Tensor:
+        """``[B, L]`` the per-position NLL of the label under the per-span sequential
+        Bayes read over the rollouts, from ``lp [K, B, L]`` (each rollout's log p of the
+        label; any value where there is none) and the BASE ``input_ids`` / ``layout``.
+        The evidence is ``lp`` itself at the evidence positions, where the label IS the
+        evidence label (``rollout_mixture.evidence_labels``)."""
+        _ev_label, ev_mask = evidence_labels(input_ids, layout)
+        logw = sequential_log_weights(lp, ev_mask, span_segment_start(layout.bag_id))
+        return mixture_label_nll(lp, logw)
+
+    def _enum_mixture_logprobs(self, xh: Tensor, input_ids: Tensor, layout: SlotLayout,
+                               K: int) -> Tensor:
+        """``[B, L, V]`` fp32 log-probs: the label-free forward of a ``tul.code_enum_k``
+        model, ``log sum_k w_k(<p) p_k(. | p)`` with ``w_k(<p)`` the posterior over the K
+        rollouts after the earlier tokens of ``p``'s span (``rollout_mixture.py``). This is
+        the note's deploy read, and its CE at a scored position is exactly that position's
+        term of the per-span mixture the model trains on. ``xh`` / ``input_ids`` /
+        ``layout`` are the expanded batch; the result has the BASE batch's rows.
+
+        Cost: one chunked pass for the evidence log-probs, then one ``[B, L, V]`` fp32
+        log-softmax per rollout accumulated with ``logaddexp`` (``[K, B, L, V]`` never
+        exists). The slot id is masked out of every rollout's head, as in the plain path."""
+        BK, L, C = xh.shape
+        B = BK // K
+        ids0 = input_ids[:B]
+        lay0 = layout.head_rows(B)
+        ev_label, ev_mask = evidence_labels(ids0, lay0)
+        w_head = self.embed.lm_weight()
+        lab_ev = torch.where(ev_mask, ev_label, torch.full_like(ev_label, -100)).repeat(K, 1)
+        lp_ev = fused_linear_label_logprob(xh.reshape(-1, C), w_head, lab_ev.reshape(-1),
+                                           ignore_index=-100,
+                                           chunk_size=self.cfg.ce_chunk_size,
+                                           mask_token_id=self.cfg.tul.slot_id).view(K, B, L)
+        logw = sequential_log_weights(lp_ev, ev_mask, span_segment_start(lay0.bag_id))
+        slot = torch.tensor([self.cfg.tul.slot_id], device=xh.device)
+        acc = None
+        for k in range(K):
+            logits_k = self.embed.attend(xh[k * B:(k + 1) * B]).index_fill(
+                -1, slot, float("-inf"))
+            acc = mixture_logprobs(torch.log_softmax(logits_k.float(), dim=-1), logw[k], acc)
+        return acc
+
     def _tul_tg_kwargs(self, layout: SlotLayout) -> tuple[dict | None, Tensor | None,
                                                          dict | None, Tensor | None]:
         """``(front_kw, front_reset, coda_kw, coda_reset)`` — the TG restriction of ONE forward.
@@ -9782,6 +10043,18 @@ class MORPHTransformer(nn.Module):
         # arguments), so nothing below changes there. K = 1 expands nothing.
         _iw_k = (self._gram_iw_k if self._gram_iw_k and labels is not None
                  and (self.training or gram_mode == "iw") else 0)
+        # tul.code_enum_k (LXTUL-E): the SAME expansion, ALWAYS — train and eval, labelled
+        # or not. The code is part of the map, so there is no one-rollout forward of this
+        # model: a labelled forward scores the per-span mixture, a label-free one returns
+        # the per-span sequential Bayes read over the K rollouts (`_enum_mixture_logprobs`).
+        if self._code_enum_k:
+            if not (tc.coda_sees_slots and tc.coda_token_cut == 0):
+                raise NotImplementedError("tul.code_enum_k > 1 needs the full-axis coda")
+            if coda_state_only or plan_nats:
+                raise NotImplementedError(
+                    "tul.code_enum_k > 1 with coda_state_only / plan_nats: those read the "
+                    "coda of ONE rollout; the K-rollout read of them was not built.")
+            _iw_k = self._code_enum_k
         if self._gram_iw_k > 1 and self.training and labels is None:
             # The core and coda dropout of a K > 1 GK model share masks across K
             # rollout-major rows; without labels the batch is not expanded, and the shared
@@ -9846,7 +10119,7 @@ class MORPHTransformer(nn.Module):
         # reason: only the slot-loop branch computes it, next to the span decoder, and the
         # fold after the dispatch RAISES if a model that built the head reaches it with no
         # term (a path that silently skipped the head would read as its own ruler).
-        par_loss, par_stats = None, {}
+        par_loss, par_stats, enum_stats = None, {}, {}
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -10378,9 +10651,17 @@ class MORPHTransformer(nn.Module):
             # The SAME seam and the SAME target as the span decoder above, read with no
             # token input. Train and eval alike (the decoder's rule), so the val pass and
             # an offline scorer read the term the trainer optimises.
+            # Under tul.code_enum_k the K rollouts' exit states are read as K readers of
+            # the SAME base span (`n_rollouts`), under the exact mixture. `n_rollouts` is
+            # passed ONLY there (the `n_rep` precedent), so every other forward calls the
+            # method with the arguments it always had and instruments that wrap it keep
+            # working.
             if self.tul_spandec_par is not None:
-                par_loss = self._tul_spandec_par_loss(h_slots, input_ids, layout,
-                                                      stats=par_stats)
+                par_loss = self._tul_spandec_par_loss(
+                    h_slots, input_ids, layout, stats=par_stats,
+                    **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
+            if self._code_enum_k:
+                self._enum_exit_stats(h_slots, layout, _iw_k, enum_stats)
             # ── C2: the within-row contrastive term (tul.row_contrast_lambda) ──
             # Read at the SAME seam as the MUX and the span decoder: the loop's exit
             # state, before the gate's budget, before `detach_z` and before the eval-only
@@ -10582,7 +10863,13 @@ class MORPHTransformer(nn.Module):
                                    attn_kwargs=_coda_kw, ret_reset_mask=tg_reset,
                                    **({"checkpoint_blocks": True} if _iw_k > 1 else {}),
                                    **_bcast_kw)
-            if _iw_k:
+            if self._code_enum_k:
+                # LXTUL-E: the exact per-span mixture over the K code rollouts, train and
+                # eval (labels None: the deploy read is built below, no loss).
+                groups = (self._enum_mix_losses(xh, labels, input_ids, layout, _iw_k,
+                                                want_groups=not self.training)
+                          if labels is not None else None)
+            elif _iw_k:
                 groups = self._gram_iw_losses(xh, labels, layout, _iw_k)
             else:
                 groups = (self._tul_group_losses(xh, labels, layout,
@@ -10753,6 +11040,10 @@ class MORPHTransformer(nn.Module):
             _parw = tc.spandec_parallel_weight * par_loss
             groups["par_weighted"] = _parw.detach()
             groups["loss"] = groups["loss"] + _parw
+        if enum_stats and groups is not None:
+            # tul.code_enum_k: the exit separation between the K rollouts (detached).
+            groups = dict(groups)
+            groups.update(enum_stats)
         if code_target_loss is not None and groups is not None:
             # The code target (tul.code_target). Same contract as `spandec_weighted`: the
             # WEIGHTED term is exposed so train.py subtracts it and keeps train/loss and
@@ -11098,8 +11389,14 @@ class MORPHTransformer(nn.Module):
             # Generation (labels=None): full logits, with the structural slot id masked
             # out of the head (spec §3.1 / invariant 4 — "masked … at generation").
             # index_fill is out-of-place, so this is safe under grad as well as no_grad.
-            out["logits"] = self.embed.attend(xh).index_fill(
-                -1, torch.tensor([tc.slot_id], device=xh.device), float("-inf"))
+            if self._code_enum_k:
+                # LXTUL-E: the per-span sequential Bayes read over the K code rollouts
+                # (log-probs, a valid logit tensor) — the model's own predictive, what
+                # generation and `core_depth_sweep.py` read. Base batch shape [B, L, V].
+                out["logits"] = self._enum_mixture_logprobs(xh, input_ids, layout, _iw_k)
+            else:
+                out["logits"] = self.embed.attend(xh).index_fill(
+                    -1, torch.tensor([tc.slot_id], device=xh.device), float("-inf"))
             if self.mtp is not None:
                 # The heads' logits on the COMPACT token axis ([B, n_max, V], token order,
                 # a row's ragged tail past its token count is unscored garbage); the same
@@ -11336,7 +11633,13 @@ class MORPHTransformer(nn.Module):
         B, S = layout.slot_valid.shape
         # Pads sort last (score 2.0 > any uniform draw), so real slots are permuted
         # among the real slot POSITIONS only — SlotLayout guarantees pads are last.
-        r = torch.rand(B, S, device=h_slots.device)
+        # tul.code_enum_k: the batch is K rollout-major copies of each row, so ONE
+        # permutation is drawn per BASE row and shared by its K rollouts (they must differ
+        # in their code alone). `_n` is 1 on every other model and the draw is unchanged.
+        _n = self._code_enum_k or 1
+        r = torch.rand(B // _n, S, device=h_slots.device)
+        if _n > 1:
+            r = r.repeat(_n, 1)
         r = torch.where(layout.slot_valid, r, torch.full_like(r, 2.0))
         perm = r.argsort(dim=1)
         idx = perm.reshape(B, S, *([1] * (h_slots.dim() - 2))).expand_as(h_slots)
@@ -11644,9 +11947,21 @@ class MORPHTransformer(nn.Module):
         _pz = _pok = None
         if self.tul_loop_denoise is not None:
             _pz, _pok = self._tul_code_target_encode_pre(x, layout, input_ids)
-        _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
-                                                 input_ids=input_ids,
-                                                 code_x0=_pz, code_ok=_pok)
+        _ek = self._code_enum_k
+        if _ek:
+            # tul.code_enum_k: the loop runs on the K-rollout batch (the forward's
+            # expansion); the dial is read on rollout 0 ALONE, one code's states, so it
+            # stays comparable with a K = 1 arm's. The other rollouts differ from it by
+            # their code only.
+            _xn, h_slots, _d, _g, *_ = self._tul_core(
+                x, repeat_along_batch(x0, _ek), repeat_along_batch(bigram, _ek),
+                layout.repeat_rows(_ek), input_ids=repeat_along_batch(input_ids, _ek),
+                iw_rollouts=_ek)
+            h_slots = h_slots[:x.shape[0]]
+        else:
+            _xn, h_slots, _d, _g, *_ = self._tul_core(x, x0, bigram, layout,
+                                                     input_ids=input_ids,
+                                                     code_x0=_pz, code_ok=_pok)
         # ── the think-once stack (tul.cond_layers) ───────────────────────────────
         # This probe's contract is "the WRITTEN slot states, read at the point the coda
         # reads them". On a `cond_layers` model the coda reads the STACK's output, so the

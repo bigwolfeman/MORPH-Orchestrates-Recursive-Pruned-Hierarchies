@@ -87,6 +87,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from .rollout_mixture import log_mean_exp
 from .tul_layout import SlotLayout
 
 __all__ = ["TULGramStep", "TULGramPool", "gram_kl", "gram_kl_balanced", "gram_has_next",
@@ -346,8 +347,6 @@ def iw_span_bound(lp: Tensor, w: Tensor, group: Tensor, n_groups: int
         1, group, lp.float() * wf.unsqueeze(0))
     scored = torch.zeros(n_groups, dtype=wf.dtype, device=wf.device).index_add_(
         0, group, (wf != 0).to(wf.dtype)) > 0
-    lme = torch.logsumexp(S, dim=0)
-    if K > 1:
-        lme = lme - math.log(K)
+    lme = log_mean_exp(S, dim=0)          # the ONE copy (morph/model/rollout_mixture.py)
     bound_sum = torch.where(scored, lme, torch.zeros_like(lme)).sum()
     return bound_sum, S, scored

@@ -50,6 +50,10 @@ _NO_DECAY_KEYWORDS = (
     # the quantity the arm exists to measure; a null result would then be unattributable
     # (decay vs the model ignoring the plan). Excluded deliberately — reviewer, 2026-08-16.
     "E_slot", "E_mask", "W_prefix",
+    # LXTUL-E's code basis (tul.code_enum_k, morph/model/tul_code_enum.py): the codes are
+    # a Gram-Schmidt function of it, invariant to its scale, so decay would only shrink
+    # its norm and raise its effective step size.
+    "tul_code_enum.basis",
 )
 
 

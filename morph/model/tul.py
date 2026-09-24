@@ -907,13 +907,37 @@ class TULConfig:
     # spandec_parallel_code_init: the per-coordinate std of the code table at init (codes
     # enter as z + rms(z).detach() * u_k, so 0.1 is the note's r = 0.1 of the slot's RMS);
     # the codes are learned, scale included. Refused at K = 1, where there is no table.
-    # Requires `spandec: true` (the head reads the decoder's J cap and target offset, so
-    # both readers grade the same tokens). False = off: nothing is built, no RNG is drawn,
+    # The head's geometry is the span decoder's: `spandec_layers`, `spandec_heads`,
+    # `spandec_max_tokens` (J) and `spandec_target_offset`. With `spandec: true` both
+    # readers grade the same tokens (Stage 0); with `spandec: false` (Stage 1, the head
+    # REPLACES the teacher-forced decoder) the head alone reads those four keys, and every
+    # other `spandec_*` key stays refused. False = off: nothing is built, no RNG is drawn,
     # no term (tests/test_tul_spandec_parallel.py).
     spandec_parallel: bool = False
     spandec_parallel_k: int = 1
     spandec_parallel_weight: float = 1.0
     spandec_parallel_code_init: float = 0.1
+    # ── THE ENUMERATED LOOP CODE (LXTUL-E Stage 1, 2026-09-24) ─────────────────────
+    # code_enum_k = K > 1: the slot loop and the coda run on K rollouts per row
+    # (batch-expanded rollout-major, GK's machinery: the front runs ONCE, the rollouts
+    # share the per-slot depth draw and every dropout mask), and rollout k differs from the
+    # others in ONE thing, a fixed-size code re-added at the end of EVERY pass of the slot
+    # loop, `h <- f(h) + code_enum_ratio * rms(f(h)).detach() * u_k`
+    # (morph/model/tul_code_enum.py). The u_k are K learned unit-RMS directions that sum
+    # to zero (a regular simplex whose orientation is learned); no scale is learned (the
+    # note's W2), nothing is sampled (W3), the code reaches every pass (W4).
+    #
+    # The coda's token loss is the EXACT per-span mixture over the K rollouts (GK's read,
+    # `rollout_mixture.py`); the parallel head (`spandec_parallel`, K = 1 table) reads each
+    # rollout's exit state under the same mixture. The code is part of the MAP: train and
+    # eval both run the K rollouts, and a label-free forward returns the per-span
+    # sequential Bayes read (the deploy read), not one rollout.
+    #
+    # 1 = off: nothing is built, no RNG is drawn, the forward is the one from before the
+    # key. code_enum_ratio is refused at K = 1.
+    # Note: .agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md
+    code_enum_k: int = 1
+    code_enum_ratio: float = 0.1
     # ── TUL-CODE (arm `tul-code`, 2026-09-14; docs/tul-code-spec.md) ─────────────
     #
     # The slot holds the CODE of the span it precedes. At training time an encoder E
@@ -2475,15 +2499,21 @@ class TULConfig:
                 "tul.spandec_per_pass requires tul.spandec: the per-pass targets are graded "
                 "by the SAME SpanDecoder the exit state is graded by, and without "
                 "tul.spandec there is no decoder to grade them with.")
-        elif (self.spandec_layers != 2 or self.spandec_weight != 1.0
-                or self.spandec_heads != 0 or self.spandec_max_tokens != 0
+        elif ((not self.spandec_parallel
+               and (self.spandec_layers != 2 or self.spandec_heads != 0
+                    or self.spandec_max_tokens != 0 or self.spandec_target_offset != 1))
+                or self.spandec_weight != 1.0
                 or self.spandec_horizon != 1 or self.spandec_pass_horizon_max != 6
                 or self.spandec_pass_weight != 1.0 or self.spandec_pass_tokens != 8
-                or self.spandec_target_offset != 1 or self.spandec_reads_cells):
+                or self.spandec_reads_cells):
+            # With the parallel head on and the decoder off, the head reads the decoder's
+            # four GEOMETRY keys (layers, heads, J, target offset) itself, so only those
+            # are allowed; every other decoder knob would still be silently ignored.
             raise ValueError(
                 "tul.spandec_* set with tul.spandec=false: the decoder is not built, so the "
                 "knobs would be silently ignored. Set tul.spandec: true or drop them.")
         self._check_spandec_parallel()
+        self._check_code_enum()
         if self.coda_span_source not in ("cell", "token"):
             raise ValueError(
                 f"tul.coda_span_source must be 'cell' or 'token', got "
@@ -3369,10 +3399,11 @@ class TULConfig:
 
     def _check_spandec_parallel(self) -> None:
         """``tul.spandec_parallel`` — LXTUL-E's committed product reader
-        (morph/model/tul_spandec_parallel.py). It grades the span decoder's OWN target, so
-        it needs the decoder, and it refuses every decoder mode whose target or seam it
-        does not share: a multi-span horizon, a cell memory, the K-fold GK batch and the
-        fan's K streams (Phase B defines its own rollouts)."""
+        (morph/model/tul_spandec_parallel.py). It grades the span decoder's target at the
+        decoder's geometry, beside the decoder (Stage 0) or INSTEAD of it (Stage 1,
+        `spandec: false`), and it refuses every mode whose target or seam it does not
+        share: a multi-span horizon, a cell memory, the K-fold GK batch and the fan's K
+        streams. Its rollouts are LXTUL-E's own (`code_enum_k`)."""
         if not self.spandec_parallel:
             if (self.spandec_parallel_k != 1 or self.spandec_parallel_weight != 1.0
                     or self.spandec_parallel_code_init != 0.1):
@@ -3381,11 +3412,6 @@ class TULConfig:
                     "spandec_parallel_code_init set with tul.spandec_parallel=false: no head "
                     "is built, so the knob(s) would be silently ignored.")
             return
-        if not self.spandec:
-            raise ValueError(
-                "tul.spandec_parallel requires tul.spandec: the parallel head grades the "
-                "span decoder's target (its J cap and spandec_target_offset), read at the "
-                "same seam, so both readers score the same tokens.")
         if self.spandec_parallel_k < 1:
             raise ValueError(
                 f"tul.spandec_parallel_k must be >= 1 (1 = no code, the twin), got "
@@ -3415,6 +3441,78 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.spandec_parallel with {why}.")
+
+    def _check_code_enum(self) -> None:
+        """``tul.code_enum_k`` — LXTUL-E's enumerated loop code (morph/model/tul_code_enum.py).
+
+        Every refusal names a mode that either replaces the slot loop the code lives in,
+        defines a second choice beside the code, or whose meaning under the K-fold batch
+        expansion was not built (GK's list, `_check_gram_iw`, where the reason carries
+        over)."""
+        if self.code_enum_k < 1:
+            raise ValueError(f"tul.code_enum_k must be >= 1 (1 = off), got {self.code_enum_k}")
+        if self.code_enum_k == 1:
+            if self.code_enum_ratio != 0.1:
+                raise ValueError(
+                    "tul.code_enum_ratio set at tul.code_enum_k=1: there is no code to "
+                    "scale, so the knob would be silently ignored.")
+            return
+        if not self.code_enum_ratio > 0.0:
+            raise ValueError(
+                f"tul.code_enum_ratio must be > 0 (at 0 the K rollouts are identical and "
+                f"the arm pays K times for one), got {self.code_enum_ratio}")
+        _refused = [
+            (self.gram, "tul.gram: a Gaussian step is a second, sampled choice; the "
+             "rollouts must differ in the code alone"),
+            (self.fan_k > 0, "tul.fan_k > 0: the fan's K streams are a second width axis"),
+            (self.spandec_reads_cells,
+             "tul.spandec_reads_cells: a register reader; the code loop is one cell per slot"),
+            (self.slot_cells > 1,
+             "tul.slot_cells > 1 (the Thought Register): M cells per slot and a mean "
+             "before the readers"),
+            (self.spandec_parallel_k > 1,
+             "tul.spandec_parallel_k > 1: a code table at the head INPUT is Stage 0's "
+             "design; Stage 1's code lives in the loop state"),
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop): no per-slot pass to add a code to"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens (the token path): the loop runs `_core_region`"),
+            (self.code, "tul.code: no slot loop runs"),
+            (self.code_target, "tul.code_target: the cells are a regressed projection"),
+            (self.loop_denoise, "tul.loop_denoise: every pass enters at a noised code"),
+            (self.core_stage_cond != "none",
+             f"tul.core_stage_cond={self.core_stage_cond!r}: the db1 step and the Euler "
+             f"ladder bypass `_tul_core`"),
+            (self.vq_codes > 0, "tul.vq_codes: the write is a dequantised code"),
+            (self.prefix_source != "exit",
+             f"tul.prefix_source={self.prefix_source!r}: the write is per-pass cells"),
+            (self.pass_readout != "last",
+             f"tul.pass_readout={self.pass_readout!r}: the write is a mixture of passes"),
+            (not (self.coda_sees_slots and self.coda_token_cut == 0),
+             "a gathered coda (coda_sees_slots=false or coda_token_cut > 0)"),
+            (self.emit_weight != 0.0,
+             f"emit_weight={self.emit_weight}: the per-span mixture has no group for the "
+             f"emit label"),
+            (self.plast_weight != 1.0,
+             f"plast_weight={self.plast_weight}: the per-span mixture is the chain rule of "
+             f"a causal predictor only at unit weights"),
+            (self.coda_logit_l2 != 0.0,
+             "tul.coda_logit_l2: the penalty lives in the fused CE kernel, not in the "
+             "per-rollout log-prob kernel the mixture reads"),
+            (self.core_token_aux, "tul.core_token_aux: a second coda pass"),
+            (self.grad_pass or self.grad_pass_energy != "own_mux",
+             "tul.grad_pass / grad_pass_energy: the energies replay the coda or read the "
+             "unexpanded batch"),
+            (self.row_contrast_lambda > 0.0,
+             "tul.row_contrast_lambda > 0: the term reads the unexpanded prelude"),
+            (self.sigreg_lambda > 0.0,
+             "tul.sigreg_lambda > 0: a batch statistic would see K copies of every slot"),
+            (self.coda_span_heads > 0, "tul.coda_span_heads: a second readout of the coda"),
+            (self.gate is not None, "tul.gate: the budget and halting paths were not built"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.code_enum_k > 1 with {why}.")
 
     def _check_gram(self) -> None:
         """``tul.gram`` — LXTUL-G, the stochastic slot loop (morph/model/tul_gram.py).

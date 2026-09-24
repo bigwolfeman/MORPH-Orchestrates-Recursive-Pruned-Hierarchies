@@ -157,6 +157,17 @@ def capture_attn_lift(layout: SlotLayout, stats: AttnLiftStats):
         # now: the weights below are recomputed purely to be counted.
         out = orig(q, k, v, window_size, device, scale, n_skip_rope, extra_mask)
 
+        # A rollout-major K-fold batch (LXTUL-GK / LXTUL-E: the coda runs on K copies of
+        # each row) carries the base rows' masks K times; the lift is then averaged over
+        # every rollout's queries. Any other batch mismatch raises.
+        sm, fm = slot_mask, ft_mask
+        if q.shape[0] != sm.shape[0]:
+            if q.shape[0] % sm.shape[0]:
+                raise RuntimeError(f"capture_attn_lift: batch {q.shape[0]} is not a "
+                                   f"multiple of the layout's {sm.shape[0]} rows")
+            _r = q.shape[0] // sm.shape[0]
+            sm, fm = sm.repeat(_r, 1), fm.repeat(_r, 1)
+
         with torch.no_grad():
             mask = _window_mask(S, window_size, n_skip_rope, device, extra_mask)
             bias = torch.where(mask, 0.0, float("-inf"))
@@ -164,16 +175,16 @@ def capture_attn_lift(layout: SlotLayout, stats: AttnLiftStats):
             w = torch.softmax(scores, dim=-1)
             allow = mask.expand(q.shape[0], 1, S, S)[:, 0]                # [B, S, S]
             n_keys = allow.sum(-1).float()                                # [B, S]
-            n_slot_keys = (allow & slot_mask[:, None, :]).sum(-1).float()
+            n_slot_keys = (allow & sm[:, None, :]).sum(-1).float()
             # A fully-masked row softmaxes to NaN. Excluded, not zero-filled: counting it
             # as "no slot mass" is exactly the error described above.
             live = (n_keys > 0) & torch.isfinite(w).all(-1).all(1)
             share = torch.where(live, n_slot_keys / n_keys.clamp(min=1.0),
                                 torch.zeros_like(n_keys))
-            mass = (w.mean(1) * slot_mask[:, None, :].float()).sum(-1)     # [B, S]
+            mass = (w.mean(1) * sm[:, None, :].float()).sum(-1)     # [B, S]
             mass = torch.where(live, mass, torch.zeros_like(mass))
-            tok_q = (~slot_mask) & live & (share > 0)
-            ft_q = tok_q & ft_mask
+            tok_q = (~sm) & live & (share > 0)
+            ft_q = tok_q & fm
             rec = {"n_q": int(tok_q.sum())}
             for tag, sel in (("", tok_q), ("_ft", ft_q)):
                 n = int(sel.sum())

@@ -128,8 +128,14 @@ def test_off_builds_nothing_and_knobs_without_the_head_raise():
         TULConfig(**base, spandec_parallel_k=4)
     with pytest.raises(ValueError, match="spandec_parallel=false"):
         TULConfig(**base, spandec_parallel_weight=0.5)
-    with pytest.raises(ValueError, match="requires tul.spandec"):
-        TULConfig(prefix_k=2, slot_id=4, spandec_parallel=True)
+    # Stage 1 (2026-09-24): the head may REPLACE the decoder. With `spandec: false` it
+    # reads the decoder's four geometry keys itself; every other decoder knob still raises.
+    TULConfig(prefix_k=2, slot_id=4, spandec_parallel=True, spandec_max_tokens=16,
+              spandec_layers=1)
+    with pytest.raises(ValueError, match="spandec=false"):
+        TULConfig(prefix_k=2, slot_id=4, spandec_parallel=True, spandec_weight=2.0)
+    with pytest.raises(ValueError, match="spandec=false"):
+        TULConfig(prefix_k=2, slot_id=4, spandec_max_tokens=16)
     with pytest.raises(ValueError, match="weight > 0"):
         TULConfig(**base, spandec_parallel=True, spandec_parallel_weight=0.0)
     with pytest.raises(NotImplementedError, match="spandec_horizon"):

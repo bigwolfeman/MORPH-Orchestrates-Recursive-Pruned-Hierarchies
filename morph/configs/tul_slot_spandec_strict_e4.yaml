@@ -1,0 +1,31 @@
+# LXTUL-E Stage 1, arm "lxtul-e4": the design. Composes `tul_slot_spandec_strict_e1`
+# (read it: the recipe, the head and the reasons live there) and changes ONE thing,
+# `tul.code_enum_k: 1 -> 4`, plus the run name.
+#
+# WHAT IT IS (morph/model/tul_code_enum.py; the build notes in `_tul_core`). The slot loop
+# and the coda run on K = 4 rollouts per row, batch-expanded rollout-major. The front runs
+# ONCE; the rollouts share the per-slot depth draw, the token-state dropout mask and every
+# core and coda dropout mask, so they differ in ONE thing: a code re-added at the end of
+# EVERY pass of the slot loop,
+#     h <- f(h) + 0.1 * rms(f(h)).detach() * u_k,      k = 0 .. 3,
+# the u_k a learned regular simplex (unit RMS, sum zero, equidistant, no learned scale).
+# Readers: the coda's token CE is the EXACT per-span mixture over the 4 rollouts (GK's read,
+# morph/model/rollout_mixture.py); the parallel head reads each rollout's exit state (the
+# code is inside it; no code at the head input) under the same exact mixture. Train AND
+# eval run the 4 rollouts: the code is part of the map. A label-free forward (generation,
+# core_depth_sweep) returns the per-span sequential Bayes read over the rollouts.
+#
+# COST. Four rollouts of the loop and the coda per row, coda checkpointed per block and
+# the head's pass checkpointed at train, as GK4 (a traced 15.17 GB step for GK4).
+#
+# Acceptance criteria P-1 .. P-5: the note below, frozen before this build.
+# Note: .agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md
+defaults:
+  - tul_slot_spandec_strict_e1
+  - _self_
+
+tul:
+  code_enum_k: 4
+
+wandb:
+  name: lxtul-e4

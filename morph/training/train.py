@@ -231,6 +231,12 @@ def evaluate(
             for _pk in [k for k in out if str(k) == "par" or str(k).startswith("par_")]:
                 if torch.is_tensor(out[_pk]):
                     acc.setdefault(f"val/{_pk}", []).append(float(out[_pk]))
+            # tul.code_enum_k (LXTUL-E Stage 1): the coda's per-span mixture over the K
+            # code rollouts `enum_ce_mix`, each code alone `enum_ce_code{k}`, the width
+            # gains, the credit entropy and wins, and the exit separation. A scan.
+            for _ek in [k for k in out if str(k).startswith("enum_")]:
+                if torch.is_tensor(out[_ek]):
+                    acc.setdefault(f"val/{_ek}", []).append(float(out[_ek]))
             # ── LXTUL's fan (tul.fan_k), accumulated over the val batches ─────────
             # The ORACLE family is eval-only and has no train-side twin, so it keeps the
             # `fan/` namespace the arm is read in. The two readings the TRAIN step also
@@ -3948,6 +3954,12 @@ def main(cfg: DictConfig) -> None:
                 # and `par_width_gain`. Detached tensors from the forward (no sync there).
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if (_k == "par" or _k.startswith("par_")) and torch.is_tensor(out[_k]):
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.code_enum_k (LXTUL-E Stage 1): `enum_ce_mix` (it IS train/loss's CE
+                # part), `enum_ce_code{k}`, `enum_width_gain[_best]`, `enum_w_entropy`,
+                # `enum_code_win{k}`, `enum_exit_sep` / `enum_exit_rms`.
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("enum_") and torch.is_tensor(out[_k]):
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_grade (spec §17.2): the grades, the cosines to E(best) and
                 # E(true), the degenerate fraction and the per-pass `code_grade_cos_l{t}`.

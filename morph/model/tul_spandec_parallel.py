@@ -95,14 +95,13 @@ Contracts (copied from ``tul_spandec.py``)
 """
 from __future__ import annotations
 
-import math
-
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from .attention import RMSNorm
 from .fused_ce import fused_linear_label_logprob
+from .rollout_mixture import log_mean_exp
 from .tul_layout import SlotLayout
 from .tul_spandec import _init_linear, _SpanDecBlock, span_slots
 
@@ -126,8 +125,7 @@ def mixture_span_nll(logp_slot: Tensor, n_tokens: Tensor | float) -> Tensor:
     """
     if logp_slot.dim() != 2:
         raise ValueError(f"logp_slot must be [R, M], got {tuple(logp_slot.shape)}")
-    R = int(logp_slot.shape[0])
-    lse = torch.logsumexp(logp_slot, dim=0) - math.log(R)          # [M]
+    lse = log_mean_exp(logp_slot, dim=0)     # [M]; the ONE copy (rollout_mixture.py)
     return -lse.sum() / n_tokens
 
 

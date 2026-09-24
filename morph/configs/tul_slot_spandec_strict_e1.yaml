@@ -1,0 +1,34 @@
+# LXTUL-E Stage 1, arm "lxtul-e1": the strict ruler with the teacher-forced span decoder
+# REPLACED by the parallel span head, K = 1, no code. The WIDTH CONTROL for `lxtul-e4`.
+# ONE factor against the ruler `slot-spandec-strict` (`tul_slot_spandec_strict.yaml`): the
+# slot's own target is read by a COMMITTED product reader (every token of the next span
+# predicted at once from z plus a position query, no token input) instead of by a
+# teacher-forced decoder. Everything else is the ruler's recipe, untouched: seq 1024,
+# batch 6, seed 1, norm_match ternary, the 1000-step ramp, the fixed-point term 1.0, the
+# slot gain constraint, 5000 steps, trained FROM SCRATCH (no init_from, nothing frozen).
+#
+# WHAT DIFFERS FROM THE RULER, exactly (tests/test_tul_lxtul_e.py pins it): the module
+# `tul_spandec` is absent and `tul_spandec_par` is present; the loss term `spandec` is
+# replaced by `par` (the same weight 1.0, the same J = span_cap tokens of span s+1, the
+# same detached tied head). The loop, the coda, their losses and their RNG are the ruler's.
+#
+# The head is TRAINING-ONLY, never a decoder: the root CLAUDE.md rule ("never decode a
+# span from one vector + offset with no token path") is exactly this reader, and Wolfe
+# approved it on 2026-09-23 as a target and a scorer. The coda keeps the token path.
+#
+# Instruments: `tul/par_ce` (the head's CE per span token) beside `train/loss`;
+# offline lab/divergence/lxtul_e_stage1_score.py (the parallel K-curve at forced depth,
+# the coda under the mixture) and lab/divergence/core_depth_sweep.py.
+#
+# Note: .agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md
+# Stage 0: lab/experiments/successes/2026-09-23-lxtul-e-stage0.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  spandec: false
+  spandec_parallel: true
+
+wandb:
+  name: lxtul-e1

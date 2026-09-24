@@ -36,6 +36,13 @@ comparison of TWO things at once (fewer iterations AND a narrower aggregate) and
 the same quantity as K1-KT on a "last" arm; the per-iteration read-outs in
 `loopmtp_iteration_probe.py` are what separates them.
 
+An LXTUL-E arm (`tul.code_enum_k > 1`, lxtul-e4) runs its K code rollouts on every
+forward, so the label-free forward's logits are the per-span sequential Bayes read over
+the K rollouts (`transformer._enum_mixture_logprobs`); the CE map here is therefore the
+coda's token CE UNDER THE MIXTURE, position by position, and it sums over a span to the
+exact span mixture the arm trains on. `par_ce` is the parallel head's mixture CE at the
+same forced depth. Neither is a one-code reading; lxtul_e_stage1_score.py has those.
+
 Usage:
   python lab/divergence/core_depth_sweep.py \
     --ckpt l3=tul_l3=checkpoints/morph/tul-l3/step_4500.pt \
@@ -70,13 +77,19 @@ MUX_KEYS = ("mux_local", "mux_n_supervised", "mux_rel", "mux_kl",
             # HARDER span than the next one — so it is not comparable with an offset-1
             # arm's, and the offset travels with it so a scorer cannot silently read the
             # two as the same number.
-            "spandec_target_offset")
+            "spandec_target_offset",
+            # LXTUL-E's parallel span head (tul.spandec_parallel): its mixture CE per span
+            # token, the slot's own readout on an arm whose teacher-forced decoder it
+            # replaced (lxtul-e1 / lxtul-e4). On lxtul-e4 it is the mixture over the four
+            # code rollouts, the note's P-3 K-curve.
+            "par_ce", "par_n_tokens")
 # metric name -> (value key, count key) for the batch-weighted means and their CIs.
 # The last two exist only on a staged-target arm (tul.mux_stage_own_iters > 0).
 MUX_METRICS = {"mux_local": ("mux_local", "mux_n_supervised"),
                "mux_local_own": ("mux_local_own_final", "mux_n_supervised_own"),
                "mux_local_next": ("mux_local_next_final", "mux_n_supervised_next"),
-               "spandec_ce": ("spandec_ce", "spandec_n_tokens")}
+               "spandec_ce": ("spandec_ce", "spandec_n_tokens"),
+               "par_ce": ("par_ce", "par_n_tokens")}
 
 
 @torch.no_grad()
@@ -232,7 +245,8 @@ def main() -> None:
         # at the forced depth. A span-decoder arm has one even at mux_beta 0, so it must
         # not be skipped there: `spandec_ce` is that arm's `mux_local`.
         has_mux = (not plain) and (float(tc.mux_beta) > 0.0
-                                   or bool(getattr(tc, "spandec", False)))
+                                   or bool(getattr(tc, "spandec", False))
+                                   or bool(getattr(tc, "spandec_parallel", False)))
         arm = {"step": step, "rows": rows_done, "batch": a.batch, "eval_mode": a.eval_mode,
                "plain": plain, "paid_loop": paid,
                "train_eval_depth":

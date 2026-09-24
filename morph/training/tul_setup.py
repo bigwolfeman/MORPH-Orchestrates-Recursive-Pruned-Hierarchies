@@ -100,6 +100,8 @@ KNOWN_TUL_KEYS = frozenset({
     # LXTUL-E (tul.spandec_parallel, 2026-09-23): the committed product reader
     "spandec_parallel", "spandec_parallel_k", "spandec_parallel_weight",
     "spandec_parallel_code_init",
+    # LXTUL-E Stage 1 (tul.code_enum_k, 2026-09-24): the enumerated loop code
+    "code_enum_k", "code_enum_ratio",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
@@ -321,6 +323,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_parallel_k=int(tc.get("spandec_parallel_k", 1)),
         spandec_parallel_weight=float(tc.get("spandec_parallel_weight", 1.0)),
         spandec_parallel_code_init=float(tc.get("spandec_parallel_code_init", 0.1)),
+        code_enum_k=int(tc.get("code_enum_k", 1)),
+        code_enum_ratio=float(tc.get("code_enum_ratio", 0.1)),
         horizon_weight=float(tc.get("horizon_weight", 0.0)),
         horizon_free_first=bool(tc.get("horizon_free_first", True)),
         horizon_tokens=int(tc.get("horizon_tokens", 0)),
@@ -566,6 +570,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "spandec_parallel_k": model_cfg.spandec_parallel_k,
         "spandec_parallel_weight": model_cfg.spandec_parallel_weight,
         "spandec_parallel_code_init": model_cfg.spandec_parallel_code_init,
+        "code_enum_k": model_cfg.code_enum_k,
+        "code_enum_ratio": model_cfg.code_enum_ratio,
         "horizon_weight": model_cfg.horizon_weight,
         "horizon_free_first": model_cfg.horizon_free_first,
         "horizon_tokens": (model_cfg.horizon_tokens or model_cfg.bound_span_cap),
@@ -791,13 +797,6 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                   f"NOT comparable with an offset-1 arm's (it grades a harder span). "
                   f"This is not spandec_horizon, which WIDENS the target instead of "
                   f"moving it.", flush=True)
-        if model_cfg.spandec_parallel:
-            _kp = model_cfg.spandec_parallel_k
-            print(f"  TUL PARALLEL SPAN HEAD ON (LXTUL-E): K={_kp} "
-                  f"{'enumerated codes under the exact mixture likelihood' if _kp > 1 else 'no code (the twin)'}"
-                  f", weight={model_cfg.spandec_parallel_weight} — span s+{_k} decoded AT "
-                  f"ONCE from z with NO token input. TRAINING-ONLY target and scorer, never "
-                  f"a decoder (morph/model/tul_spandec_parallel.py)", flush=True)
         if model_cfg.spandec_reads_cells:
             print(f"  TUL SPANDEC READS CELLS: the decoder cross-attends, per layer, to "
                   f"the slot's {model_cfg.slot_cells} register cells — the same states "
@@ -1106,6 +1105,28 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"(.agents/notes/proposed/architecture/"
               f"2026-09-21-lxtul-particles-what-gives-a-pass-a-job.md, Part 2 change 1)",
               flush=True)
+    if model_cfg.spandec_parallel:
+        _kp = model_cfg.spandec_parallel_k
+        _ke = model_cfg.code_enum_k
+        _readers = (f"head codes K={_kp}, enumerated under the exact mixture" if _kp > 1
+                    else f"the K={_ke} loop rollouts' exit states under the exact mixture"
+                    if _ke > 1 else "one reader (no code)")
+        print(f"  TUL PARALLEL SPAN HEAD ON (LXTUL-E): {_readers}, "
+              f"weight={model_cfg.spandec_parallel_weight}, "
+              f"{'BESIDE' if model_cfg.spandec else 'INSTEAD OF'} the teacher-forced span "
+              f"decoder — span s+{model_cfg.spandec_target_offset} decoded AT ONCE from z "
+              f"with NO token input. TRAINING-ONLY target and scorer, never a decoder "
+              f"(morph/model/tul_spandec_parallel.py)", flush=True)
+    if model_cfg.code_enum_k > 1:
+        print(f"  LXTUL-E CODE ON: K={model_cfg.code_enum_k} enumerated codes, re-added at "
+              f"the end of EVERY slot-loop pass, h <- f(h) + {model_cfg.code_enum_ratio} * "
+              f"rms(f(h)).detach() * u_k (u_k: a learned regular simplex, unit RMS, sum "
+              f"zero, no learned scale). The front runs ONCE; the slot loop and the coda run "
+              f"on K rollouts per row at train AND eval (shared depth draw and dropout "
+              f"masks; coda checkpointed per block). Coda loss: the exact per-span mixture "
+              f"over the K rollouts. A label-free forward returns the per-span sequential "
+              f"Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, "
+              f"`tul/enum_exit_sep` (morph/model/tul_code_enum.py)", flush=True)
     if model_cfg.gram and model_cfg.gram_objective == "iw":
         # LXTUL-GK (tul.gram_objective="iw", 2026-09-23). NOT the LXTUL-G banner below:
         # there is no posterior and no KL, and train and eval draw from the SAME prior.
