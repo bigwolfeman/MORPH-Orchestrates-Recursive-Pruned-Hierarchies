@@ -311,7 +311,7 @@ class ParallelSpanHead(nn.Module):
         rows = st[:, val_s]                                                # [R, Nv, C]
         nv = int(rows.shape[1])
         lab = ids_s[val_s].repeat(R)                                       # [R * Nv]
-        lp = fused_linear_label_logprob(rows.reshape(R * nv, -1), w, lab,
+        lp = fused_linear_label_logprob(rows.reshape(R * nv, rows.shape[-1]), w, lab,
                                         chunk_size=chunk_size,
                                         mask_token_id=mask_token_id).view(R, nv)
         return lp, sup, val_s

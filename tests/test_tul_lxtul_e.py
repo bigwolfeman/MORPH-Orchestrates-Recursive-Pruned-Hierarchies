@@ -560,3 +560,23 @@ def test_the_trainers_eval_probes_run_on_the_rollout_batch():
         lift = m.tul_attn_lift_probe(inp, layout)
     assert np.isfinite(st["slot_eff_rank"]) and st["slot_eff_rank"] > 0
     assert lift and any(np.isfinite(v) for v in lift.values())
+
+
+# ── generation: a label-free forward on a row with NO complete next span ─────────────
+
+
+@pytest.mark.parametrize("kw", [dict(k=4), dict(k=1), dict(k=1, spandec=True, parallel=False)],
+                         ids=["e4", "e1", "ruler"])
+def test_generation_runs_and_a_seeded_run_repeats(kw):
+    """Found 2026-09-24 before any e4 checkpoint was sampled: the parallel head's term runs
+    on the label-free forward too, and a short prompt has no complete next span, so its
+    token set is EMPTY; `reshape(0, -1)` raised. Training rows always hold complete spans,
+    so no training test could see it. The generator must run on every Stage 1 model and a
+    seeded generation must repeat exactly."""
+    from morph.inference.tul_generate import generate_tul
+    from test_tul_strict_geometry import _rule, _spec
+    m = _model(**kw).eval()
+    runs = [generate_tul(m, [5, 9, 12, 3], _rule(), _spec(), max_new_tokens=40,
+                         temperature=1.0, seed=7, emit_source="token")[0] for _ in range(2)]
+    assert len(runs[0]) == 40 and runs[0] == runs[1]
+    assert all(0 <= t < m.cfg.vocab_size for t in runs[0])
