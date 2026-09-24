@@ -885,6 +885,35 @@ class TULConfig:
     # mean does not already give) and with `spandec: false` (no decoder is built).
     # Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
     spandec_reads_cells: bool = False
+    # ── THE PARALLEL SPAN HEAD (LXTUL-E Stage 0, 2026-09-23) ───────────────────────
+    # spandec_parallel: a COMMITTED product reader of the SAME target the span decoder
+    # grades — every token of span s + spandec_target_offset predicted AT ONCE from z plus
+    # a learned position query, with NO token input
+    # (morph/model/tul_spandec_parallel.py::ParallelSpanHead).
+    #
+    # WHY. A reader that can hedge gains nothing from width (Lean `multisample_le_bayes`);
+    # a committed product reader from ONE latent is capped at the product of the span's
+    # marginals (`product_reader_le`), and K enumerated codes under the exact mixture
+    # likelihood lift that cap (`enumerated_pair_gt`). Stage 0 measures the budget
+    # B0 = CE_par(K=1) - CE_par(K=4 mixture) on the frozen ruler before any loop trains
+    # (.agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md).
+    #
+    # THE ROOT CLAUDE.md RULE. "Never decode a span from one vector + offset with no token
+    # path": this head IS that reader. Wolfe approved it (2026-09-23) as a TRAINING-ONLY
+    # target and scorer; it is never a decoder, and the coda keeps the token path.
+    #
+    # spandec_parallel_k: the number of enumerated codes. 1 builds NO code table (the
+    # strict twin). spandec_parallel_weight: the term's weight in the total loss.
+    # spandec_parallel_code_init: the per-coordinate std of the code table at init (codes
+    # enter as z + rms(z).detach() * u_k, so 0.1 is the note's r = 0.1 of the slot's RMS);
+    # the codes are learned, scale included. Refused at K = 1, where there is no table.
+    # Requires `spandec: true` (the head reads the decoder's J cap and target offset, so
+    # both readers grade the same tokens). False = off: nothing is built, no RNG is drawn,
+    # no term (tests/test_tul_spandec_parallel.py).
+    spandec_parallel: bool = False
+    spandec_parallel_k: int = 1
+    spandec_parallel_weight: float = 1.0
+    spandec_parallel_code_init: float = 0.1
     # ── TUL-CODE (arm `tul-code`, 2026-09-14; docs/tul-code-spec.md) ─────────────
     #
     # The slot holds the CODE of the span it precedes. At training time an encoder E
@@ -2454,6 +2483,7 @@ class TULConfig:
             raise ValueError(
                 "tul.spandec_* set with tul.spandec=false: the decoder is not built, so the "
                 "knobs would be silently ignored. Set tul.spandec: true or drop them.")
+        self._check_spandec_parallel()
         if self.coda_span_source not in ("cell", "token"):
             raise ValueError(
                 f"tul.coda_span_source must be 'cell' or 'token', got "
@@ -3336,6 +3366,55 @@ class TULConfig:
                 "per-slot no-grad PREFIX of the trajectory, and under loop_denoise the "
                 "passes are independent — a cut prefix would silently drop those passes' "
                 "own per-pass terms rather than truncating a chain.")
+
+    def _check_spandec_parallel(self) -> None:
+        """``tul.spandec_parallel`` — LXTUL-E's committed product reader
+        (morph/model/tul_spandec_parallel.py). It grades the span decoder's OWN target, so
+        it needs the decoder, and it refuses every decoder mode whose target or seam it
+        does not share: a multi-span horizon, a cell memory, the K-fold GK batch and the
+        fan's K streams (Phase B defines its own rollouts)."""
+        if not self.spandec_parallel:
+            if (self.spandec_parallel_k != 1 or self.spandec_parallel_weight != 1.0
+                    or self.spandec_parallel_code_init != 0.1):
+                raise ValueError(
+                    "tul.spandec_parallel_k / spandec_parallel_weight / "
+                    "spandec_parallel_code_init set with tul.spandec_parallel=false: no head "
+                    "is built, so the knob(s) would be silently ignored.")
+            return
+        if not self.spandec:
+            raise ValueError(
+                "tul.spandec_parallel requires tul.spandec: the parallel head grades the "
+                "span decoder's target (its J cap and spandec_target_offset), read at the "
+                "same seam, so both readers score the same tokens.")
+        if self.spandec_parallel_k < 1:
+            raise ValueError(
+                f"tul.spandec_parallel_k must be >= 1 (1 = no code, the twin), got "
+                f"{self.spandec_parallel_k}")
+        if self.spandec_parallel_weight <= 0.0:
+            raise ValueError(
+                "tul.spandec_parallel needs tul.spandec_parallel_weight > 0: at 0 the head "
+                "is built, costs its readout and trains nothing (got "
+                f"{self.spandec_parallel_weight})")
+        if not self.spandec_parallel_code_init > 0.0:
+            raise ValueError(
+                f"tul.spandec_parallel_code_init must be > 0 (a zero table is a symmetric "
+                f"saddle: every code gets the same gradient), got "
+                f"{self.spandec_parallel_code_init}")
+        if self.spandec_parallel_k == 1 and self.spandec_parallel_code_init != 0.1:
+            raise ValueError(
+                "tul.spandec_parallel_code_init set at spandec_parallel_k=1: the K = 1 head "
+                "builds no code table, so the knob would be silently ignored.")
+        _refused = [
+            (self.spandec_horizon != 1,
+             f"tul.spandec_horizon={self.spandec_horizon}: the head decodes ONE span"),
+            (self.spandec_reads_cells,
+             "tul.spandec_reads_cells: the head reads z alone and would ignore the cells"),
+            (self.gram, "tul.gram: the rollout batch is Phase B's to define"),
+            (self.fan_k > 0, "tul.fan_k: the fan's K streams are Phase B's to define"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.spandec_parallel with {why}.")
 
     def _check_gram(self) -> None:
         """``tul.gram`` — LXTUL-G, the stochastic slot loop (morph/model/tul_gram.py).

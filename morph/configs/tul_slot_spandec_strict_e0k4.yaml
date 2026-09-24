@@ -1,0 +1,15 @@
+# LXTUL-E Stage 0, arm "lxtul-e0k4": the K = 4 enumerated-code parallel head on the FROZEN
+# ruler, scored under the exact mixture likelihood. Composes `tul_slot_spandec_strict_e0k1`
+# (read it: the freeze, the head's recipe and the reasons live there) and changes K and
+# the run name ONLY, so the two arms differ by the codes alone. The head's non-code
+# weights start byte-identical to the K = 1 head's (the code table has its own private
+# generator), and the data order, schedule and frozen model are the same.
+defaults:
+  - tul_slot_spandec_strict_e0k1
+  - _self_
+
+tul:
+  spandec_parallel_k: 4
+
+wandb:
+  name: lxtul-e0k4

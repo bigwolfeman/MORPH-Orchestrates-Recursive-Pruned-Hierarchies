@@ -56,6 +56,7 @@ from .tul_fan import (FanReservoir, TULFanMix, fan_epi_term, fan_repel_term, fan
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
+from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
 from .tul_vq import TULThoughtVQ
 from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        cfm_null_floor, cfm_pair, code_rmsnorm, code_target_infonce,
@@ -2176,6 +2177,27 @@ class MORPHTransformer(nn.Module):
                 raise ValueError(
                     "tul.spandec_per_pass needs a core loop (model.n_core > 0): it grades "
                     "the state after EVERY pass, and a coreless TUL model has no passes.")
+
+        # ── The parallel span head (TULConfig.spandec_parallel; LXTUL-E) ──────────
+        # A COMMITTED product reader of the span decoder's own target: J input-free queries
+        # read z (and, at K > 1, one of K enumerated codes). TRAINING-ONLY target and
+        # scorer, never a decoder (morph/model/tul_spandec_parallel.py). Same width, heads,
+        # layers and J cap as the span decoder above, so the two readers differ in the
+        # token path alone. RNG-neutral (private generators, global RNG forked), so the
+        # arm's base weights are byte-identical to its ruler's.
+        self.tul_spandec_par: ParallelSpanHead | None = None
+        if cfg.tul is not None and cfg.tul.spandec_parallel:
+            assert self.tul_spandec is not None      # TULConfig refuses it without spandec
+            self.tul_spandec_par = ParallelSpanHead(
+                d_model=d,
+                n_heads=int(cfg.tul.spandec_heads or cfg.n_heads),
+                d_ff=int(cfg.d_ff),
+                n_layers=int(cfg.tul.spandec_layers),
+                max_tokens=self.tul_spandec.per_span_tokens,
+                n_codes=int(cfg.tul.spandec_parallel_k),
+                target_offset=self.tul_spandec.target_offset,
+                code_init=float(cfg.tul.spandec_parallel_code_init),
+            )
 
         # ── Parallel span decoding from the coda (TULConfig.coda_span_heads) ──────
         # J offset heads on the coda's FINAL state at each slot's emitting position. The
@@ -8477,6 +8499,52 @@ class MORPHTransformer(nn.Module):
                 stats["spandec_n_tokens_h1"] = float(valid[:, :, :dec.per_span_tokens].sum())
         return loss
 
+    def _tul_spandec_par_loss(self, h_slots: Tensor, input_ids: Tensor,
+                              layout: SlotLayout, stats: dict | None = None) -> Tensor:
+        """LXTUL-E's parallel span head: the exact K-code mixture likelihood of the span
+        decoder's own target, read from the slot's exit state with NO token input.
+
+        TRAINING-ONLY target and scorer, never a decoder (the root ``CLAUDE.md`` rule and
+        Wolfe's 2026-09-23 approval are recorded in
+        ``morph/model/tul_spandec_parallel.py``).
+
+        THE SEAM. ``z = self._readout(h_slots)``, the exact tensor
+        :meth:`_tul_spandec_loss` reads, called beside it on the same ``h_slots``: after the
+        think-once stack, before ``detach_z``, the gate and the eval-only plan ablation.
+        The target is ``span_slots`` at the decoder's J cap and ``target_offset``, so the
+        teacher-forced decoder and this head grade the same tokens.
+
+        THE TIED TABLE is detached at both ends: there is no input read at all, and the
+        output head is ``embed.lm_weight().detach()`` whatever ``tul.mux_detach_head``
+        says, so this head never trains the table the coda speaks through.
+
+        The per-token log-probs come from ``fused_linear_label_logprob`` over the valid
+        rows only, so ``[B, S, J, V]`` never exists; K = 4 x J = 32 x ~50 slots x B = 6 is
+        ~40 k head rows per step.
+
+        ``stats`` gets DETACHED 0-dim tensors (no host sync): ``par_ce`` (the mixture CE
+        per span token, the term itself), ``par_n_tokens``, ``par_k`` and, at K > 1, the
+        code-usage readings of :func:`code_usage_stats`.
+        """
+        tc = self.cfg.tul
+        head = self.tul_spandec_par
+        assert head is not None
+        z = self._readout(h_slots)                                    # [B, S, C]
+        ids, valid = head.targets(input_ids, layout)
+        w = self.embed.lm_weight().detach()
+        logp_slot, n_tok, _sup = head.slot_logp(z, ids, valid, w,
+                                                chunk_size=self.cfg.ce_chunk_size,
+                                                mask_token_id=tc.slot_id)
+        n = n_tok.clamp_min(1.0)
+        loss = mixture_span_nll(logp_slot, n)
+        if stats is not None:
+            stats["par_ce"] = loss.detach()
+            stats["par_n_tokens"] = n_tok.detach()
+            stats["par_k"] = loss.new_tensor(float(head.n_codes))
+            if head.n_codes > 1:
+                stats.update(code_usage_stats(logp_slot.detach(), n, loss))
+        return loss
+
     def _spandec_pass_decode(self, z: Tensor, ids: Tensor, valid: Tensor,
                              emb: Tensor) -> Tensor:
         """One per-pass decode, as a named function so it can be CHECKPOINTED.
@@ -9774,6 +9842,11 @@ class MORPHTransformer(nn.Module):
         fan_wta_loss = None             # tul.fan_mix="all": the winner-alone span CE (train)
         fan_stats: dict[str, float] = {}
         _fan_cells = None
+        # LXTUL-E's parallel span head (tul.spandec_parallel). Bound here for the fan's
+        # reason: only the slot-loop branch computes it, next to the span decoder, and the
+        # fold after the dispatch RAISES if a model that built the head reaches it with no
+        # term (a path that silently skipped the head would read as its own ruler).
+        par_loss, par_stats = None, {}
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -10301,6 +10374,13 @@ class MORPHTransformer(nn.Module):
             spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
                                                    stats=spandec_stats, cells=_reg_cells)
                             if self.tul_spandec is not None else None)
+            # ── the parallel span head (tul.spandec_parallel, LXTUL-E) ─────────────
+            # The SAME seam and the SAME target as the span decoder above, read with no
+            # token input. Train and eval alike (the decoder's rule), so the val pass and
+            # an offline scorer read the term the trainer optimises.
+            if self.tul_spandec_par is not None:
+                par_loss = self._tul_spandec_par_loss(h_slots, input_ids, layout,
+                                                      stats=par_stats)
             # ── C2: the within-row contrastive term (tul.row_contrast_lambda) ──
             # Read at the SAME seam as the MUX and the span decoder: the loop's exit
             # state, before the gate's budget, before `detach_z` and before the eval-only
@@ -10657,6 +10737,22 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
+        if self.tul_spandec_par is not None and groups is not None:
+            # LXTUL-E's parallel span head. Same contract as `spandec_weighted`: the
+            # WEIGHTED term is exposed so train.py subtracts it and train/loss and the val
+            # loss stay the MODEL's CE. `par_*` stats are detached tensors (no host sync).
+            if par_loss is None:
+                raise RuntimeError(
+                    "tul.spandec_parallel built its head but this forward path never "
+                    "computed the term (it is wired next to the span decoder in the slot-"
+                    "loop branch only). Refusing to return a loss without it: the arm "
+                    "would silently read as its own ruler.")
+            groups = dict(groups)
+            groups["par"] = par_loss.detach()
+            groups.update(par_stats)
+            _parw = tc.spandec_parallel_weight * par_loss
+            groups["par_weighted"] = _parw.detach()
+            groups["loss"] = groups["loss"] + _parw
         if code_target_loss is not None and groups is not None:
             # The code target (tul.code_target). Same contract as `spandec_weighted`: the
             # WEIGHTED term is exposed so train.py subtracts it and keeps train/loss and
@@ -11952,6 +12048,14 @@ class MORPHTransformer(nn.Module):
                 _t = torch.arange(1, _max_d + 1, device=depths.device)
                 _n = (_t.clamp(max=_cap) * (_t <= depths.max()).long()).sum() * _pt
                 passes = passes + len(self.tul_spandec.blocks) * B * S * _n
+        if self.tul_spandec_par is not None:
+            # The parallel head runs its blocks over the VALID slots only (pads never enter)
+            # at J positions, once per code. `slot_valid` counts one slot per row that has
+            # no complete next span, so this is an upper bound by at most
+            # `target_offset` slots per row, never an under-report.
+            _hp = self.tul_spandec_par
+            passes = passes + (len(_hp.blocks) * _hp.n_codes * _hp.max_tokens
+                               * layout.slot_valid.sum())
         # `self.coda_span` adds NO block pass: each head is one RMSNorm and one [d, d]
         # matmul on [B, S, d] (3.2 GFLOP at the panel shape, against a ~50 TFLOP step). Its
         # real cost is the J x S readout rows, which this metric does not count for the

@@ -267,6 +267,12 @@ training:
   #   `resume` (a path on the CLI) is the faithful continuation instead. data_skip_batches
   #   fast-forwards the token stream past batches a seed run already read (0 = none).
   init_from: null
+  # init_from_new_modules: parameter-name prefixes of modules this model builds and the
+  #   init_from checkpoint does not carry (LXTUL-E Stage 0: [tul_spandec_par.]). [] = the
+  #   old loader behaviour. Non-empty makes the init_from load STRICT: every missing key
+  #   must lie under a listed prefix, every listed prefix must be wholly missing, and any
+  #   unexpected key raises (train.py::check_init_from_keys).
+  init_from_new_modules: []
   data_skip_batches: 0
   # ── the in-process divergence guard (train.py) ───────────────────────────────────────
   # Consecutive eval-cadence points with train ppl over the ceiling past step 2000 abort
@@ -582,6 +588,12 @@ training:
   # TUL-Code thinker-only regime lists the core body, its injection terms and the code
   # head/time/markers (morph/configs/tul_code_thinker.yaml).
   train_only: []
+  # frozen_eval — with train_only set, the FROZEN model runs in EVAL mode (no dropout, no
+  # token-state dropout, the eval slot depth, no training-only loop terms) and only the
+  # modules train_only names run in train mode (morph/training/freeze.py::apply_frozen_eval).
+  # A head fitted on a frozen model then reads the deterministic state the val pass and
+  # the offline scorers read. Every train_only prefix must name a whole module (end in ".").
+  frozen_eval: false
 
 # Routing — whole-body ReMoE (prelude+core+coda). ALWAYS ON in the hotpath.
 # route_start = training-phase schedule: routing code activates at this step.

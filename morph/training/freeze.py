@@ -41,3 +41,51 @@ def apply_train_only(model: nn.Module, prefixes: list[str] | tuple[str, ...]
         raise ValueError(f"training.train_only={list(prefixes)} matched EVERY parameter; "
                          f"drop the key instead")
     return n_train, n_frozen, groups
+
+
+def apply_frozen_eval(model: nn.Module, prefixes: list[str] | tuple[str, ...]) -> list[str]:
+    """`training.frozen_eval`: the FROZEN model runs in eval mode, the trained modules in
+    train mode. Call it wherever the trainer would call `model.train()`.
+
+    Why. `training.train_only` freezes parameters, not behaviour: a frozen model left in
+    train mode still draws its dropout masks, its token-state dropout and its Poisson slot
+    depths, so the state a new head is fitted on is a noisy training-mode state and not
+    the deterministic one the eval pass (and every offline scorer) reads. LXTUL-E Stage 0
+    fits a head on the FROZEN ruler's exit cell, so the cell must be the eval cell.
+
+    What it does. `model.eval()` on the whole tree (the ROOT's `training` flag is what the
+    forward's `self.training` branches read: the depth draw, the token-state dropout, the
+    training-only loop terms), then `.train()` on every module whose qualified name + "."
+    starts with one of `prefixes`. Every prefix must end in "." (it names a whole
+    module) and must match at least one module; a prefix that names a single tensor of a
+    module that also holds frozen tensors (`tul.E_slot`) RAISES, because that module
+    cannot be in both modes. Returns the names of the modules left in train mode."""
+    prefixes = tuple(str(p) for p in prefixes)
+    if not prefixes:
+        raise ValueError("apply_frozen_eval: an empty prefix list leaves nothing to train")
+    bad = [p for p in prefixes if not p.endswith(".")]
+    if bad:
+        raise ValueError(
+            f"training.frozen_eval needs train_only prefixes that name WHOLE modules (end "
+            f"in '.'), got {bad}: a module holding both trained and frozen tensors cannot "
+            f"be in train and eval mode at once.")
+    root = getattr(model, "_orig_mod", model)
+    model.eval()
+    root.eval()
+    trained: list[str] = []
+    hit = {p: False for p in prefixes}
+    for name, mod in root.named_modules():
+        if not name:
+            continue
+        key = name + "."
+        for p in prefixes:
+            if key.startswith(p):
+                mod.train()
+                trained.append(name)
+                hit[p] = True
+                break
+    missing = [p for p, h in hit.items() if not h]
+    if missing:
+        raise ValueError(f"training.frozen_eval: train_only prefix(es) {missing} match no "
+                         f"module")
+    return trained
