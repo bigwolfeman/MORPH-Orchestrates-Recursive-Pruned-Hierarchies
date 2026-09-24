@@ -1,0 +1,38 @@
+
+CODA tokens (each reader joined to notul in notul index space):
+[align e4 coda] corr by shift {-1: 0.012, 0: 0.914, 1: 0.04} -> +0
+  e4 coda          n=491520  4.3407  notul 4.0750  minus notul +0.2657 [+0.2619, +0.2692]   K1-K6 +0.0019
+[align e4j4 coda] corr by shift {-1: 0.009, 0: 0.911, 1: 0.043} -> +0
+  e4j4 coda        n=491520  4.4079  notul 4.0750  minus notul +0.3330 [+0.3289, +0.3366]   K1-K6 +0.0017
+[align e4probe coda] corr by shift {-1: 0.012, 0: 0.915, 1: 0.04} -> +0
+  e4probe coda     n=491520  4.3292  notul 4.0750  minus notul +0.2542 [+0.2501, +0.2578]   K1-K6 +0.0011
+[align stage0 TF] corr by shift {-1: 0.053, 0: 0.009, 1: 0.903} -> +1
+
+HEAD tokens by span offset (each reader on its OWN tokens, notul on the same):
+[align e4 par] corr by shift {-1: 0.051, 0: -0.064, 1: 0.58} -> +1
+  [e4 par] 476712 of 486031 matched
+    offset    n                notul          e4 par       e4 par d1        ruler TF
+    all      476712            4.0731          6.7863          6.8045          4.4828
+    0         23874            3.4838          4.1154          4.1460          3.9582
+    1         23676            3.5307          5.3210          5.3866          3.9643
+    2-3       47299            4.1636          6.6925          6.7393          4.6309
+    4-7       85883            4.1668          7.0048          7.0267          4.5735
+    8-15     136662            4.1512          7.0571          7.0677          4.5470
+    16+      159318            4.0977          7.0820          7.0874          4.4905
+[align e4j4 par] corr by shift {-1: 0.026, 0: 0.007, 1: 0.712} -> +1
+  [e4j4 par] 94849 of 96690 matched
+    offset    n                notul        e4j4 par     e4j4 par d1        ruler TF
+    all       94849            3.8345          5.5692          5.5925          4.2952
+    0         23874            3.4838          4.0458          4.0628          3.9582
+    1         23676            3.5307          5.0770          5.1100          3.9643
+    2-3       47299            4.1636          6.5846          6.6061          4.6309
+[align e4probe par] corr by shift {-1: 0.049, 0: -0.071, 1: 0.57} -> +1
+  [e4probe par] 476712 of 486031 matched
+    offset    n                notul     e4probe par  e4probe par d1        ruler TF
+    all      476712            4.0731          6.9203          6.9241          4.4828
+    0         23874            3.4838          4.3958          4.4185          3.9582
+    1         23676            3.5307          5.5323          5.5627          3.9643
+    2-3       47299            4.1636          6.8772          6.8913          4.6309
+    4-7       85883            4.1668          7.1349          7.1379          4.5735
+    8-15     136662            4.1512          7.1703          7.1697          4.5470
+    16+      159318            4.0977          7.1875          7.1855          4.4905

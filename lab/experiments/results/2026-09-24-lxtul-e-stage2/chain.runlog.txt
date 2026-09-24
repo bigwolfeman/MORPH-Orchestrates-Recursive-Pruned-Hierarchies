@@ -1,0 +1,14 @@
+[10:37:27] at 40289e2 Merge branch 'lxtul-e-stage2'
+[10:37:27] START e4j4
+[11:58:16] DONE e4j4 exit=0 tok/s=7543 Final val_loss=4.4902  ppl=89.14  val/attn_lift=0.5749  val/
+[11:58:16] START e4probe
+[13:37:14] DONE e4probe exit=0 tok/s=6136 Final val_loss=4.4042  ppl=81.79  val/attn_lift=0.5069  val/
+[13:37:14] SCORE
+[13:46:03] SCORE exit=0
+[13:50:05] SWEEP e4j4 exit=0
+[13:51:12] WORTH e4j4 exit=0
+[13:55:57] SWEEP e4probe exit=0
+[13:57:11] WORTH e4probe exit=0
+[14:14:43] GEN exit=0
+[14:14:53] PARSAMPLES exit=0
+[14:14:53] ALL_DONE

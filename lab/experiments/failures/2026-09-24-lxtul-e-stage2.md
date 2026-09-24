@@ -1,6 +1,6 @@
 # Planned: LXTUL-E Stage 2, where the committed read points and who pays for width
 
-Status: planned
+Status: failure
 
 Date: 2026-09-24 10:07 (frozen before the build finished and before any Stage 2 GPU step).
 Parent: [`../failures/2026-09-24-lxtul-e-stage1.md`](../failures/2026-09-24-lxtul-e-stage1.md).
@@ -100,4 +100,73 @@ No clause passes on a cosine.
 Build on branch `lxtul-e-stage2` (Opus subagent; orchestrator reviews and merges). Smoke
 each config for 30 steps. Then e4j4, then e4probe, 5000 steps each, then the scorer,
 sweeps, worth, notul pairing and samples. Artifacts: JSON and `.runlog.txt` files in
-`../results/2026-09-24-lxtul-e-stage2/`.
+[`../results/2026-09-24-lxtul-e-stage2/`](../results/2026-09-24-lxtul-e-stage2/).
+
+## Results (filed 2026-09-24 14:20)
+
+Artifacts: [`../results/2026-09-24-lxtul-e-stage2/`](../results/2026-09-24-lxtul-e-stage2/)
+(`stage2_score.json`, sweeps, worth profiles, `gen_samples.json`, `notul_pair.runlog.txt`,
+the run logs of both arms, the scorer and the chain). Chain at 40289e2. Both arms ran
+5000 steps with exit 0 and no spike (e4j4 7,543 tok/s, e4probe 6,136). Scorer self-check
+against each model's own forward: max |dev| under 1e-6. 480 rows, 501,106 coda tokens;
+head tokens 486,031 (e4, e4probe) and 96,690 (e4j4, offsets 0–3).
+
+| clause | reading, 95 % CI | verdict |
+|---|---|---|
+| J-1 j4 par K1−K6 (own tokens) >= 0.068 | +0.0238 [+0.0208, +0.0271]; e4 on the same tokens +0.0478 | failed |
+| J-2 j4 coda K1−K6 >= 0.005 | +0.0017 [+0.0014, +0.0020] | failed |
+| J-3 j4 coda mix − e4 coda mix @6 <= −0.003 | **+0.0668 [+0.0643, +0.0695]** | failed, opposite sign |
+| J-4 j4 coda width gain @6 >= 0.0275 | +0.0238 [+0.0225, +0.0250] | failed |
+| Q-1 probe coda mix − e4 coda mix @6 >= +0.005 | **−0.0120 [−0.0144, −0.0098]** | failed; the opposite sign (25 %) held |
+| Q-2 probe coda width gain @6 >= 0.0275 | +0.0287 [+0.0271, +0.0303] | held on the point; the CI straddles |
+| Q-3 probe coda K1−K6 >= 0.005 | +0.0011 [+0.0009, +0.0013] | failed |
+| Q-4 probe par mix − e4 par mix @6 >= +0.05 (shared) | +0.1337 [+0.1296, +0.1381] | held |
+| diagnostic: exit separation d6 / d1, abs | e4 1.99, j4 2.13, probe 1.33 | – |
+
+More readings:
+
+- Coda @6 against the ruler: e4 −0.0056, e4j4 **+0.0612** [+0.0585, +0.0638], e4probe
+  **−0.0176** [−0.0198, −0.0154]. Against notul on identical tokens (491,520): e4 +0.2657,
+  e4j4 +0.3330, e4probe +0.2542.
+- j4 vs e4 par @6 on the shared tokens (offsets 0–3): −0.1310 [−0.1384, −0.1235]. j4's
+  par width gain (best code minus the mixture) is 1.42 nats at depth 6 (e4 0.317): each
+  code alone is a poor reader, so the four codes split the spans between them.
+- Probe par K1−K6 +0.0038 (e4 +0.0180). Worth(zero) total: e4 0.248, j4 0.173, probe 0.213.
+- Samples: top-k rep4 0.021 (j4) and 0.025 (probe), real text 0.025; greedy 0.76 and 0.78;
+  prose reads like the Stage 1 arms.
+
+## Verdict
+
+Failure: neither J-1 nor J-2 held. By the verdict rule's second clause, neither arm moves
+the coda's K1−K6 above 0.005 (0.0011–0.0020 on all three arms), so the loop's integration
+job is real but the deployed reader does not pay for it, whoever shapes the loop. The next
+move is the reader, not the objective.
+
+What the numbers say:
+
+- **The parallel head's gradient costs the deployed coda.** Cut it (the probe) and the coda
+  improves by 0.012; the probe's 4-rollout coda is the best strict-TUL coda on this panel
+  (0.0176 better than the ruler, 0.254 behind notul). Point it at the first 4 tokens and
+  the coda loses 0.067: the committed read on the span's opening tokens pulls the exit
+  state hard toward a four-way split of span openings, and the coda pays for it.
+- **The head's gradient is what drives the loop's integration.** Rollout separation grows
+  x1.99 (e4) and x2.13 (j4) with depth when the head trains the loop, x1.33 when it does
+  not. The probe's committed read is 0.134 worse and its depth value falls to 0.004.
+- **Focusing the head halved its depth value.** On offsets 0–3, j4 earns 0.024 from depth
+  against e4's 0.048 on the same tokens, while its CE there is 0.131 better: the codes
+  took over the job the passes did.
+- **The deployed path gets width, not depth, in every arm.** The coda's width gain is
+  0.024–0.029; its K1−K6 is 0.001–0.002 with or without the head's pull.
+
+Unverified: one seed per arm; the probe's coda gain over e4 (0.012) is outside the ~0.004
+seed floor measured on earlier arms, but the floor was not re-measured here; the coda
+number is the 4-rollout mixture at 3.1x the ruler's layer passes, and the probe's best
+single rollout is ~0.011 behind the ruler.
+
+## Updated hypothesis
+
+The loop earns depth only for a reader whose gradient trains it and that cannot get the
+content elsewhere (the committed head). The coda reads the exit state as a one-pass
+feature and takes width from the rollouts, but no objective on the loop has yet made the
+coda's own prediction improve with passes. A reader-side change is next: the coda must
+need something only later passes make.

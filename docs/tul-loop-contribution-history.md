@@ -145,7 +145,7 @@ its source. The era sections below carry every other number.
 | B7 | 09-21 | LXTUL-P ladder (fp0, trig, noise, lineage, denoise), np0, cfg-tlow, pk8 | fp0 +0.0102, all of it pass 1's ([failures/2026-09-21-lxtul-fan4-all-fp0.md](../lab/experiments/failures/2026-09-21-lxtul-fan4-all-fp0.md)) | state levers closed; teacher forcing is a bypass; the depth law |
 | B8 | 09-21 to 09-22 | reach split, LXTUL-R, seed twin, LCTUL-J, synthesis, token-like read, 20k horizon pair | LXTUL-R 1b +0.0261 (a refund of a tax); plain reach 1 +0.0554 ([failures/2026-09-21-span-reach-split.md](../lab/experiments/failures/2026-09-21-span-reach-split.md) ln 171) | relay closes; Conditions A and B; slot vs twin a constant 0.0075 |
 | B9 | 09-23 | LXTUL-G (posterior-trained stochastic loop), LXTUL-GK (multi-sample bound) | LXTUL-G width gain 0.159, qualified ([failures/2026-09-23-lxtul-g-panel.md](../lab/experiments/failures/2026-09-23-lxtul-g-panel.md) ln 205) | exposure gap; GK noise collapses (filed failure) |
-| B10 | 09-23 to 09-24 | LXTUL-E: K = 4 enumerated codes re-added every pass, a parallel span reader, exact mixture | e4 par K1−K6 +0.0180; exit separation x1.99 with depth ([failures/2026-09-24-lxtul-e-stage1.md](../lab/experiments/failures/2026-09-24-lxtul-e-stage1.md)) | width survives and the loop integrates the code, but depth pays 0.018; the parallel reader sits 2.7 nats behind notul |
+| B10 | 09-23 to 09-24 | LXTUL-E: K = 4 enumerated codes re-added every pass, a parallel span reader, exact mixture | e4 par K1−K6 +0.0180; exit separation x1.99 with depth ([failures/2026-09-24-lxtul-e-stage1.md](../lab/experiments/failures/2026-09-24-lxtul-e-stage1.md)) | width survives and the loop integrates the code, but depth pays 0.018; the parallel reader sits 2.7 nats behind notul. Stage 2 ([failures/2026-09-24-lxtul-e-stage2.md](../lab/experiments/failures/2026-09-24-lxtul-e-stage2.md)): the head's gradient costs the coda (probe −0.012, first-4 cap +0.067); coda K1−K6 0.001–0.002 in every arm |
 
 ## 3. Glossary
 
@@ -1508,9 +1508,25 @@ token against the teacher-forced decoder on the same cell) dominates, and width 
 of it. The next lever named in the filing: a reader whose width value is large AND that is
 the deployed path.
 
+**Stage 2 (2026-09-24, [failures/2026-09-24-lxtul-e-stage2.md](../lab/experiments/failures/2026-09-24-lxtul-e-stage2.md)).** Two one-factor arms on e4: `e4j4` (the head predicts only
+the first 4 span tokens) and `e4probe` (the head reads the exit state detached, so only the
+coda shapes the loop).
+
+| number | instrument | arm | step | source | status |
+|---|---|---|---|---|---|
+| coda @6 vs e4 +0.0668 [+0.0643, +0.0695]; vs ruler +0.0612 | paired coda CE | e4j4 | 5000 | same | stands |
+| par K1−K6 +0.0238 on offsets 0–3 (e4 +0.0478 on the same tokens); par @6 −0.131 vs e4 there; par width gain 1.42 | par CE at forced depths | e4j4 | 5000 | same | stands |
+| coda @6 vs e4 −0.0120 [−0.0144, −0.0098]; vs ruler −0.0176 [−0.0198, −0.0154]; vs notul +0.2542 | paired coda CE | e4probe | 5000 | same | stands; one seed |
+| par @6 +0.134 vs e4; par K1−K6 +0.0038; exit separation d6/d1 1.33 (e4 1.99, j4 2.13) | probe head; separation | e4probe | 5000 | same | stands |
+| coda K1−K6 +0.0017 (j4), +0.0011 (probe) | token K-curve | both | 5000 | same | stands |
+
+What it adds: the head's gradient is what drives the loop's integration, and it costs the
+deployed coda. With the head cut, the coda is the best strict-TUL coda on this panel, by
+width (4 rollouts), with no depth value. The filing names the reader as the next move.
+
 ## 6. Positive readings, by date
 
-One row per positive reading from both parts, sorted by date (stable within a date). A-rows come from hist-A, B-rows from hist-B; B83 was added at the merge. "Positive" means the loop's passes, or the loop's written slot state, made the prediction better on the named instrument. Many rows are qualified or retracted; the status column says why. hist-B's inclusion rule for B-rows: token K-curves above the slot-loop floor (+0.0033) or named in the ledger, any paired, worth, probe or sampler reading that favours the loop or its written state, and every retracted positive of the range. Rows: 61 A, 86 B.
+One row per positive reading from both parts, sorted by date (stable within a date). A-rows come from hist-A, B-rows from hist-B; B83 was added at the merge. "Positive" means the loop's passes, or the loop's written slot state, made the prediction better on the named instrument. Many rows are qualified or retracted; the status column says why. hist-B's inclusion rule for B-rows: token K-curves above the slot-loop floor (+0.0033) or named in the ledger, any paired, worth, probe or sampler reading that favours the loop or its written state, and every retracted positive of the range. Rows: 61 A, 87 B.
 
 | # | date | number | instrument | arm | step | source | status (correcting doc) |
 |---|---|---|---|---|---|---|---|
@@ -1661,6 +1677,7 @@ One row per positive reading from both parts, sorted by date (stable within a da
 | B84 | 09-24 | B0 +0.1031 [+0.1001, +0.1063] | width over one committed reader, frozen cells | e0k4 vs e0k1 | 2000 | [successes/2026-09-23-lxtul-e-stage0.md](../lab/experiments/successes/2026-09-23-lxtul-e-stage0.md) | qualified: the written state read by a new head, not loop passes |
 | B85 | 09-24 | +0.0180 [+0.0165, +0.0196]; exit separation x1.99 d6/d1 | parallel-head K1−K6 under the 4-rollout mixture | lxtul-e4 | 5000 | [failures/2026-09-24-lxtul-e-stage1.md](../lab/experiments/failures/2026-09-24-lxtul-e-stage1.md) | qualified: a TRAINING-ONLY head; below the 0.02 bar; equals the frozen-cell head (6.788 vs 6.791) |
 | B86 | 09-24 | 0.0056 [0.0033, 0.0079] better than the ruler | paired coda CE, depth 6, 4-rollout mixture | lxtul-e4 | 5000 | [failures/2026-09-24-lxtul-e-stage1.md](../lab/experiments/failures/2026-09-24-lxtul-e-stage1.md) | qualified: a width read at 3.1x the layer passes; coda K1−K6 +0.0020 |
+| B87 | 09-24 | 0.0176 [0.0154, 0.0198] better than the ruler; 0.0120 better than e4 | paired coda CE, depth 6, 4-rollout mixture | lxtul-e4probe | 5000 | [failures/2026-09-24-lxtul-e-stage2.md](../lab/experiments/failures/2026-09-24-lxtul-e-stage2.md) | qualified: width at 3.1x the layer passes, not depth (coda K1−K6 +0.0011); best single rollout ~0.011 behind the ruler |
 
 lxtul-gk4-shared (filed 2026-09-23, [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)) adds no positive row: its K1−K6 +0.0036 sits at
 the floor's top edge and its width gain is 0.00005. Its −0.0044 against the ruler is inside

@@ -1,0 +1,741 @@
+{
+  "e4j4": {
+    "step": 5000,
+    "config": "tul_slot_spandec_strict_e4j4",
+    "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-e4j4/step_5000.pt",
+    "tul": true,
+    "fixed": {
+      "topk50_t0.8": {
+        "metrics": {
+          "boundary_frac": 0.7244230232133457,
+          "distinct3": 0.9314304461942258,
+          "distinct4": 0.9785902503293805,
+          "mean_span": 18.813864764267986,
+          "n_spans": 14.833333333333334,
+          "n_tokens": 256.0,
+          "p50_span": 19.0,
+          "rep4": 0.021409749670619233,
+          "rep4_sd": 0.02261721264835691,
+          "distinct3_sd": 0.06064053690115665
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.023715415019762844,
+            "distinct4": 0.9762845849802372,
+            "distinct3": 0.9291338582677166,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 21.916666666666668,
+            "p50_span": 24.0,
+            "boundary_frac": 0.5833333333333334,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.015810276679841896,
+            "distinct4": 0.9841897233201581,
+            "distinct3": 0.9566929133858267,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 19.142857142857142,
+            "p50_span": 19.5,
+            "boundary_frac": 0.8571428571428571,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.02766798418972332,
+            "distinct4": 0.9723320158102767,
+            "distinct3": 0.9448818897637795,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 21.0,
+            "p50_span": 24.5,
+            "boundary_frac": 0.6666666666666666,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.007905138339920948,
+            "distinct4": 0.9920948616600791,
+            "distinct3": 0.9566929133858267,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.071428571428573,
+            "p50_span": 16.0,
+            "boundary_frac": 0.7857142857142857,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.06719367588932806,
+            "distinct4": 0.932806324110672,
+            "distinct3": 0.7952755905511811,
+            "n_tokens": 256.0,
+            "n_spans": 20.0,
+            "mean_span": 12.85,
+            "p50_span": 8.5,
+            "boundary_frac": 0.9,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.007905138339920948,
+            "distinct4": 0.9920948616600791,
+            "distinct3": 0.9763779527559056,
+            "n_tokens": 256.0,
+            "n_spans": 11.0,
+            "mean_span": 23.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.36363636363636365,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.015810276679841896,
+            "distinct4": 0.9841897233201581,
+            "distinct3": 0.9606299212598425,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 19.46153846153846,
+            "p50_span": 15.0,
+            "boundary_frac": 0.6153846153846154,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003952569169960474,
+            "distinct4": 0.9960474308300395,
+            "distinct3": 0.9488188976377953,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 21.083333333333332,
+            "p50_span": 20.5,
+            "boundary_frac": 0.6666666666666666,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.007905138339920948,
+            "distinct4": 0.9920948616600791,
+            "distinct3": 0.952755905511811,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.785714285714285,
+            "p50_span": 17.5,
+            "boundary_frac": 0.7857142857142857,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003952569169960474,
+            "distinct4": 0.9960474308300395,
+            "distinct3": 0.9763779527559056,
+            "n_tokens": 256.0,
+            "n_spans": 15.0,
+            "mean_span": 16.4,
+            "p50_span": 15.0,
+            "boundary_frac": 0.9333333333333333,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.07114624505928854,
+            "distinct4": 0.9288537549407114,
+            "distinct3": 0.8031496062992126,
+            "n_tokens": 256.0,
+            "n_spans": 31.0,
+            "mean_span": 8.35483870967742,
+            "p50_span": 5.0,
+            "boundary_frac": 0.9354838709677419,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003952569169960474,
+            "distinct4": 0.9960474308300395,
+            "distinct3": 0.9763779527559056,
+            "n_tokens": 256.0,
+            "n_spans": 10.0,
+            "mean_span": 25.7,
+            "p50_span": 30.5,
+            "boundary_frac": 0.6,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some of the most expensive worlds will be provided by the United States, which was not reported by the Supreme Court to the United States, but also in the 19th century itself.\n\nThe Ebola Police Department has argued that the new government will decide if they were subjected to the deportation of the Russian government, and it would provide an increase in future deportation.\n\nThe U.S. Iranian-led nuclear plight will be given only 35 percent of all governments, but they are also not aware that the Ukrainian authorities in Yemen who were the only two-year-old who had been the coalition of the Iranian government and the Department of Public Health.\n\nThe White House's current government in Iraq had grown in Iraq\u2019s first American national security force through a 2004-year period for the Russian intelligence community.\n\nThe Pakistan Police Department's national security officials have also told that the country should be in the U.S. to be in the state of China, as Iraq has not seen all of those votes.",
+          "Once upon a time in a distant land, there lived a plea to get away from the guns that were all going to become a bit more likely than ever.\n\n\u201cIn the time of those guys, it\u2019s unrealistic,\u201d he said. \u201cI also have a lot of people who are trying to find themselves on the grounds. \u2018I\u2019m a family member. I want to see it!\u201d\n\n\u201cHe gets a great idea to look at us at a time where we were doing something good. I\u2019m getting to know it\u2019s all over it. It\u2019s a better team.\u201d\n\nThe Donald Trump campaign is a real challenge because the people who don\u2019t know the same, that they do not have the same problem. But why did he pay for the president?\n\n\u201cI know he has a very large fan base in the future, and he\u2019s always been on a position to be very good,\u201d he said. \u201cI think it\u2019s a clear thing in the last 19 weeks when the Trump administration\u2019s rationale is going to happen.\u201d\n\nThe New York Times notes that the BBC\u2019s \u201cspiritive\u201d system is \u201cdumbing\u201d by the officials. The judge",
+          "In machine learning, the key insight is that the banks have become more of a very bad idea. In order to keep the world overlooked, the best of the future will come to one step forward, and we have been working on some kind of business. Just as the president, the party of the group, was to be on the field of the world\u2019s inherent military to address the federal law. The only way to avoid the fact that we\u2019ve been bombed at this point is it just way for us to change. This is pretty similar.\n\nBut one time in 2014, he said, \u201cI was the 45 percent most of us, who were in a sporting time of year. In the end, that was just the biggest thing.\u201d\n\nThis is the first time in the NSA's 2012 campaign. This is the first time that the American Republican Party had already been an important role for the future since the 2014 election, in 2089. When the president wrote in the House of Representatives about whether the Senate Justice Department would have been in charge of the election. The 2014 administration did not know where the state",
+          "The capital of France is not necessarily for the country (the only one of the most important parties in the world.)\n\nThis has the right to start the election.\n\nI am not the only person who has never learned. And I think people should have an insufficient choice.\n\nWe are just talking about how the Bush administration has in the comments about the issue of the government, and we all know that there's no real purpose is hard to support, and it's something we're going to need to be done.\n\nI think I want to get the biggest news stories in the future.\n\nA couple of years ago, I want to convince you why I think this is a way to put a plan over how to stop it for our lives, we are going to have to do with the people. They live in the last couple of years just and will not be more likely to be done after these days. I want to do that. I get to take the same statement and share their ideas by writing them, and I just said he'll be a little more people than in the way that you can't be done with them.\n\nI do not think I am going to get the same for you. I'm not at all looking for a",
+          "def quicksort(arr):\n\n- * *\n\n1. 0:08:00:00(73) #15(d.14)\n\n/\n\n(1,6) 18:28:33:0.1\n\n(c) 38\n\n\u2013 \"26\"\n\n(1) 29:01:14:10:07:14:29:32:00, 0.2, 10:54, 1981, 49:19:33.\n\n( 4 , 2:17:50:08; 33:26)\n\n(72) 29:95:1:31\n\n- * 1.9\n\n(8) 0:52:29:73:08:13:16:09:13:94:00:0.\n\n(1):00, 0.3 and 9:01.71:3.6:36.7\n\n(3",
+          "Yesterday the committee announced that the company would not have to move to the United States, but the government would not convince local party officials that it would be a \"big, no matter what it was,\" but the administration would not be able to work on the Government to get somebody involved in the next election. A recent statement from a poll of the 2004 investigation by the CIA, which proved that President Vladimir Putin still has no legal protections.\n\nHe stated that Hillary on the same basis that the 89-year-old Judge Miller gave a statement to his organization that the US said they would not have to pay on the party to raise interest on whether, in a statement, if he could have been doing it, he would have to be done before, she said.\n\nThe new report also noted that Trump was disappointing with the PAC and made a statement that he would not seek a request to take action against the Trump administration. \"One of the federal government's findings is that the federal government will be open under the same position: those who are going to have to deal with the budget.\"\n\nThe House of Representatives, in fact, said",
+          "Water boils at a temperature of 5.5mm crore in the entire 200th century.\n\nHowever, the US-dollar system of the Tumblr debuted in early 2011, when the mood recovered by the early 900s, the newspaper reported.\n\nThe crowd and airlines of UFC were not intended to allow the prospect of a \"war murder\" to provide the stadium from its rugged arrival and revolution. The company has refused to leave the flooding room over the past few weeks, he said.\n\nThe crowd also made little consideration. A reign of the mutilated firearms was found in the town of the Pakistani Air Force, but said the incident was not a sign that the government had received in June.\n\nThe officials said that the suspect was expected to release the attack in a \"American\" state that was not used to remembers the investigation of the attack.\n\nIn an interview with the 1980s, NBC News said it had been found for any \"a group of students who were killed and were not involved in the fight between the court and",
+          "She opened the letter and read, \u201cWhat the Female are going to be that big?\u201d\n\nAnd maybe it\u2019s not the first thing. And, you\u2019re not a little weird, but it\u2019s something that makes me feel like we were all going on. We just don\u2019t have to work with a couple of books in the first place, but for a few years the best of us wanted on our play or anything else. I never thought about it, but it just happened. And it\u2019s going to be interesting if I am a fan of my favorite. At that point, I\u2019m working on it, so the people who are going to play for it are to be doing it, and I\u2019m happy to have that in. It\u2019s a big thing on that.\n\nI believe they have been so badly sought through this season since we\u2019d be going to be able to get to the world, with all the next 20 years, and we\u2019ve got some nice friends that have been on some teams. And at the end of that year, you\u2019re a bad friend, and a long way forward and I\u2019ll be able to move the entire play, because it\u2019s a game that has a",
+          "The main advantage of this approach is that there is no way to keep the most pocket of the economy in order for the people who can come from themselves.\n\nThe result is that the financial crisis is not required, but the most important thing is that the current population of the European Union is the most significant challenge to their health.\n\nBut the most important thing has been tough \u2014 and is the world's most critical.\n\nWe\u2019ve seen you as far as you do, in your perspective, to a society that has been making for some reason now. But we will be able to make the kind of revolution in the US. We could find our state will only have to stay. The problem is, we need to come around to show that the political spending of American corporate-made population is the power of the government and the U.S.\n\nThere are much more than 20% of our country in recent years:\n\nThere\u2019s probably a lot of support for the federal government.\n\nBut if we want a lot of money to do, we will be getting away from this bill.\n\nHowever, the NSA will be recruiting as an economic state in the West\u2019s election.",
+          "After the war ended, the government announced that people are indicted in the video and told it \u201cshelves a victim and blessing on the planet and to the fate of the rebates.\u201d\n\nThe idea of this was not so much more, but this time for the country\u2019s defence against the U.S. and it was unfair to me. That\u2019s not what I would have learned about the future. So, if they want to take the opportunity to meet it, there\u2019s a more crackdown on the basis of the election.\n\nAs a result, we have in fact begun that it\u2019s time to fight this country. That\u2019s the best thing here. It would be a huge part. It\u2019s not a really good way to tell us what the RBI wants to do to the public.\n\nAdvertisement Continue reading the main story\n\n\u201cThe BBC is coming back and the people can go down. This is the only way to use a country that should be forced to be in the country. The more people have the right to do.\n\n\u201cI know this is a good idea. I know how to start as a big one and I\u2019m really sure I want",
+          "import numpy as np\n\ndef <x.de.net.com/10/2017/08/2295/86441380-44-5-4, or +8.80/16/8/10/10/10/00/10/\n\n(355-355) 29879904246174255054367 2012 15 74 14.04 43.0 19 13 17.31 1111 55.1 69.47 17.7 49.37 20.6 29.8 10.1 3.9 0.5 0.76 3 67 1938 49.0 13.7 16.1 3.18 0.5 7.3 0.4 30.8 7.8 0.37 21.5 21",
+          "According to the report published last week, the Gardens were not listed as \u201cdisaster of a man\u201d in the city\u2019s country, and the judge was \u201cfairly a good part of the election\u201d and it was not enough in terms of a case that would have led to a decision.\n\nFor the second day, the state\u2019s largest indictment has seen over 400,000 people, for the first time, in the end of the day\u2019s election, the GOP\u2019s own \u201cnon-the-stand\u201d committee.\n\n\u201cWith this, we will get a list of the time we\u2019re all in the back, but we\u2019re going to be able to be able to buy the bill,\u201d said Jason Manson, a former state senator from 2008-1944. \u201cYou need to make that money and that\u2019s where we are. It\u2019s not quite a big deal.\u201d\n\n\u201cThis is an important challenge from the current government of the state.\u201d\n\nWhen the first two majorities, the CIA\u2019s deputies were told to send the 13rd \u201cwe\u2019d love to give it down, so please don\u2019t"
+        ]
+      },
+      "greedy": {
+        "metrics": {
+          "boundary_frac": 0.8277497964997965,
+          "distinct3": 0.20833333333333334,
+          "distinct4": 0.23550724637681156,
+          "mean_span": 17.368984615888643,
+          "n_spans": 19.416666666666668,
+          "n_tokens": 256.0,
+          "p50_span": 17.791666666666668,
+          "rep4": 0.7644927536231885,
+          "rep4_sd": 0.14359905858063163,
+          "distinct3_sd": 0.12465939638754871
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.6837944664031621,
+            "distinct4": 0.31620553359683795,
+            "distinct3": 0.28346456692913385,
+            "n_tokens": 256.0,
+            "n_spans": 19.0,
+            "mean_span": 12.631578947368421,
+            "p50_span": 12.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.849802371541502,
+            "distinct4": 0.15019762845849802,
+            "distinct3": 0.14173228346456693,
+            "n_tokens": 256.0,
+            "n_spans": 27.0,
+            "mean_span": 9.88888888888889,
+            "p50_span": 9.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7628458498023716,
+            "distinct4": 0.23715415019762845,
+            "distinct3": 0.2125984251968504,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 17.857142857142858,
+            "p50_span": 18.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7628458498023716,
+            "distinct4": 0.23715415019762845,
+            "distinct3": 0.21653543307086615,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 20.333333333333332,
+            "p50_span": 21.0,
+            "boundary_frac": 0.9166666666666666,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8735177865612648,
+            "distinct4": 0.12648221343873517,
+            "distinct3": 0.1062992125984252,
+            "n_tokens": 256.0,
+            "n_spans": 56.0,
+            "mean_span": 4.642857142857143,
+            "p50_span": 4.5,
+            "boundary_frac": 1.0,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.3675889328063241,
+            "distinct4": 0.6324110671936759,
+            "distinct3": 0.5511811023622047,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.142857142857142,
+            "p50_span": 19.5,
+            "boundary_frac": 0.8571428571428571,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7786561264822134,
+            "distinct4": 0.22134387351778656,
+            "distinct3": 0.18503937007874016,
+            "n_tokens": 256.0,
+            "n_spans": 8.0,
+            "mean_span": 30.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.125,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8656126482213439,
+            "distinct4": 0.13438735177865613,
+            "distinct3": 0.12598425196850394,
+            "n_tokens": 256.0,
+            "n_spans": 34.0,
+            "mean_span": 7.705882352941177,
+            "p50_span": 7.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7312252964426877,
+            "distinct4": 0.26877470355731226,
+            "distinct3": 0.23228346456692914,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.071428571428573,
+            "p50_span": 17.5,
+            "boundary_frac": 1.0,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7351778656126482,
+            "distinct4": 0.2648221343873518,
+            "distinct3": 0.22440944881889763,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 20.153846153846153,
+            "p50_span": 23.0,
+            "boundary_frac": 0.9230769230769231,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9920948616600791,
+            "distinct4": 0.007905138339920948,
+            "distinct3": 0.007874015748031496,
+            "n_tokens": 256.0,
+            "n_spans": 9.0,
+            "mean_span": 29.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.1111111111111111,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7707509881422925,
+            "distinct4": 0.22924901185770752,
+            "distinct3": 0.2125984251968504,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 20.0,
+            "p50_span": 18.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that the government is not in the process of the government\u2019s economic growth.\n\nThe U.S. government has been a major issue in the United States, and the U.S. has been a major issue in the United States.\n\nThe U.S. government has been a major issue in the United States, and the U.S. has been a major issue in the United States. The U.S. and the U.S. government has been in the first place since 2010.\n\nThe U.S. has been a major issue in the United States, but it is not a clear and unusual process.\n\nThe U.S. government has been a major issue in the United States, and the United States has been in the first place since 2010.\n\nThe U.S. has been a major issue in the United States, but it is not a clear and unusual process.\n\nThe U.S. has been a major issue in the United States, but it is not a clear and unusual process.\n\nThe U.S. government has been a major issue in the United States, and the United States has been in the first place",
+          "Once upon a time in a distant land, there lived a lot of time.\n\nThe first thing I had to do was to be a good person.\n\nI was a little more than a few years old. I was a little more than a few years old. I was a little more than a few years old. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a little more than a person. I was a",
+          "In machine learning, the key insight is that the world is not a good thing.\n\nThe first thing that is going to be a good thing is that it is a good thing to do with the same thing. It\u2019s a great thing.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good",
+          "The capital of France is the largest in the world.\n\nThe 1990s, which is the first time the United States has been in the United States, has been a major part of the country.\n\nThe 2015 election is the first time the United States has been in the first place. The 2017 election is the first time the United States has been in the first place.\n\nThe 2017 election is the first time the United States has been in the first place. The 2017 election is the first time the United States has been in the first place.\n\nThe 2017 election is the first time the United States has been in the first place. The 2017 election is the first time the United States has been in the first place.\n\nThe 2017 election is the first time the United States has been in the first place. The 2017 election is the first time the United States has been in the first place.\n\nThe 2017 election is the first time the United States has been in the first place. The 2017 election is the first time the United States has been in",
+          "def quicksort(arr):\n\n(1) 100\n\n(1) 1.\n\n(1.1)\n\n(1.9.1)\n\n(1.9.1)\n\n(1.9.1)\n\n(1.9.1)\n\n(1.9.1)\n\n(1.9.1)\n\n(19.99)\n\n(19.9)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99)\n\n(19.99",
+          "Yesterday the committee announced that the government would be able to pay for the government to be able to pay for the government to be able to pay for the budget.\n\nThe government has been working on a new budget to the public, but it is not clear whether the government is not going to be a part of the government.\n\nThe government has also said that the government will be able to pay for the government to pay for the government to pay for the government.\n\nThe government has also said it will be a \u201cnew\u201d for the government to pay for the government\u2019s budget.\n\nThe government\u2019s decision to provide a new plan to reduce the costs of the government\u2019s economic growth.\n\nThe government\u2019s decision to expand the government\u2019s economic growth in the state of Iraq is not the same.\n\nThe government\u2019s decision to expand the U.S. government to the United States, which is the largest economic growth in the state.\n\nThe U.S. government has been awarded the U.S. and the U.S. government\u2019s economic growth, which is the largest economic growth in the state.\n\nThe U.S. government has been able to recruit the",
+          "Water boils at a temperature of 100,000.\n\nThe 2015-15-year-old, who was a 2009-year-old, was a 2009-year-old, and a 2009-year-old, a 20-year-old, a 2-year-old, and a 2-year-old, a 2-year-old, a 2-year-old, a 19-year-old, a 2-year-old, a 2-year-old, a 2-year-old, a 19-year-old, a 19-year-old, a 19-year-old, a 19-year-old, a 2-year-old, a 2-year-old, a 1-year-old, a 1-year-old, a 2-year-old, a 1-year-old, a 1-year-old, a 1-year-old, a 2-year-old, a 1-year-old, a 1",
+          "She opened the letter and read the story of the 2015-17 season.\n\n\u201cI was a great friend and I was a great friend and I was a great friend. I was a great friend. I was a great friend. I was a great friend. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl. I was a little girl.",
+          "The main advantage of this approach is to be a good idea to be a good idea.\n\nThe first thing that is going to be a good thing is that it is a good thing to do with the same thing.\n\nI don\u2019t know what the game is. I\u2019m not sure if I\u2019m going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019m not going to be a good person. I\u2019m not sure if I\u2019m not going to be a good person.\n\nI\u2019m not sure if I\u2019",
+          "After the war ended, the government had been in the process of the 1990s and 1990s.\n\nThe 1990s was the first time the United States had been in the city of the United States, and the United States had been in the first place.\n\nThe 1990s was the first time the United States had been in the area of the United States. The first was the first time the United States was in the first place.\n\nThe 1990s was the first time the United States had been in the first place. The first was the first time the United States had been in the first place.\n\nThe 1999 election was the first time the United States had been in the first place. The first was the first time the United States had been in the first place.\n\nThe 1999 election was the first time the United States had been in the first place. The first was the first time the United States had been in the first place.\n\nThe 1999 election was the first time the United States had been in the first place. The first was the first time the United States had been in the first place.\n",
+          "import numpy as np\n\ndef_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a_a",
+          "According to the report published last week, the company was not involved in the program.\n\nThe report also said that the company had not yet been able to use the information to provide the information to the company.\n\nThe company said the company had not yet been able to use the data to provide the information to the company.\n\nThe company said the company had not yet been able to use the data to provide the information to the company.\n\nThe company said the company had not yet been able to use the data to provide the information to the company.\n\nThe company said it had been the first to release the data on the network.\n\nThe company said it had been the first to release the data on the network.\n\nThe company said it had been the first to release the data on the network.\n\nThe company said it had been the first to release the data on the network.\n\nThe company said it had been the first to release the data on the network.\n\nThe company said it had been the first to release the data on the network.\n\nThe company said it had been the first to release the data on the network.\n\nThe company said it had been the first to release the data on the network.\n\nThe company said"
+        ]
+      }
+    }
+  },
+  "e4probe": {
+    "step": 5000,
+    "config": "tul_slot_spandec_strict_e4probe",
+    "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-e4probe/step_5000.pt",
+    "tul": true,
+    "fixed": {
+      "topk50_t0.8": {
+        "metrics": {
+          "boundary_frac": 0.7938346375846376,
+          "distinct3": 0.9340551181102362,
+          "distinct4": 0.9746376811594203,
+          "mean_span": 18.532060532060537,
+          "n_spans": 14.666666666666666,
+          "n_tokens": 256.0,
+          "p50_span": 19.083333333333332,
+          "rep4": 0.02536231884057971,
+          "rep4_sd": 0.028886148425782167,
+          "distinct3_sd": 0.05213439382330414
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.003952569169960474,
+            "distinct4": 0.9960474308300395,
+            "distinct3": 0.9606299212598425,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.285714285714285,
+            "p50_span": 15.0,
+            "boundary_frac": 0.7857142857142857,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003952569169960474,
+            "distinct4": 0.9960474308300395,
+            "distinct3": 0.9724409448818898,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 22.5,
+            "p50_span": 27.0,
+            "boundary_frac": 0.75,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.9448818897637795,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 20.5,
+            "p50_span": 21.5,
+            "boundary_frac": 0.5833333333333334,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.007905138339920948,
+            "distinct4": 0.9920948616600791,
+            "distinct3": 0.968503937007874,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 18.076923076923077,
+            "p50_span": 18.0,
+            "boundary_frac": 0.8461538461538461,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.07905138339920949,
+            "distinct4": 0.9209486166007905,
+            "distinct3": 0.84251968503937,
+            "n_tokens": 256.0,
+            "n_spans": 24.0,
+            "mean_span": 10.833333333333334,
+            "p50_span": 8.0,
+            "boundary_frac": 0.875,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.968503937007874,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 22.0,
+            "p50_span": 27.0,
+            "boundary_frac": 0.5,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.952755905511811,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 19.46153846153846,
+            "p50_span": 21.0,
+            "boundary_frac": 0.7692307692307693,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9724409448818898,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 18.615384615384617,
+            "p50_span": 22.0,
+            "boundary_frac": 0.9230769230769231,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.9763779527559056,
+            "n_tokens": 256.0,
+            "n_spans": 11.0,
+            "mean_span": 21.272727272727273,
+            "p50_span": 19.0,
+            "boundary_frac": 0.9090909090909091,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.039525691699604744,
+            "distinct4": 0.9604743083003953,
+            "distinct3": 0.905511811023622,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.071428571428573,
+            "p50_span": 17.5,
+            "boundary_frac": 0.8571428571428571,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.09090909090909091,
+            "distinct4": 0.9090909090909091,
+            "distinct3": 0.8110236220472441,
+            "n_tokens": 256.0,
+            "n_spans": 27.0,
+            "mean_span": 9.222222222222221,
+            "p50_span": 7.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.03162055335968379,
+            "distinct4": 0.9683794466403162,
+            "distinct3": 0.9330708661417323,
+            "n_tokens": 256.0,
+            "n_spans": 11.0,
+            "mean_span": 23.545454545454547,
+            "p50_span": 26.0,
+            "boundary_frac": 0.7272727272727273,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that independence and the world\u2019s economic growth are often a factor that causes.\n\nThe 12th century\u2019s first-round national political committees, who has been in the position of 43% to the next year. Civilization has also dissatisfied the 20th century.\n\nAdvertisement\n\nThe Civil Union\u2019s most popular event was a conservative national citizen, a major conservative politician. The conservative party was an American and political leader. It was the first two years of the election, and it was a fellow in the 4th Amendmentary Party in 2013. This is a reputation for the reforms in which the right is, from the end of the first year, as well as the Nobel Prize. Now, the only way with the nationalism is to conclude that the party\u2019s population is no risk to the state of the world is a very well-known system of economic growth.\n\nAnd is it? The country\u2019s nuclear industry\u2014and the 30th century is a relatively widespread war\u2014wired to go, to the",
+          "Once upon a time in a distant land, there lived a plea in the city, a major role in the civil war. As with a few men, the Dutch and Afghanistanans, all the more unbelievable, would serve on the issue of the wars, including in the Netherlands. The Russians were not in the city.\n\nAt the same time, Muslims were in the first place in Paris and in the United States. The first half of the Tea Party brought the city to the West in the mid20s to the grounds of the British nationalist. The United States was the first military to have killed the same two civilians, and they had no fellow Muslim people and a couple of the Kurdistan border. He said the Sabons had been in the southern city, and then the German crisis was to be a military army.\n\nThe city was not going to leave it to the United States.\n\n\u201cThe Army was the first person to ever be able to fight between the Kurdish forces and the Iraqi and Israel,\u201d he said. \u201cIt was a political prosecutor who was so busy.",
+          "In machine learning, the key insight is that the potential to be the highest option to take advantage of the climate change, the more we have to do is improve their infrastructure with the right to compete, so they must end up on the road (the same day of the year).\n\nBut there is nothing about that.\n\nOne of the things that the American people see on how the environment is to have this problem is the only way to avoid the cost of having it being more like a \u201creal\u201d future.\n\nIn reality, it is not the only way we have to pay for your in-game-to-wife, to which you get a 845.\n\nIt\u2019s not a bad thing because it is not to be a way of the economy but the only one to share it at this position that we are now getting a huge portion of the economy in the country.\n\nThe people who have been in the world are still trying to disagree at the time that we are now trying to do the things we have done to we get from the middle class.\n\nThe more you have to do here, you all get to know it.\n\nAs we have been interested in being a big-time American who, where we\u2019",
+          "The capital of France is not necessarily for the country. The country is looking at its economic development. The regional economy of the American Palestinians has since been a very small town. Those are the areas in the world where people should have an insufficient choice.\n\nIn recent years, the US state is the largest US in the Mrs. Civil Commission, which is due to a long-term impact on the international market for the world.\n\n10. Aaron Leer-Kick and his colleagues have been the best of all the city\u2019s population in the 1930s. His 1941 era is a year away from a two-day stadium in the past 13 months. We have no interest in the population. In 2008, the Australian population was still the only international team who could bring to the world after the world's largest economic crisis. That means at least 12 years, the Iraqi city of Iraq had been the largest city in Europe.\n\n11. Ottawa, in 1985, was the 1990s to be a military minister",
+          "def quicksort(arr):\n\n-\n\n(in e.g. in response to my client-long mallup of public action) The FBI has always argued that the lawsuit against Iran were not sufficient to have a plan to help Iran\u2019s military.\n\n(1 - A former U.S., Terrorist Party)\n\n(10.5)\n\n(57.1)\n\n(75.172\n\n(2001, 2007.\n\n(1919):\n\n(2017)\n\nLewood Falham, 4 , 22973\n\n(2017)\n\nTerrorist, 27, 2012\n\nOn 3 February 2014, he met with Senator Joseph Mateen to \"imperialize\" the president's actions in favor of the president.\n\n(1965)\n\nThe Russian leader, 40, has been accused of a new president, as a \"dequice\" and her secretary, is a nonprofit director.\n\n",
+          "Yesterday the committee announced that the government would not have any questions about how the company\u2019s 29-year budget was used within 25 percent, a \"big\" for the law.\n\n\u201cThe $2.9 million was to be paid to the 2013 government of the House,\u201d said Lobby Abraham, director of the Department of Justice Department.\n\n\u201cWe need to work together to do it in a given market for the next 20 years, so we need to pay for more than 30 or 10% at the time, which is the only way to deal with that.\u201d\n\nAs Iowa Commissioner, Politico acknowledged that Kazakhani had refused to comment through the Federal Reserve and have been innocent, she said.\n\n\u201cI wouldn\u2019t have been able to disregard until the time of a month in the next month without any unusual advice,\u201d said Mark Psyche, president of the Department of Representatives, a long-time organization in the state.\n\nThe senator\u2019s statement is likely to be a \u201cfree, unheard of cynical conservative and political society.\u201d",
+          "Water boils at a temperature of 5.5 minutes.\n\nBut they have a major role in buying a 66.7 million-dollar 2.3 million% per person.\n\nSo you don\u2019t know anything about the city, but you have to be able to find out if you have anything to do with the same day.\n\nThese are all things that do not include, but I\u2019m not going to say something about a climate change.\n\nI want to be sure not to bring them to this team so I am talking about that.\n\nIt is about 11,000 people on the planet that are working to buy the homes from their homes. The people are not good or, because they can\u2019t be put on their balls and their loved ones are going to get one thing we\u2019re getting away. What\u2019s what that is, you\u2019re going to be in a way that you say that we\u2019re going to have the money to go and go through it.\n\nI\u2019m going to get that up by making it right, it\u2019s better for me now to have a great job in that situation.\n\nSo, at least, they do have",
+          "She opened the letter and read \u201cI was the hero,\u201d and I knew if that was the last act that was supposed to be for him.\n\nAnd they did say the reason is that his friend had been on his remarks, and that it was a good thing. He had had a few days. It was like a different point\u2026\n\nIt was the last time he picked him down. He had a lot of fun. He was in the home for the same time, he had just worked in a 4-year home, and he was a tug-up and the best friend in the 474-foot, 68, he was unchief on her own.\n\nA friend was a friend, and she had a guy, one of only two battles.\n\nHe was in a crowd after all, and he has since become very funny and often was the most productive man in the city.\n\nThe fact is that, if someone is there, that a person has never been on a job. Some of them were tolerating, but in a way that never happened.\n\nAdvertisement\n\nDutch, she said she used to be a \u201cBaby a man\u201d so she was",
+          "The main advantage of this approach is that all of our activities and systems were not available again. To be careful, even further information on the information we have on the Internet should be in the process of a new study.\n\nTheir ideas are not so much as the results are in the process of the process. In the first place we have used a different tool to identify and make this information better \u2014 and as the result becomes, we have done a little more.\n\nThe latest study is also available in a collection of 3.8 per cent of students, including many others in the world. This is not the first time this is being implemented by the authors who are \u201cdesigned to our activities\u201d that we have seen in their own context. The findings reportedly have the same reasons that people can use to do so.\n\nThe findings indicate that the definition of the research of these factors is largely available to the number of information that are being asked to respond to:\n\nThere is a sense of this documentary which is also a fact: \u201cWhat is more like a function of religiousism, and you have to be something that is going to be important for the human rights of the people to have as an act as it is in the body of that group",
+          "After the war ended, the government announced that people are indicted in the state's leading bureaucracy and the way the government's rulent Party continues to be.\n\nThe new Government said it would be \"not as powerful to our sovereignty to the nine-man government.\"\n\nThe U.S. government has taken a tough part in the decades since the Senate since September 2013.\n\nDamacare's ruling of the Pakistani government was aimed at not supporting the government's constitutional relations with the Israel government and that it has been used with the Pakistani government.\n\nOne question about the Obama administration's actions is that the Balties' political agenda has not only done them.\n\nThe TPP has said it is part of the issue of the U.S. and the U.N. Congressional Office.\n\n\"I don't think it has a national part of the state,\" he said.\n\nThe administration also said that the U.S. has not been able to use to maintain its ability to allow a U.S. government to take out the federal government",
+          "import numpy as np\n\ndefv> }\n\n#}\n\n1) Ron 1770\n\nThis is an example of a simple type of memory that is not necessarily an easy-to-per-play case.\n\n1676\n\n2013\n\n1982\n\nThis is probably the best quality of the experience as much as it is. It\u2019s also the first thing it has to be given to it.\n\n1050\n\n7500\n\nThe problem is nothing but an interesting one. It is a very popular way to build a sense of modernization and order. At the point of this, we do not want to have to.\n\n9547\n\n1979\n\n5375\n\n1605\n\nAnd you might be much more likely to hear that the album is an amazing way behind in the real world.\n\n8423\n\n49300\n\n1770\n\n1200\n\n5000\n\n32600\n\n300007\n\n3000000000020",
+          "According to the report published last week, the Supreme Court's Department of Justice would not have to pay a tax on Iran by 2000 (1939 to 1953, which is also in place from a year-long federal law that led to the 36,000 to 50,000 to 200,000 people).\n\nOne more question, in the same way he added: \"For the first time in federal elections, there were several problems with the same situation as the first time. That's because of the decision.\"\n\nThe Obama administration's decision to help commit that the budget should provide $270 million in the first bill for the U.S. taxes and for more than $61 million. The Government plans to reduce the costs of the Federal Reserve, which is part of the government's decision to comply with Medicaid regulations. The Supreme Court also acknowledged that a \"matureful\" state would help ensure the money was not acceptable.\n\n\"No,\" the legislative said, \"that those who should have passed up the case is not the same.\n\n\"I believe this"
+        ]
+      },
+      "greedy": {
+        "metrics": {
+          "boundary_frac": 0.825925925925926,
+          "distinct3": 0.19783464566929135,
+          "distinct4": 0.2229907773386034,
+          "mean_span": 17.015246449712176,
+          "n_spans": 20.583333333333332,
+          "n_tokens": 256.0,
+          "p50_span": 15.916666666666666,
+          "rep4": 0.7770092226613965,
+          "rep4_sd": 0.16112443782850752,
+          "distinct3_sd": 0.13970485061332183
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.48616600790513836,
+            "distinct4": 0.5138339920948617,
+            "distinct3": 0.44881889763779526,
+            "n_tokens": 256.0,
+            "n_spans": 15.0,
+            "mean_span": 17.2,
+            "p50_span": 14.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7470355731225297,
+            "distinct4": 0.25296442687747034,
+            "distinct3": 0.2283464566929134,
+            "n_tokens": 256.0,
+            "n_spans": 18.0,
+            "mean_span": 14.5,
+            "p50_span": 11.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7193675889328063,
+            "distinct4": 0.28063241106719367,
+            "distinct3": 0.23228346456692914,
+            "n_tokens": 256.0,
+            "n_spans": 25.0,
+            "mean_span": 10.36,
+            "p50_span": 8.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7628458498023716,
+            "distinct4": 0.23715415019762845,
+            "distinct3": 0.21653543307086615,
+            "n_tokens": 256.0,
+            "n_spans": 31.0,
+            "mean_span": 8.35483870967742,
+            "p50_span": 7.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9683794466403162,
+            "distinct4": 0.03162055335968379,
+            "distinct3": 0.027559055118110236,
+            "n_tokens": 256.0,
+            "n_spans": 64.0,
+            "mean_span": 4.09375,
+            "p50_span": 4.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.6600790513833992,
+            "distinct4": 0.33992094861660077,
+            "distinct3": 0.3031496062992126,
+            "n_tokens": 256.0,
+            "n_spans": 10.0,
+            "mean_span": 24.3,
+            "p50_span": 25.0,
+            "boundary_frac": 0.8,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9881422924901185,
+            "distinct4": 0.011857707509881422,
+            "distinct3": 0.011811023622047244,
+            "n_tokens": 256.0,
+            "n_spans": 8.0,
+            "mean_span": 32.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8379446640316206,
+            "distinct4": 0.16205533596837945,
+            "distinct3": 0.15354330708661418,
+            "n_tokens": 256.0,
+            "n_spans": 18.0,
+            "mean_span": 14.277777777777779,
+            "p50_span": 13.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7391304347826086,
+            "distinct4": 0.2608695652173913,
+            "distinct3": 0.24015748031496062,
+            "n_tokens": 256.0,
+            "n_spans": 16.0,
+            "mean_span": 15.6875,
+            "p50_span": 14.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9051383399209486,
+            "distinct4": 0.09486166007905138,
+            "distinct3": 0.08661417322834646,
+            "n_tokens": 256.0,
+            "n_spans": 11.0,
+            "mean_span": 22.90909090909091,
+            "p50_span": 23.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9841897233201581,
+            "distinct4": 0.015810276679841896,
+            "distinct3": 0.015748031496062992,
+            "n_tokens": 256.0,
+            "n_spans": 9.0,
+            "mean_span": 29.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.1111111111111111,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.525691699604743,
+            "distinct4": 0.4743083003952569,
+            "distinct3": 0.4094488188976378,
+            "n_tokens": 256.0,
+            "n_spans": 22.0,
+            "mean_span": 11.5,
+            "p50_span": 8.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that the \u201cthe world\u201d of the world is not the same as the \u201cthe world of the world.\u201d\n\n\u201cThe world is not the first time we have to do it,\u201d said the University of Michigan. \u201cThe world is not the first time we have to do it.\u201d\n\nThe world is now the largest in the world, which is the largest in the world. The world is the world\u2019s largest population, and the world is the world\u2019s most popular world.\n\n\u201cThe world is the world\u2019s most popular world, and the world is the world\u2019s most popular world. It is a great way to make it the world of the world. It is a great way to make it the world of the world. It is a great way to make it the world of the world. It is a great way to make it the world of the world. It is a great way to make it the world of the world. It is a great way to make it the world of the world. It is a great way to make it the world of the world.\n\n\u201cI think it is a very good thing to do. I think it\u2019s a great thing to do. I\u2019m not going",
+          "Once upon a time in a distant land, there lived a lot of time.\n\nThe first thing I\u2019ve been doing is to get a lot of money to get the money to get the money to the next level.\n\nThe first thing I\u2019ve been doing is to get a lot of money to get the money to get the money done.\n\nI\u2019m not sure if you\u2019re going to be a good person, but I\u2019m not going to be a good person.\n\nI\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good person. I\u2019m not going to be a good",
+          "In machine learning, the key insight is that the world is not a good thing.\n\nThe fact that the world is not the only thing that is going to be the best way to do it is that it is a good idea. It is a very good idea to be a good idea.\n\nThe fact that it is a very good idea to be a good idea to be a good thing. It is a good idea to be a good thing.\n\nI think it is a good thing to do. I think it is a good thing to do. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good thing. I think it is a good",
+          "The capital of France is the only one that is being used to protect the country\u2019s economy and the economy.\n\nThe new economic crisis is a major factor in the economic crisis. The economic crisis is a very good thing.\n\nThe economic crisis is a very good thing. It\u2019s a good thing to do. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019s a good thing. It\u2019",
+          "def quicksort(arr): 0.0) 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.",
+          "Yesterday the committee announced that the government would not pay for the government to pay for the government.\n\nThe government has been working on a new policy that has been used to protect the government\u2019s economic growth.\n\nThe government has been working on a new policy that has been used to protect the government\u2019s economic growth.\n\nThe government has been working on a new policy that has been used to protect the government\u2019s economic growth.\n\nThe government has been working on a new policy that has been used to protect the government\u2019s economic growth.\n\nThe government has been working on a new policy that has been used to protect the economic growth of the government.\n\nThe government has been working on a new policy that has been awarded a new government to the government\u2019s economic development and its economic development.\n\nThe government has been working on a new policy that has been used to protect the economic growth of the economy.\n\nThe government has been working on a new policy that has been awarded a new economic system that has been awarded for the first time since 2015.\n\nThe government has been working on a new policy that has been awarded a new economic system",
+          "Water boils at a temperature of 100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "She opened the letter and read \u201cThe Dream\u201d and \u201cThe Good\u201d on the list.\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person. I\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person. I\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person. I\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m",
+          "The main advantage of this approach is to be done in the future of the world.\n\nThe first step is to be a good idea to be a good idea. The first thing we can do is to make sure that we are going to be able to do it.\n\nThe first thing we do is to make sure that we are going to be able to do it.\n\nThe first thing we do is to make sure we have to do it.\n\nThe first thing we do is to make sure we have to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do it.\n\nI think we have a lot of time to do",
+          "After the war ended, the government had been working on a new program to help the government and the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program to help the government and the government to help the government.\n\nThe government has been working on a new program",
+          "import numpy as np\n\ndef. 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "According to the report published last week, the U.S. Department of Justice said the U.S. government would not be able to use the program to help the U.S. government.\n\n\u201cThe government has been working on a new program that is not a part of the government,\u201d he said. \u201cWe have been working on the program to ensure that we are not going to be able to do it.\u201d\n\nThe U.S. has been awarded the U.S. government in the U.S. and the U.S. Department of Justice has been working on a new program to help the U.S. and the U.S. Department of Justice.\n\n\u201cWe are not going to be able to get the government to get the government to pay for the government,\u201d he said. \u201cWe are not going to be able to get the government to get the government to pay for the government.\u201d\n\nThe U.S. has been awarded the U.S. government in the U.S. and the U.S. Department of Justice has been working on a new program to help the U.S. and the U.S. Department of Justice.\n\n\u201cWe are not going to be able to get"
+        ]
+      }
+    }
+  },
+  "_real_text": {
+    "n_rows": 256,
+    "n_tokens": 256,
+    "rep4": 0.025182188735177864,
+    "rep4_std": 0.04086310846442259,
+    "rep4_p10": 0.0,
+    "rep4_p50": 0.011857707509881422,
+    "rep4_p90": 0.05533596837944664,
+    "rep4_frac_zero": 0.15625,
+    "distinct3": 0.9475578248031495,
+    "distinct3_std": 0.05427222294309213
+  },
+  "_meta": {
+    "n_tokens": 256,
+    "seed": 1234,
+    "max_slots": 0,
+    "n_prompts": 12,
+    "decodes": [
+      "topk50_t0.8",
+      "greedy"
+    ],
+    "samples_per_prompt": 1,
+    "arms_done": [
+      "e4j4",
+      "e4probe"
+    ]
+  }
+}
