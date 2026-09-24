@@ -1,4 +1,31 @@
-# What sets the loop's per-pass map: the cause behind 0.88
+# 🚨 READ BEFORE TUNING THE LOOP MAP: the slot map's 0.87 is the injection floor
+
+> **The loop's map is an EFFECT. Do not tune it before you know its cause.**
+>
+> A core pass whose blocks do not respond to the state still has a typical gain. That gain
+> comes from `DiagonalInjection` alone: identity on 704 of 1024 channels, decay `A` on the
+> 320 context channels:
+>
+> `floor = sqrt((704 + sum A^2) / 1024) = 0.865 at A = 0.447 (the init)`.
+>
+> `A` has not moved from its init in any MORPH model read (e4probe 0.433, ruler 0.439,
+> notul 0.452; floors 0.864, 0.865, 0.867). The slot loop's map reads 0.870 to 0.883, which
+> is 0.005 to 0.018 above the floor. The plain loop that earns depth reads 0.92 to 0.97,
+> which is 0.05 to 0.10 above it. So the slot core's blocks barely respond to the slot
+> state. A hinge, floor or cap on the gain can move the number, and the cheapest route
+> is `A`, not the blocks.
+>
+> Before you add a gain lever, read `injection.log_A` and compute the floor. Report the map
+> as "floor + the blocks' part", never as the map alone.
+>
+> Status: the floor and `A` are MEASURED. The causal account (the slot trajectory settles
+> from its entry, so the task cannot train the blocks' response) is PROVED in linear
+> models only (`TulExploration/MapCause.lean`, no `sorry`) and CONJECTURED for MORPH. It is
+> under test in LXTUL Stage 3 and interventions I-0, I-1 and I-2
+> (`lab/experiments/planned/2026-09-24-lxtul-stage3-map.md`,
+> `lab/experiments/planned/2026-09-24-lxtul-map-cause.md`).
+
+## What sets the loop's per-pass map: the cause behind 0.88
 
 Date: 2026-09-24. Lean file: [`TulExploration/MapCause.lean`](TulExploration/MapCause.lean) (T6).
 Toy scripts (`toy_map.py`, `linear_checks.py`, `readA.py`, `wnorms.py`) are in

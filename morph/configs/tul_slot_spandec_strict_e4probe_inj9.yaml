@@ -1,0 +1,25 @@
+# Map-cause intervention I-1, arm "lxtul-e4probe-inj9": MOVE THE FLOOR, change nothing else.
+# Composes `tul_slot_spandec_strict_e4probe_map` (Stage 3 arm C: row target 0.98, tail
+# hinge 100 @ 1.1) and changes TWO keys plus the run name:
+#
+#   model.injection_channels   ctx -> all   DiagonalInjection on every carrier dim
+#   model.injection_all_decay  (0.9)        the 704 non-context dims start at decay 0.9,
+#                                           dt 0.1; the context dims keep 0.447 / 1.0
+#
+# WHY. The slot map's 0.87 is the injection's own floor, sqrt((704 + sum A^2)/1024) = 0.865
+# with A at its init (lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-
+# THE-INJECTION-FLOOR.md). This arm moves that floor to sqrt((704 * 0.81 + 320 * 0.2)/1024)
+# = 0.787 and nothing else. If the map follows the floor down (0.77-0.81), 0.87 was an
+# architecture default. If the blocks compensate and the map returns to 0.85-0.90, the loss
+# was choosing about 0.88. Read against `lxtul-e4probe-map`. Prereg:
+# lab/experiments/planned/2026-09-24-lxtul-map-cause.md.
+defaults:
+  - tul_slot_spandec_strict_e4probe_map
+  - _self_
+
+model:
+  injection_channels: all
+  injection_all_decay: 0.9
+
+wandb:
+  name: lxtul-e4probe-inj9

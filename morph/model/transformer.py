@@ -642,6 +642,9 @@ class MORPHConfig:
     # PUSHES the typical gain up into [floor, target]; the tail still bounds one slot's
     # excursion. Needs slot_gain_lambda > 0 and floor target < slot_gain_target (the two
     # hinges would otherwise fight over one band). 0.0 = OFF and bit-identical.
+    # CAUTION: the cheapest way to meet this floor is to raise the injection decay `A`
+    # (A ~ 0.83 lifts the injection's own floor to 0.95) with the blocks as quiet as before.
+    # Read `injection.log_A` on any floor arm before reading its gain (DiagonalInjection).
     slot_gain_floor_lambda: float = 0.0
     slot_gain_floor_target: float = 0.95
 
@@ -666,6 +669,18 @@ class DiagonalInjection(nn.Module):
 
     h_ctx = decay * h_ctx + dt * e_ctx
     Spectral radius < 1 guaranteed by construction.
+
+    THIS MODULE SETS THE LOOP MAP'S FLOOR (measured 2026-09-24). Its Jacobian in h is
+    identity on the channels outside [start, end) and diag(A) inside, so a core pass whose
+    blocks do not respond to the state still has typical gain
+        sqrt(((d - n_ctx) + sum(A^2)) / d)    = sqrt((704 + 320 * 0.447^2) / 1024) = 0.865
+    at the init. `log_A` has not moved from that init in any trained model read (e4probe
+    0.433, ruler 0.439, notul 0.452). The slot loop's measured map (0.870-0.883) is this
+    floor plus a small part from the blocks; the plain loop that earns depth sits 0.05-0.10
+    above it. So every gain reading (`_slot_gain_penalty`, `core_map_fd.py`, the Jacobian
+    probe) includes this module, and a hinge, floor or cap on the gain can be met by moving
+    `A` alone while the blocks stay quiet. Read `log_A` and report the map as floor + the
+    blocks' part. lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md
     """
 
     def __init__(self, channel_start: int, channel_end: int, init_decay: float = 0.447,
@@ -695,6 +710,13 @@ class DiagonalInjection(nn.Module):
         if self.B is not None:
             e_ctx = e_ctx @ self.B.to(e_ctx.dtype).T
         new_ctx = A * h_ctx + dt * e_ctx
+        return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
+
+    def decay(self, h: Tensor) -> Tensor:
+        """The same carry with NO source: h_ctx <- A * h_ctx (`tul.slot_source_once` on
+        passes t >= 1). The Jacobian in h, and so the floor above, is `forward`'s."""
+        A = self.log_A.exp().clamp(max=0.9999)
+        new_ctx = A * h[..., self.start:self.end]
         return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
 
 
@@ -2981,6 +3003,10 @@ class MORPHTransformer(nn.Module):
                     "into [floor, target] and the row hinge holds it from above.")
         if cfg.slot_gain_lambda > 0.0 and cfg.scse_enabled and _why is None:
             raise NotImplementedError("model.slot_gain_lambda under SCSE is not defined (deviation carrier)")
+        if cfg.tul is not None and cfg.tul.slot_source_once and cfg.scse_enabled:
+            raise NotImplementedError(
+                "tul.slot_source_once under SCSE: SCSE's core is already source-free "
+                "(`source_free`), so the knob would change nothing.")
         self.scse: _SCSE | None = (
             _SCSE(d, step_scale=cfg.scse_step_scale, anchor_scale=cfg.scse_anchor_scale,
                   init_scale=cfg.scse_init_scale, eps=cfg.scse_eps, kappa=cfg.scse_kappa,
@@ -3118,7 +3144,7 @@ class MORPHTransformer(nn.Module):
 
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
                          ret_state=None, iter_idx=0, inj_terms=None, source_free=False,
-                         stage_cond=None, attn_kw=None):
+                         stage_cond=None, attn_kw=None, source_decay_only=False):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
@@ -3169,11 +3195,21 @@ class MORPHTransformer(nn.Module):
         # the deviation's context channels by ~0.447 per iteration with nothing to refill
         # them (spec D3). It is a Python bool that is constant per call site, so it traces
         # out and the baseline graph is unchanged.
-        h_injected = h_in if source_free else self.injection(h_in, e_in)
+        # `source_decay_only` (`tul.slot_source_once`, passes t >= 1 of the slot loop): the
+        # carry's decay stays and every SOURCE goes, the injection's dt * e term and the
+        # per-layer x0/bigram terms. Unlike `source_free` the context channels still decay
+        # by A, so what the loop keeps across passes it keeps through A and the blocks. A
+        # Python bool per call site, so it traces out and the baseline graph is unchanged.
+        if source_free:
+            h_injected = h_in
+        elif source_decay_only:
+            h_injected = self.injection.decay(h_in)
+        else:
+            h_injected = self.injection(h_in, e_in)
         ret_cap = {} if self._core_has_retention else None
         for i, layer in enumerate(self.core):
             gi = np_ + i
-            if not source_free:
+            if not (source_free or source_decay_only):
                 if inj_terms is not None:
                     term = inj_terms[i]
                 else:
@@ -5095,6 +5131,7 @@ class MORPHTransformer(nn.Module):
         # the ANCHOR (read only when kappa > 0) and the third is unused.
         _e_arg = h_star if _scse is not None else e
         _inj_arg = _inj_none if _scse is not None else inj
+        _src_once = bool(self.cfg.tul.slot_source_once)
 
         if halt:
             if slot_depths is not None:
@@ -5421,10 +5458,14 @@ class MORPHTransformer(nn.Module):
                         (_rt[_msk] / _rh[_msk].clamp_min(1e-12)).mean() if bool(_msk.any())
                         else _rt.new_zeros(())).detach()
             if _scse is None:
+                # `tul.slot_source_once`: pass 0 takes the source, later passes only decay.
+                # `iter_idx` is the loop's Python int, so the gain hinge (which re-runs this
+                # step at its own `t`) and the checkpoint recompute see the same map.
                 _h_out, _rs = self._apply_core_step(
                     h_in, e_in, None, None, None,
                     ret_state=ret_state, iter_idx=iter_idx,
-                    inj_terms=inj_terms, stage_cond=stage_cond, attn_kw=_core_akw)
+                    inj_terms=inj_terms, stage_cond=stage_cond, attn_kw=_core_akw,
+                    source_decay_only=_src_once and int(iter_idx) >= 1)
                 if want_carry:
                     return _h_out, _rs, _carry_cap["win"]
                 return _h_out, _rs
@@ -5895,7 +5936,9 @@ class MORPHTransformer(nn.Module):
             #     tul.loop_carry), per slot over streams and channels; pads get 0.
             #   * A slot whose depth is spent is frozen by the `torch.where` below, so it
             #     keeps the code of its last realised pass and gets no extra copy.
-            if _enum is not None:
+            #   * `tul.slot_source_once`: the code is a source too, so it is added after
+            #     pass 0 only and the loop must keep it.
+            if _enum is not None and not (_src_once and t >= 1):
                 h_new = self._apply_injection(
                     h_new, _enum.term(h_new, layout.slot_valid, iw_rollouts))
             _h_det = h_new
@@ -6185,6 +6228,11 @@ class MORPHTransformer(nn.Module):
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
                            mask, lam: float, carry=None) -> dict:
         """Hinge penalty on the slot map's typical gain at the live operating point.
+
+        The gain read here INCLUDES `DiagonalInjection`, whose identity-plus-decay Jacobian
+        alone gives 0.865 at `A`'s init; the slot map sits just above that floor. A term
+        on this gain can be met through `A` without the blocks responding. See the
+        `DiagonalInjection` docstring and lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md.
 
         g = ||f(h + d) - f(h)|| / ||d|| over the active real slots, d a Gaussian direction
         scaled per slot to `slot_gain_eps` of that slot's norm; penalty

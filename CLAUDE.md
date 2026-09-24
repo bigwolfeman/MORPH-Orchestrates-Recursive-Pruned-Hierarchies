@@ -45,6 +45,17 @@ exists. Do not re-derive any of it. **The cure is measured (2026-09-03): a 1000-
 ramp, now `training.warmup: 1000` in `base.yaml`, 0 detonations in 9 of 9 draws. Do not
 override it to 0 on the ternary+AdEMAMix recipe. Second hold, shipped 2026-09-07: the terminal fixed-point term `model.core_fixed_point_lambda 1.0` (0 of 6 warmup-0 detonations vs 4 of 7 controls; free at 5k under the ramp). It runs in `_core_region` (plain model + paid TUL loop) AND, since 7ff72a0 (2026-09-07), in `_tul_core` (the slot loop, per-slot last iteration); every slot-loop arm carries it. Measured on the slot loop (E13/E14, 2026-09-07): free on the healthy arms, and NO hold against the two slot-loop failure modes it was not built for — the first-iteration SCALE growth under a passing hinge (a fixed depth, or MTP heads at weight 1.0: `loop/core_gain_t0` 1.5 → 170 while the term reads 0.01–0.04) and the single-sample gain spike at typical gain 1 (E14). Both are scale-blind terms; the instrument for the scale mode is `loop/core_gain_t0` (leads the tripwire by ~500 steps). Note: [`2026-09-07-fixed-point-objective-as-the-loop-stability-term.md`](.agents/notes/implemented/architecture/2026-09-07-fixed-point-objective-as-the-loop-stability-term.md).**
 
+## 🚨 TUNING THE LOOP'S MAP (gain hinge, floor, cap, contractivity)? READ [READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md](lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md) FIRST
+
+**The slot map's 0.87 is the `DiagonalInjection` floor, not a choice the loss made (2026-09-24,
+measured).** A pass whose blocks do not respond still has typical gain
+`sqrt((704 + sum A^2) / 1024)` = 0.865 at the decay's init `A = 0.447`, and `A` has not moved
+from its init in any model read. The slot map sits 0.005–0.018 above that floor; the plain loop
+that earns depth sits 0.05–0.10 above it. So the slot core's BLOCKS are quiet, and any gain
+lever is met most cheaply through `A`. Read `injection.log_A` and report "floor + blocks' part"
+before you tune the map. The causal account is proved in linear models only
+(`lab/theory/tul_exploration/TulExploration/MapCause.lean`) and under test in LXTUL Stage 3.
+
 ## ⭐ Core mental model — MORPH is a NESTED dynamical system (read before optimizing)
 
 The looped core makes MORPH **two** dynamical systems, not one: the **outer** (optimization,

@@ -1,5 +1,11 @@
 # TUL loop contribution: the history
 
+> 🚨 **2026-09-24: the slot map's 0.87 is the injection floor.** Every slot-loop gain
+> number in this history (0.87–0.89 "held by the constraint") sits 0.005–0.018 above the
+> `DiagonalInjection` floor, `sqrt((704 + sum A^2)/1024)` = 0.865 with `A` still at its
+> init. The blocks are quiet on slot states; the plain loop's blocks are not. Read
+> [`../lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md`](../lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md) before reading any gain row below as a choice the model made.
+
 2026-09-23. Written by two agents from the committed record: hist-A wrote Part A
 (2026-08-16 to 2026-09-12, through the strict-geometry panel) and the glossary; hist-B
 wrote Part B (2026-09-12 to 2026-09-23). hist-A merged the two. Sources: every filed

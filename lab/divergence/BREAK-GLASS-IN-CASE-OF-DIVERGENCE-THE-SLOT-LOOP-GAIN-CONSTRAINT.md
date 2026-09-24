@@ -58,6 +58,10 @@ it up into [floor, slot_gain_target]. It is NOT a stability lever: it raises the
 it moves the map toward the crossing the constraint exists to guard. Needs
 `slot_gain_lambda > 0` and floor < `slot_gain_target`. Logged as `loss/gain_floor_pen`.
 Arm: `tul_slot_spandec_strict_e4probe_floor.yaml`; tests `tests/test_slot_gain_floor.py`.
+**Read before tuning any of these levers:** the typical gain has a floor of
+`sqrt((704 + sum A^2)/1024)` = 0.865 set by `DiagonalInjection` alone, and the slot map sits
+just above it with `A` at its init
+([`../../lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md`](../../lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md)). A hinge can be met through `A` with the blocks as quiet as before.
 
 ## 2. What it is, in five lines
 

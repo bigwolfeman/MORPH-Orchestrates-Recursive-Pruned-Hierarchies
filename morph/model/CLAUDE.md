@@ -31,6 +31,14 @@ not by reading the diff.
 
 ## Things that look like bugs and are not
 
+- **The slot loop's gain reads 0.87 with quiet blocks, and that is the injection, not a
+  bug in the probe.** `DiagonalInjection` is identity on the 704 non-context channels and
+  decay `A` on the 320 context channels, so a pass whose blocks do not respond has typical
+  gain `sqrt((704 + sum A^2) / 1024)` = 0.865 at `A`'s init (0.447), and `A` has not moved
+  in any model read. Every gain reading (`gain_est`, `core_map_fd.py`, the Jacobian probe)
+  includes it. Report the map as floor + blocks' part. Any hinge on the gain can be met by
+  raising `A` alone. `../../lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md`.
+
 - **`tul.reinject_seed_every_pass` RAISES at construction.** It is not unimplemented — it is
   a NO-OP. `_tul_core` binds `_e_arg = e` (the prelude's output at the slot position, i.e.
   the slot seed after the prelude) once and hands it to EVERY pass, where `_apply_core_step`

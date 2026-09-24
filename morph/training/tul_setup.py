@@ -104,6 +104,8 @@ KNOWN_TUL_KEYS = frozenset({
     "spandec_parallel_span_cap", "spandec_parallel_detach",
     # LXTUL-E Stage 1 (tul.code_enum_k, 2026-09-24): the enumerated loop code
     "code_enum_k", "code_enum_ratio",
+    # map-cause I-2 (2026-09-24): the slot loop's source enters at pass 0 only
+    "slot_source_once",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
@@ -329,6 +331,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_parallel_detach=bool(tc.get("spandec_parallel_detach", False)),
         code_enum_k=int(tc.get("code_enum_k", 1)),
         code_enum_ratio=float(tc.get("code_enum_ratio", 0.1)),
+        slot_source_once=bool(tc.get("slot_source_once", False)),
         horizon_weight=float(tc.get("horizon_weight", 0.0)),
         horizon_free_first=bool(tc.get("horizon_free_first", True)),
         horizon_tokens=int(tc.get("horizon_tokens", 0)),
@@ -578,6 +581,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "spandec_parallel_detach": model_cfg.spandec_parallel_detach,
         "code_enum_k": model_cfg.code_enum_k,
         "code_enum_ratio": model_cfg.code_enum_ratio,
+        "slot_source_once": model_cfg.slot_source_once,
         "horizon_weight": model_cfg.horizon_weight,
         "horizon_free_first": model_cfg.horizon_free_first,
         "horizon_tokens": (model_cfg.horizon_tokens or model_cfg.bound_span_cap),

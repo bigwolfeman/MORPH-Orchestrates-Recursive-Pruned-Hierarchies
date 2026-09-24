@@ -958,6 +958,19 @@ class TULConfig:
     # Note: .agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md
     code_enum_k: int = 1
     code_enum_ratio: float = 0.1
+    # ── SOURCE ONCE (map-cause intervention I-2, 2026-09-24) ─────────────────────────
+    # slot_source_once: the slot loop's per-pass SOURCE enters at pass 0 only. On passes
+    # t >= 1 the core step keeps `DiagonalInjection`'s decay (h_ctx <- A * h_ctx) and drops
+    # its source term (dt * e_ctx) and the per-layer x0/bigram terms; under
+    # `code_enum_k > 1` the LXTUL-E code is added after pass 0 only. So after pass 0 the
+    # entry and the code live in the state alone and the loop must KEEP them. Why: the Lean
+    # account of the slot map (lab/theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-
+    # 0.87-IS-THE-INJECTION-FLOOR.md, theorem 2) says a source re-supplied every pass lets a
+    # depth-independent target be met by a settled trajectory, on which the task cannot
+    # train the blocks' response to the state. Taking the source away gives the loop
+    # something to keep. The account predicts the decay `A` rises (mean >= 0.7) and the
+    # map with it, with no depth value on the coda.
+    slot_source_once: bool = False
     # ── TUL-CODE (arm `tul-code`, 2026-09-14; docs/tul-code-spec.md) ─────────────
     #
     # The slot holds the CODE of the span it precedes. At training time an encoder E
@@ -2534,6 +2547,7 @@ class TULConfig:
                 "knobs would be silently ignored. Set tul.spandec: true or drop them.")
         self._check_spandec_parallel()
         self._check_code_enum()
+        self._check_source_once()
         if self.coda_span_source not in ("cell", "token"):
             raise ValueError(
                 f"tul.coda_span_source must be 'cell' or 'token', got "
@@ -3550,6 +3564,30 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.code_enum_k > 1 with {why}.")
+
+    def _check_source_once(self) -> None:
+        """``tul.slot_source_once`` (I-2). Every refusal names a path on which the slot
+        loop's per-pass source is not the one this knob removes: a loop that does not run
+        in `_tul_core`, or a second per-pass input the knob would leave in place."""
+        if not self.slot_source_once:
+            return
+        _refused = [
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop): the loop runs `_core_region`"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens (the token path): the loop runs `_core_region`"),
+            (self.code, "tul.code: no slot loop runs"),
+            (self.core_stage_cond != "none",
+             f"tul.core_stage_cond={self.core_stage_cond!r}: the db1 step and the Euler "
+             f"ladder bypass `_tul_core`"),
+            (self.fan_trigger_every_pass,
+             "tul.fan_trigger_every_pass: a second source re-added at every pass"),
+            (self.reread, "tul.reread: a read of the prelude at every pass"),
+            (self.loop_denoise, "tul.loop_denoise: every pass enters at a noised target"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.slot_source_once with {why}.")
 
     def _check_gram(self) -> None:
         """``tul.gram`` — LXTUL-G, the stochastic slot loop (morph/model/tul_gram.py).

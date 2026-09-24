@@ -134,7 +134,7 @@ predictions above.
 
 ### Method amendment, 2026-09-24 17:04 (readings added; predictions unchanged)
 
-The Lean account ([`../../theory/tul_exploration/MAP-CAUSE.md`](../../theory/tul_exploration/MAP-CAUSE.md))
+The Lean account ([`../../theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md`](../../theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md))
 arrived after the predictions were frozen and after the chain started. It finds that the
 slot map's 0.87 is the `DiagonalInjection` floor, `sqrt((704 + sum A^2) / 1024)`: the
 context channels are scaled by A, the other 704 pass through, and A has not moved from its
