@@ -177,11 +177,11 @@ def test_init_from_branch_never_touches_optimizer_state():
     import morph.training.train as train_mod
 
     src = inspect.getsource(train_mod.main)
-    resume_idx = src.index("if resume_path and os.path.isfile(resume_path):")
-    # second occurrence, inside the "build things" section (the first is the earlier
-    # ckpt_pnames pre-scan) — find the one that owns the elif init_from_path branch.
-    resume_idx = src.index("if resume_path and os.path.isfile(resume_path):", resume_idx + 1)
-    elif_idx = src.index("elif init_from_path:", resume_idx)
+    # The resume branch that OWNS `elif init_from_path:` is the last occurrence of its
+    # test before that elif. (Counting occurrences broke on 2026-09-23: a comment above
+    # the pre-scan quotes the same line, so "the second one" moved.)
+    elif_idx = src.index("elif init_from_path:")
+    resume_idx = src.rindex("if resume_path and os.path.isfile(resume_path):", 0, elif_idx)
     create_opt_idx = src.index("optimizer = create_optimizer(model, cfg)")
 
     branch_block = src[resume_idx:elif_idx]

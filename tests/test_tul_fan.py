@@ -112,7 +112,10 @@ def _finite_logit_sum(lg: torch.Tensor) -> float:
 # `d778845` on 2026-09-13 — i.e. measured on the tree BEFORE `tul.fan_k` existed.
 HEAD_K4_LOSS = 5.020976543426514
 HEAD_K4_LOGIT_SUM = 1136.2373420511503
-HEAD_K4_GRAD_SUM = 962.8389480001819
+# 2026-09-23: re-pinned after 911ef4e. `TULSlots.prefix_project` stopped expanding W_prefix
+# through a broadcast matmul (6 GB at K = 4); the forward is bit-identical, the W_prefix
+# gradient's fp32 summation order changed. Passes at 911ef4e^, fails at 911ef4e (bisected).
+HEAD_K4_GRAD_SUM = 962.8389462181175
 HEAD_K4_KEYS = 211
 
 

@@ -167,7 +167,10 @@ def _reads(m: MORPHTransformer, inp, layout):
 # `d778845` on 2026-09-13 — i.e. measured on the tree BEFORE `tul.loop_carry` existed.
 HEAD_K2_LOSS = 5.044249534606934
 HEAD_K2_LOGIT_SUM = 842.074198674527
-HEAD_K2_GRAD_SUM = 968.7720451547807
+# 2026-09-23: re-pinned after 911ef4e. `TULSlots.prefix_project` stopped expanding W_prefix
+# through a broadcast matmul (6 GB at K = 4); the forward is bit-identical, the W_prefix
+# gradient's fp32 summation order changed. Passes at 911ef4e^, fails at 911ef4e (bisected).
+HEAD_K2_GRAD_SUM = 968.7720451450658
 HEAD_K2_KEYS = 211
 
 

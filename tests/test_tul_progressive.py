@@ -230,9 +230,11 @@ def test_the_gain_hinge_never_probes_a_detached_position():
     seen: list[tuple[int, torch.Tensor]] = []
     orig = m._slot_gain_penalty
 
-    def spy(core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond, mask, lam):
+    def spy(core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond, mask, lam, **kw):
+        # **kw: the forward passes `carry=` (tul.loop_carry, 6bcbe89) on every call.
         seen.append((int(t), mask.detach().clone()))
-        return orig(core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond, mask, lam)
+        return orig(core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond, mask, lam,
+                    **kw)
 
     m._slot_gain_penalty = spy
     out, _, _ = _run(m)
