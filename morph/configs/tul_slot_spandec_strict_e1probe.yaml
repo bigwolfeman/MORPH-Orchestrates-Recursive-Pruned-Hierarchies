@@ -1,0 +1,28 @@
+# LXTUL Stage 3, arm "lxtul-e1probe": e1 (K = 1, no code) with the parallel head trained as
+# a PROBE. The K = 1 control for the Stage 3 map arms; NO map change.
+# Composes `tul_slot_spandec_strict_e1` and changes ONE thing,
+# `tul.spandec_parallel_detach: false -> true`, plus the run name: the e4 -> e4probe step
+# of Stage 2, applied to e1.
+#
+# WHY. Stage 3 moves the slot map toward gain 1 (`tul_slot_spandec_strict_e4probe_map.yaml`
+# says why). The K = 4 arms read the map through the coda's 4-rollout mixture; this arm and
+# `lxtul-e1probe-map` ask the same question with one rollout, so a map effect that exists
+# only through the mixture is visible as a K = 4 / K = 1 difference. As in e4probe, the
+# head reads `_readout(h_slots).detach()`: its term trains the head's own tensors and sends
+# no gradient to the loop, so the loop is trained by the coda's CE and the ruler's stability
+# terms alone, and the head's par CE reads what the loop put in the exit state.
+#
+# WHAT DIFFERS FROM e1, exactly (tests/test_slot_gain_tail.py pins it):
+# `tul.spandec_parallel_detach` and `wandb.name`. The gain constraint is e1's (the ruler's):
+# row target 0.9, lambda 100, no tail.
+#
+# Note: .agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md
+defaults:
+  - tul_slot_spandec_strict_e1
+  - _self_
+
+tul:
+  spandec_parallel_detach: true
+
+wandb:
+  name: lxtul-e1probe

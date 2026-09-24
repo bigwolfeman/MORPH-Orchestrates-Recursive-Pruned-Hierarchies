@@ -36,6 +36,19 @@ If a slot-loop run still shows the spike train, check three things in order:
 Turning it off (`slot_gain_lambda: 0.0`, `slot_cot_clip: 0.0`) is bit-identical to the
 tree before it existed.
 
+**The tail hinge (2026-09-24, LXTUL Stage 3, UNMEASURED beyond a 30-step smoke).**
+`slot_gain_tail_lambda` (default 0.0 = off, bit-identical) and `slot_gain_tail_target`
+(default 1.1) add `lambda_tail * mean over valid slots of relu(g_s - target)^2` on the
+PER-SLOT gain `g_s` of the same finite difference. The row hinge reads the d-weighted RMS
+of a row's slots, so one slot's excursion hides in it; E14's two deaths at row target 1.02
+were exactly that (`gain_est` 0.99, `gain_est_max` 5-16 on the spike step). The tail lets
+the row target sit near 1 (the Stage 3 arms use 0.98) and charges any single slot above
+1.1. Needs `slot_gain_lambda > 0` (it rides the row hinge's probe). Readings, logged
+whenever the row hinge runs, tail on or off: `loss/gain_slot_p50`, `_p90`, `_max`,
+`_frac_gt1` (fraction of valid slots above 1) and `loss/gain_tail_pen` in `probe.jsonl`
+(`tul/gain_slot_*` in wandb). Arms: `tul_slot_spandec_strict_e{1,4}probe_map.yaml`.
+Code: `_slot_gain_penalty`, `_slot_gain_reduce`; tests `tests/test_slot_gain_tail.py`.
+
 ## 2. What it is, in five lines
 
 A slot loop trained through all its iterations (full BPTT) with ternary QAT drifts the
@@ -90,8 +103,8 @@ result as a depth result.
 - Code: `morph/model/transformer.py` — `MORPHConfig.slot_gain_*`, `_slot_gain_penalty`,
   `_loop_cot_hook` (the clip), the renorm inside `_tul_core`; `morph/training/train.py`
   reports the model loss without the penalty (the sigreg contract) and logs `tul/gain_est`.
-- Tests: `tests/test_slot_gain_reg.py`, `tests/test_slot_cot_clip.py`,
-  `tests/test_onset_capture.py`.
+- Tests: `tests/test_slot_gain_reg.py`, `tests/test_slot_gain_tail.py` (the tail hinge),
+  `tests/test_slot_cot_clip.py`, `tests/test_onset_capture.py`.
 - Records, in order: `lab/experiments/successes/2026-09-03-tul-onset-capture.md` (the
   mechanism, bit-exact replay), `failures/2026-09-04-tul-clip-through-time.md` (the clip
   alone, and A1 at full BPTT), `successes/2026-09-04-tul-forward-levers.md` (the two

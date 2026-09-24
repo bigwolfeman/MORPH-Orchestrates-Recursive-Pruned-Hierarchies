@@ -619,6 +619,20 @@ class MORPHConfig:
     # detonated (arc E2, 2026-09-04). The penalty is the SUM of the per-iteration hinges;
     # gain / gain_max are the mean / max over the iterations.
     slot_gain_all_iters: bool = False
+    # slot_gain_tail_lambda — a SECOND hinge, on the map's PER-SLOT gain (LXTUL Stage 3,
+    # "move the slot map", 2026-09-24): g_s = ||(f(h + d) - f(h))_s|| / ||d_s|| on every
+    # valid slot of the SAME finite difference the row hinge reads, and
+    # lambda_tail * mean_s relu(g_s - slot_gain_tail_target)^2 added to the penalty. The row
+    # hinge holds the TYPICAL gain; this one bounds a single slot's excursion, so the row
+    # target can sit near 1 with small per-slot steps over it and no large one. Arc E14
+    # moved the row target to 1.02 with nothing on the tail and died on ONE directional
+    # excursion (`gain_est_max` 5-16, lab/experiments/failures/2026-09-07-arc-e14-
+    # expansive-dial.md). At M > 1 register cells the unit is a CELL (axis 1 of the compact
+    # sequence, the unit `slot_gain_eps` scales per). 0.0 = OFF: the per-slot readings
+    # (`gain_slot_*`) are still logged whenever the row hinge runs, and nothing they compute
+    # enters the loss, the gradients or the RNG stream.
+    slot_gain_tail_lambda: float = 0.0
+    slot_gain_tail_target: float = 1.1
 
     @property
     def retention_carry_mode(self) -> str:
@@ -2903,7 +2917,8 @@ class MORPHTransformer(nn.Module):
         # of pretending the knob did something (lab/divergence/BREAK-GLASS-IN-CASE-OF-
         # DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md). A TUL model with n_core == 0 asked for
         # a lever on a loop it does not have: that is a contradiction and raises.
-        _levers = {k: getattr(cfg, k) for k in ("slot_cot_clip", "slot_state_renorm", "slot_gain_lambda")
+        _levers = {k: getattr(cfg, k) for k in ("slot_cot_clip", "slot_state_renorm", "slot_gain_lambda",
+                                                  "slot_gain_tail_lambda")
                    if getattr(cfg, k)}
         _why = ("no TUL block" if cfg.tul is None else
                 "n_core=0 (a coreless TUL model has no loop)" if cfg.n_core == 0 else
@@ -2929,6 +2944,16 @@ class MORPHTransformer(nn.Module):
                 "and pinning its norm pins the wrong quantity (the db_loop precedent).")
         if cfg.slot_gain_lambda < 0.0 or cfg.slot_gain_eps <= 0.0:
             raise ValueError("model.slot_gain_lambda must be >= 0 and slot_gain_eps > 0")
+        if cfg.slot_gain_tail_lambda < 0.0 or cfg.slot_gain_tail_target <= 0.0:
+            raise ValueError(
+                f"model.slot_gain_tail_lambda must be >= 0 (0 = off) and slot_gain_tail_target "
+                f"> 0, got {cfg.slot_gain_tail_lambda} / {cfg.slot_gain_tail_target}")
+        if cfg.slot_gain_tail_lambda > 0.0 and cfg.slot_gain_lambda <= 0.0:
+            # The tail rides the row hinge's finite difference: with slot_gain_lambda 0 the
+            # probe never runs, so a tail lambda alone would be a knob that does nothing.
+            raise ValueError(
+                "model.slot_gain_tail_lambda > 0 needs model.slot_gain_lambda > 0: the tail "
+                "hinge reads the row hinge's finite difference and never runs without it.")
         if cfg.slot_gain_lambda > 0.0 and cfg.scse_enabled and _why is None:
             raise NotImplementedError("model.slot_gain_lambda under SCSE is not defined (deviation carrier)")
         self.scse: _SCSE | None = (
@@ -6101,14 +6126,35 @@ class MORPHTransformer(nn.Module):
             self._core_aux = _aux
         if _gain_terms:
             # One sampled iteration: its dict as before. Every iteration: the hinges SUM
-            # (each iteration's map is held under the target), the gains report mean / max.
-            _gain_reg = {
-                "gain": torch.stack([g["gain"] for g in _gain_terms]).mean(),
-                "gain_max": torch.stack([g["gain_max"] for g in _gain_terms]).max(),
-                "penalty": torch.stack([g["penalty"] for g in _gain_terms]).sum(),
-                "n_iters": float(len(_gain_terms)),
-            }
+            # (each iteration's map is held under the target), the gains report mean / max
+            # (`_slot_gain_reduce`).
+            _gain_reg = self._slot_gain_reduce(_gain_terms)
         return xn, h, depths, g_traj, _db_traj, _gain_reg, _mep_keep
+
+    @staticmethod
+    def _slot_gain_reduce(terms: list[dict]) -> dict:
+        """One step's gain-hinge dict from the per-iteration dicts of `_slot_gain_penalty`.
+
+        The row hinges SUM over iterations and the row gains report mean / max, as before.
+        The per-slot readings pool EVERY regularised iteration's valid slots (a slot read at
+        two iterations is two samples of the map; pads and inactive slots arrive as NaN and
+        are skipped); the tail term sums like the hinge. No valid slot anywhere reads NaN
+        for the quantiles, the max and the fraction: an empty sample is not a zero.
+        """
+        gs = torch.cat([g["g_slot"].flatten() for g in terms])
+        ok = ~torch.isnan(gs)
+        return {
+            "gain": torch.stack([g["gain"] for g in terms]).mean(),
+            "gain_max": torch.stack([g["gain_max"] for g in terms]).max(),
+            "penalty": torch.stack([g["penalty"] for g in terms]).sum(),
+            "n_iters": float(len(terms)),
+            "gain_slot_p50": torch.nanquantile(gs, 0.5),
+            "gain_slot_p90": torch.nanquantile(gs, 0.9),
+            "gain_slot_max": torch.where(ok.any(), torch.where(ok, gs, -torch.inf).max(),
+                                         torch.nan),
+            "gain_slot_frac_gt1": (gs > 1.0).sum().float() / ok.sum().float(),
+            "gain_tail_pen": torch.stack([g["tail_pen"] for g in terms]).sum(),
+        }
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
                            mask, lam: float, carry=None) -> dict:
@@ -6160,12 +6206,32 @@ class MORPHTransformer(nn.Module):
                               stage_cond=stage_cond, carry=carry)
         finally:
             _restore()
-        num = ((f1 - f0) * m).float().flatten(1).norm(dim=1)                       # [B]
+        df = (f1 - f0) * m
+        num = df.float().flatten(1).norm(dim=1)                                    # [B]
         den = d.float().flatten(1).norm(dim=1) + 1e-6
         gain = (num / den)                                                         # [B]
         hinge = torch.relu(gain - float(self.cfg.slot_gain_target))
         pen = lam * (hinge * hinge).mean()
-        return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen}
+        # The PER-SLOT gain of the same finite difference (`slot_gain_tail_*`): the row
+        # gain above is the d-weighted RMS of these, so a single slot's excursion is
+        # diluted by its row's other slots. Pads and inactive slots are excluded by the
+        # mask (their d and their f-difference are both 0); they read NaN so the
+        # quantiles in `_slot_gain_reduce` skip them. With the tail off the readings come
+        # from a detached difference, so they add no node to the graph and nothing to the
+        # loss: the instruments are free and the default is the function before them.
+        tail_lam = float(self.cfg.slot_gain_tail_lambda)
+        valid = mask.to(torch.bool)
+        n_valid = valid.sum()
+        g_slot = ((df if tail_lam > 0.0 else df.detach()).float().flatten(2).norm(dim=2)
+                  / (d.float().flatten(2).norm(dim=2) + 1e-6))                     # [B, S]
+        th = torch.relu(g_slot - float(self.cfg.slot_gain_tail_target))
+        tail = tail_lam * (th * th * valid).sum() / n_valid.clamp_min(1)
+        if tail_lam > 0.0:
+            pen = pen + tail
+        g_det = g_slot.detach()
+        return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen,
+                "g_slot": torch.where(valid, g_det, torch.full_like(g_det, float("nan"))),
+                "tail_pen": tail.detach()}
 
     # ── LXTUL-G (tul.gram; morph/model/tul_gram.py) ───────────────────────────────
 
@@ -11010,6 +11076,11 @@ class MORPHTransformer(nn.Module):
             if "n_iters" in gain_reg:
                 groups["gain_n_iters"] = gain_reg["gain"].new_tensor(gain_reg["n_iters"])
             groups["gain_reg_weighted"] = gain_reg["penalty"].detach()
+            # Per-slot readings of the same finite difference (`slot_gain_tail_*`); the
+            # weighted tail term is inside `gain_reg_weighted` and reported apart as well.
+            for _gk in ("gain_slot_p50", "gain_slot_p90", "gain_slot_max",
+                        "gain_slot_frac_gt1", "gain_tail_pen"):
+                groups[_gk] = gain_reg[_gk]
             groups["loss"] = groups["loss"] + gain_reg["penalty"]
 
         if mux_loss is not None and groups is not None:

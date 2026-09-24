@@ -144,7 +144,10 @@ built for, both scale-blind to it AND to the typical-gain hinge:
 
 `lab/experiments/failures/2026-09-07-arc-e12-k12-panel.md`, `…-e13-m12-panel.md`,
 `…-e14-expansive-dial.md`. The missing lever for both is directional (the map's largest
-direction at the live operating point), which no shipped term measures.
+direction at the live operating point), which no shipped term measures. 2026-09-24:
+`model.slot_gain_tail_lambda` (off by default) hinges each SLOT's gain from the same
+finite difference, so one slot's excursion no longer hides in the row mean; it resolves
+slots, not directions within a slot (break-glass doc, "The tail hinge").
 
 The same assay refuted a Jacobian penalty along a power-iterated direction (STARS): inert
 once per step (reads the typical gain), and 2 of 6 with two within-step power iterations at

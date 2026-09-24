@@ -116,6 +116,16 @@ model:
   #   one sample missed the expansive one (arc E2 detonated at 2556). ~2x the penalty's
   #   extra core steps. false = the measured single-sample constraint.
   slot_gain_all_iters: false
+  # slot_gain_tail_lambda: a second hinge on the PER-SLOT gain g_s of the same finite
+  #   difference, lambda_tail * mean over valid slots of relu(g_s - slot_gain_tail_target)^2,
+  #   added to the row hinge. The row hinge holds the typical gain; the tail bounds ONE
+  #   slot's excursion, so a row target near 1 can allow small steps over 1 and block a
+  #   large one (arc E14 died at row target 1.02 on a single excursion, gain_est_max 5-16).
+  #   Needs slot_gain_lambda > 0. 0.0 = OFF and bit-identical; the per-slot readings
+  #   (gain_slot_p50 / _p90 / _max / _frac_gt1, gain_tail_pen) are logged either way.
+  #   First arms: tul_slot_spandec_strict_e{1,4}probe_map.yaml (LXTUL Stage 3).
+  slot_gain_tail_lambda: 0.0
+  slot_gain_tail_target: 1.1
   slot_cot_clip: 4.0
   slot_state_renorm: false
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth

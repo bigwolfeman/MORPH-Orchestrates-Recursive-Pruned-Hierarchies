@@ -607,6 +607,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_target=float(getattr(m, "slot_gain_target", 0.9)),
         slot_gain_eps=float(getattr(m, "slot_gain_eps", 0.02)),
         slot_gain_all_iters=bool(getattr(m, "slot_gain_all_iters", False)),
+        slot_gain_tail_lambda=float(getattr(m, "slot_gain_tail_lambda", 0.0)),
+        slot_gain_tail_target=float(getattr(m, "slot_gain_tail_target", 1.1)),
         mtp_heads=int(getattr(m, "mtp_heads", 1)),
         injection_channels=str(getattr(m, "injection_channels", "ctx")),
         core_fixed_point_lambda=float(getattr(m, "core_fixed_point_lambda", 0.0)),
@@ -3571,7 +3573,9 @@ def main(cfg: DictConfig) -> None:
                 # whether the forward on that batch was itself abnormal (a forward
                 # explosion moves the loss; a backward-only blow-up does not).
                 _probe_log["loss/total"] = float(loss.detach())
-                for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted",
+                for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters",
+                            "gain_slot_p50", "gain_slot_p90", "gain_slot_max", "gain_slot_frac_gt1",
+                            "gain_tail_pen", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted",
                             "egrad", "egrad_weighted", "egrad_train", "egrad_auc", "egrad_pos_frac",
                             "pass_residual", "pass_res_weighted",
                             "oracle_z", "oracle_z_weighted",
@@ -3885,6 +3889,8 @@ def main(cfg: DictConfig) -> None:
                     log["tul/tokens_per_batch"] = _npos
                 for _k in ("ce_tokens", "ce_first_tok", "first_tok_counterfactual", "mux_local",
                            "gain_est", "gain_est_max", "gain_reg_weighted", "gain_n_iters",
+                           "gain_slot_p50", "gain_slot_p90", "gain_slot_max",
+                           "gain_slot_frac_gt1", "gain_tail_pen",
                            "sigreg", "spandec_ce", "spandec_n_tokens", "spandec_weighted",
                            "egrad", "egrad_weighted", "egrad_train", "egrad_auc",
                            "egrad_pos_frac", "pass_residual", "pass_res_weighted",

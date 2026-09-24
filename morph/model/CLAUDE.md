@@ -47,7 +47,10 @@ not by reading the diff.
   (`_slot_gain_penalty`): the finite-difference gain reading, at the detached operating point,
   with the global RNG saved and restored around them. Not a duplicated forward; the loss and
   every later random draw are bit-identical to a run with the penalty off
-  (`tests/test_slot_gain_reg.py`).
+  (`tests/test_slot_gain_reg.py`). The same difference also yields a PER-SLOT gain
+  (`gain_slot_p50/_p90/_max/_frac_gt1`, logged whenever the hinge runs) and, at
+  `slot_gain_tail_lambda > 0`, a tail hinge on it (`_slot_gain_reduce` pools iterations;
+  lambda 0 is bit-identical to the code before it, `tests/test_slot_gain_tail.py`).
 
 * `RMSNorm` returns **fp32** even under autocast: its final `* self.weight` promotes.
   Anything that scatters into or concatenates with a normed carrier must cast at the

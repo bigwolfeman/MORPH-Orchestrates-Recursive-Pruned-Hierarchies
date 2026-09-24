@@ -1,0 +1,25 @@
+# LXTUL Stage 3, arm "lxtul-e1probe-map": e1probe with the slot map MOVED toward gain 1.
+# The K = 1 twin of `lxtul-e4probe-map` (read `tul_slot_spandec_strict_e4probe_map.yaml`
+# for the why: arc E14, the row hinge that cannot see one slot's excursion, the tail).
+# Composes `tul_slot_spandec_strict_e1probe` and changes the SAME three keys, plus the name:
+#
+#   model.slot_gain_target      0.9 -> 0.98   the row hinge: the typical gain may sit near 1
+#   model.slot_gain_tail_lambda 0.0 -> 100.0  a per-slot hinge (the tail) ...
+#   model.slot_gain_tail_target (1.1)         ... on any single slot's gain above 1.1
+#
+# WHAT DIFFERS FROM e1probe, exactly (tests/test_slot_gain_tail.py pins it): the three keys
+# and `wandb.name`. The fixed-point term, the cotangent clip, `slot_gain_eps`,
+# `slot_gain_lambda` and the single-sample hinge are unchanged.
+#
+# Read against `lxtul-e1probe` at the same step; the K = 4 pair is e4probe / e4probe-map.
+defaults:
+  - tul_slot_spandec_strict_e1probe
+  - _self_
+
+model:
+  slot_gain_target: 0.98
+  slot_gain_tail_lambda: 100.0
+  slot_gain_tail_target: 1.1
+
+wandb:
+  name: lxtul-e1probe-map

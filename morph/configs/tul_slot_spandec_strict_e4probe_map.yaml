@@ -1,0 +1,41 @@
+# LXTUL Stage 3, arm "lxtul-e4probe-map": e4probe with the slot map MOVED toward gain 1.
+# Composes `tul_slot_spandec_strict_e4probe` (read it, e4 and e1: the recipe, the head and
+# the probe live there) and changes THREE keys, all on the slot map's gain constraint,
+# plus the run name:
+#
+#   model.slot_gain_target      0.9 -> 0.98   the row hinge: the typical gain may sit near 1
+#   model.slot_gain_tail_lambda 0.0 -> 100.0  a per-slot hinge (the tail) ...
+#   model.slot_gain_tail_target (1.1)         ... on any single slot's gain above 1.1
+#
+# WHY. On every LXTUL-E arm the map sat at a typical gain of 0.87-0.89 all run (max 0.94,
+# 0 % of steps above 0.95): the 0.9 hinge holds it well inside the contractive region.
+# The design target is a map that is MOSTLY contractive and APPROACHES 1, with occasional
+# SMALL steps over 1. Arc E14 (lab/experiments/failures/2026-09-07-arc-e14-expansive-dial.md)
+# moved the row target to 1.02: the map sat at 0.99, the loop's contribution rose 30-85 %,
+# and both arms died near step 4000 on ONE large directional excursion (`gain_est_max`
+# 5-16 on the spike step while the row reading sat at 0.99). The row hinge cannot see that
+# excursion: it reads the d-weighted RMS of the row's slots. The tail hinge reads every
+# slot's own gain from the SAME finite difference, so it allows the mean near 1 and small
+# per-slot steps over it, and charges a large one quadratically.
+#
+# WHAT DIFFERS FROM e4probe, exactly (tests/test_slot_gain_tail.py pins it): the three keys
+# above and `wandb.name`. The fixed-point term, the cotangent clip 4.0, `slot_gain_eps`,
+# `slot_gain_lambda` 100 and the single-sample hinge are e4probe's. The head is still a
+# probe (`tul.spandec_parallel_detach: true`), so the loop is trained by the coda's
+# mixture CE and the stability terms alone, and the head's par CE reads what the moved
+# map puts in the exit state.
+#
+# Instruments: `loss/gain_est` (row), `loss/gain_slot_p50` / `_p90` / `_max` /
+# `_frac_gt1` and `loss/gain_tail_pen` in probe.jsonl (also `tul/gain_slot_*` in wandb).
+# Read against `lxtul-e4probe` at the same step. Pair with `lxtul-e1probe-map` (K = 1).
+defaults:
+  - tul_slot_spandec_strict_e4probe
+  - _self_
+
+model:
+  slot_gain_target: 0.98
+  slot_gain_tail_lambda: 100.0
+  slot_gain_tail_target: 1.1
+
+wandb:
+  name: lxtul-e4probe-map
