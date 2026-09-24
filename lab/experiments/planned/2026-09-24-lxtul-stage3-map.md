@@ -131,3 +131,21 @@ notul pairing, samples. Artifacts: JSON and `.runlog.txt` files in
 A Lean agent is working on the causal account of the contraction in parallel
 (Wolfe, 2026-09-24). Its account is read beside these results. It does not change the
 predictions above.
+
+### Method amendment, 2026-09-24 17:04 (readings added; predictions unchanged)
+
+The Lean account ([`../../theory/tul_exploration/MAP-CAUSE.md`](../../theory/tul_exploration/MAP-CAUSE.md))
+arrived after the predictions were frozen and after the chain started. It finds that the
+slot map's 0.87 is the `DiagonalInjection` floor, `sqrt((704 + sum A^2) / 1024)`: the
+context channels are scaled by A, the other 704 pass through, and A has not moved from its
+0.447 init in any model read (checked by me on e4probe, the ruler and notul: floors 0.864,
+0.865, 0.867 against maps 0.870, 0.877-0.883, 0.92-0.97). A map at the floor means the
+core's blocks barely respond to a change of the slot state. Two readings are added, both
+from the step-5000 checkpoints, no forward pass needed for the first:
+
+- **Injection decay A** per arm (`injection.log_A`), and the floor it implies.
+- **The blocks' part of the gain**, map minus floor, per pass, beside the map itself.
+
+These decide how B-1 reads. The floor hinge can be met by raising A alone (A about 0.83
+gives a floor of 0.95) with the blocks as quiet as before. B-1 holding with the map within
+0.03 of B's own floor means the gain moved through the injection, not through the blocks.
