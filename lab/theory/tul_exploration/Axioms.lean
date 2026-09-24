@@ -1,0 +1,110 @@
+/-
+Sorry check.  Run with
+
+  lake env lean Axioms.lean
+
+Every line of the output must read `depends on axioms: [propext, Classical.choice, Quot.sound]`.
+`sorryAx` in any line means the theorem is unproved.
+-/
+import TulExploration
+
+-- T3: Bayes.lean
+#print axioms TulExploration.sum_mul_log_le_log_sum
+#print axioms TulExploration.sum_mul_pos_of_law
+#print axioms TulExploration.mixture_le_bayes
+#print axioms TulExploration.multisample_le_bayes
+#print axioms TulExploration.multisample_bayes_attained
+#print axioms TulExploration.log_add_log_le_bool
+#print axioms TulExploration.product_reader_le
+#print axioms TulExploration.enumerated_pair_gt
+#print axioms TulExploration.iid_pair_le
+-- T2: HardMin.lean
+#print axioms TulExploration.bestOf_const
+#print axioms TulExploration.bestOf_mixed
+#print axioms TulExploration.bestOf_eq
+#print axioms TulExploration.sum_bestOf
+#print axioms TulExploration.max_quad
+#print axioms TulExploration.hardObj_eq
+#print axioms TulExploration.cK_pos
+#print axioms TulExploration.cK_zero
+#print axioms TulExploration.hardObj_hasDerivWithinAt
+#print axioms TulExploration.hardObj_le_opt
+#print axioms TulExploration.hardObj_escape
+#print axioms TulExploration.hardObj_one
+#print axioms TulExploration.hard_gain_eq_deploy_price
+#print axioms TulExploration.hardObj_useless_spread
+-- T1: Smooth.lean
+#print axioms TulExploration.smoothObj_det
+#print axioms TulExploration.log_mean_exp_le
+#print axioms TulExploration.log_mean_exp_lt
+#print axioms TulExploration.smoothObj_le_common_max
+#print axioms TulExploration.smoothObj_lt_common_max
+#print axioms TulExploration.smoothObj_one
+#print axioms TulExploration.single_draw_le_best
+#print axioms TulExploration.hasDerivAt_lin
+#print axioms TulExploration.hasDerivAt_quad
+#print axioms TulExploration.hasDerivAt_quad'
+#print axioms TulExploration.qD_pos
+#print axioms TulExploration.hasDerivAt_qD
+#print axioms TulExploration.hasDerivAt_qN
+#print axioms TulExploration.hasDerivAt_logmean
+#print axioms TulExploration.hasDerivAt_ratio
+#print axioms TulExploration.quadObj_eq_smoothObj
+#print axioms TulExploration.matched_curvature_optimal
+#print axioms TulExploration.hasDerivAt_quadObj
+#print axioms TulExploration.deriv_quadObj
+#print axioms TulExploration.hasDerivAt_quadObj1
+#print axioms TulExploration.q_at_zero
+#print axioms TulExploration.quadObj_deriv_zero
+#print axioms TulExploration.quadObj_deriv2_zero
+#print axioms TulExploration.quadObj_continuousAt
+#print axioms TulExploration.quadObj_isLocalMax
+#print axioms TulExploration.quadObj_isLocalMin
+#print axioms TulExploration.sum_prod_signs
+#print axioms TulExploration.sum_sgn_bool
+#print axioms TulExploration.sgn_sq
+#print axioms TulExploration.sum_sgn_coord
+#print axioms TulExploration.sum_sgn_mul_coord
+#print axioms TulExploration.iid_sum_sgn
+#print axioms TulExploration.iid_sum_sgn_sq
+#print axioms TulExploration.iid_m2
+#print axioms TulExploration.iid_stats
+#print axioms TulExploration.iid_matched_isLocalMax
+#print axioms TulExploration.iid_deriv2
+#print axioms TulExploration.iid_sharp_isLocalMin
+#print axioms TulExploration.not_isLocalMax_of_deriv2_pos
+#print axioms TulExploration.strict_localMax_of_deriv2_neg
+#print axioms TulExploration.quadObj_differentiable
+#print axioms TulExploration.iid_sharp_not_isLocalMax
+#print axioms TulExploration.iid_matched_strict
+#print axioms TulExploration.sharp_reader_counterexample
+#print axioms TulExploration.enumerated_pair_deriv2
+-- T4: Hops.lean
+#print axioms TulExploration.Prog.length_asked
+#print axioms TulExploration.Prog.run_congr
+#print axioms TulExploration.Prog.eval_bind
+#print axioms TulExploration.Prog.cost_bind
+#print axioms TulExploration.Prog.cost_loop_le
+#print axioms TulExploration.Prog.eval_hop
+#print axioms TulExploration.Prog.cost_hop
+#print axioms TulExploration.succT_iter
+#print axioms TulExploration.detour_iter_le
+#print axioms TulExploration.detour_iter_after
+#print axioms TulExploration.hop_lower_bound
+#print axioms TulExploration.passes_needed
+#print axioms TulExploration.pointer_loop_exact
+#print axioms TulExploration.fixed_after
+#print axioms TulExploration.teacher_forced_one_lookup
+#print axioms TulExploration.fixed_table_no_lookups
+#print axioms TulExploration.double_iterate
+-- T5: Washout.lean
+#print axioms TulExploration.washout
+#print axioms TulExploration.reinjection_separates
+#print axioms TulExploration.reinjected_rollouts_stay_apart
+#print axioms TulExploration.reinjected_linear_diff
+#print axioms TulExploration.entry_linear_diff
+#print axioms TulExploration.pow_apply_eigen
+#print axioms TulExploration.reinjected_eigen_diff
+#print axioms TulExploration.entry_eigen_diff
+#print axioms TulExploration.geom_times
+#print axioms TulExploration.geom_mono
