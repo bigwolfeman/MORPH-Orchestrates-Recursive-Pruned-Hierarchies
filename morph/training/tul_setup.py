@@ -97,6 +97,9 @@ KNOWN_TUL_KEYS = frozenset({
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
     "spandec_per_pass", "spandec_reads_cells", "spandec_target_offset",
     "spandec_weight",
+    # LXTUL-E (tul.spandec_parallel, 2026-09-23): the committed product reader
+    "spandec_parallel", "spandec_parallel_k", "spandec_parallel_weight",
+    "spandec_parallel_code_init",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
@@ -314,6 +317,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_pass_horizon_max=int(tc.get("spandec_pass_horizon_max", 6)),
         spandec_pass_weight=float(tc.get("spandec_pass_weight", 1.0)),
         spandec_pass_tokens=int(tc.get("spandec_pass_tokens", 8)),
+        spandec_parallel=bool(tc.get("spandec_parallel", False)),
+        spandec_parallel_k=int(tc.get("spandec_parallel_k", 1)),
+        spandec_parallel_weight=float(tc.get("spandec_parallel_weight", 1.0)),
+        spandec_parallel_code_init=float(tc.get("spandec_parallel_code_init", 0.1)),
         horizon_weight=float(tc.get("horizon_weight", 0.0)),
         horizon_free_first=bool(tc.get("horizon_free_first", True)),
         horizon_tokens=int(tc.get("horizon_tokens", 0)),
@@ -555,6 +562,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "spandec_pass_horizon_max": model_cfg.spandec_pass_horizon_max,
         "spandec_pass_weight": model_cfg.spandec_pass_weight,
         "spandec_pass_tokens": model_cfg.spandec_pass_tokens,
+        "spandec_parallel": model_cfg.spandec_parallel,
+        "spandec_parallel_k": model_cfg.spandec_parallel_k,
+        "spandec_parallel_weight": model_cfg.spandec_parallel_weight,
+        "spandec_parallel_code_init": model_cfg.spandec_parallel_code_init,
         "horizon_weight": model_cfg.horizon_weight,
         "horizon_free_first": model_cfg.horizon_free_first,
         "horizon_tokens": (model_cfg.horizon_tokens or model_cfg.bound_span_cap),
@@ -780,6 +791,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                   f"NOT comparable with an offset-1 arm's (it grades a harder span). "
                   f"This is not spandec_horizon, which WIDENS the target instead of "
                   f"moving it.", flush=True)
+        if model_cfg.spandec_parallel:
+            _kp = model_cfg.spandec_parallel_k
+            print(f"  TUL PARALLEL SPAN HEAD ON (LXTUL-E): K={_kp} "
+                  f"{'enumerated codes under the exact mixture likelihood' if _kp > 1 else 'no code (the twin)'}"
+                  f", weight={model_cfg.spandec_parallel_weight} — span s+{_k} decoded AT "
+                  f"ONCE from z with NO token input. TRAINING-ONLY target and scorer, never "
+                  f"a decoder (morph/model/tul_spandec_parallel.py)", flush=True)
         if model_cfg.spandec_reads_cells:
             print(f"  TUL SPANDEC READS CELLS: the decoder cross-attends, per layer, to "
                   f"the slot's {model_cfg.slot_cells} register cells — the same states "

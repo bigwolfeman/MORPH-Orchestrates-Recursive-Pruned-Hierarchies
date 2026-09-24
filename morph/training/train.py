@@ -162,7 +162,10 @@ def evaluate(
                           # tul.coda_logit_l2 (spectral decoupling, 2026-09-23): folded
                           # straight into the fused CE kernel, so subtracted the same
                           # way so val loss stays the MODEL's CE.
-                          "coda_logit_l2_weighted"):
+                          "coda_logit_l2_weighted",
+                          # tul.spandec_parallel (LXTUL-E, 2026-09-23): the parallel
+                          # head's mixture term, so val loss stays the MODEL's CE.
+                          "par_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -222,6 +225,12 @@ def evaluate(
                 # the sampler, not the flow term. Read train/code_fm_rel and tul/code_fm_*.)
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
+            # tul.spandec_parallel (LXTUL-E): `par` (the term), `par_ce` (the mixture CE
+            # per span token), `par_n_tokens`, `par_k` and at K > 1 the code-usage stats.
+            # A variable number of keys (one `par_code_win_{k}` per code), so a scan.
+            for _pk in [k for k in out if str(k) == "par" or str(k).startswith("par_")]:
+                if torch.is_tensor(out[_pk]):
+                    acc.setdefault(f"val/{_pk}", []).append(float(out[_pk]))
             # ── LXTUL's fan (tul.fan_k), accumulated over the val batches ─────────
             # The ORACLE family is eval-only and has no train-side twin, so it keeps the
             # `fan/` namespace the arm is read in. The two readings the TRAIN step also
@@ -1073,6 +1082,58 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device,
           f"tensors via {'raw' if state is raw else 'stripped'} keys; "
           f"{len(missing)} missing / {len(unexpected)} unexpected", flush=True)
     return list(missing), list(unexpected)
+
+
+def check_init_from_keys(missing: list[str], unexpected: list[str], model: nn.Module,
+                         new_modules: list[str] | tuple[str, ...], path: str) -> list[str]:
+    """``training.init_from_new_modules``: the STRICT init_from key audit.
+
+    ``load_weights_only`` on its own only refuses a load that matches under half the
+    model; a single homeless tensor is printed as a count and dropped. When a run seeds a
+    model that ADDS modules to a checkpoint (LXTUL-E Stage 0: the ruler plus a parallel
+    head), exactly those modules may be missing and nothing else may move. So:
+
+    * every UNEXPECTED key raises (a checkpoint tensor with no home is lost state);
+    * every MISSING key must lie under a listed prefix (``_prune_mask`` buffers keep the
+      back-compat exemption ``load_checkpoint`` gives them);
+    * every listed prefix must be WHOLLY missing — each model tensor under it absent from
+      the checkpoint — so a prefix cannot excuse a partial load of a module the
+      checkpoint did carry.
+
+    Prints the missing list in full and returns it."""
+    prefixes = tuple(str(p) for p in new_modules)
+
+    def _canon(k: str) -> str:
+        return k.replace("._orig_mod.", ".").replace("_orig_mod.", "")
+
+    if unexpected:
+        raise RuntimeError(
+            f"init_from {path}: {len(unexpected)} checkpoint tensor(s) have no home in this "
+            f"model: {sorted(unexpected)[:8]}{'...' if len(unexpected) > 8 else ''}")
+    bad = [k for k in missing
+           if not _canon(k).startswith(prefixes) and not k.endswith("_prune_mask")]
+    if bad:
+        raise RuntimeError(
+            f"init_from {path}: {len(bad)} model tensor(s) are missing from the checkpoint "
+            f"outside training.init_from_new_modules={list(prefixes)}: "
+            f"{sorted(bad)[:8]}{'...' if len(bad) > 8 else ''}")
+    miss = {_canon(k) for k in missing}
+    for p in prefixes:
+        under = [_canon(k) for k in model.state_dict() if _canon(k).startswith(p)]
+        if not under:
+            raise RuntimeError(f"init_from {path}: training.init_from_new_modules prefix "
+                               f"{p!r} names no tensor of this model")
+        loaded = [k for k in under if k not in miss]
+        if loaded:
+            raise RuntimeError(
+                f"init_from {path}: prefix {p!r} is listed as NEW but the checkpoint "
+                f"carries {len(loaded)} of its {len(under)} tensor(s) ({loaded[:4]}). A "
+                f"new module is wholly missing; drop it from the list or fix the seed.")
+    print(f"  init_from {path}: {len(missing)} tensor(s) NEW in this model (kept their "
+          f"fresh init), all under {list(prefixes)}; 0 unexpected:", flush=True)
+    for k in sorted(missing):
+        print(f"      {k}", flush=True)
+    return list(missing)
 
 
 @torch.no_grad()
@@ -2436,6 +2497,33 @@ def main(cfg: DictConfig) -> None:
         full_config_dict["train_only_groups"] = dict(_groups)
     assert_code_target_front_frozen(model)
 
+    # ── training.frozen_eval: the FROZEN model runs in eval mode (LXTUL-E Stage 0) ──────
+    # `train_only` freezes PARAMETERS; this freezes BEHAVIOUR. With it on, every place the
+    # loop below would call `model.train()` calls `_train_mode()` instead: the whole tree
+    # goes to eval (no dropout, no token-state dropout, the eval slot depth, no
+    # training-only loop terms) and only the modules the train_only prefixes name go back
+    # to train. So the head is fitted on the deterministic exit state the val pass and the
+    # offline scorer read. A per-step check below refuses a forward with the root in train
+    # mode, so no path can leave it there silently.
+    _frozen_eval = bool(getattr(cfg.training, "frozen_eval", False))
+    if _frozen_eval and not _train_only:
+        raise ValueError("training.frozen_eval needs training.train_only: with nothing "
+                         "trained there is no module to leave in train mode")
+    _frozen_root = getattr(model, "_orig_mod", model)
+
+    def _train_mode() -> None:
+        if _frozen_eval:
+            from morph.training.freeze import apply_frozen_eval
+            apply_frozen_eval(model, _train_only)
+        else:
+            model.train()
+
+    if _frozen_eval:
+        from morph.training.freeze import apply_frozen_eval
+        _fe_mods = apply_frozen_eval(model, _train_only)
+        print(f"  [frozen_eval] model in EVAL mode; {len(_fe_mods)} module(s) in train mode "
+              f"under {list(_train_only)}", flush=True)
+
     # ── Optimizer + LR schedule ───────────────────────────────────────────
     optimizer = create_optimizer(model, cfg)
     lr_fn = create_lr_schedule(cfg)
@@ -2638,8 +2726,14 @@ def main(cfg: DictConfig) -> None:
         if not os.path.isfile(init_from_path):
             raise FileNotFoundError(f"training.init_from not found: {init_from_path}")
         print(f"Init-from (weights only) {init_from_path}")
-        load_weights_only(init_from_path, model, device,
-                          allow_plain_to_tul=_plain_to_tul)
+        _if_missing, _if_unexp = load_weights_only(init_from_path, model, device,
+                                                   allow_plain_to_tul=_plain_to_tul)
+        _new_mods = list(getattr(tr, "init_from_new_modules", None) or [])
+        if _new_mods:
+            if _plain_to_tul:
+                raise ValueError("training.init_from_new_modules and "
+                                 "training.resume_plain_to_tul are two key audits; set one")
+            check_init_from_keys(_if_missing, _if_unexp, model, _new_mods, init_from_path)
 
     # ── tul.code_target_ref (spec §17.1): the frozen VAE-stage twin ──────────────────
     # AFTER quantisation and AFTER the weights load, so the twin is an exact copy of what
@@ -2865,7 +2959,7 @@ def main(cfg: DictConfig) -> None:
         scaler.update()
 
     # ── Training loop ─────────────────────────────────────────────────────
-    model.train()
+    _train_mode()
     step_times: list[float] = []
     t_start = time.perf_counter()
     # In-process divergence guard: counts consecutive eval-cadence points with train ppl
@@ -3274,6 +3368,11 @@ def main(cfg: DictConfig) -> None:
                             {k: (v.cpu() if torch.is_tensor(v) else v)
                              for k, v in vars(_layout).items()}},
                            os.path.join(_bdump_dir, f"batch_{step:06d}.pt"))
+            if _frozen_eval and _frozen_root.training:
+                raise RuntimeError(
+                    f"training.frozen_eval: the frozen model is in TRAIN mode at step "
+                    f"{step}. Some path called model.train() instead of _train_mode(); the "
+                    f"head would be fitted on training-mode cells.")
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     out = model(x, labels=y, bag_size=phase.bag_size,
@@ -3602,6 +3701,7 @@ def main(cfg: DictConfig) -> None:
                                                    # online variance floor, its own weight
                                                    # (code_enc_var_lambda), separate from
                                                    # code_target_weight
+                        "par_weighted",   # tul.spandec_parallel (LXTUL-E)
                         "coda_logit_l2_weighted"):  # tul.coda_logit_l2 (spectral
                                                      # decoupling, 2026-09-23): folded
                                                      # into the fused CE kernel
@@ -3809,6 +3909,13 @@ def main(cfg: DictConfig) -> None:
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("gk_") and torch.is_tensor(out[_k]):
                         log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.spandec_parallel (LXTUL-E Stage 0 / Phase B): `par` and its weighted
+                # twin, `par_ce` (the mixture CE per span token), `par_n_tokens`, `par_k`,
+                # and at K > 1 `par_resp_entropy`, `par_code_win_{k}`, `par_ce_code_best`
+                # and `par_width_gain`. Detached tensors from the forward (no sync there).
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if (_k == "par" or _k.startswith("par_")) and torch.is_tensor(out[_k]):
+                        log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_grade (spec §17.2): the grades, the cosines to E(best) and
                 # E(true), the degenerate fraction and the per-pass `code_grade_cos_l{t}`.
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
@@ -3958,6 +4065,14 @@ def main(cfg: DictConfig) -> None:
                 # wandb history is not readable locally; the log file must be sufficient)
                 if isinstance(out, dict) and out.get("code_fm_rel") is not None:
                     _second += f"fm={float(out['code_fm_rel']):.3f}  "
+                # tul.spandec_parallel (LXTUL-E): the head's mixture CE per span token is
+                # the arm's reading (Stage 0 trains nothing else), so the log carries it,
+                # with the code-usage entropy and the in-head width gain at K > 1.
+                if isinstance(out, dict) and out.get("par_ce") is not None:
+                    _second += f"par_ce={float(out['par_ce']):.4f}  "
+                    if out.get("par_resp_entropy") is not None:
+                        _second += (f"par_H={float(out['par_resp_entropy']):.3f}  "
+                                    f"par_gain={float(out['par_width_gain']):+.4f}  ")
                 # tul.code_grade (spec §17.2): the graded term fires on one step in
                 # `code_grade_every`, and its readings are the arm. Same reason the flow
                 # share is here: a resumed run's wandb history is not readable locally, so
@@ -4043,7 +4158,7 @@ def main(cfg: DictConfig) -> None:
                 f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
                 flush=True,
             )
-            model.train()
+            _train_mode()
 
         # docs/tul-gate-spec.md §10: `w` starts at exactly zero and takes a gradient
         # every step, so a norm still at the floor here means the parameter is frozen.
@@ -4067,7 +4182,7 @@ def main(cfg: DictConfig) -> None:
                     f"{k.split('/')[-1]}={v:.3f}" for k, v in sorted(gen_metrics.items())),
                     flush=True)
             _emit_gen(f"step {step}", gen_text)
-            model.train()
+            _train_mode()
 
         # ── Checkpoint ────────────────────────────────────────────────────
         # ckpt_every <= 0 means "never checkpoint" (short probe / smoke runs). Guarded

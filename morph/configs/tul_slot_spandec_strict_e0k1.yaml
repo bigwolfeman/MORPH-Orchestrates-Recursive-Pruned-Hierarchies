@@ -1,0 +1,76 @@
+# LXTUL-E Stage 0, arm "lxtul-e0k1": the K = 1 parallel head on the FROZEN ruler.
+# Its twin is `tul_slot_spandec_strict_e0k4.yaml` (arm "lxtul-e0k4"), which composes THIS
+# file and changes `tul.spandec_parallel_k` and the run name only, so the two arms are
+# identical except K by construction.
+#
+# WHAT IT MEASURES. The width budget of the design note
+# (.agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md, "The
+# cheapest decisive test"):
+#     B0 = CE_par(K = 1) - CE_par(K = 4 enumerated-code mixture)   per span token,
+# scored by lab/divergence/lxtul_e_stage0_score.py on the SAME 480 validation rows the
+# depth sweeps read. B0 < 0.005 stops the design. No loop is trained here.
+#
+# THE HEAD (morph/model/tul_spandec_parallel.py). A committed product reader: every token
+# of the next span predicted AT ONCE from the slot's exit state z plus a learned position
+# query, NO token input, the ruler decoder's width / heads / layers / J cap / target. It
+# is the "one vector + offset, no token path" reader the root CLAUDE.md forbids as a
+# DECODER. Wolfe approved it 2026-09-23 as a TRAINING-ONLY target and scorer.
+#
+# WHAT IS FROZEN, and how.
+#   * init_from the ruler's step 5000 (weights only, step axis from 0, fresh optimizer).
+#     init_from_new_modules makes the load strict: only `tul_spandec_par.*` may be missing,
+#     every other tensor must load and no checkpoint tensor may be homeless.
+#   * train_only: the head alone. Every other parameter has requires_grad False.
+#   * frozen_eval: the frozen model runs in EVAL mode (no dropout, no token-state dropout,
+#     the eval slot depth int(mean) = 6 on every slot, no fixed-point / gain terms), so z is
+#     the deterministic cell the val pass and the scorer read. The trainer refuses a
+#     forward with the root in train mode.
+#
+# THE HEAD'S RECIPE (not fixed by the note; chosen here and the same on both arms).
+#   * AdamW (torch, fp32 state), betas 0.9 / 0.95, weight decay 0.1. A fresh ~27 M
+#     parameter head fitted on frozen features is a standard probe fit; the ruler's
+#     AdEMAMix-b1zero schedule (t_alpha 1600, t_beta3 3500) was tuned for a 5000-step
+#     looped run and has no reason to transfer to a 2000-step probe.
+#   * lr 3e-4 peak, 100-step linear warmup, cosine to 3e-5 at step 2000. The decay lands
+#     both heads near a fitted endpoint so B0 compares two converged-ish readers, not two
+#     points on a noisy flat-lr plateau. 3e-4 is 3x the ruler's own 1e-4 because only
+#     the head trains and nothing downstream of it can destabilise.
+#   * 2000 steps (the note's number), the ruler's batch 6 x seq 1024.
+#   * data_skip_batches 5000: the head trains on batches the ruler never saw, so its train
+#     cells are distributed like the validation cells the scorer reads.
+#   * The loop's own instruments are off (grad_probe_every 0, loop_cot_probe false): the
+#     loop carries no gradient in this run, so they would read nothing.
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+tul:
+  spandec_parallel: true
+  spandec_parallel_k: 1
+  spandec_parallel_weight: 1.0
+
+training:
+  init_from: /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict/step_5000.pt
+  init_from_new_modules:
+    - tul_spandec_par.
+  train_only:
+    - tul_spandec_par.
+  frozen_eval: true
+  data_skip_batches: 5000
+  steps: 2000
+  optimizer: adamw
+  adam8bit: false
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  lr: 3.0e-4
+  min_lr: 3.0e-5
+  warmup: 100
+  lr_schedule: cosine
+  eval_every: 250
+  ckpt_every: 1000
+  grad_probe_every: 0
+  loop_cot_probe: false
+
+wandb:
+  name: lxtul-e0k1
