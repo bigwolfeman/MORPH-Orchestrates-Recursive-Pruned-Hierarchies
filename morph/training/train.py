@@ -1084,6 +1084,26 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device,
     return list(missing), list(unexpected)
 
 
+def e_slot_seeded(missing: list[str], model: nn.Module) -> bool:
+    """True when a weights-only load put a TRAINED ``tul.E_slot`` into ``model``.
+
+    ``TULSlots.init_at_activation`` sets ``E_slot`` to the embedding-table mean at the step
+    TUL switches on. That is right for a fresh TUL model and for a plain-to-TUL seed (the
+    checkpoint has no ``E_slot``), and WRONG for ``init_from`` of a TUL checkpoint: the
+    step resets to 0, the activation branch fires, and the checkpoint's trained slot
+    embedding is overwritten. Found 2026-09-23 on LXTUL-E Stage 0, where the "frozen" ruler
+    came back with one changed tensor (``tul.E_slot``, max |d| 0.10). Every earlier
+    ``init_from`` of a TUL checkpoint (the LCTUL arms seeded from ``tul-code-vae``, gl1c,
+    gl1bc, l3wake) started from the mean instead of the trained vector.
+
+    ``missing`` is the load's missing-key list (``load_weights_only``); ``False`` when the
+    model has no ``tul`` module or the checkpoint lacked the key."""
+    mm = getattr(model, "_orig_mod", model)
+    if getattr(mm, "tul", None) is None or not hasattr(mm.tul, "E_slot"):
+        return False
+    return not any(k.replace("_orig_mod.", "") == "tul.E_slot" for k in missing)
+
+
 def check_init_from_keys(missing: list[str], unexpected: list[str], model: nn.Module,
                          new_modules: list[str] | tuple[str, ...], path: str) -> list[str]:
     """``training.init_from_new_modules``: the STRICT init_from key audit.
@@ -2641,6 +2661,7 @@ def main(cfg: DictConfig) -> None:
     # `classify_plain_to_tul_keys` and morph/configs/tul_slot_strict_bootstrap.yaml.
     _plain_to_tul = bool(getattr(tr, "resume_plain_to_tul", False))
     start_step = 0
+    _e_slot_from_ckpt = False   # an init_from seed that carried a trained tul.E_slot
     if resume_path and os.path.isfile(resume_path):
         print(f"Resuming from {resume_path}")
         start_step, _opt_state, _needs_rebuild, _ckpt_pnames = load_checkpoint(
@@ -2734,6 +2755,7 @@ def main(cfg: DictConfig) -> None:
                 raise ValueError("training.init_from_new_modules and "
                                  "training.resume_plain_to_tul are two key audits; set one")
             check_init_from_keys(_if_missing, _if_unexp, model, _new_mods, init_from_path)
+        _e_slot_from_ckpt = e_slot_seeded(_if_missing, model)
 
     # ── tul.code_target_ref (spec §17.1): the frozen VAE-stage twin ──────────────────
     # AFTER quantisation and AFTER the weights load, so the twin is an exact copy of what
@@ -2888,10 +2910,16 @@ def main(cfg: DictConfig) -> None:
     print(f"  {schedule}; start_step={start_step} → {phase}", flush=True)
     if phase.tul_on and start_step == 0:
         # Spec §5 / Block Transformer §3.7: E_slot starts as the MEAN of the embedding
-        # table. On a resume the trained value comes back from the checkpoint instead.
+        # table. On a resume the trained value comes back from the checkpoint instead, and
+        # so it does on an init_from seed that carried one (`e_slot_seeded`).
         _mm0 = getattr(model, "_orig_mod", model)
-        _mm0.tul.init_at_activation(_mm0.embed.lm_weight())
-        print("[TUL] layout ACTIVE from step 0; E_slot ← mean(embedding table)", flush=True)
+        if _e_slot_from_ckpt:
+            print("[TUL] layout ACTIVE from step 0; E_slot KEPT from the init_from "
+                  "checkpoint", flush=True)
+        else:
+            _mm0.tul.init_at_activation(_mm0.embed.lm_weight())
+            print("[TUL] layout ACTIVE from step 0; E_slot ← mean(embedding table)",
+                  flush=True)
     # docs/tul-gate-spec.md §10. Pending until the first real batch: seating reads the
     # corpus base rate off actual span lengths rather than a hardcoded constant, and the
     # audit then refuses the run if the seated gate still cannot reach its targets.
@@ -3241,8 +3269,13 @@ def main(cfg: DictConfig) -> None:
             save_checkpoint(_sw, step, model, optimizer, scaler, pruning, next_step=step)
             if _next.tul_on and not phase.tul_on:
                 _mm = getattr(model, "_orig_mod", model)
-                # Spec §5 / Block Transformer §3.7: E_slot ← mean of the embedding table.
-                _mm.tul.init_at_activation(_mm.embed.lm_weight())
+                # Spec §5 / Block Transformer §3.7: E_slot ← mean of the embedding table,
+                # unless an init_from seed carried a trained one (`e_slot_seeded`).
+                if _e_slot_from_ckpt:
+                    print(f"[TUL] activation at step {step}; E_slot KEPT from the "
+                          f"init_from checkpoint", flush=True)
+                else:
+                    _mm.tul.init_at_activation(_mm.embed.lm_weight())
                 # The captured front/back graphs are the PLAIN regions at the plain shape;
                 # the TUL forward neither replays them nor matches L_total. Drop them so
                 # their ~9 GB private pool is returned.
