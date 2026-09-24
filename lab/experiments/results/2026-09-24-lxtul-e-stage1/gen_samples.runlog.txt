@@ -1,0 +1,53 @@
+
+=== notul  [notul_panel_norm_match]  /home/wolfe/morph-to/checkpoints/morph/plain-panel-norm-match/step_5000.pt ===
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+    no TUL runtime -> plain (baseline) decoding
+  [slot-levers] {'slot_cot_clip': 4.0, 'slot_gain_lambda': 100.0} INERT on this model: no TUL block. They act only inside the slot loop (_tul_core).
+MORPHTransformer: 265.1M params, loop 4:6×6:4 (kernels=fused, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+    REAL TEXT anchor n=256 L=256 rep4=0.0252+-0.0409 (p50 0.0119, 16% zero) distinct3=0.9476
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer GPT2Tokenizer. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+    topk50_t0.8    rep4=0.1252+-0.2002 distinct3=0.8241 n=12 (163s)
+    greedy         rep4=0.9203+-0.0270 distinct3=0.0761 n=12 (162s)
+    [flush] /home/wolfe/morph-scratch/lxtul-e-s1/gen_samples.json now holds 1 arm(s)
+
+=== ruler  [tul_slot_spandec_strict]  /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict/step_5000.pt ===
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 292.5M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+    topk50_t0.8    rep4=0.0606+-0.1311 distinct3=0.8983 n=12 (437s)
+    greedy         rep4=0.6469+-0.1326 distinct3=0.3087 n=12 (420s)
+    [flush] /home/wolfe/morph-scratch/lxtul-e-s1/gen_samples.json now holds 2 arm(s)
+
+=== e1  [tul_slot_spandec_strict_e1]  /home/wolfe/morph-to/checkpoints/morph/lxtul-e1/step_5000.pt ===
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL PARALLEL SPAN HEAD ON (LXTUL-E): one reader (no code), weight=1.0, INSTEAD OF the teacher-forced span decoder — span s+1 decoded AT ONCE from z with NO token input. TRAINING-ONLY target and scorer, never a decoder (morph/model/tul_spandec_parallel.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 291.4M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+    topk50_t0.8    rep4=0.0165+-0.0134 distinct3=0.9508 n=12 (187s)
+    greedy         rep4=0.7750+-0.1345 distinct3=0.1946 n=12 (174s)
+    [flush] /home/wolfe/morph-scratch/lxtul-e-s1/gen_samples.json now holds 3 arm(s)
+
+=== e4  [tul_slot_spandec_strict_e4]  /home/wolfe/morph-to/checkpoints/morph/lxtul-e4/step_5000.pt ===
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL PARALLEL SPAN HEAD ON (LXTUL-E): the K=4 loop rollouts' exit states under the exact mixture, weight=1.0, INSTEAD OF the teacher-forced span decoder — span s+1 decoded AT ONCE from z with NO token input. TRAINING-ONLY target and scorer, never a decoder (morph/model/tul_spandec_parallel.py)
+  LXTUL-E CODE ON: K=4 enumerated codes, re-added at the end of EVERY slot-loop pass, h <- f(h) + 0.1 * rms(f(h)).detach() * u_k (u_k: a learned regular simplex, unit RMS, sum zero, no learned scale). The front runs ONCE; the slot loop and the coda run on K rollouts per row at train AND eval (shared depth draw and dropout masks; coda checkpointed per block). Coda loss: the exact per-span mixture over the K rollouts. A label-free forward returns the per-span sequential Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, `tul/enum_exit_sep` (morph/model/tul_code_enum.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 291.4M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+    topk50_t0.8    rep4=0.0300+-0.0336 distinct3=0.9222 n=12 (271s)
+    greedy         rep4=0.7022+-0.1562 distinct3=0.2539 n=12 (266s)
+    [flush] /home/wolfe/morph-scratch/lxtul-e-s1/gen_samples.json now holds 4 arm(s)
+
+wrote /home/wolfe/morph-scratch/lxtul-e-s1/gen_samples.json

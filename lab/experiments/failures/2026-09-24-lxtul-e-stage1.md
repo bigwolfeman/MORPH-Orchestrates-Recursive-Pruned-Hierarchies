@@ -129,14 +129,17 @@ What the numbers say:
 - **The teacher-forced coda does not hedge (P-2's premise was wrong).** It reads each code's
   rollout differently: one code alone costs 0.0275 over the 4-rollout read. So the coda
   mixture beats the ruler by 0.0056 and e1 by 0.0134, at 3.1x the layer passes, and the
-  deployed read needs the per-span Bayes weights over rollouts.
+  deployed read is that same mixture, run as 4 rollouts.
 - **The parallel reader stays 2.7 nats per token behind notul.** It is near notul only at
   span offset 0 (+0.63); from offset 2 on it is ~2.9 behind. The product cap (T3) is the
   dominant term (e1 par − the ruler's teacher-forced decoder: 2.42), and width closes 5 %
   of it.
 
-Unverified: one seed per arm; 5000 steps; the r 0.1 code scale was not swept; the coda's
-width gain is read on a mixture the model was trained on, not on the deploy read.
+Unverified: one seed per arm; 5000 steps; the r 0.1 code scale was not swept. The e4 coda
+number is the deploy read's log loss by the chain rule of the mixture (the label-free
+forward, `_enum_mixture_logprobs`, gives each position the Bayes-weighted mixture over
+rollouts); `tests/test_tul_lxtul_e.py::test_coda_mixture_is_the_brute_force_per_span_logsumexp_and_the_deploy_read`
+pins that equality on a small model, and it was not re-measured on the step-5000 checkpoint.
 
 ## Updated hypothesis
 
@@ -145,3 +148,25 @@ doubles with depth, width gains grow with it), but the job is worth 0.02 nats be
 reader that pays for width (the parallel head) is capped far below the token path, and the
 reader that is the deployed path (the coda) pays only 0.002 for depth. The lever is not
 more integration: it is a reader whose width value is large AND that is the deployed path.
+
+## Addendum 2026-09-24 04:45: generation samples
+
+`gen_samples.json` and `gen_samples.runlog.txt` (`scripts/tul_samples.py` at ce68156: 12
+prompts, 256 tokens, seed 1234, top-k 50 at T 0.8 and greedy; e4 decodes through the
+deploy read) and `par_samples.runlog.txt` (`lab/divergence/parallel_span_samples.py`,
+greedy whole-span decodes of the parallel head, 2 rows × 4 spans). Real-text anchor at the
+same length: rep4 0.025, distinct3 0.948.
+
+| model | top-k rep4 | top-k distinct3 | greedy rep4 | greedy distinct3 |
+|---|---|---|---|---|
+| notul | 0.125 | 0.824 | 0.920 | 0.076 |
+| ruler | 0.061 | 0.898 | 0.647 | 0.309 |
+| e1 | 0.017 | 0.951 | 0.775 | 0.195 |
+| e4 | 0.030 | 0.922 | 0.702 | 0.254 |
+
+All four read as fluent-ish 5000-step web text under top-k; none is better by eye. Every
+TUL arm repeats less than notul at both decodes (notul greedy loops on one sentence); this
+is a diversity reading, not a quality one, and notul's CE is 0.27 lower. The parallel head
+decodes the next span's first token or two plausibly (`S. official and`, `5 million`) and
+then falls into `the the the` and `....`; e4's four rollouts differ only in those first
+tokens and in punctuation.

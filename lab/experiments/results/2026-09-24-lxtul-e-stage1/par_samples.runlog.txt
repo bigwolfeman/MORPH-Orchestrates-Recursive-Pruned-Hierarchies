@@ -1,0 +1,92 @@
+
+==== e1 (step 5000, 1 reader(s)) ====
+-- row 0 slot 6 --
+  PREV : ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+  TRUE : ', said it was his decision to pull the team out for the night.'
+  r0 ll=  -87.03: '.\n\n\n. the.........'
+-- row 0 slot 7 --
+  PREV : ', said it was his decision to pull the team out for the night.'
+  TRUE : ' Gijs said he requested U.'
+  r0 ll=  -60.81: '\n\n"The the the the the'
+-- row 0 slot 8 --
+  PREV : ' Gijs said he requested U.'
+  TRUE : 'N. security personnel to staff the hospital overnight, but was told that peacekeepers would only be able to evacuate the team.'
+  r0 ll= -212.34: 'S. official and............................'
+-- row 0 slot 9 --
+  PREV : 'N. security personnel to staff the hospital overnight, but was told that peacekeepers would only be able to evacuate the team.'
+  TRUE : '\n\nHe said it was a "tough decision" but that he accepted the U.'
+  r0 ll=  -99.92: '\n\n"The the the the the the the the the the the the the the the the'
+-- row 1 slot 6 --
+  PREV : '\nA 7.'
+  TRUE : "0 magnitude earthquake flattened Haiti's capital city Tuesday afternoon, affecting as many as 3 million people as it fanned out"
+  r0 ll= -241.95: '5 million in a the the the the the the the.....................'
+-- row 1 slot 7 --
+  PREV : "0 magnitude earthquake flattened Haiti's capital city Tuesday afternoon, affecting as many as 3 million people as it fanned out"
+  TRUE : ' across the island nation.'
+  r0 ll=  -41.90: '.\n\n\n...'
+-- row 1 slot 8 --
+  PREV : ' across the island nation.'
+  TRUE : ' Tens of thousands of people are feared dead.'
+  r0 ll=  -76.72: '\n\n" the the the the the the the the'
+-- row 1 slot 9 --
+  PREV : ' Tens of thousands of people are feared dead.'
+  TRUE : '\n\nHaiti, the poorest nation in the Western hemisphere, lacked adequate medical resources even before the dis'
+  r0 ll= -212.37: '\n\n"The the the the the the the the the the the the the the the the the the the..........'
+
+==== e4 (step 5000, 4 reader(s)) ====
+-- row 0 slot 6 --
+  PREV : ' However, Belgian Chief Coordinator Geert Gijs, a doctor who was at the hospital with 60 Belgian medical personnel'
+  TRUE : ', said it was his decision to pull the team out for the night.'
+  r0 ll=  -91.23: '.\n\n\n the the the the the the the the the the the'
+  r1 ll=  -89.40: ', the the.00000......'
+  r2 ll=  -88.81: ' was the the the the the.........'
+  r3 ll=  -81.19: ', the the the the the the the the......'
+-- row 0 slot 7 --
+  PREV : ', said it was his decision to pull the team out for the night.'
+  TRUE : ' Gijs said he requested U.'
+  r0 ll=  -77.59: '\n\n"We was the the the'
+  r1 ll=  -66.84: '\n\nThe the the the the the'
+  r2 ll=  -56.57: ' The the the the the the the the'
+  r3 ll=  -59.02: ' HeI was was the the the the'
+-- row 0 slot 8 --
+  PREV : ' Gijs said he requested U.'
+  TRUE : 'N. security personnel to staff the hospital overnight, but was told that peacekeepers would only be able to evacuate the team.'
+  r0 ll= -220.52: 'S. District District the the the the the.......................'
+  r1 ll= -221.38: 'S. cit m  ..........................'
+  r2 ll= -216.13: 'S. m m the the the the........................'
+  r3 ll= -212.78: 'S. official and the the the the the.......................'
+-- row 0 slot 9 --
+  PREV : 'N. security personnel to staff the hospital overnight, but was told that peacekeepers would only be able to evacuate the team.'
+  TRUE : '\n\nHe said it was a "tough decision" but that he accepted the U.'
+  r0 ll=  -97.90: '\n\n"We said said the the the the the the the the the the the the the'
+  r1 ll= -103.36: '\n\nThe the the the the the the the the the the the the the the the the'
+  r2 ll= -113.85: ' The said said the the the the the the the the the the the the the the..'
+  r3 ll= -109.58: ' “ said said was to to to to to the the........'
+-- row 1 slot 6 --
+  PREV : '\nA 7.'
+  TRUE : "0 magnitude earthquake flattened Haiti's capital city Tuesday afternoon, affecting as many as 3 million people as it fanned out"
+  r0 ll= -248.52: '2 million.\n the the the the the the the the the the the the the...............'
+  r1 ll= -244.38: '5 million of 0000000000000000000000000000'
+  r2 ll= -243.04: '5 million of the the the the the the the the the the the the the the the..............'
+  r3 ll= -249.82: '1., the the the the the the the the the the the the.................'
+-- row 1 slot 7 --
+  PREV : "0 magnitude earthquake flattened Haiti's capital city Tuesday afternoon, affecting as many as 3 million people as it fanned out"
+  TRUE : ' across the island nation.'
+  r0 ll=  -52.53: '.\n\n\n the the the'
+  r1 ll=  -43.27: ' of .....'
+  r2 ll=  -38.78: ' of the the....'
+  r3 ll=  -42.79: '...\n the the the'
+-- row 1 slot 8 --
+  PREV : ' across the island nation.'
+  TRUE : ' Tens of thousands of people are feared dead.'
+  r0 ll= -102.86: '\n\n"We the the the the the the the'
+  r1 ll=  -81.38: '\n\nThe   00000'
+  r2 ll=  -73.30: ' The the the the the the the the the the the'
+  r3 ll=  -72.12: ' "We the the the the the the the the the'
+-- row 1 slot 9 --
+  PREV : ' Tens of thousands of people are feared dead.'
+  TRUE : '\n\nHaiti, the poorest nation in the Western hemisphere, lacked adequate medical resources even before the dis'
+  r0 ll= -212.21: '\n\n"We the the the the the the the the the the the the the the the the............'
+  r1 ll= -217.41: '\n\nThe    00000000.................'
+  r2 ll= -224.69: ' The the the the the the the the the the the the the the the the the the the the the the the.........'
+  r3 ll= -234.21: ' "\'s the the the the the the the the the the the...................'
