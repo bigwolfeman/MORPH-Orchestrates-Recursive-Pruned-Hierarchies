@@ -170,3 +170,148 @@ It does not give a training recipe that transfers. The curriculum runs 25 epochs
 stage over 300 epochs on a task with a 40-token vocabulary.
 
 It does not address stochasticity. Every thought here is deterministic given the prompt.
+
+## Re-read 2026-09-23
+
+Re-read for the LXTUL-GK prereg
+([`2026-09-23-lxtul-gk-multisample.md`](../../../../../lab/experiments/planned/2026-09-23-lxtul-gk-multisample.md))
+and the LXTUL-G failure
+([`2026-09-23-lxtul-g-panel.md`](../../../../../lab/experiments/failures/2026-09-23-lxtul-g-panel.md)).
+The question was whether this paper solves the noise collapse: the slot loop's learned
+Gaussian step dies (sigma/r 0.1 to 0.0003) under the multi-sample bound. The first
+reading above covers the construction. It left out the training objective, the
+companion paper that explains WHY superposition emerges, and what that means for a
+sampled latent. Those are added here.
+
+### Identity and cache (verified)
+
+arXiv [2505.12514](https://arxiv.org/abs/2505.12514) (v1 2025-05-18, v3 2025-11-01) is
+this paper. The NeurIPS 2025 proceedings PDF is now cached next to this note as
+[`reasoning-by-superposition.pdf`](reasoning-by-superposition.pdf), fetched 2026-09-23
+from the proceedings URL above. Its SHA256 is `d4015070...0849`, identical to the
+`ignore/papers/` copy. The arXiv v3 text has the same training section and the same
+COCONUT-BFS section (checked by grep, not line by line).
+
+### Where it sits in the LXTUL lineage (verified from the tree)
+
+This paper was item 1 of the reading order in the 2026-09-18 survey
+([`../2026-09-18-latent-exploration-survey.md`](../2026-09-18-latent-exploration-survey.md)),
+the batch read after the LaDiR recipe (2026-09-16). The same day it was cited as "the
+prior, in theorem form" of the hop-distance prereg
+([`2026-09-18-hop-distance-earning.md`](../../../../../lab/experiments/failures/2026-09-18-hop-distance-earning.md))
+and as the motivation of the toy `eliminate` task
+([`2026-09-18-toy-eliminate-deferred-commitment.md`](../../../../../lab/experiments/failures/2026-09-18-toy-eliminate-deferred-commitment.md)).
+The first LXTUL design note
+([`2026-09-19-lxtul-fan-streams.md`](../../../../../.agents/notes/proposed/architecture/2026-09-19-lxtul-fan-streams.md))
+does not cite it by name. It cites the survey and takes its SHAPE from PLR: K separate
+vectors, a repulsion and a gate. This paper's shape is the other one: ONE vector that
+holds the set. LXTUL-G then took GRAM's stochastic shape. So the one-vector form of this
+paper was never built as an LXTUL arm.
+
+### How the model is trained (verified, Section 5.1 and 5.4)
+
+- Two-layer GPT-2 style decoder, d_model 768, 8 heads, from scratch, AdamW
+  (beta 0.9/0.95, weight decay 1e-2), constant LR 1e-4. ProsQA subset with 3 to 4 hops;
+  every graph node is its own token.
+- A Coconut multi-stage curriculum: "Stage i teaches the model to use i continuous
+  thoughts before predicting the i-th node in the given chain of thought as the next
+  token." 25 epochs per stage, 300 in total, the previous stage's data mixed in with
+  probability 0.1.
+- The loss at every stage is ordinary cross-entropy on ONE node: the i-th node of the
+  single demonstrated path. Nothing supervises the set.
+- COCONUT-BFS (Section 5.4): the stage-i target is "drawn uniformly at random from the
+  frontier nodes exactly i hops from the root". It reaches the same near-perfect accuracy
+  and the same inner-product geometry.
+- The thought is deterministic. There is no sampling anywhere.
+
+The Coconut paper itself (arXiv 2412.06769, Section 5.3, cached in
+[`../../../tul-latent-emission/coconut/coconut.md`](../../../tul-latent-emission/coconut/coconut.md))
+reports that without the curriculum the model does "not perform any better than no-CoT".
+So the superposition is emergent. The depth schedule is supervised.
+
+### Why superposition emerges: the companion paper (verified)
+
+Hanlin Zhu, Shibo Hao, Zhiting Hu, Jiantao Jiao, Stuart Russell, Yuandong Tian.
+*Emergence of Superposition: Unveiling the Training Dynamics of Chain of Continuous
+Thought*. [arXiv 2509.23365](https://arxiv.org/abs/2509.23365) (v3 2026-03-01).
+"Published as a conference paper at ICLR 2026" on every page. Read from the arXiv PDF
+(Sections 3 to 5, Appendix E.2); not cached in the repo.
+
+It compares two losses on the thought's next-node logits `xi_v` (Eq. 5, Eq. 6):
+
+    COCONUT-BFS:  l = -log( sum_{v in N_{c+1}} exp(xi_v) / sum_{v in V} exp(xi_v) )
+    COCONUT:      l = -log( exp(xi_{p_{c+1}}) / sum_{v in V} exp(xi_v) )
+
+The first rewards mass anywhere in the reachable set. The second is plain cross-entropy on
+the one demonstrated node. Theorem 1: under COCONUT-BFS the index-matching logit mu
+"grows at least logarithmically in t, leading to unbounded attention logits". Under
+COCONUT, if the demonstrated node's in-degree is not the maximum (d* < d_max), mu
+converges to a finite mu* and "all attention logits remain uniformly bounded".
+
+Their reading (Section 3): "a bounded index-matching logit can balance exploration and
+exploitation: if the logit is too small, the model cannot even perform local search ...
+if the logit is too large, the model might over-confidently commit to one of the
+plausible search traces merely depending on local features ... and thus early discard
+the correct path." Theorem 2: with mu > 0 the next thought's token projection is
+`beta_v = lambda_v 1{v in N_c} + mu * sum_{u in N_c} lambda_u 1{(u -> v) in E}`, a
+carryover term plus a one-hop expansion.
+
+Measured (Section 5.1): the frontier logit difference "saturates around 60 after ~125
+epochs"; the BFS-style loss "did not saturate but kept increasing" (Appendix E.2).
+Stages 3 and 4 reuse the stage 1-2 mechanism with no further training ("length
+generalization"). Table 4 ablation, accuracy %: L=2 98.8, L=4 97.3, L=8 96.5, L=12 67.4;
+d_model 384 62.0, 768 98.8, 1536 97.7; tied and untied weights both 98.8.
+
+In plain words: superposition is what cross-entropy does to a deterministic state when
+the single demonstrated target is uncertain given what the state can see. It is the
+Bayes hedge of a proper scoring rule, held in one vector. It is not produced by noise,
+and a loss that pays for "any member of the set" destroys it.
+
+### Conditions for superposition to fail (verified, three sources)
+
+- Target identifiable from local features (d* = d_max): logits diverge, the thought
+  commits (Emergence, Theorem 1).
+- A set-style loss: same divergence (Emergence, Theorem 1 and Appendix E.2).
+- Too narrow or too deep per step: Emergence Table 4 above; the Illusion paper's
+  parameter-matched Table 3 (2L-768d 96.0 with latents against 12L-320d 72.4).
+- Pretrained or fine-tuned models shortcut the latent (Illusion, Section 5.1).
+- A contractive recursion erases the differences between mixtures. Backour, *The
+  Dynamics of Continuous Mixture Collapse in Language Models*,
+  [arXiv 2609.02049](https://arxiv.org/abs/2609.02049) (2026-09-02), Theorem 2: with
+  coupling `L_t <= L_max < 2`, `|u_T| <= (L_max/2)^T |u_0| + (1/2) sum_t (L_max/2)^(T-1-t) |b_t|`,
+  so a mixture not re-supplied by the field `b_t` goes to 0 at a geometric rate. Above the
+  threshold (Theorem 1) one component takes over. Their setting is soft-token feedback in
+  pretrained LLMs, not a hidden-state loop, so the mapping to MORPH is inferred.
+
+### What this changes for MORPH (inferred unless marked)
+
+1. **The noise collapse is the expected optimum, not a defect.** The coda is a
+   teacher-forced AR decoder. A mixture over span hypotheses factorises as
+   `p(x_t | x_<t) = sum_k w_k(x_<t) p_k(x_t | x_<t)`, and the weights update from the true
+   prefix. One deterministic state that stores the branches, read by a coda that
+   re-weights them as tokens arrive, is the same model as the sampled mixture. Noise then
+   buys nothing and costs curvature. That is this paper's picture, with the coda as the
+   "measurement" of Section 4.3. LXTUL-GK1 matched the ruler (val 4.4238 against 4.4249)
+   while its sigma/r fell to 0.000339, which is what this view predicts. The XM reading
+   (no multimodality worth holding) predicts the same numbers, so GK alone cannot tell the
+   two apart.
+2. **"Conditional mean" and "superposition" are not opposites.** Lemma 2's thought is a
+   normalised SUM of item embeddings, a weighted mean. It stays decodable because the
+   items are near-orthogonal (d = O(|Voc|), Theorem 1). A blurred mean is a mean in a code
+   where the candidates overlap. So a CE target (span decoder, token CE) asks the slot for
+   a distribution. An MSE regression onto a dense code (the LCTUL code-target arms) asks
+   for a point and is the anti-superposition objective.
+3. **Depth.** The thought needs pass c only because hop c's query is the set found at hop
+   c-1 and each step is two layers. On the strict ruler every earlier cell is one
+   attention hop away and a pass is six core blocks, so the theorem's D is about 1. Pass 1
+   doing 89-95 % of the work fits that. Where the geometry forced hops
+   (`prev-reach1`), content h spans back arrived at pass h-1, exactly this paper's
+   schedule (`hop-staircase-on-prev-reach1`). Wolfe closed restriction geometries on
+   2026-09-22, so the non-restricting way to raise D is shallower passes (fewer core
+   blocks per pass, more passes), untested on the slot loop.
+4. **Instrument.** Rank cannot see this. The readout that can: bucket spans by whether
+   the true first token was the coda's top-1 or top-2 choice given the cell, then measure
+   the cell's worth (own cell against a shuffled cell) on the rest of the span. A
+   superposition helps on both buckets. A committed point helps only on top-1. A blur
+   helps on neither beyond the shuffle control. The set-membership readout proposed in
+   the first reading above is the per-pass version.
