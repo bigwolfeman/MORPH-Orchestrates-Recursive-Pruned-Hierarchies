@@ -86,6 +86,8 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 
 ## ⭐ TUL — Thought Unpack Loop — TWO FORWARDS, ONE TREE (paid loop shipped 2026-09-03; slot loop back with its constraint 2026-09-04)
 
+> **Before any loop-contribution work, read [docs/tul-loop-contribution-history.md](docs/tul-loop-contribution-history.md)** (2026-09-23): every TUL attempt to make the loop contribute, 2026-08-16 to LXTUL-GK, with each number's source, the 48 retractions, and the docs that still state a retracted number. Positives ledger: [docs/9-26-TUL-run-history-IMPORTANT.md](docs/9-26-TUL-run-history-IMPORTANT.md).
+
 Status: the **paid loop** is the shipped forward and is ON in `base.yaml`
 (`tul.tokens_through_core: true`; `tul.activate_at: ${training.tst_ratio}` — TUL switches
 on when the TST phase ends): tokens and slots are ONE sequence and the ordinary per-sample
