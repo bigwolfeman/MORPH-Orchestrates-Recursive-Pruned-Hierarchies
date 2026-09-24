@@ -1,0 +1,84 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL PARALLEL SPAN HEAD ON (LXTUL-E): one reader (no code), weight=1.0, INSTEAD OF the teacher-forced span decoder — span s+1 decoded AT ONCE from z with NO token input. TRAINING-ONLY target and scorer, never a decoder (morph/model/tul_spandec_parallel.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 291.4M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+  lxtul-e1: all_slots ON (the route split)
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+  lxtul-e1: 3/192 rows
+  lxtul-e1: 6/192 rows
+  lxtul-e1: 9/192 rows
+  lxtul-e1: 12/192 rows
+  lxtul-e1: 15/192 rows
+  lxtul-e1: 18/192 rows
+  lxtul-e1: 21/192 rows
+  lxtul-e1: 24/192 rows
+  lxtul-e1: 27/192 rows
+  lxtul-e1: 30/192 rows
+  lxtul-e1: 33/192 rows
+  lxtul-e1: 36/192 rows
+  lxtul-e1: 39/192 rows
+  lxtul-e1: 42/192 rows
+  lxtul-e1: 45/192 rows
+  lxtul-e1: 48/192 rows
+  lxtul-e1: 51/192 rows
+  lxtul-e1: 54/192 rows
+  lxtul-e1: 57/192 rows
+  lxtul-e1: 60/192 rows
+  lxtul-e1: 63/192 rows
+  lxtul-e1: 66/192 rows
+  lxtul-e1: 69/192 rows
+  lxtul-e1: 72/192 rows
+  lxtul-e1: 75/192 rows
+  lxtul-e1: 78/192 rows
+  lxtul-e1: 81/192 rows
+  lxtul-e1: 84/192 rows
+  lxtul-e1: 87/192 rows
+  lxtul-e1: 90/192 rows
+  lxtul-e1: 93/192 rows
+  lxtul-e1: 96/192 rows
+  lxtul-e1: 99/192 rows
+  lxtul-e1: 102/192 rows
+  lxtul-e1: 105/192 rows
+  lxtul-e1: 108/192 rows
+  lxtul-e1: 111/192 rows
+  lxtul-e1: 114/192 rows
+  lxtul-e1: 117/192 rows
+  lxtul-e1: 120/192 rows
+  lxtul-e1: 123/192 rows
+  lxtul-e1: 126/192 rows
+  lxtul-e1: 129/192 rows
+  lxtul-e1: 132/192 rows
+  lxtul-e1: 135/192 rows
+  lxtul-e1: 138/192 rows
+  lxtul-e1: 141/192 rows
+  lxtul-e1: 144/192 rows
+  lxtul-e1: 147/192 rows
+  lxtul-e1: 150/192 rows
+  lxtul-e1: 153/192 rows
+  lxtul-e1: 156/192 rows
+  lxtul-e1: 159/192 rows
+  lxtul-e1: 162/192 rows
+  lxtul-e1: 165/192 rows
+  lxtul-e1: 168/192 rows
+  lxtul-e1: 171/192 rows
+  lxtul-e1: 174/192 rows
+  lxtul-e1: 177/192 rows
+  lxtul-e1: 180/192 rows
+  lxtul-e1: 183/192 rows
+  lxtul-e1: 186/192 rows
+  lxtul-e1: 189/192 rows
+  lxtul-e1: 192/192 rows
+lxtul-e1   zero       +0.726[+0.690,+0.764]  +0.360[+0.337,+0.384]  +0.295[+0.273,+0.316]  +0.249[+0.228,+0.268]  +0.189[+0.177,+0.202]  +0.132[+0.123,+0.140]  +0.089[+0.084,+0.095]
+lxtul-e1   zero       TOTAL +0.1815
+lxtul-e1   shuffle    +1.736[+1.620,+1.860]  +0.294[+0.271,+0.318]  +0.214[+0.194,+0.233]  +0.174[+0.156,+0.192]  +0.118[+0.108,+0.127]  +0.074[+0.067,+0.081]  +0.034[+0.029,+0.039]
+lxtul-e1   shuffle    TOTAL +0.1725
+lxtul-e1   wrong_seed +1.174[+1.050,+1.295]  +0.046[+0.038,+0.053]  +0.029[+0.023,+0.035]  +0.027[+0.021,+0.033]  +0.020[+0.016,+0.023]  +0.015[+0.013,+0.017]  +0.013[+0.011,+0.015]
+lxtul-e1   wrong_seed TOTAL +0.0750
+lxtul-e1   all_slots  +0.726[+0.690,+0.762]  +0.360[+0.336,+0.382]  +0.295[+0.274,+0.315]  +0.249[+0.227,+0.269]  +0.189[+0.177,+0.202]  +0.132[+0.124,+0.140]  +0.089[+0.083,+0.095]
+lxtul-e1   all_slots  TOTAL +0.1815
+wrote /home/wolfe/morph-scratch/lxtul-e-s1/worth_lxtul-e1_5000.json

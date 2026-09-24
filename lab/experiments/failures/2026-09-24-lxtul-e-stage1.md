@@ -73,7 +73,7 @@ e1 then e4, then the scorer and the sweeps. Artifacts: JSON and run logs in
 ## Results (filed 2026-09-24 04:10)
 
 Artifacts: [`../results/2026-09-24-lxtul-e-stage1/`](../results/2026-09-24-lxtul-e-stage1/)
-(`stage1_score.json`, both sweeps and worth profiles, `notul_pair.log`, the run logs of
+(`stage1_score.json`, both sweeps and worth profiles, `notul_pair.runlog.txt`, the run logs of
 both arms, the scorer and the chain). Chain at a045b47. Both arms ran 5000 steps with exit
 0 and no spike. Scorer self-check against each model's own forward: max |dev| 1.1e-6. 480
 rows, 501,106 coda tokens, 486,031 head tokens, 490 blocks.

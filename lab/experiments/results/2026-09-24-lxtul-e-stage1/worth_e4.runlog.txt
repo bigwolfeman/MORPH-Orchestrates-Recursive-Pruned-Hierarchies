@@ -1,0 +1,85 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL PARALLEL SPAN HEAD ON (LXTUL-E): the K=4 loop rollouts' exit states under the exact mixture, weight=1.0, INSTEAD OF the teacher-forced span decoder — span s+1 decoded AT ONCE from z with NO token input. TRAINING-ONLY target and scorer, never a decoder (morph/model/tul_spandec_parallel.py)
+  LXTUL-E CODE ON: K=4 enumerated codes, re-added at the end of EVERY slot-loop pass, h <- f(h) + 0.1 * rms(f(h)).detach() * u_k (u_k: a learned regular simplex, unit RMS, sum zero, no learned scale). The front runs ONCE; the slot loop and the coda run on K rollouts per row at train AND eval (shared depth draw and dropout masks; coda checkpointed per block). Coda loss: the exact per-span mixture over the K rollouts. A label-free forward returns the per-span sequential Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, `tul/enum_exit_sep` (morph/model/tul_code_enum.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 291.4M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+  lxtul-e4: all_slots ON (the route split)
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+  lxtul-e4: 3/192 rows
+  lxtul-e4: 6/192 rows
+  lxtul-e4: 9/192 rows
+  lxtul-e4: 12/192 rows
+  lxtul-e4: 15/192 rows
+  lxtul-e4: 18/192 rows
+  lxtul-e4: 21/192 rows
+  lxtul-e4: 24/192 rows
+  lxtul-e4: 27/192 rows
+  lxtul-e4: 30/192 rows
+  lxtul-e4: 33/192 rows
+  lxtul-e4: 36/192 rows
+  lxtul-e4: 39/192 rows
+  lxtul-e4: 42/192 rows
+  lxtul-e4: 45/192 rows
+  lxtul-e4: 48/192 rows
+  lxtul-e4: 51/192 rows
+  lxtul-e4: 54/192 rows
+  lxtul-e4: 57/192 rows
+  lxtul-e4: 60/192 rows
+  lxtul-e4: 63/192 rows
+  lxtul-e4: 66/192 rows
+  lxtul-e4: 69/192 rows
+  lxtul-e4: 72/192 rows
+  lxtul-e4: 75/192 rows
+  lxtul-e4: 78/192 rows
+  lxtul-e4: 81/192 rows
+  lxtul-e4: 84/192 rows
+  lxtul-e4: 87/192 rows
+  lxtul-e4: 90/192 rows
+  lxtul-e4: 93/192 rows
+  lxtul-e4: 96/192 rows
+  lxtul-e4: 99/192 rows
+  lxtul-e4: 102/192 rows
+  lxtul-e4: 105/192 rows
+  lxtul-e4: 108/192 rows
+  lxtul-e4: 111/192 rows
+  lxtul-e4: 114/192 rows
+  lxtul-e4: 117/192 rows
+  lxtul-e4: 120/192 rows
+  lxtul-e4: 123/192 rows
+  lxtul-e4: 126/192 rows
+  lxtul-e4: 129/192 rows
+  lxtul-e4: 132/192 rows
+  lxtul-e4: 135/192 rows
+  lxtul-e4: 138/192 rows
+  lxtul-e4: 141/192 rows
+  lxtul-e4: 144/192 rows
+  lxtul-e4: 147/192 rows
+  lxtul-e4: 150/192 rows
+  lxtul-e4: 153/192 rows
+  lxtul-e4: 156/192 rows
+  lxtul-e4: 159/192 rows
+  lxtul-e4: 162/192 rows
+  lxtul-e4: 165/192 rows
+  lxtul-e4: 168/192 rows
+  lxtul-e4: 171/192 rows
+  lxtul-e4: 174/192 rows
+  lxtul-e4: 177/192 rows
+  lxtul-e4: 180/192 rows
+  lxtul-e4: 183/192 rows
+  lxtul-e4: 186/192 rows
+  lxtul-e4: 189/192 rows
+  lxtul-e4: 192/192 rows
+lxtul-e4   zero       +1.840[+1.677,+2.013]  +0.407[+0.380,+0.435]  +0.322[+0.301,+0.343]  +0.271[+0.251,+0.291]  +0.201[+0.188,+0.214]  +0.143[+0.135,+0.151]  +0.094[+0.088,+0.100]
+lxtul-e4   zero       TOTAL +0.2481
+lxtul-e4   shuffle    +1.781[+1.657,+1.917]  +0.306[+0.282,+0.332]  +0.215[+0.195,+0.235]  +0.166[+0.150,+0.186]  +0.113[+0.103,+0.122]  +0.073[+0.067,+0.080]  +0.033[+0.028,+0.038]
+lxtul-e4   shuffle    TOTAL +0.1736
+lxtul-e4   wrong_seed +1.245[+1.096,+1.408]  +0.039[+0.032,+0.046]  +0.020[+0.015,+0.026]  +0.020[+0.016,+0.025]  +0.018[+0.014,+0.021]  +0.014[+0.012,+0.017]  +0.012[+0.010,+0.014]
+lxtul-e4   wrong_seed TOTAL +0.0767
+lxtul-e4   all_slots  +1.840[+1.681,+2.009]  +0.407[+0.381,+0.433]  +0.322[+0.301,+0.343]  +0.271[+0.251,+0.291]  +0.201[+0.188,+0.214]  +0.143[+0.135,+0.151]  +0.094[+0.088,+0.100]
+lxtul-e4   all_slots  TOTAL +0.2481
+wrote /home/wolfe/morph-scratch/lxtul-e-s1/worth_lxtul-e4_5000.json
