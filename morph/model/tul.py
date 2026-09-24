@@ -913,10 +913,30 @@ class TULConfig:
     # REPLACES the teacher-forced decoder) the head alone reads those four keys, and every
     # other `spandec_*` key stays refused. False = off: nothing is built, no RNG is drawn,
     # no term (tests/test_tul_spandec_parallel.py).
+    #
+    # LXTUL-E Stage 2 (2026-09-24), two one-factor knobs on the head, both refused with
+    # the head off (tests/test_tul_lxtul_e_stage2.py):
+    # spandec_parallel_span_cap: 0 = the full J above. c > 0 = the head's target is only
+    # the FIRST c tokens of the next span: the head is BUILT at J = c (a c-row position
+    # table, c queries per reader), so the blocks, the vocabulary GEMM, `par_n_tokens` and
+    # the mixture all see c positions and never a masked 32. Why: at Stage 1 the head's CE
+    # at span offsets >= 4 sat near the unigram (~7.0 nats) and the width value lived at
+    # offsets 0-3 (lab/experiments/failures/2026-09-24-lxtul-e-stage1.md), so a full-span
+    # target spends most of its gradient on tokens a committed reader cannot predict.
+    # Refused at c >= J (it would change nothing) and beside the teacher-forced decoder
+    # (`spandec: true`, Stage 0's pairing grades the SAME J tokens with both readers).
+    # spandec_parallel_detach: the head trains as a PROBE. It reads the exit state
+    # DETACHED after the readout (`_readout(h).detach()`), so its term still enters the
+    # total loss and trains the head's own tensors, and it sends no gradient to the loop,
+    # the codes, the front, `lm_mixer` / `final_norm` or the tied table (the output head
+    # is detached already). Why: it separates "the head's target shapes the loop" from
+    # "the loop's state already holds what the head reads".
     spandec_parallel: bool = False
     spandec_parallel_k: int = 1
     spandec_parallel_weight: float = 1.0
     spandec_parallel_code_init: float = 0.1
+    spandec_parallel_span_cap: int = 0
+    spandec_parallel_detach: bool = False
     # ── THE ENUMERATED LOOP CODE (LXTUL-E Stage 1, 2026-09-24) ─────────────────────
     # code_enum_k = K > 1: the slot loop and the coda run on K rollouts per row
     # (batch-expanded rollout-major, GK's machinery: the front runs ONCE, the rollouts
@@ -3406,12 +3426,29 @@ class TULConfig:
         streams. Its rollouts are LXTUL-E's own (`code_enum_k`)."""
         if not self.spandec_parallel:
             if (self.spandec_parallel_k != 1 or self.spandec_parallel_weight != 1.0
-                    or self.spandec_parallel_code_init != 0.1):
+                    or self.spandec_parallel_code_init != 0.1
+                    or self.spandec_parallel_span_cap != 0 or self.spandec_parallel_detach):
                 raise ValueError(
                     "tul.spandec_parallel_k / spandec_parallel_weight / "
-                    "spandec_parallel_code_init set with tul.spandec_parallel=false: no head "
+                    "spandec_parallel_code_init / spandec_parallel_span_cap / "
+                    "spandec_parallel_detach set with tul.spandec_parallel=false: no head "
                     "is built, so the knob(s) would be silently ignored.")
             return
+        if self.spandec_parallel_span_cap < 0:
+            raise ValueError(
+                f"tul.spandec_parallel_span_cap must be >= 0 (0 = the full span), got "
+                f"{self.spandec_parallel_span_cap}")
+        if self.spandec_parallel_span_cap:
+            _j = self.spandec_max_tokens or self.bound_span_cap
+            if self.spandec_parallel_span_cap >= _j:
+                raise ValueError(
+                    f"tul.spandec_parallel_span_cap={self.spandec_parallel_span_cap} is at "
+                    f"or past the head's full J={_j}: the cap would change nothing. Use 0.")
+            if self.spandec:
+                raise NotImplementedError(
+                    "tul.spandec_parallel_span_cap with tul.spandec: true: Stage 0's pairing "
+                    "grades the SAME J tokens with the teacher-forced decoder and the head; "
+                    "a capped head would silently read a different target.")
         if self.spandec_parallel_k < 1:
             raise ValueError(
                 f"tul.spandec_parallel_k must be >= 1 (1 = no code, the twin), got "

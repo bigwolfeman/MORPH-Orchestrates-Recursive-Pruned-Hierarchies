@@ -2191,6 +2191,10 @@ class MORPHTransformer(nn.Module):
         # The geometry comes from the decoder's keys, read the way `SpanDecoder` reads
         # them, so with `tul.spandec` on (Stage 0) both readers grade the same J tokens of
         # the same span, and with it off (Stage 1) the head keeps that geometry alone.
+        # `tul.spandec_parallel_span_cap` c > 0 (Stage 2, refused beside the decoder) builds
+        # the head at J = c: its target is the first c tokens of the span and it runs c
+        # queries, not the full J under a mask. The position table is zero-init, so the
+        # smaller build draws nothing and every other tensor is the uncapped head's.
         self.tul_spandec_par: ParallelSpanHead | None = None
         if cfg.tul is not None and cfg.tul.spandec_parallel:
             self.tul_spandec_par = ParallelSpanHead(
@@ -2198,7 +2202,8 @@ class MORPHTransformer(nn.Module):
                 n_heads=int(cfg.tul.spandec_heads or cfg.n_heads),
                 d_ff=int(cfg.d_ff),
                 n_layers=int(cfg.tul.spandec_layers),
-                max_tokens=int(cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap),
+                max_tokens=int(cfg.tul.spandec_parallel_span_cap
+                               or cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap),
                 n_codes=int(cfg.tul.spandec_parallel_k),
                 target_offset=int(cfg.tul.spandec_target_offset),
                 code_init=float(cfg.tul.spandec_parallel_code_init),
@@ -8597,6 +8602,16 @@ class MORPHTransformer(nn.Module):
         output head is ``embed.lm_weight().detach()`` whatever ``tul.mux_detach_head``
         says, so this head never trains the table the coda speaks through.
 
+        THE PROBE (``tul.spandec_parallel_detach``, Stage 2). ``z`` is detached AFTER the
+        readout, so the term trains the head's own tensors and nothing upstream: not the
+        loop, the codes, the front, nor ``lm_mixer`` / ``final_norm`` (which the coda
+        shares). The term still enters the total loss and every ``par_*`` stat is the same
+        reading. A build-time config bool, the ``mux_detach_head`` precedent.
+
+        THE CAP (``tul.spandec_parallel_span_cap``, Stage 2) needs nothing here: the head
+        is built at J = cap, and :meth:`ParallelSpanHead.targets` and every reader below
+        take J from it.
+
         The per-token log-probs come from ``fused_linear_label_logprob`` over the valid
         rows only, so ``[B, S, J, V]`` never exists; K = 4 x J = 32 x ~50 slots x B = 6 is
         ~40 k head rows per step.
@@ -8618,6 +8633,8 @@ class MORPHTransformer(nn.Module):
         head = self.tul_spandec_par
         assert head is not None
         z = self._readout(h_slots)                                    # [R*B, S, C]
+        if tc.spandec_parallel_detach:
+            z = z.detach()
         w = self.embed.lm_weight().detach()
         if n_rollouts > 1:
             if head.n_codes > 1:

@@ -1,0 +1,31 @@
+# LXTUL-E Stage 2, arm "lxtul-e4j4": e4 with the parallel head's target cut to the FIRST 4
+# tokens of the next span. Composes `tul_slot_spandec_strict_e4` (read it and e1: the recipe,
+# the code and the head live there) and changes ONE thing, `tul.spandec_parallel_span_cap:
+# 0 -> 4`, plus the run name.
+#
+# WHY. Stage 1 (lab/experiments/failures/2026-09-24-lxtul-e-stage1.md): e4's head reads the
+# whole next span (J = 32) from the slot's exit state with no token input. Its CE is near
+# notul only at span offset 0 (4.1 vs 3.5); from offset 2 on it sits at 6.7-7.1, near the
+# unigram, and the width value (the mixture over the 4 codes) lives at offsets 0-3. A
+# full-span target spends most of its gradient on tokens a committed reader cannot
+# predict. This arm asks whether a head graded ONLY where it can win moves the loop's
+# depth job (par K1-K6, the exit separation) and the coda's width gain.
+#
+# WHAT DIFFERS FROM e4, exactly (tests/test_tul_lxtul_e_stage2.py pins it): the head is
+# BUILT at J = 4 (a 4-row position table, 4 queries per rollout; every other head tensor is
+# e4's), its target is span s+1's first 4 tokens, and `tul/par_n_tokens` falls to at most 4
+# per supervised slot: 0.198 of e4's in the 30-step smoke, since the spans average ~20
+# tokens, not 32. The loop, the codes, the coda and their
+# losses are e4's. par numbers are NOT comparable with e4's whole-span par CE: compare on
+# the shared offsets 0-3 (lab/divergence/lxtul_e_stage2_score.py).
+#
+# Note: .agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md
+defaults:
+  - tul_slot_spandec_strict_e4
+  - _self_
+
+tul:
+  spandec_parallel_span_cap: 4
+
+wandb:
+  name: lxtul-e4j4

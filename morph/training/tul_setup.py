@@ -100,6 +100,8 @@ KNOWN_TUL_KEYS = frozenset({
     # LXTUL-E (tul.spandec_parallel, 2026-09-23): the committed product reader
     "spandec_parallel", "spandec_parallel_k", "spandec_parallel_weight",
     "spandec_parallel_code_init",
+    # LXTUL-E Stage 2 (2026-09-24): the head's target cap and the probe mode
+    "spandec_parallel_span_cap", "spandec_parallel_detach",
     # LXTUL-E Stage 1 (tul.code_enum_k, 2026-09-24): the enumerated loop code
     "code_enum_k", "code_enum_ratio",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
@@ -323,6 +325,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_parallel_k=int(tc.get("spandec_parallel_k", 1)),
         spandec_parallel_weight=float(tc.get("spandec_parallel_weight", 1.0)),
         spandec_parallel_code_init=float(tc.get("spandec_parallel_code_init", 0.1)),
+        spandec_parallel_span_cap=int(tc.get("spandec_parallel_span_cap", 0)),
+        spandec_parallel_detach=bool(tc.get("spandec_parallel_detach", False)),
         code_enum_k=int(tc.get("code_enum_k", 1)),
         code_enum_ratio=float(tc.get("code_enum_ratio", 0.1)),
         horizon_weight=float(tc.get("horizon_weight", 0.0)),
@@ -570,6 +574,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "spandec_parallel_k": model_cfg.spandec_parallel_k,
         "spandec_parallel_weight": model_cfg.spandec_parallel_weight,
         "spandec_parallel_code_init": model_cfg.spandec_parallel_code_init,
+        "spandec_parallel_span_cap": model_cfg.spandec_parallel_span_cap,
+        "spandec_parallel_detach": model_cfg.spandec_parallel_detach,
         "code_enum_k": model_cfg.code_enum_k,
         "code_enum_ratio": model_cfg.code_enum_ratio,
         "horizon_weight": model_cfg.horizon_weight,
@@ -1111,12 +1117,19 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         _readers = (f"head codes K={_kp}, enumerated under the exact mixture" if _kp > 1
                     else f"the K={_ke} loop rollouts' exit states under the exact mixture"
                     if _ke > 1 else "one reader (no code)")
+        _cap = model_cfg.spandec_parallel_span_cap
+        _span = (f"the FIRST {_cap} tokens of span s+{model_cfg.spandec_target_offset}"
+                 if _cap else f"span s+{model_cfg.spandec_target_offset}")
         print(f"  TUL PARALLEL SPAN HEAD ON (LXTUL-E): {_readers}, "
               f"weight={model_cfg.spandec_parallel_weight}, "
               f"{'BESIDE' if model_cfg.spandec else 'INSTEAD OF'} the teacher-forced span "
-              f"decoder — span s+{model_cfg.spandec_target_offset} decoded AT ONCE from z "
-              f"with NO token input. TRAINING-ONLY target and scorer, never a decoder "
+              f"decoder — {_span} decoded AT ONCE from z with NO token input. "
+              f"TRAINING-ONLY target and scorer, never a decoder "
               f"(morph/model/tul_spandec_parallel.py)", flush=True)
+        if model_cfg.spandec_parallel_detach:
+            print("  TUL PARALLEL SPAN HEAD IS A PROBE: it reads the exit state DETACHED; "
+                  "its term trains the head alone and sends NO gradient to the loop, the "
+                  "codes, the front or the tied table", flush=True)
     if model_cfg.code_enum_k > 1:
         print(f"  LXTUL-E CODE ON: K={model_cfg.code_enum_k} enumerated codes, re-added at "
               f"the end of EVERY slot-loop pass, h <- f(h) + {model_cfg.code_enum_ratio} * "
