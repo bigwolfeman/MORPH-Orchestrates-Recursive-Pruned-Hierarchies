@@ -1,6 +1,6 @@
 # Planned: LXTUL-E Stage 0, the width budget of the ruler's cells under a committed reader
 
-Status: planned
+Status: success
 
 Date: 2026-09-23 (frozen before any GPU step). Design:
 [`2026-09-23-provable-loop-contribution.md`](../../../.agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md)
@@ -84,3 +84,63 @@ Also measured on the void run: the val loss moved between evals (4.4765, 4.5431,
 documents. So the trainer's val loss is not a frozen-model check; the tensor diff is.
 
 The chain reruns on 7f73f0a, same configs.
+
+## Results (filed 2026-09-24 00:27)
+
+Artifacts: [`../results/2026-09-23-lxtul-e-stage0/`](../results/2026-09-23-lxtul-e-stage0/)
+(`stage0_score.json`, run logs of the chain, the smoke, both arms and the scorer). Rerun
+on 7f73f0a. Frozen-tensor diff of each arm's step-2000 checkpoint against the ruler: 0 of
+478 changed (e0k1 and e0k4). Scorer self-check against the model's own forward: max |dev|
+8.9e-7 (parallel term), 6.5e-7 (ruler decoder). 480 rows, 24,339 spans, 486,031 span
+tokens, 490 blocks. Both arms read val 4.4912 at step 1750: the same frozen model on the
+same val stream.
+
+| reading | value, 95 % CI |
+|---|---|
+| CE_par, K = 1 | 6.8943 [6.8703, 6.9189] |
+| CE_par, 4-code mixture | 6.7912 [6.7662, 6.8173] |
+| CE, the ruler's teacher-forced span decoder, same tokens | 4.4839 [4.4406, 4.5295] |
+| **B0 = K1 − mixture** | **+0.1031 [+0.1001, +0.1063]** |
+| mixture gain over its best single code | +0.2545 [+0.2468, +0.2622] |
+
+B0 by offset in the span: 0: −0.0099 [−0.0161, −0.0039]; 1: +0.3072; 2: +0.3867; 3:
++0.1944; 4–7: +0.1263; 8–15: +0.0718; 16+: +0.0485 [+0.0442, +0.0528]. Code usage: mean
+responsibility entropy 0.333 of log 4 = 1.386; share of spans each code wins 0.223, 0.227,
+0.253, 0.296; each code read alone 7.09, 7.28, 7.17, 7.05.
+
+| clause | reading | verdict |
+|---|---|---|
+| P-S0 B0 >= 0.02 (and not < 0.005) | +0.1031 [+0.1001, +0.1063] | held |
+| P-S1 K1 parallel CE − teacher-forced CE >= 0.5 | 2.41 | held |
+| P-S2 entropy > 0.5 log 4 AND no code > 60 % | entropy 0.333; top share 0.296 | failed (entropy clause) |
+| P-S3 B0 at offsets 8+ larger than at offsets 0–3 | 0.07 / 0.05 vs 0.31 / 0.39 at 1–2 | failed |
+
+## Verdict
+
+Success on the deciding clause. Four enumerated codes under the exact mixture buy 0.103
+nats per span token over one committed reader on the ruler's frozen cells, five times the
+note's go threshold. By the verdict rule, Stage 1 runs as written.
+
+What the numbers say about the mechanism:
+
+- **The product cap is large.** A parallel reader of one cell sits 2.41 nats per token
+  behind the teacher-forced decoder on the same cell. Width closes 0.10 of it (4 %).
+  `product_reader_le` was the prediction; the size was not.
+- **The codes act as a span type chosen by the span's first token.** B0 is slightly
+  negative at offset 0, where the mixture's weights are still uniform, and peaks at
+  offsets 1 and 2 (0.31, 0.39), right after the first tokens have picked a code. It decays
+  but stays positive to offsets 16+ (0.049).
+- **P-S2 failed on a clause I set wrong.** Low responsibility entropy (0.33 of 1.39) means
+  each span is assigned DECISIVELY to one code, and the wins are balanced (22 % to 30 %).
+  All four codes are used. The prediction read low entropy as collapse; it is the
+  opposite. The clause stays failed as written.
+
+Unverified: one seed per arm; B0 includes the difference between two separately trained
+heads (the note's named risk); 2000 steps may not have converged either head.
+
+## Updated hypothesis
+
+The ruler's cell has joint next-span structure that a committed reader can only reach
+through enumerated codes, and the amount is not small (0.10 nats per token). Stage 1 asks
+whether a loop that carries a re-injected code integrates it with depth (the note's P-1
+to P-5), with the width priors unchanged.

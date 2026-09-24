@@ -1,0 +1,11 @@
+[23:44:32] at 7f73f0a Trainer: init_from of a TUL checkpoint keeps its trained tul.E_slot.
+[23:45:34] SMOKE exit=0 par_ce=11.4680 -> par_ce=7.2758 peak=7.83GB tok/s=12251
+[23:45:34] START e0k1
+[00:02:27] DONE e0k1 exit=0 par_ce=7.0247   [VAL    1750] loss=4.4912  ppl=89.23  ppl_tok=89.23  first_tok=6.8085  cf=-2.8777  lp/tok=17.45
+[00:02:31] FROZEN e0k1 /home/wolfe/morph-to/checkpoints/morph/lxtul-e0k1/step_2000.pt: common 478  only-new 15  only-ruler 0  CHANGED 0
+[00:02:31] START e0k4
+[00:24:22] DONE e0k4 exit=0 par_ce=6.9262   [VAL    1750] loss=4.4912  ppl=89.23  ppl_tok=89.23  first_tok=6.8085  cf=-2.8777  lp/tok=26.56
+[00:24:26] FROZEN e0k4 /home/wolfe/morph-to/checkpoints/morph/lxtul-e0k4/step_2000.pt: common 478  only-new 16  only-ruler 0  CHANGED 0
+[00:24:26] SCORE k1=/home/wolfe/morph-to/checkpoints/morph/lxtul-e0k1/step_2000.pt k4=/home/wolfe/morph-to/checkpoints/morph/lxtul-e0k4/step_2000.pt
+[00:25:26] SCORE exit=0   B0           +0.1031 [+0.1001, +0.1063] n=486031     offset  0-0  B0 -0.0099 [-0.0161, -0.0039] n=24339     offset  1-1  B0 +0.3072 [+0.2978, +0.3166] n=24132 
+[00:25:26] ALL_DONE

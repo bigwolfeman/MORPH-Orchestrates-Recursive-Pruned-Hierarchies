@@ -1,0 +1,152 @@
+[2026-09-23 23:45:38,056][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-23 23:45:38,063][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/config.json "HTTP/1.1 200 OK"
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[2026-09-23 23:45:38,119][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-23 23:45:38,125][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/tokenizer_config.json "HTTP/1.1 200 OK"
+[2026-09-23 23:45:38,192][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+[2026-09-23 23:45:38,256][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+[2026-09-23 23:45:38,355][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-23 23:45:38,361][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/config.json "HTTP/1.1 200 OK"
+[2026-09-23 23:45:38,418][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-23 23:45:38,423][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/tokenizer_config.json "HTTP/1.1 200 OK"
+[2026-09-23 23:45:38,475][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+[2026-09-23 23:45:38,533][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 319.3M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+Model: 319.3M params on cuda
+  [flops] model v1.0.0 nominal A0-shape proxy=44.00 passes/token, realized depth=5.688
+  Core spectral-norm penalty OFF (logging only): cap=0.0 lambda=0.0 log_every=100 include_attn=False on 12 core linears (12 MLP + 0 attention)
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=norm_match group=tensor dtype=fp16 modules=44 ({'backbone': 44, 'attention': 0, 'embeddings': 0}) params_ternary=127.8M (40.0% of model)
+  Embed QAT ON: mode=int6 modules=2 (['embed.hybrid.euc_embed', 'embed.bigram.embed']). LM head: LM head is WEIGHT-TIED to euc_embed (no separate weight). lm_head_quant is a NO-
+  CMS score_mode=taylor on 28 CMSBlockLinear layers
+  MLPs compiled (mode=default, core dynamic-batch)
+  Warmup compile [startup thread-free] (TG path, 4 packed TUL passes)...
+  Warmup compile [startup thread-free] done in 5.5s (4 TG passes)
+  torch.compiler stance = eager_on_recompile (rare uncovered shapes run eager, never recompile/fork)
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/wolfe/.netrc.
+wandb: Currently logged in as: austindewolfe (adew-me) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.28.2
+wandb: Run data is saved locally in /home/wolfe/morph-scratch/wandb/run-20260923_234546-rqij8qwk
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run lxtul-e0k1
+wandb: ⭐️ View project at https://wandb.ai/adew-me/morph-tul
+wandb: 🚀 View run at https://wandb.ai/adew-me/morph-tul/runs/rqij8qwk
+  [train_only] 26.8M trainable / 292.5M frozen; trainable groups: tul_spandec_par.pos(0.03M), tul_spandec_par.z_in(1.05M), tul_spandec_par.blocks(25.69M), tul_spandec_par.out_norm(0.00M)
+  [frozen_eval] model in EVAL mode; 18 module(s) in train mode under ['tul_spandec_par.']
+  [ckpt] retention: keeping the last 8 step_*.pt (0 already on disk). Set training.ckpt_keep_last=0 to keep all.
+Init-from (weights only) /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict/step_5000.pt
+  init_from /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict/step_5000.pt: loaded WEIGHTS only (step reset → 0, fresh optimizer); seed step was 5000; matched 478/493 tensors via stripped keys; 15 missing / 0 unexpected
+  init_from /home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict/step_5000.pt: 15 tensor(s) NEW in this model (kept their fresh init), all under ['tul_spandec_par.']; 0 unexpected:
+      tul_spandec_par.blocks.0.down.weight
+      tul_spandec_par.blocks.0.gate_up.weight
+      tul_spandec_par.blocks.0.norm1.weight
+      tul_spandec_par.blocks.0.norm2.weight
+      tul_spandec_par.blocks.0.proj.weight
+      tul_spandec_par.blocks.0.qkv.weight
+      tul_spandec_par.blocks.1.down.weight
+      tul_spandec_par.blocks.1.gate_up.weight
+      tul_spandec_par.blocks.1.norm1.weight
+      tul_spandec_par.blocks.1.norm2.weight
+      tul_spandec_par.blocks.1.proj.weight
+      tul_spandec_par.blocks.1.qkv.weight
+      tul_spandec_par.out_norm.weight
+      tul_spandec_par.pos
+      tul_spandec_par.z_in.weight
+  [data] training.data_skip_batches=5000 → the train stream starts where the seed run stopped
+  PhaseSchedule(total_steps=2000, tst=off, tul=step 0); start_step=0 → TrainPhase(bag_size=0, tul_on=True)
+[TUL] layout ACTIVE from step 0; E_slot KEPT from the init_from checkpoint
+  [data] fast-forwarding train stream by 5000 batches (deterministic replay to exact resume position)…
+[2026-09-23 23:45:48,774][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-23 23:45:48,780][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/config.json "HTTP/1.1 200 OK"
+[2026-09-23 23:45:48,841][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-23 23:45:48,847][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/tokenizer_config.json "HTTP/1.1 200 OK"
+[2026-09-23 23:45:48,900][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+[2026-09-23 23:45:49,119][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+[data] TUL layout: seq_len=1024 prefix_k=2 max_slots=64 L_total=1152 slot_id=4
+[2026-09-23 23:45:49,286][httpx][INFO] - HTTP Request: HEAD https://s3.amazonaws.com/datasets.huggingface.co/datasets/datasets/arrow/arrow.py "HTTP/1.1 404 Not Found"
+  [data] fast-forward done in 29.0s
+  [div-guard] ppl ceiling 1000, 2 strikes
+  [spec] step=0 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[      0/2000] loss=21.5155  ppl=485165195.4  par_ce=11.6212  lr=0.00e+00  sps=2.84  tok/s=17425  proxy=10.20  tflops=27.3  peak=12.09GB
+  [mem] peak stats reset at step 5 — perf/peak_mem_* now reflects the TRAINING STEP, not the warmup compile
+  [spec] step=100 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [spec] step=200 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[    200/2000] loss=14.8695  ppl=2869187.0  par_ce=6.8432  lr=2.98e-04  sps=3.18  tok/s=19512  proxy=10.21  tflops=30.6  peak=4.54GB
+[2026-09-23 23:47:37,104][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-23 23:47:37,110][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/config.json "HTTP/1.1 200 OK"
+[2026-09-23 23:47:37,175][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/bigcode/starcoder2-7b/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-23 23:47:37,181][httpx][INFO] - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/bigcode/starcoder2-7b/bb9afde76d7945da5745592525db122d4d729eb1/tokenizer_config.json "HTTP/1.1 200 OK"
+[2026-09-23 23:47:37,241][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+[2026-09-23 23:47:37,299][httpx][INFO] - HTTP Request: GET https://huggingface.co/api/models/bigcode/starcoder2-7b/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+[data] TUL layout: seq_len=1024 prefix_k=2 max_slots=64 L_total=1152 slot_id=4
+[2026-09-23 23:47:37,468][httpx][INFO] - HTTP Request: HEAD https://s3.amazonaws.com/datasets.huggingface.co/datasets/datasets/arrow/arrow.py "HTTP/1.1 404 Not Found"
+  [VAL     250] loss=4.4644  ppl=86.87  ppl_tok=86.87  first_tok=6.7705  cf=-2.9729  lp/tok=17.81
+  [spec] step=300 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [spec] step=400 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[    400/2000] loss=15.7201  ppl=6716729.1  par_ce=7.0640  lr=2.84e-04  sps=3.17  tok/s=19494  proxy=10.19  tflops=30.5  peak=4.54GB
+  [spec] step=500 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [VAL     500] loss=4.5301  ppl=92.76  ppl_tok=92.76  first_tok=6.9126  cf=-3.0887  lp/tok=17.66
+  [spec] step=600 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[    600/2000] loss=16.0559  ppl=9397210.6  par_ce=7.0633  lr=2.56e-04  sps=3.16  tok/s=19438  proxy=10.20  tflops=30.5  peak=4.54GB
+  [spec] step=700 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [VAL     750] loss=4.4264  ppl=83.63  ppl_tok=83.63  first_tok=6.7430  cf=-3.1035  lp/tok=17.80
+  [spec] step=800 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[    800/2000] loss=15.3072  ppl=4444752.6  par_ce=6.9543  lr=2.19e-04  sps=3.15  tok/s=19331  proxy=10.18  tflops=30.2  peak=4.54GB
+  [spec] step=900 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [spec] step=1000 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[   1000/2000] loss=16.2934  ppl=11916131.5  par_ce=6.8124  lr=1.76e-04  sps=3.15  tok/s=19376  proxy=10.23  tflops=30.4  peak=4.54GB
+  [VAL    1000] loss=4.3136  ppl=74.71  ppl_tok=74.71  first_tok=6.7591  cf=-3.1029  lp/tok=17.77
+  Checkpoint: /home/wolfe/morph-to/checkpoints/morph/lxtul-e0k1/step_1000.pt
+  [spec] step=1100 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [spec] step=1200 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[   1200/2000] loss=15.5897  ppl=5895268.5  par_ce=6.7465  lr=1.32e-04  sps=3.16  tok/s=19436  proxy=10.22  tflops=30.5  peak=4.54GB
+  [VAL    1250] loss=4.3438  ppl=77.00  ppl_tok=77.00  first_tok=6.6718  cf=-3.0718  lp/tok=17.53
+  [spec] step=1300 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [spec] step=1400 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[   1400/2000] loss=16.1263  ppl=10082312.2  par_ce=6.8666  lr=9.12e-05  sps=3.16  tok/s=19393  proxy=10.25  tflops=30.5  peak=4.54GB
+  [spec] step=1500 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [VAL    1500] loss=4.5230  ppl=92.11  ppl_tok=92.11  first_tok=6.8790  cf=-2.9647  lp/tok=18.56
+  [spec] step=1600 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[   1600/2000] loss=15.3483  ppl=4630860.4  par_ce=6.9194  lr=5.85e-05  sps=3.19  tok/s=19570  proxy=10.20  tflops=30.7  peak=4.54GB
+  [spec] step=1700 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+  [VAL    1750] loss=4.4912  ppl=89.23  ppl_tok=89.23  first_tok=6.8085  cf=-2.8777  lp/tok=17.45
+  [spec] step=1800 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+[   1800/2000] loss=18.2324  ppl=82840655.3  par_ce=7.0971  lr=3.73e-05  sps=3.13  tok/s=19256  proxy=10.32  tflops=30.4  peak=4.54GB
+  [spec] step=1900 sigma_max=3.80 (core.0.mlp.0.down) mean=2.89
+wandb: updating run metadata
+wandb: 
+wandb: Run history:
+wandb:    gradnorm/tul_spandec_par █▅▃███▆▂▄▂▂▄▃▄▁▁▂▁▃▁
+wandb:    perf/backward_multiplier ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:     perf/core_position_frac ▂▂▂▂▃▂▅▂▂▃▂▃▂▂▁▂▂▄▃▂▂▁▅▂█▂▂▂▂▄▂▃▂▃▃▃▂▁▂▂
+wandb:       perf/cum_layer_passes ▁▁▁▁▂▂▂▂▂▂▂▃▃▃▃▃▄▄▄▄▅▅▅▅▆▆▆▆▆▆▇▇▇▇▇▇████
+wandb:             perf/cum_tokens ▁▂▂▂▂▂▂▃▃▃▃▃▃▄▄▄▄▄▄▄▄▅▅▅▅▅▆▆▆▆▆▆▆▆▇▇▇███
+wandb:             perf/flop_proxy ▁▁▁▁▁▁▂▁▂█▁▂▂▂▂▁▁▁▂▂▁▂▁▁▁▁▁▁▄▁▁▂▂▁▂▂▃▂▁▂
+wandb:        perf/flops_attn_frac ▃▂▃▂▂▃▁▂▅▃▅▂▂▄▃▃▂▂▂▂▃▂▃▂▂▃▂▃▅▃▂█▂▄▃▂▃▃▆▃
+wandb: perf/layer_passes_per_token ▃▂▃▂▂▃▃▁▃▅▂▂▄▂▄▃▃▄▂▂▂▃▃▃▃▁█▂▃▃▃▂▂▄▂▂▄▂▂▃
+wandb:           perf/model_tflops ▁▇▇▇▇▇▇▇▇▇▇▇▇▇█▇▇▇▇▇▇▇▇▇█▇▇▇▇█▇▇▇▇▇▇▇▆▆▆
+wandb:     perf/peak_mem_alloc_mib █▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:                        +124 ...
+wandb: 
+wandb: Run summary:
+wandb:    gradnorm/tul_spandec_par 0.21469
+wandb:    perf/backward_multiplier 3
+wandb:     perf/core_position_frac 0.06176
+wandb:       perf/cum_layer_passes 535535616.0
+wandb:             perf/cum_tokens 12171264.0
+wandb:     perf/flop_model_version 1.0.0
+wandb:             perf/flop_proxy 10.22322
+wandb:        perf/flops_attn_frac 0.01536
+wandb: perf/layer_passes_per_token 10.10778
+wandb:           perf/model_tflops 29.85905
+wandb:                        +125 ...
+wandb: 
+wandb: 🚀 View run lxtul-e0k1 at: https://wandb.ai/adew-me/morph-tul/runs/rqij8qwk
+wandb: ⭐️ View project at: https://wandb.ai/adew-me/morph-tul
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: /home/wolfe/morph-scratch/wandb/run-20260923_234546-rqij8qwk/logs
+Final checkpoint: /home/wolfe/morph-to/checkpoints/morph/lxtul-e0k1/step_2000.pt
+Final val_loss=4.6926  ppl=109.13  val/attn_lift=0.5280  val/attn_lift_alllayers=0.6469  val/attn_lift_first_tok=1.0000  val/attn_lift_first_tok_alllayers=1.0000  val/attn_lift_n_calls=8.0000  val/attn_slot_mass=0.3482  val/attn_slot_mass_first_tok=1.0000  val/attn_slot_share=0.6499  val/ce_tokens=4.6926  val/first_tok_ce=6.9545  val/first_tok_counterfactual=-2.9356  val/layer_passes_per_token=17.6144  val/par=7.0247  val/par_ce=7.0247  val/par_k=1.0000  val/par_n_tokens=6067.6500  val/par_weighted=7.0247  val/plan_worth_shuffle=0.1653  val/plan_worth_wrong_seed=0.0481  val/plan_worth_zero=0.2113  val/ppl_tokens=109.1312  val/slot_component_mean=-0.0224  val/slot_component_std=1.1351  val/slot_eff_rank=12.6320  val/slot_norm_mean=36.3354  val/slot_pairwise_cos=0.5454  val/span_cap_frac=0.3207  val/span_mean_span=20.8836  val/span_one_tok_frac=0.0057  val/span_pad_frac=0.0070  val/span_spans=50.3917  val/span_tokens=1043.2083  val/spandec=4.8173  val/spandec_ce=4.8173  val/spandec_n_tokens=6067.6500  val/spandec_target_offset=1.0000

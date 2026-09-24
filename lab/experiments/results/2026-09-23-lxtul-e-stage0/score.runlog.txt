@@ -1,0 +1,25 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 319.3M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 2000, 0 unexpected, 0 rope/cache-missing
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 319.3M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+    load ok: step 2000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+Stage 0: 24339 spans, 486031 span tokens, 490 blocks, rows 480; frozen {'n_frozen_tensors': 478, 'k1_vs_k4': 'identical', 'vs_ruler': 'identical', 'ruler': '/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict/step_5000.pt'}
+  CE_par K=1   +6.8943 [+6.8703, +6.9189] n=486031
+  CE_par mix   +6.7912 [+6.7662, +6.8173] n=486031
+  CE_tf ruler  +4.4839 [+4.4406, +4.5295] n=486031
+  B0           +0.1031 [+0.1001, +0.1063] n=486031
+    offset  0-0  B0 -0.0099 [-0.0161, -0.0039] n=24339
+    offset  1-1  B0 +0.3072 [+0.2978, +0.3166] n=24132
+    offset  2-2  B0 +0.3867 [+0.3746, +0.3985] n=24118
+    offset  3-3  B0 +0.1944 [+0.1845, +0.2042] n=24101
+    offset  4-7  B0 +0.1263 [+0.1203, +0.1325] n=87500
+    offset  8-15 B0 +0.0718 [+0.0676, +0.0760] n=139308
+    offset 16-99 B0 +0.0485 [+0.0442, +0.0528] n=162533
+  codes: resp entropy 0.3327 of 1.3863, wins [0.223, 0.227, 0.253, 0.296], ce_code [7.093, 7.2763, 7.1659, 7.0457], mix gain over best +0.2545 [+0.2468, +0.2622] n=486031
+  self-check max |dev|: {'par': 8.882216944172683e-07, 'tf': 6.504866512102581e-07}
+  DECISION: {'verdict': 'P-S0 holds: B0 >= 0.02', 'ci_clear_of_0.005': True, 'ci_clear_of_0.02': True}
+wrote /home/wolfe/morph-scratch/lxtul-e/stage0_score.json and /home/wolfe/morph-scratch/lxtul-e/stage0_score.tokens.npz
