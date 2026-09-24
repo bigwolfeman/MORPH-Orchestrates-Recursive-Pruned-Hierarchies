@@ -126,6 +126,13 @@ model:
   #   First arms: tul_slot_spandec_strict_e{1,4}probe_map.yaml (LXTUL Stage 3).
   slot_gain_tail_lambda: 0.0
   slot_gain_tail_target: 1.1
+  # slot_gain_floor_lambda: a FLOOR on the same row gain, lambda_floor * mean relu(floor -
+  #   g)^2. The row hinge and the tail only PERMIT a map near 1; the slot map settles at a
+  #   uniform 0.87-0.88 on its own (lab/divergence/core_map_fd.py), so this one PUSHES it
+  #   up into [floor, slot_gain_target]. Needs slot_gain_lambda > 0 and floor < target.
+  #   0.0 = OFF and bit-identical. First arm: tul_slot_spandec_strict_e4probe_floor.yaml.
+  slot_gain_floor_lambda: 0.0
+  slot_gain_floor_target: 0.95
   slot_cot_clip: 4.0
   slot_state_renorm: false
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth

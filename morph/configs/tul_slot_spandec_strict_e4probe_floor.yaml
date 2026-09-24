@@ -1,0 +1,28 @@
+# LXTUL Stage 3, arm "lxtul-e4probe-floor": e4probe_map with a FLOOR on the map's gain.
+# Composes `tul_slot_spandec_strict_e4probe_map` (the map guard: row target 0.98, tail
+# hinge 100 @ 1.1) and changes TWO keys plus the run name:
+#
+#   model.slot_gain_floor_lambda  0.0 -> 100.0   lambda * mean relu(0.95 - g)^2 on the row gain
+#   model.slot_gain_floor_target  (0.95)
+#
+# WHY. Measured with lab/divergence/core_map_fd.py (fp32, 96 rows, depth 6): the plain loop
+# that earns (notul, K1-K6 0.053) has a map whose passes 1-5 sit at typical gain 0.97 ->
+# 0.92 with 3-21 % of positions above 1; the slot loop's map is a UNIFORM 0.87-0.88
+# contraction that settles there by itself. The row hinge and the tail only PERMIT a map
+# near 1 (arc E1: a looser hinge alone did not move the map). The floor PUSHES the typical
+# gain up into [0.95, 0.98]; the tail still charges any single slot above 1.1, the
+# excursion that killed arc E14. The fixed-point term stays on (1.0), so this arm and
+# `..._e4probe_nofp` each move the map by ONE mechanism.
+#
+# Instruments: `loss/gain_est`, `loss/gain_slot_*`, `loss/gain_floor_pen`. Read against
+# `lxtul-e4probe`. Prereg: lab/experiments/planned/2026-09-24-lxtul-stage3-map.md.
+defaults:
+  - tul_slot_spandec_strict_e4probe_map
+  - _self_
+
+model:
+  slot_gain_floor_lambda: 100.0
+  slot_gain_floor_target: 0.95
+
+wandb:
+  name: lxtul-e4probe-floor

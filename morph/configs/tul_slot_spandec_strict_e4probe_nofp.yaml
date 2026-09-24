@@ -1,0 +1,28 @@
+# LXTUL Stage 3, arm "lxtul-e4probe-nofp": e4probe_map with the fixed-point term OFF.
+# Composes `tul_slot_spandec_strict_e4probe_map` (the map guard: row target 0.98, tail
+# hinge 100 @ 1.1) and changes ONE key plus the run name:
+#
+#   model.core_fixed_point_lambda  1.0 -> 0.0
+#
+# WHY. Measured with lab/divergence/core_map_fd.py (fp32, 96 rows, depth 6): the plain loop
+# that earns (notul, K1-K6 0.053) has a map whose passes 1-5 sit at typical gain 0.97 ->
+# 0.92 with 3-21 % of positions above 1; the slot loop's map is a UNIFORM 0.87-0.88
+# contraction (p10-p99 spread 0.03, 0 positions above 1), and it settles there by itself,
+# below a 0.9 hinge that stops binding after ~1000 steps. The fixed-point term
+# (lambda * ||h_T - h_{T-1}||^2 / ||h_T||^2 at each slot's last pass) rewards settling,
+# a direct pull toward a contraction. This arm removes the pull and keeps the guard.
+# Precedent: `tul_slot_spandec_strict_fan4_all_fp0.yaml` (LXTUL-P, 2026-09-21) turned the
+# term off on the fan and found its K1-K6 gain all in pass 1; its map was never measured.
+#
+# Instruments: `loss/gain_est`, `loss/gain_slot_*`, `loss/fixed_point` (still logged at
+# lambda 0). Read against `lxtul-e4probe`. Prereg:
+# lab/experiments/planned/2026-09-24-lxtul-stage3-map.md.
+defaults:
+  - tul_slot_spandec_strict_e4probe_map
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.0
+
+wandb:
+  name: lxtul-e4probe-nofp

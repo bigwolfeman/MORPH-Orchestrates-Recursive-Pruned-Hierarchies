@@ -50,7 +50,10 @@ not by reading the diff.
   (`tests/test_slot_gain_reg.py`). The same difference also yields a PER-SLOT gain
   (`gain_slot_p50/_p90/_max/_frac_gt1`, logged whenever the hinge runs) and, at
   `slot_gain_tail_lambda > 0`, a tail hinge on it (`_slot_gain_reduce` pools iterations;
-  lambda 0 is bit-identical to the code before it, `tests/test_slot_gain_tail.py`).
+  lambda 0 is bit-identical to the code before it, `tests/test_slot_gain_tail.py`). At
+  `slot_gain_floor_lambda > 0` a FLOOR on the row gain pushes the map UP into
+  [floor, slot_gain_target]; rows with no active slot at that pass are left out of its
+  mean (`tests/test_slot_gain_floor.py`).
 
 * `RMSNorm` returns **fp32** even under autocast: its final `* self.weight` promotes.
   Anything that scatters into or concatenates with a normed carrier must cast at the

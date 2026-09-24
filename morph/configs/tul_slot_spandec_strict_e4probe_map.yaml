@@ -8,7 +8,10 @@
 #   model.slot_gain_tail_target (1.1)         ... on any single slot's gain above 1.1
 #
 # WHY. On every LXTUL-E arm the map sat at a typical gain of 0.87-0.89 all run (max 0.94,
-# 0 % of steps above 0.95): the 0.9 hinge holds it well inside the contractive region.
+# 0 % of steps above 0.95). CORRECTED 2026-09-24 (lab/divergence/core_map_fd.py): after
+# ~1000 steps the 0.9 hinge no longer binds; the map settles at a uniform 0.87-0.88 BY
+# ITSELF (e4probe max 0.883 from step 2500). So this arm only PERMITS a higher gain; the
+# arms that push are `..._e4probe_nofp` (fixed-point term off) and `..._e4probe_floor`.
 # The design target is a map that is MOSTLY contractive and APPROACHES 1, with occasional
 # SMALL steps over 1. Arc E14 (lab/experiments/failures/2026-09-07-arc-e14-expansive-dial.md)
 # moved the row target to 1.02: the map sat at 0.99, the loop's contribution rose 30-85 %,

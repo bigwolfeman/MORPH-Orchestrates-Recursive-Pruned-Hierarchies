@@ -49,6 +49,16 @@ whenever the row hinge runs, tail on or off: `loss/gain_slot_p50`, `_p90`, `_max
 (`tul/gain_slot_*` in wandb). Arms: `tul_slot_spandec_strict_e{1,4}probe_map.yaml`.
 Code: `_slot_gain_penalty`, `_slot_gain_reduce`; tests `tests/test_slot_gain_tail.py`.
 
+**The floor (2026-09-24, LXTUL Stage 3 arm B, UNMEASURED beyond a 30-step smoke).**
+`slot_gain_floor_lambda` (default 0.0 = off, bit-identical) and `slot_gain_floor_target`
+(default 0.95) add `lambda_floor * mean over rows with an active slot of relu(floor -
+g_row)^2` on the ROW gain the hinge reads. The hinge and the tail only PERMIT a map near
+1; the slot map settles at a uniform 0.87 by itself (`core_map_fd.py`), so the floor PUSHES
+it up into [floor, slot_gain_target]. It is NOT a stability lever: it raises the gain, so
+it moves the map toward the crossing the constraint exists to guard. Needs
+`slot_gain_lambda > 0` and floor < `slot_gain_target`. Logged as `loss/gain_floor_pen`.
+Arm: `tul_slot_spandec_strict_e4probe_floor.yaml`; tests `tests/test_slot_gain_floor.py`.
+
 ## 2. What it is, in five lines
 
 A slot loop trained through all its iterations (full BPTT) with ternary QAT drifts the
@@ -104,6 +114,7 @@ result as a depth result.
   `_loop_cot_hook` (the clip), the renorm inside `_tul_core`; `morph/training/train.py`
   reports the model loss without the penalty (the sigreg contract) and logs `tul/gain_est`.
 - Tests: `tests/test_slot_gain_reg.py`, `tests/test_slot_gain_tail.py` (the tail hinge),
+  `tests/test_slot_gain_floor.py` (the floor),
   `tests/test_slot_cot_clip.py`, `tests/test_onset_capture.py`.
 - Records, in order: `lab/experiments/successes/2026-09-03-tul-onset-capture.md` (the
   mechanism, bit-exact replay), `failures/2026-09-04-tul-clip-through-time.md` (the clip

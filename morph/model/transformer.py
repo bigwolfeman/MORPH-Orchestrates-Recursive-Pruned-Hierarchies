@@ -633,6 +633,17 @@ class MORPHConfig:
     # enters the loss, the gradients or the RNG stream.
     slot_gain_tail_lambda: float = 0.0
     slot_gain_tail_target: float = 1.1
+    # slot_gain_floor_lambda — a FLOOR on the row gain (LXTUL Stage 3 arm B, 2026-09-24):
+    # lambda_floor * mean_rows relu(slot_gain_floor_target - g)^2 on the SAME finite
+    # difference the row hinge reads. The row hinge and the tail only PERMIT a map near 1;
+    # measured, the slot map settles at a uniform 0.87-0.88 on its own, below a 0.9 hinge
+    # that stops binding after ~1000 steps (lab/divergence/core_map_fd.py; the plain
+    # loop that earns sits at 0.92-0.97 with 3-21 % of positions above 1). The floor
+    # PUSHES the typical gain up into [floor, target]; the tail still bounds one slot's
+    # excursion. Needs slot_gain_lambda > 0 and floor target < slot_gain_target (the two
+    # hinges would otherwise fight over one band). 0.0 = OFF and bit-identical.
+    slot_gain_floor_lambda: float = 0.0
+    slot_gain_floor_target: float = 0.95
 
     @property
     def retention_carry_mode(self) -> str:
@@ -2918,7 +2929,7 @@ class MORPHTransformer(nn.Module):
         # DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md). A TUL model with n_core == 0 asked for
         # a lever on a loop it does not have: that is a contradiction and raises.
         _levers = {k: getattr(cfg, k) for k in ("slot_cot_clip", "slot_state_renorm", "slot_gain_lambda",
-                                                  "slot_gain_tail_lambda")
+                                                  "slot_gain_tail_lambda", "slot_gain_floor_lambda")
                    if getattr(cfg, k)}
         _why = ("no TUL block" if cfg.tul is None else
                 "n_core=0 (a coreless TUL model has no loop)" if cfg.n_core == 0 else
@@ -2954,6 +2965,20 @@ class MORPHTransformer(nn.Module):
             raise ValueError(
                 "model.slot_gain_tail_lambda > 0 needs model.slot_gain_lambda > 0: the tail "
                 "hinge reads the row hinge's finite difference and never runs without it.")
+        if cfg.slot_gain_floor_lambda < 0.0 or cfg.slot_gain_floor_target <= 0.0:
+            raise ValueError(
+                f"model.slot_gain_floor_lambda must be >= 0 (0 = off) and slot_gain_floor_target "
+                f"> 0, got {cfg.slot_gain_floor_lambda} / {cfg.slot_gain_floor_target}")
+        if cfg.slot_gain_floor_lambda > 0.0:
+            if cfg.slot_gain_lambda <= 0.0:
+                raise ValueError(
+                    "model.slot_gain_floor_lambda > 0 needs model.slot_gain_lambda > 0: the "
+                    "floor reads the row hinge's finite difference and never runs without it.")
+            if cfg.slot_gain_floor_target >= cfg.slot_gain_target:
+                raise ValueError(
+                    f"model.slot_gain_floor_target {cfg.slot_gain_floor_target} must be below "
+                    f"slot_gain_target {cfg.slot_gain_target}: the floor pushes the row gain UP "
+                    "into [floor, target] and the row hinge holds it from above.")
         if cfg.slot_gain_lambda > 0.0 and cfg.scse_enabled and _why is None:
             raise NotImplementedError("model.slot_gain_lambda under SCSE is not defined (deviation carrier)")
         self.scse: _SCSE | None = (
@@ -6154,6 +6179,7 @@ class MORPHTransformer(nn.Module):
                                          torch.nan),
             "gain_slot_frac_gt1": (gs > 1.0).sum().float() / ok.sum().float(),
             "gain_tail_pen": torch.stack([g["tail_pen"] for g in terms]).sum(),
+            "gain_floor_pen": torch.stack([g["floor_pen"] for g in terms]).sum(),
         }
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
@@ -6228,10 +6254,23 @@ class MORPHTransformer(nn.Module):
         tail = tail_lam * (th * th * valid).sum() / n_valid.clamp_min(1)
         if tail_lam > 0.0:
             pen = pen + tail
+        # The FLOOR (`slot_gain_floor_*`): the same row gain, charged when it sits BELOW the
+        # floor target, so the map is pushed up into [floor, target] instead of only being
+        # allowed there. Off, nothing is computed and the penalty is the one above. A row
+        # with no active slot at this pass (its depth ran out) reads gain 0 and is not a
+        # map below the floor: it is left out of the mean.
+        floor_lam = float(self.cfg.slot_gain_floor_lambda)
+        if floor_lam > 0.0:
+            row_ok = valid.flatten(1).any(dim=1)                                    # [B]
+            fl = torch.relu(float(self.cfg.slot_gain_floor_target) - gain) * row_ok
+            floor = floor_lam * (fl * fl).sum() / row_ok.sum().clamp_min(1)
+            pen = pen + floor
+        else:
+            floor = gain.new_zeros(())
         g_det = g_slot.detach()
         return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen,
                 "g_slot": torch.where(valid, g_det, torch.full_like(g_det, float("nan"))),
-                "tail_pen": tail.detach()}
+                "tail_pen": tail.detach(), "floor_pen": floor.detach()}
 
     # ── LXTUL-G (tul.gram; morph/model/tul_gram.py) ───────────────────────────────
 
@@ -11079,7 +11118,7 @@ class MORPHTransformer(nn.Module):
             # Per-slot readings of the same finite difference (`slot_gain_tail_*`); the
             # weighted tail term is inside `gain_reg_weighted` and reported apart as well.
             for _gk in ("gain_slot_p50", "gain_slot_p90", "gain_slot_max",
-                        "gain_slot_frac_gt1", "gain_tail_pen"):
+                        "gain_slot_frac_gt1", "gain_tail_pen", "gain_floor_pen"):
                 groups[_gk] = gain_reg[_gk]
             groups["loss"] = groups["loss"] + gain_reg["penalty"]
 

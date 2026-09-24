@@ -33,7 +33,7 @@ from test_slot_gain_reg import MAX_DEPTH, _model, _run, _same
 from morph.model.transformer import MORPHTransformer
 
 _NEW_KEYS = ("gain_slot_p50", "gain_slot_p90", "gain_slot_max", "gain_slot_frac_gt1",
-             "gain_tail_pen")
+             "gain_tail_pen", "gain_floor_pen")
 
 
 # ── the pre-change code, VERBATIM (master 2f0c30d) ──────────────────────────────────────
