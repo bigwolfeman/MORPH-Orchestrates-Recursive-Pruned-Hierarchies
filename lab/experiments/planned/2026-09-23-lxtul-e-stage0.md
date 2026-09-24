@@ -66,3 +66,21 @@ codes, and Stage 1 should read its code usage first. No clause passes on a cosin
 One GPU smoke of e0k4 (~50 steps) first, for memory, tok/s and a falling `par_ce`; then
 e0k1 and e0k4 in sequence on the 5090 (one trainer at a time), then the scorer. Artifacts:
 JSON and run logs in `../results/2026-09-23-lxtul-e-stage0/`.
+
+## Method amendment (2026-09-23 23:44, after a void first launch, before any scored reading)
+
+Predictions unchanged. The first launch (3f03adf, 23:29) is VOID. Its smoke passed (par_ce
+11.46 → 7.28 in 50 steps, 7.83 GB, 13.7k tok/s), but a diff of e0k1's step-1000 checkpoint
+against the ruler found exactly one of 478 frozen tensors changed: `tul.E_slot` (max |d|
+0.10). `init_from` resets the step to 0, and the trainer's TUL activation branch
+overwrote the seed's trained slot embedding with the embedding-table mean, so both heads
+were training on a cell the ruler never wrote. Fixed in 7f73f0a (`train.e_slot_seeded`;
+test `tests/test_init_from_e_slot.py`). A 60-step e0k1 run on 7f73f0a then diffs at 0 of
+478 frozen tensors changed. The void run was stopped at step ~1100 of e0k1, its checkpoints
+and its wandb run id were deleted, and nothing from it is scored.
+
+Also measured on the void run: the val loss moved between evals (4.4765, 4.5431, 4.4382,
+4.3248) because the val loader rewinds only on curriculum runs; each eval reads different
+documents. So the trainer's val loss is not a frozen-model check; the tensor diff is.
+
+The chain reruns on 7f73f0a, same configs.
