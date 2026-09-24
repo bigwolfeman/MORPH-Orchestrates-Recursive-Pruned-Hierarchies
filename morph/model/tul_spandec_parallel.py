@@ -89,6 +89,10 @@ Contracts (copied from ``tul_spandec.py``)
 * **The tied head is detached at both ends.** There is no input embedding read at all,
   and the OUTPUT head is ``embed.lm_weight().detach()`` always (this head never trains the
   table the coda speaks through, whatever ``tul.mux_detach_head`` says).
+* **Two Stage 2 knobs live in the model, not here** (``TULConfig``):
+  ``spandec_parallel_span_cap`` builds this head at ``J = cap`` (the first ``cap`` tokens
+  of the span), and ``spandec_parallel_detach`` hands it a detached exit state, so it
+  trains as a probe of the loop's state (``MORPHTransformer._tul_spandec_par_loss``).
 * **Never materialises ``[B, S, J, V]``.** The per-token log-prob of the label comes from
   :func:`morph.model.fused_ce.fused_linear_label_logprob` over the VALID rows only; pad
   slots and past-the-end positions never reach the vocabulary GEMM.
@@ -248,7 +252,9 @@ class ParallelSpanHead(nn.Module):
         :func:`~morph.model.tul_spandec.span_slots` at the ruler decoder's shift and J cap,
         the one home of the target mapping (validity: the span is complete and the graded
         slot exists; pad slots, the dump bin and the trailing unterminated text are all
-        invalid)."""
+        invalid). ``J = max_tokens``: under ``tul.spandec_parallel_span_cap`` c the model
+        builds the head at ``J = c``, and ``span_slots`` DROPS a span's tokens at offset
+        ``>= J``, so the target is the span's first c tokens and validity is unchanged."""
         return span_slots(input_ids, layout, self.max_tokens, shift=self.target_offset)
 
     # ── the codes ───────────────────────────────────────────────────────────────────

@@ -227,6 +227,46 @@ def score_arm(m, batches, depths: list[int], device: str, tol: float) -> dict:
     return {"per": per, "devs": devs}
 
 
+def abs_path(p: str) -> str:
+    """A relative checkpoint path is taken against the repo root."""
+    from _build import ROOT
+    return p if p.startswith("/") else os.path.join(ROOT, p)
+
+
+def load_arm(config: str, path: str, device: str, ovr: list[str]):
+    """``(model in eval mode, step, cfg, tul runtime)`` for one arm's checkpoint, built from
+    its Hydra config with the eager kernels (``model.use_kernels=false``) plus ``ovr``.
+    Shared with ``lxtul_e_stage2_score.py``."""
+    from _build import ROOT, build_cfg
+    if f"{ROOT}/scripts" not in sys.path:
+        sys.path.insert(0, f"{ROOT}/scripts")
+    from tul_samples import load_ckpt  # noqa: E402
+
+    from morph.training.tul_setup import build_tul_runtime
+    cfg = build_cfg(config, ["model.use_kernels=false", *ovr])
+    rt = build_tul_runtime(cfg)
+    m, step = load_ckpt(cfg, abs_path(path), device, rt.model_cfg)
+    return m.eval(), step, cfg, rt
+
+
+def val_batches(cfg, rt, rows: int, batch: int) -> tuple[list, int]:
+    """The first ``rows`` packed validation rows (the trainer's packer over the validation
+    stream from its start), in batches of ``batch``, with the stream index of every
+    position. RAISES when the stream packs fewer rows than asked."""
+    from _rows import pack_rows, stream_from_loader
+
+    from morph.training.data import create_dataloader
+    loader = create_dataloader(cfg.data.tokenizer, cfg.data.dataset, 2048, 8,
+                               split="validation", skip_samples=0, bag_size=0, tul=None)
+    row_tokens = rt.data_cfg.spec_for(cfg.data.seq_len).l_total + 1
+    stream = stream_from_loader(loader, rows * row_tokens)
+    batches = pack_rows(stream, rt, cfg, batch, False)[:-(-rows // batch)]
+    got = sum(b[0].shape[0] for b in batches)
+    if got < rows:
+        raise SystemExit(f"packed {got} rows, asked for {rows}")
+    return batches, got
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--e4", required=True)
@@ -251,35 +291,15 @@ def main() -> None:
     if 1 not in depths or 6 not in depths:
         raise SystemExit("--depths must include 1 and 6 (K1-K6 and the separation ratio)")
     t0 = time.time()
-
-    from _build import ROOT, build_cfg
-    from _rows import pack_rows, stream_from_loader
-    sys.path.insert(0, f"{ROOT}/scripts")
-    from tul_samples import load_ckpt  # noqa: E402
-
-    from morph.training.data import create_dataloader
-    from morph.training.tul_setup import build_tul_runtime
-
-    def _abs(p: str) -> str:
-        return p if p.startswith("/") else os.path.join(ROOT, p)
+    _abs = abs_path
 
     def _load(config: str, path: str):
-        cfg = build_cfg(config, ["model.use_kernels=false", *a.ovr])
-        rt = build_tul_runtime(cfg)
-        m, step = load_ckpt(cfg, _abs(path), a.device, rt.model_cfg)
-        return m.eval(), step, cfg, rt
+        return load_arm(config, path, a.device, a.ovr)
 
     m4, s4, cfg4, rt4 = _load(a.config_e4, a.e4)
     if m4._code_enum_k < 2 or m4.tul_spandec_par is None:
         raise SystemExit("--e4 must be a code_enum_k > 1 arm with the parallel head")
-    loader = create_dataloader(cfg4.data.tokenizer, cfg4.data.dataset, 2048, 8,
-                               split="validation", skip_samples=0, bag_size=0, tul=None)
-    row_tokens = rt4.data_cfg.spec_for(cfg4.data.seq_len).l_total + 1
-    stream = stream_from_loader(loader, a.rows * row_tokens)
-    batches = pack_rows(stream, rt4, cfg4, a.batch, False)[:-(-a.rows // a.batch)]
-    rows = sum(b[0].shape[0] for b in batches)
-    if rows < a.rows:
-        raise SystemExit(f"packed {rows} rows, asked for {a.rows}")
+    batches, rows = val_batches(cfg4, rt4, a.rows, a.batch)
 
     print(f"e4 {a.e4} (step {s4})", flush=True)
     r4 = score_arm(m4, batches, depths, a.device, a.tol)
