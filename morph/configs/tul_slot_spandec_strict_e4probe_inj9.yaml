@@ -12,7 +12,7 @@
 # = 0.787 and nothing else. If the map follows the floor down (0.77-0.81), 0.87 was an
 # architecture default. If the blocks compensate and the map returns to 0.85-0.90, the loss
 # was choosing about 0.88. Read against `lxtul-e4probe-map`. Prereg:
-# lab/experiments/planned/2026-09-24-lxtul-map-cause.md.
+# lab/experiments/failures/2026-09-24-lxtul-map-cause.md.
 defaults:
   - tul_slot_spandec_strict_e4probe_map
   - _self_

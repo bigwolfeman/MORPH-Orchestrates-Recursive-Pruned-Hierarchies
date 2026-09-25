@@ -1,0 +1,107 @@
+.......................sss.............................................. [  2%]
+......x................................................................. [  5%]
+........................................................................ [  7%]
+........................................................................ [ 10%]
+......................................................................ss [ 13%]
+........................................................................ [ 15%]
+........................................................................ [ 18%]
+........................................................................ [ 21%]
+........................................................................ [ 23%]
+...............s...s...............s...............sssssssssssssssssssss [ 26%]
+ssssssssssssssssssssssssss.............................................. [ 29%]
+........................................................................ [ 31%]
+........................................................................ [ 34%]
+........................................................................ [ 37%]
+........................................................................ [ 39%]
+........................................................................ [ 42%]
+........................................................................ [ 45%]
+........................................................................ [ 47%]
+........................................................................ [ 50%]
+........................................................................ [ 53%]
+........................................................................ [ 55%]
+........................................................................ [ 58%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+...............................................s........................ [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 74%]
+........................................................................ [ 77%]
+........................................................................ [ 79%]
+........................................................................ [ 82%]
+........................................................................ [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 90%]
+........................................................................ [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 98%]
+...........................................                              [100%]
+=============================== warnings summary ===============================
+../11-DiffusionBlocks-Testing/.venv/lib/python3.12/site-packages/torch/jit/_script.py:365: 14 warnings
+  /home/wolfe/11-DiffusionBlocks-Testing/.venv/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+tests/test_core_jacobian.py::test_probe_is_rng_neutral
+tests/test_core_jacobian.py::test_probe_measurement_is_rng_neutral_with_dropout
+tests/test_onset_capture.py::test_jacobian_probe_dict_carries_typical_gain
+  /home/wolfe/morph-wt-map/morph/training/train.py:1223: UserWarning: CUDA is not available or torch_xla is imported. Disabling autocast.
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+
+tests/test_core_loop_aux.py::test_gain_hinge_zero_above_target_positive_at_zero
+  /home/wolfe/morph-wt-map/tests/test_core_loop_aux.py:81: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+  Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+    assert float(hi["core_gain_weighted"]) == 0.0 and torch.isfinite(hi["core_gain_est"])
+
+tests/test_lifecycle_checkpoint.py::test_post_step_checkpoint_resumes_at_next_step
+tests/test_lifecycle_checkpoint.py::test_pre_step_transition_checkpoint_resumes_at_same_step
+tests/test_lifecycle_checkpoint.py::test_legacy_checkpoint_without_next_step_assumes_post_step
+  /home/wolfe/morph-wt-map/tests/test_lifecycle_checkpoint.py:25: UserWarning: torch.cuda.amp.GradScaler is enabled, but CUDA is not available.  Disabling.
+    scaler = torch.amp.GradScaler("cuda")
+
+tests/test_loop_diagnostics.py: 4 warnings
+tests/test_resume_allow_missing_tul.py: 10 warnings
+tests/test_slot_cell_rank_vectorized.py: 1 warning
+tests/test_spandec_horizon_grid.py: 14 warnings
+tests/test_tul_center_exit.py: 16 warnings
+tests/test_tul_coda_span.py: 9 warnings
+tests/test_tul_cond4_strict.py: 24 warnings
+tests/test_tul_core_token_and_critic_arms.py: 4 warnings
+tests/test_tul_core_token_aux.py: 17 warnings
+tests/test_tul_critic.py: 16 warnings
+tests/test_tul_egrad.py: 4 warnings
+tests/test_tul_gram_iw.py: 4 warnings
+tests/test_tul_horizon.py: 15 warnings
+tests/test_tul_loop_reads_tokens.py: 16 warnings
+tests/test_tul_objective_arms.py: 3 warnings
+tests/test_tul_oracle_z.py: 13 warnings
+tests/test_tul_row_contrast.py: 14 warnings
+tests/test_tul_slot_register.py: 31 warnings
+tests/test_tul_spandec.py: 7 warnings
+tests/test_tul_spandec_horizon.py: 5 warnings
+tests/test_tul_spandec_per_pass.py: 16 warnings
+tests/test_tul_spandec_reads_cells.py: 25 warnings
+tests/test_tul_spandec_target_offset.py: 5 warnings
+tests/test_tul_strict_geometry.py: 10 warnings
+tests/test_tul_vq_thought.py: 21 warnings
+  /home/wolfe/11-DiffusionBlocks-Testing/.venv/lib/python3.12/site-packages/torch/nn/modules/linear.py:124: UserWarning: Initializing zero-element tensors is a no-op
+    init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+
+tests/test_ternary_rule_carve_export.py::test_carve_carries_norm_match_into_the_carved_ste_and_persists_it
+tests/test_ternary_rule_carve_export.py::test_symmetric_carve_is_unchanged_and_an_old_two_element_buffer_loads_as_symmetric
+tests/test_ternary_rule_carve_export.py::test_carve_refuses_learnable_scales_before_touching_any_layer
+tests/test_ternary_rule_carve_export.py::test_packer_bakes_the_trained_rule_on_a_carved_norm_match_layer
+  /home/wolfe/morph-wt-map/morph/model/layers/block_sparse.py:482: UserWarning: The .grad attribute of a Tensor that is not a leaf Tensor is being accessed. Its .grad attribute won't be populated during autograd.backward(). If you indeed want the .grad field to be populated for a non-leaf Tensor, use .retain_grad() on the non-leaf Tensor. If you access the non-leaf Tensor by mistake, make sure you access the leaf Tensor instead. See github.com/pytorch/pytorch/pull/30531 for more information. (Triggered internally at /pytorch/build/aten/src/ATen/core/TensorBody.h:494.)
+    w_grad = self.weight.grad
+
+tests/test_train_evaluate_plain.py::test_evaluate_runs_on_a_plain_model_with_extra
+  /home/wolfe/morph-wt-map/morph/training/train.py:350: UserWarning: CUDA is not available or torch_xla is imported. Disabling autocast.
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+
+tests/test_train_phase.py::test_val_ppl_tokens_is_exp_of_the_mean_not_the_mean_of_exps
+tests/test_train_phase.py::test_val_ppl_tokens_uses_the_same_aggregation_as_the_baseline_val_ppl
+  /home/wolfe/morph-wt-map/morph/training/train.py:131: UserWarning: CUDA is not available or torch_xla is imported. Disabling autocast.
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2650 passed, 56 skipped, 1 xfailed, 332 warnings in 132.26s (0:02:12)
+EXIT 0

@@ -380,7 +380,8 @@ def run_arm(spec: str, a) -> dict:
               f"{time.time() - t0:.0f}s", flush=True)
 
     # ── reduce ──
-    n_pos = int(max(np.concatenate(acc["bf16"][0]["pos"]).max() + 1, 1))
+    # Any mode reads the same positions; `--modes fp32` has no bf16 entry.
+    n_pos = int(max(np.concatenate(next(iter(acc.values()))[0]["pos"]).max() + 1, 1))
     bins = pos_bins(n_pos, slot=not plain)
     out_modes = {}
     for md, per in acc.items():

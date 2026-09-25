@@ -1,0 +1,25 @@
+[17:01:53] chain at 5e96fec
+[17:04:23] SMOKE nofp exit=0 Final val_loss=10.8144  ppl=49732.40  va
+[17:06:54] SMOKE floor exit=0 Final val_loss=10.8190  ppl=49961.44  va
+[17:06:54] at 5e96fec Stage 3 prereg: what holds the slot map at 0.87, and does a map near 1 earn depth.
+[17:06:54] START nofp
+[18:55:18] DONE nofp exit=0 tok/s=5729 Final val_loss=4.4182  ppl=82.94  val/attn_lift=0.5083  val/
+[18:55:18] TRIPWIRE nofp: DETONATED step=4048 max=1.96e+08@4048 (single row > 1e5)
+[18:55:18] START floor
+[23:08:51] DONE floor exit=0 tok/s=4853 Final val_loss=4.4222  ppl=83.28  val/attn_lift=0.5139  val/
+[23:08:51] TRIPWIRE floor: AMBIGUOUS last=4999 max=7.43e+03@951
+[23:08:51] START map
+[01:00:13] DONE map exit=0 tok/s=5494 Final val_loss=4.4028  ppl=81.68  val/attn_lift=0.5100  val/
+[01:00:14] TRIPWIRE map: HEALTHY last=4999 max=35.1@2115
+[01:00:14] arms with step_5000: nofp floor map
+[01:01:57] MAP exit=0
+[01:15:09] SCORE exit=0
+[01:19:59] SWEEP nofp exit=0
+[01:21:16] WORTH nofp exit=0
+[01:26:05] SWEEP floor exit=0
+[01:27:22] WORTH floor exit=0
+[01:32:09] SWEEP map exit=0
+[01:33:24] WORTH map exit=0
+[01:33:30] PAIR exit=0 plain=/home/wolfe/morph-scratch/arc/results/2026-09-13-register/sweep_plain-panel-norm-match_5000.plain-panel-norm-match.tokens.npz
+[01:59:56] GEN exit=0
+[01:59:56] ALL_DONE

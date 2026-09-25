@@ -1,0 +1,52 @@
+
+CODA tokens (each reader joined to notul in notul index space):
+[align e4probe coda] corr by shift {-1: 0.012, 0: 0.915, 1: 0.04} -> +0
+  e4probe coda     n=491520  4.3292  notul 4.0750  minus notul +0.2542 [+0.2501, +0.2578]   K1-K6 +0.0011
+[align floor coda] corr by shift {-1: 0.012, 0: 0.915, 1: 0.04} -> +0
+  floor coda       n=491520  4.3453  notul 4.0750  minus notul +0.2703 [+0.2663, +0.2740]   K1-K6 -0.0001
+[align map coda] corr by shift {-1: 0.013, 0: 0.915, 1: 0.04} -> +0
+  map coda         n=491520  4.3246  notul 4.0750  minus notul +0.2496 [+0.2457, +0.2533]   K1-K6 +0.0009
+[align nofp coda] corr by shift {-1: 0.011, 0: 0.914, 1: 0.04} -> +0
+  nofp coda        n=491520  4.3340  notul 4.0750  minus notul +0.2590 [+0.2551, +0.2628]   K1-K6 +0.0121
+
+HEAD tokens by span offset (each reader on its OWN tokens, notul on the same):
+[align e4probe par] corr by shift {-1: 0.049, 0: -0.071, 1: 0.57} -> +1
+  [e4probe par] 476712 of 486031 matched
+    offset    n                notul     e4probe par  e4probe par d1
+    all      476712            4.0731          6.9203          6.9241
+    0         23874            3.4838          4.3958          4.4185
+    1         23676            3.5307          5.5323          5.5627
+    2-3       47299            4.1636          6.8772          6.8913
+    4-7       85883            4.1668          7.1349          7.1379
+    8-15     136662            4.1512          7.1703          7.1697
+    16+      159318            4.0977          7.1875          7.1855
+[align floor par] corr by shift {-1: 0.048, 0: -0.071, 1: 0.571} -> +1
+  [floor par] 476712 of 486031 matched
+    offset    n                notul       floor par    floor par d1
+    all      476712            4.0731          6.9306          6.9331
+    0         23874            3.4838          4.4227          4.4490
+    1         23676            3.5307          5.5394          5.5604
+    2-3       47299            4.1636          6.8891          6.8961
+    4-7       85883            4.1668          7.1427          7.1477
+    8-15     136662            4.1512          7.1808          7.1791
+    16+      159318            4.0977          7.1964          7.1937
+[align map par] corr by shift {-1: 0.049, 0: -0.072, 1: 0.569} -> +1
+  [map par] 476712 of 486031 matched
+    offset    n                notul         map par      map par d1
+    all      476712            4.0731          6.9479          6.9477
+    0         23874            3.4838          4.5580          4.5753
+    1         23676            3.5307          5.6025          5.6192
+    2-3       47299            4.1636          6.9309          6.9307
+    4-7       85883            4.1668          7.1554          7.1554
+    8-15     136662            4.1512          7.1822          7.1799
+    16+      159318            4.0977          7.1983          7.1947
+[align nofp par] corr by shift {-1: 0.05, 0: -0.07, 1: 0.572} -> +1
+  [nofp par] 476712 of 486031 matched
+    offset    n                notul        nofp par     nofp par d1
+    all      476712            4.0731          6.9195          7.1391
+    0         23874            3.4838          4.5677          5.5450
+    1         23676            3.5307          5.6129          6.2615
+    2-3       47299            4.1636          6.9036          7.1376
+    4-7       85883            4.1668          7.1224          7.2976
+    8-15     136662            4.1512          7.1491          7.2919
+    16+      159318            4.0977          7.1645          7.2922

@@ -1,0 +1,40 @@
+
+CODA tokens (each reader joined to notul in notul index space):
+[align inj9 coda] corr by shift {-1: 0.013, 0: 0.915, 1: 0.04} -> +0
+  inj9 coda        n=491520  4.3293  notul 4.0750  minus notul +0.2543 [+0.2505, +0.2578]   K1-K6 +0.0010
+[align map coda] corr by shift {-1: 0.013, 0: 0.915, 1: 0.04} -> +0
+  map coda         n=491520  4.3246  notul 4.0750  minus notul +0.2496 [+0.2457, +0.2533]   K1-K6 +0.0009
+[align once coda] corr by shift {-1: 0.011, 0: 0.914, 1: 0.04} -> +0
+  once coda        n=491520  4.3405  notul 4.0750  minus notul +0.2655 [+0.2616, +0.2691]   K1-K6 +0.0015
+
+HEAD tokens by span offset (each reader on its OWN tokens, notul on the same):
+[align inj9 par] corr by shift {-1: 0.049, 0: -0.071, 1: 0.57} -> +1
+  [inj9 par] 476712 of 486031 matched
+    offset    n                notul        inj9 par     inj9 par d1
+    all      476712            4.0731          6.9540          6.9654
+    0         23874            3.4838          4.6398          4.6591
+    1         23676            3.5307          5.6496          5.6869
+    2-3       47299            4.1636          6.9295          6.9658
+    4-7       85883            4.1668          7.1599          7.1728
+    8-15     136662            4.1512          7.1822          7.1885
+    16+      159318            4.0977          7.1952          7.1976
+[align map par] corr by shift {-1: 0.049, 0: -0.072, 1: 0.569} -> +1
+  [map par] 476712 of 486031 matched
+    offset    n                notul         map par      map par d1
+    all      476712            4.0731          6.9479          6.9477
+    0         23874            3.4838          4.5580          4.5753
+    1         23676            3.5307          5.6025          5.6192
+    2-3       47299            4.1636          6.9309          6.9307
+    4-7       85883            4.1668          7.1554          7.1554
+    8-15     136662            4.1512          7.1822          7.1799
+    16+      159318            4.0977          7.1983          7.1947
+[align once par] corr by shift {-1: 0.049, 0: -0.073, 1: 0.567} -> +1
+  [once par] 476712 of 486031 matched
+    offset    n                notul        once par     once par d1
+    all      476712            4.0731          6.9756          6.9834
+    0         23874            3.4838          4.6716          4.6899
+    1         23676            3.5307          5.6859          5.7018
+    2-3       47299            4.1636          6.9695          6.9792
+    4-7       85883            4.1668          7.1739          7.1817
+    8-15     136662            4.1512          7.2002          7.2083
+    16+      159318            4.0977          7.2146          7.2190

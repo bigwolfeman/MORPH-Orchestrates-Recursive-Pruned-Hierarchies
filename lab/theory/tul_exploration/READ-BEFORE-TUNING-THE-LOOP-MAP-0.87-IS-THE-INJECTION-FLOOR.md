@@ -18,12 +18,19 @@
 > Before you add a gain lever, read `injection.log_A` and compute the floor. Report the map
 > as "floor + the blocks' part", never as the map alone.
 >
-> Status: the floor and `A` are MEASURED. The causal account (the slot trajectory settles
-> from its entry, so the task cannot train the blocks' response) is PROVED in linear
-> models only (`TulExploration/MapCause.lean`, no `sorry`) and CONJECTURED for MORPH. It is
-> under test in LXTUL Stage 3 and interventions I-0, I-1 and I-2
-> (`lab/experiments/planned/2026-09-24-lxtul-stage3-map.md`,
-> `lab/experiments/planned/2026-09-24-lxtul-map-cause.md`).
+> Status (2026-09-25, after the tests): the floor and `A` are MEASURED, and **0.87 IS an
+> architecture default**: moving the injection's floor to 0.773 moved the map to 0.781 with
+> the blocks' part unchanged (I-1). The causal account below is **REFUTED on its I-2
+> link**: with the per-pass source removed, `A` stayed at 0.443 and the map at 0.871, and
+> the coda lost 0.016 (`lab/experiments/failures/2026-09-24-lxtul-map-cause.md`). **Depth
+> use appeared where the map barely moved**: with the fixed-point term off, coda K1−K6 is
+> 0.0123 while the eval map sits at 0.884, and a floor hinge that pushed the TRAINING gain
+> to 0.955 earned nothing (`lab/experiments/successes/2026-09-24-lxtul-stage3-map.md`).
+> Two lessons for anyone reading a gain: (1) the hinge's logged gain is a bf16 finite
+> difference, and on a moving map it reads high (0.97 logged vs 0.884 fp32 on the same
+> arm); read `core_map_fd.py` fp32. (2) A map near 1 was neither necessary nor sufficient
+> for depth use in these arms. The map is an effect, and the typical gain is dominated by
+> an injection that does not train.
 
 ## What sets the loop's per-pass map: the cause behind 0.88
 

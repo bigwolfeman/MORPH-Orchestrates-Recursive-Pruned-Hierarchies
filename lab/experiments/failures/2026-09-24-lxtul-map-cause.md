@@ -1,9 +1,9 @@
 # Planned: what causes the slot map's 0.87 (map-cause interventions I-0, I-1, I-2)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-24 18:00 (frozen before any GPU step of I-0, I-1 or I-2).
-Parent: [`2026-09-24-lxtul-stage3-map.md`](2026-09-24-lxtul-stage3-map.md) (Stage 3; its
+Parent: [`2026-09-24-lxtul-stage3-map.md`](../successes/2026-09-24-lxtul-stage3-map.md) (Stage 3; its
 arm C `lxtul-e4probe-map` is the reference here).
 Account under test: [`../../theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md`](../../theory/tul_exploration/READ-BEFORE-TUNING-THE-LOOP-MAP-0.87-IS-THE-INJECTION-FLOOR.md).
 Wolfe's go: 2026-09-24 ("We should test I-1 and I-2. If you really think we need I-0 do it
@@ -98,3 +98,62 @@ the GPU lock is free between Stage 3 steps. I-1 and I-2 run after the Stage 3 ch
 after the full test suite passes: 30-step smokes, then inj9, then once, then
 `core_map_fd` on both beside arm C, the Stage 2 scorer, sweeps, notul pairing. Artifacts:
 JSON and `.runlog.txt` files in `../results/2026-09-24-lxtul-map-cause/`.
+
+## Results (filed 2026-09-25 08:52)
+
+Artifacts: [`../results/2026-09-24-lxtul-map-cause/`](../results/2026-09-24-lxtul-map-cause/).
+Chain at 966ea9b. Full suite on that commit: 2650 passed, 56 skipped, 1 xfailed. I-0 ran
+2026-09-24 18:55; I-1 and I-2 ran 5000 steps each with exit 0 (6,175 and 6,239 tok/s),
+tripwire HEALTHY on both (max 19.8 and 52.2). Scorer against arm C (`lxtul-e4probe-map`):
+480 rows, 501,106 coda tokens, self-check max |dev| under 1e-6.
+
+Map (fp32, eval, depth 6, `operator.rms_vjp`) and floor from each checkpoint's own `A`
+(`map_vs_floor.runlog.txt`):
+
+| model | mean A | floor | pass 0 | passes 1–5 | mean 1–5 − floor |
+|---|---|---|---|---|---|
+| I-0 prev-reach1 | 0.432 | 0.864 | 0.923 | 0.889 → 0.880 | +0.019 |
+| arm C map (ref) | 0.437 | 0.864 | 0.871 | 0.871–0.872 | +0.007 |
+| I-1 inj9 | 0.743 (ctx ~0.43, the rest ~0.88) | 0.773 | 0.783 | 0.781 | +0.008 |
+| I-2 once | 0.443 | 0.865 | 0.873 | 0.871–0.872 | +0.006 |
+
+| clause | reading, 95 % CI | verdict |
+|---|---|---|
+| P0-1 prev-reach1 map − floor >= +0.03 | +0.019 | failed |
+| P0-2 slot-index trend rho >= 0.3 | −0.011 | failed |
+| P1-1 inj9 map within 0.02 of its floor | +0.008 | held |
+| P1-2 inj9 map <= 0.82 | 0.781 | held |
+| P1-3 inj9 coda K1−K6 <= 0.003 | +0.0010 [+0.0008, +0.0013] | held |
+| P1-4 inj9 coda @6 within ±0.01 of C | +0.0046 [+0.0024, +0.0066] | held |
+| P2-1 once mean A >= 0.7 | 0.443 | failed |
+| P2-2 once map >= 0.93 | 0.871 | failed |
+| P2-3 once coda K1−K6 >= 0.005 | +0.0016 [+0.0014, +0.0018] | failed |
+| P2-4 once − C coda @6 <= +0.02 | +0.0159 [+0.0136, +0.0181] | held |
+| stability HEALTHY, I-1 / I-2 | HEALTHY / HEALTHY | held |
+
+More readings: par K1−K6 inj9 +0.0113, once +0.0078 (C −0.0002). Exit separation @6:
+inj9 0.29, once 0.18 (C 0.26). Against notul on 491,520 identical tokens: C +0.2496, inj9
++0.2543, once +0.2655.
+
+## Verdict
+
+Failure: the account is not supported (P2-1 failed) and it is REFUTED on the I-2 link by
+its own rule. With the source gone after pass 0, `A` stayed at 0.443 and the map at 0.871;
+the loop did not take up keeping the entry, and the coda paid 0.016 for the lost source.
+
+What stands: **0.87 is an architecture default** (I-1). Moving the injection's floor to
+0.773 moved the map to 0.781, the blocks' part unchanged (+0.008 against +0.007), at no
+depth value and 0.0046 of coda CE. I-0 is between the account's two outcomes: +0.019 over
+the floor (less than its +0.03, more than the ruler's +0.013) with no slot-index trend.
+
+The Stage 3 filing the same night found the lever the account ranked fourth: with the
+fixed-point term off the coda earns K1−K6 0.0123 while the map moves only +0.025 over the
+floor ([`../successes/2026-09-24-lxtul-stage3-map.md`](../successes/2026-09-24-lxtul-stage3-map.md)).
+
+## Updated hypothesis
+
+The typical gain is the wrong reading of what the slot loop does. It is dominated by an
+injection that does not train (`A` moves by at most 0.03 in every arm, whatever the
+objective asks), and depth use appeared in the one arm whose map barely moved. What moved
+in that arm is the trajectory: the rollouts separate 13x more by depth 6. The next
+instrument reads motion across passes and what the coda takes from it, not the map's gain.

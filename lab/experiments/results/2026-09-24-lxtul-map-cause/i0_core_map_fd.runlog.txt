@@ -1,0 +1,91 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL SPAN DECODER ON: layers=2 heads=8 J=32x1 offset=1 weight=1.0 — span s+1 is decoded from z with a teacher-forced token path (morph/model/tul_spandec.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=prev): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TUL LOOP REACH 1: inside the loop a slot attends slots k-1..k only, the compressed branch takes the same relation and the CCA conv / value shift reset PER CELL — a slot m spans back needs ceil(m/1) passes to reach k
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 292.5M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=norm_match group=tensor dtype=fp16 modules=44 ({'backbone': 44, 'attention': 0, 'embeddings': 0}) params_ternary=127.8M (43.7% of model)
+  Embed QAT ON: mode=int6 modules=2 (['embed.hybrid.euc_embed', 'embed.bigram.embed']). LM head: LM head is WEIGHT-TIED to euc_embed (no separate weight). lm_head_quant is a NO-
+  CMS score_mode=taylor on 28 CMSBlockLinear layers
+  Resumed model+scaler+RNG from checkpoint step 5000; next_step=5000 (compact=False routed=False → optimizer_rebuild=False)
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+  [prev-reach1] batch 1/24 rows=4 10s
+  [prev-reach1] batch 2/24 rows=8 10s
+  [prev-reach1] batch 3/24 rows=12 11s
+  [prev-reach1] batch 4/24 rows=16 11s
+  [prev-reach1] batch 5/24 rows=20 12s
+  [prev-reach1] batch 6/24 rows=24 12s
+  [prev-reach1] batch 7/24 rows=28 13s
+  [prev-reach1] batch 8/24 rows=32 13s
+  [prev-reach1] batch 9/24 rows=36 14s
+  [prev-reach1] batch 10/24 rows=40 14s
+  [prev-reach1] batch 11/24 rows=44 15s
+  [prev-reach1] batch 12/24 rows=48 15s
+  [prev-reach1] batch 13/24 rows=52 15s
+  [prev-reach1] batch 14/24 rows=56 16s
+  [prev-reach1] batch 15/24 rows=60 16s
+  [prev-reach1] batch 16/24 rows=64 17s
+  [prev-reach1] batch 17/24 rows=68 17s
+  [prev-reach1] batch 18/24 rows=72 18s
+  [prev-reach1] batch 19/24 rows=76 18s
+  [prev-reach1] batch 20/24 rows=80 19s
+  [prev-reach1] batch 21/24 rows=84 19s
+  [prev-reach1] batch 22/24 rows=88 19s
+  [prev-reach1] batch 23/24 rows=92 20s
+  [prev-reach1] batch 24/24 rows=96 20s
+
+=== prev-reach1 (step 5000, 96 rows, depth 6, eps 0.02) replay_err={'t0': 0.0, 't1': 0.0, 't2': 0.0, 't3': 0.0, 't4': 0.0}
+  -- bf16
+  pass    mean    p10    p50    p90    p99    max      >1   >1.05 |    row pooled    iso | nrm_pos nrm_row
+  t0     0.928  0.902  0.922  0.957  1.039  1.151  0.0248  0.0080 |  0.927  0.927  0.928 |   1.219   1.219
+  t1     0.894  0.880  0.892  0.909  0.931  0.996  0.0000  0.0000 |  0.894  0.894  0.894 |   1.075   1.076
+  t2     0.888  0.875  0.886  0.903  0.923  0.967  0.0000  0.0000 |  0.888  0.888  0.888 |   1.038   1.039
+  t3     0.886  0.873  0.884  0.899  0.919  0.967  0.0000  0.0000 |  0.886  0.886  0.886 |   1.024   1.024
+  t4     0.884  0.872  0.883  0.898  0.920  0.964  0.0000  0.0000 |  0.884  0.884  0.885 |   1.017   1.018
+  t5     0.884  0.872  0.883  0.898  0.921  0.957  0.0000  0.0000 |  0.884  0.884  0.884 |   1.014   1.015
+  all    0.894  0.875  0.888  0.920  0.971  1.151  0.0041  0.0013 |  0.894
+  -- fp32
+  pass    mean    p10    p50    p90    p99    max      >1   >1.05 |    row pooled    iso | nrm_pos nrm_row
+  t0     0.918  0.897  0.913  0.942  1.023  1.136  0.0174  0.0054 |  0.918  0.918  0.919 |   1.219   1.219
+  t1     0.888  0.877  0.887  0.900  0.914  0.965  0.0000  0.0000 |  0.888  0.888  0.888 |   1.075   1.076
+  t2     0.882  0.872  0.882  0.893  0.906  0.975  0.0000  0.0000 |  0.882  0.882  0.882 |   1.038   1.039
+  t3     0.881  0.871  0.880  0.891  0.904  0.932  0.0000  0.0000 |  0.880  0.880  0.880 |   1.024   1.024
+  t4     0.879  0.870  0.879  0.890  0.902  0.918  0.0000  0.0000 |  0.879  0.879  0.879 |   1.017   1.018
+  t5     0.879  0.869  0.878  0.890  0.903  0.934  0.0000  0.0000 |  0.879  0.879  0.879 |   1.014   1.015
+  all    0.888  0.872  0.883  0.911  0.952  1.136  0.0029  0.0009 |  0.888
+  linearity (row-aggregate mean, batch 0):
+    fp32_t0_eps0.005   0.9222
+    bf16_t0_eps0.005   1.0241
+    fp32_t0_eps0.08    0.9218
+    bf16_t0_eps0.08    0.9224
+    fp32_t1_eps0.005   0.8895
+    bf16_t1_eps0.005   0.9487
+    fp32_t1_eps0.08    0.8896
+    bf16_t1_eps0.08    0.8900
+    fp32_t2_eps0.005   0.8831
+    bf16_t2_eps0.005   0.9460
+    fp32_t2_eps0.08    0.8834
+    bf16_t2_eps0.08    0.8839
+    fp32_t3_eps0.005   0.8818
+    bf16_t3_eps0.005   0.9493
+    fp32_t3_eps0.08    0.8821
+    bf16_t3_eps0.08    0.8827
+    fp32_t4_eps0.005   0.8813
+    bf16_t4_eps0.005   0.9438
+    fp32_t4_eps0.08    0.8816
+    bf16_t4_eps0.08    0.8822
+    fp32_t5_eps0.005   0.8801
+    bf16_t5_eps0.005   0.9355
+    fp32_t5_eps0.08    0.8804
+    bf16_t5_eps0.08    0.8807
+  carrier peak/rms per position: t0:p50=17.4,max=19.6 t1:p50=20.4,max=23.6 t2:p50=21.5,max=24.9 t3:p50=21.9,max=25.1 t4:p50=22.1,max=25.1 t5:p50=22.2,max=25.2
+  operator t0: typical(VJP)=0.9230 sigma_max=12.1090 (rel_change 1.6e-07) fd_iso_same_batch=0.9245
+  operator t1: typical(VJP)=0.8887 sigma_max=6.2351 (rel_change 4.7e-06) fd_iso_same_batch=0.8896
+  operator t2: typical(VJP)=0.8835 sigma_max=5.6905 (rel_change 1.6e-05) fd_iso_same_batch=0.8829
+  operator t3: typical(VJP)=0.8816 sigma_max=5.7483 (rel_change 1.6e-04) fd_iso_same_batch=0.8809
+  operator t4: typical(VJP)=0.8805 sigma_max=5.6313 (rel_change 7.9e-05) fd_iso_same_batch=0.8806
+  operator t5: typical(VJP)=0.8800 sigma_max=5.8067 (rel_change 3.7e-06) fd_iso_same_batch=0.8801
+wrote /home/wolfe/morph-scratch/lxtul-mc/i0_core_map_fd.json

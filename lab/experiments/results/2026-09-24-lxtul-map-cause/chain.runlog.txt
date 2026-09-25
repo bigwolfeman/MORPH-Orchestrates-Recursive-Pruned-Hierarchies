@@ -1,0 +1,20 @@
+[18:02:22] chain at 966ea9b Map-cause prereg: I-0, I-1, I-2 against the injection-floor account.
+[18:55:51] I-0 MAP exit=0
+[02:00:56] stage3 chain gone: [01:59:56] ALL_DONE
+[02:00:56] full suite: 2650 passed, 56 skipped, 1 xfailed, 332 warnings in 132.26s (0:02:12)
+[02:03:15] SMOKE inj9 exit=0 Final val_loss=10.8127  ppl=49648.16  va
+[02:05:32] SMOKE once exit=0 Final val_loss=10.7816  ppl=48127.26  va
+[02:05:32] START inj9
+[03:44:28] DONE inj9 exit=0 tok/s=6175 Final val_loss=4.4151  ppl=82.69  val/attn_lift=0.4712  val/
+[03:44:28] TRIPWIRE inj9: HEALTHY last=4999 max=19.8@224
+[03:44:28] START once
+[05:22:30] DONE once exit=0 tok/s=6239 Final val_loss=4.4190  ppl=83.01  val/attn_lift=0.5319  val/
+[05:22:30] TRIPWIRE once: HEALTHY last=4999 max=52.2@224
+[05:23:44] MAP exit=0
+[05:32:56] SCORE exit=0
+[05:37:46] SWEEP inj9 exit=0
+[05:39:03] WORTH inj9 exit=0
+[05:43:50] SWEEP once exit=0
+[05:45:06] WORTH once exit=0
+[05:45:10] PAIR exit=0
+[05:45:10] ALL_DONE

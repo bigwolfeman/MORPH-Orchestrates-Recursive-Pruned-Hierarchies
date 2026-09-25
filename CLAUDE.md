@@ -53,8 +53,11 @@ measured).** A pass whose blocks do not respond still has typical gain
 from its init in any model read. The slot map sits 0.005–0.018 above that floor; the plain loop
 that earns depth sits 0.05–0.10 above it. So the slot core's BLOCKS are quiet, and any gain
 lever is met most cheaply through `A`. Read `injection.log_A` and report "floor + blocks' part"
-before you tune the map. The causal account is proved in linear models only
-(`lab/theory/tul_exploration/TulExploration/MapCause.lean`) and under test in LXTUL Stage 3.
+before you tune the map. Tested 2026-09-25: moving the floor moves the map (0.87 is a
+default); the Lean causal account is refuted on its source-once link; and depth use appeared
+with the map barely moved (fixed-point term off: coda K1−K6 0.0123, eval map 0.884), while a
+gain floor that lifted the TRAINING gain to 0.955 earned nothing. The hinge's logged gain is
+bf16 and reads high on a moving map: use `core_map_fd.py` fp32.
 
 ## ⭐ Core mental model — MORPH is a NESTED dynamical system (read before optimizing)
 

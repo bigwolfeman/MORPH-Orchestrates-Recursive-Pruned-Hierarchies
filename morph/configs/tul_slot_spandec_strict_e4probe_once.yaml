@@ -16,7 +16,7 @@
 # rises (mean >= 0.7), the map rises with it (>= 0.93), and still no depth value on the
 # coda. The map guard (0.98) of the parent is what lets the map rise; e4probe's 0.9 hinge
 # would fight it. Read against `lxtul-e4probe-map`. Prereg:
-# lab/experiments/planned/2026-09-24-lxtul-map-cause.md.
+# lab/experiments/failures/2026-09-24-lxtul-map-cause.md.
 defaults:
   - tul_slot_spandec_strict_e4probe_map
   - _self_

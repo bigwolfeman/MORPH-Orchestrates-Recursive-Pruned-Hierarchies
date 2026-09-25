@@ -15,7 +15,7 @@
 # `..._e4probe_nofp` each move the map by ONE mechanism.
 #
 # Instruments: `loss/gain_est`, `loss/gain_slot_*`, `loss/gain_floor_pen`. Read against
-# `lxtul-e4probe`. Prereg: lab/experiments/planned/2026-09-24-lxtul-stage3-map.md.
+# `lxtul-e4probe`. Prereg: lab/experiments/successes/2026-09-24-lxtul-stage3-map.md.
 defaults:
   - tul_slot_spandec_strict_e4probe_map
   - _self_

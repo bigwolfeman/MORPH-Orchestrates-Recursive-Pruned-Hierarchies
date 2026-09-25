@@ -1,6 +1,6 @@
 # Planned: LXTUL Stage 3, what holds the slot map at 0.87, and does a map near 1 earn depth
 
-Status: planned
+Status: success
 
 Date: 2026-09-24 15:56 (frozen before any Stage 3 GPU step of arms A and B).
 Parent: [`../failures/2026-09-24-lxtul-e-stage2.md`](../failures/2026-09-24-lxtul-e-stage2.md).
@@ -149,3 +149,87 @@ from the step-5000 checkpoints, no forward pass needed for the first:
 These decide how B-1 reads. The floor hinge can be met by raising A alone (A about 0.83
 gives a floor of 0.95) with the blocks as quiet as before. B-1 holding with the map within
 0.03 of B's own floor means the gain moved through the injection, not through the blocks.
+
+## Results (filed 2026-09-25 08:52)
+
+Artifacts: [`../results/2026-09-24-lxtul-stage3-map/`](../results/2026-09-24-lxtul-stage3-map/).
+Chain at 5e96fec, 2026-09-24 17:01 to 2026-09-25 01:59 (paused by Wolfe 20:52 to 23:08
+between arms B and C). All three arms ran 5000 steps with exit 0 (nofp 5,729 tok/s,
+floor 4,853, map 5,494). Scorer: 480 rows, 501,106 coda tokens, self-check max |dev|
+under 1.2e-6 on every arm.
+
+The map, `core_map_fd.py` fp32 at eval, depth 6, 96 rows (`operator.rms_vjp`); floor
+`sqrt((704 + sum A^2)/1024)` from each checkpoint's own `injection.log_A`:
+
+| arm | mean A | floor | pass 0 | passes 1–5 | mean 1–5 − floor | positions > 1, passes 1–5 |
+|---|---|---|---|---|---|---|
+| e4probe (ref) | 0.433 | 0.864 | 0.870 | 0.869–0.870 | +0.006 | 0 |
+| A nofp | 0.401 | 0.859 | 0.826 | 0.872 → 0.891 | +0.025 | 0–0.2 % |
+| B floor | 0.450 | 0.866 | 0.968 | 0.891 → 0.880 | +0.016 | 0 (pass 0: 11 %) |
+| C map | 0.437 | 0.864 | 0.871 | 0.871–0.872 | +0.007 | 0 |
+
+| clause | reading, 95 % CI | verdict |
+|---|---|---|
+| A-1 typical gain >= 0.92 | 0.884 | failed |
+| A-2 coda K1−K6 >= 0.005 | **+0.0123 [+0.0115, +0.0130]** | **held** |
+| A-3 A − e4probe coda @6 <= +0.005 | +0.0046 [+0.0025, +0.0068] | held on the point; the CI crosses |
+| A-4 tripwire HEALTHY | DETONATED: one row 1.96e8 at step 4048 (`gain_est` 7.0, one slot 426), recovered, finished | failed |
+| B-1 gain in [0.94, 0.99] | 0.883 | failed |
+| B-2 >= 1 % above 1 | 0 % on passes 1–5 | failed |
+| B-3 coda K1−K6 >= 0.005 | −0.0001 [−0.0002, +0.0001] | failed |
+| B-4 B − e4probe coda @6 <= +0.005 | +0.0159 [+0.0137, +0.0180] | failed |
+| B-5 k/2 shape | not scored (B-3 failed) | – |
+| B-6 tripwire HEALTHY | AMBIGUOUS, max 7.4e3 at step 951 | failed |
+| C-1 guard inert | map 0.871; coda −0.0044 [−0.0067, −0.0020] | held |
+
+More readings:
+
+- Arm A's coda by forced depth: 4.3467, 4.3389, 4.3350, 4.3346, 4.3345, 4.3344. 95 % of
+  K1−K6 is reached by pass 3 (the k/2 shape). Its depth-1 coda is 0.016 worse than
+  e4probe's; its depth-6 coda is 0.0046 worse. Against the ruler @6: −0.0130
+  [−0.0154, −0.0106]. Against notul on 491,520 identical tokens: +0.2590 (e4probe +0.2542).
+- Arm A's detached parallel head: K1−K6 **+0.2186** [+0.2076, +0.2308] (e4probe +0.0038).
+  Exit separation between the four code rollouts at depth 6: **3.47** abs (e4probe 0.27,
+  floor 0.28, map 0.26), growing every pass (1.19, 1.29, 1.76, 2.21, 2.69, 3.47). The
+  codes are kept and grown across passes only when the fixed-point term is off.
+- Width gain (best code minus the mixture, coda @6): e4probe 0.0287, A 0.0229, B 0.0337,
+  C 0.0288.
+- **The logged training gain is not the map.** The hinge reads bf16. Train-mode fp32
+  (dropout on, the hinge's masks) equals eval fp32 within 0.005 on every arm, so dropout
+  is not the gap. On arm A bf16 reads pass 0 at 0.994 (37 % above 1) where fp32 reads
+  0.826, and passes 1–5 at 0.89–0.92 where fp32 reads 0.87–0.89. The logged 0.97 was
+  bf16 finite-difference noise on a moving map; on the quiet maps (e4probe, C) bf16 and
+  fp32 agree within 0.004.
+- Arm B's logged gain sat at 0.955–0.962 all run, above its eval map (0.88 on passes 1–5)
+  in both precisions and in train mode. The floor was met at the training operating point
+  (Poisson depth, the sampled pass) and did not carry to the eval map. Its `A` did not
+  rise (0.450). Not resolved: no instrument reads the map at the training operating point.
+- Samples (`gen_samples.json`) are saved and not read for this filing.
+
+## Verdict
+
+Success by the rule: A-2 held and A-3 held on the point. Turning the fixed-point term off
+put depth value on the deployed coda (K1−K6 0.0123, about 10x the ~0.002 slot-loop
+baseline, 95 % of it by pass 3) and made the committed codes diverge across passes. It is
+the largest coda K1−K6 in the strict slot family WITHOUT a restriction geometry or a
+forced relay. Forced relays read higher at a larger CE cost: prev-reach1 +0.0163
+(2026-09-12), LXTUL-R Step 1b +0.0261 at 0.0265 worse CE (2026-09-22).
+
+It is NOT a CE win: arm A's depth-6 coda is 0.0046 worse than e4probe's, and the K-curve
+comes from a worse depth-1 read. By the TUL scoring rule (loop contribution, not
+matched-compute nats) that is a positive; by final CE it is a tie with e4probe. It is one
+seed, and arm A detonated once and recovered.
+
+The map is not what moved. Arm A's eval map is 0.884, rising with pass, with no position
+above 1. Arm B forced a train-time gain of 0.955 and got no depth value and a worse coda.
+So a map near 1 was neither necessary (A) nor sufficient (B) for depth use here.
+
+## Updated hypothesis
+
+The fixed-point term (`||h_T − h_{T−1}||^2 / ||h_T||^2`) charges exactly the motion a
+loop needs to integrate across passes, and on the slot loop that motion is the whole
+job. Remove it and the loop moves (separation grows 13x by depth 6) and the coda reads
+the motion. The term is also the second hold against the detonation, and arm A
+detonated once. Next: a second seed of arm A; and a stability hold that does not charge
+motion, so the loop can move without the single-slot excursion that E14 and arm A both
+died on.
