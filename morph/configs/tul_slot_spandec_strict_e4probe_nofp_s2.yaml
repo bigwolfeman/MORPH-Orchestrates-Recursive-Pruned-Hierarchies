@@ -1,0 +1,18 @@
+# LXTUL Stage 3 follow-up, arm "lxtul-e4probe-nofp-s2": the fixed-point-off arm at a second
+# seed. Composes `tul_slot_spandec_strict_e4probe_nofp` and changes ONE key plus the run name:
+#
+#   training.seed  1 -> 2
+#
+# WHY. lxtul-e4probe-nofp earned coda K1-K6 +0.0123 [+0.0115, +0.0130] at seed 1, the
+# largest unforced slot-loop K-curve on the ledger, and detonated once at step 4048. MORPH
+# runs decorrelate within ~11 steps at a fixed seed, so one seed cannot carry the claim.
+# Prereg: lab/experiments/planned/2026-09-25-lxtul-nofp-followup.md.
+defaults:
+  - tul_slot_spandec_strict_e4probe_nofp
+  - _self_
+
+training:
+  seed: 2
+
+wandb:
+  name: lxtul-e4probe-nofp-s2

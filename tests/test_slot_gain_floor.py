@@ -230,3 +230,36 @@ def test_the_arms_compose_build_train_and_differ_from_the_map_arm_by_the_stated_
         assert float(out["gain_floor_pen"]) >= 0.0
     else:
         assert float(out["gain_floor_pen"]) == 0.0
+
+
+@pytest.mark.parametrize("name,section,keys,wb", [
+    ("tul_slot_spandec_strict_e4probe_nofp_s2", "training", {"seed": 2}, "lxtul-e4probe-nofp-s2"),
+    ("tul_slot_spandec_strict_e4probe_fp01", "model", {"core_fixed_point_lambda": 0.1},
+     "lxtul-e4probe-fp01"),
+])
+def test_the_nofp_followups_differ_from_nofp_by_the_stated_keys(name, section, keys, wb,
+                                                               monkeypatch):
+    from omegaconf import OmegaConf
+    from test_tul_lxtul_e import _D_FF
+    from test_tul_strict_geometry import _pack, _runtime, _tiny
+
+    from morph.training.train import build_morph_config
+
+    parent = "tul_slot_spandec_strict_e4probe_nofp"
+    cfg, rt = _runtime(name, monkeypatch)
+    pcfg, _prt = _runtime(parent, monkeypatch)
+    c = _leaves(OmegaConf.to_container(cfg, resolve=True))
+    p = _leaves(OmegaConf.to_container(pcfg, resolve=True))
+    assert c["wandb.name"] == wb and p["wandb.name"] == "lxtul-e4probe-nofp"
+    diff = {k for k in c.keys() | p.keys() if c.get(k, _MISSING) != p.get(k, _MISSING)}
+    assert diff == {f"{section}.{k}" for k in keys} | {"wandb.name"}, sorted(diff)
+    assert p["training.seed"] == 1 and p["model.core_fixed_point_lambda"] == 0.0
+    mc = build_morph_config(cfg, tul=rt.model_cfg)
+    assert mc.core_fixed_point_lambda == keys.get("core_fixed_point_lambda", 0.0)
+    torch.manual_seed(7)
+    m = MORPHTransformer(_tiny(tul=rt.model_cfg, d_ff=_D_FF,
+                               core_fixed_point_lambda=mc.core_fixed_point_lambda)).train().float()
+    _ids, inp, lab, layout = _pack()
+    out = m(inp, labels=lab, slot_layout=layout)
+    out["loss"].backward()
+    assert torch.isfinite(out["loss"])

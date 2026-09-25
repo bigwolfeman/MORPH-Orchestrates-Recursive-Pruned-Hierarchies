@@ -1,0 +1,19 @@
+# LXTUL Stage 3 follow-up, arm "lxtul-e4probe-fp01": the fixed-point term at a tenth.
+# Composes `tul_slot_spandec_strict_e4probe_nofp` and changes ONE key plus the run name:
+#
+#   model.core_fixed_point_lambda  0.0 -> 0.1   (e4probe_map, arm C, has 1.0)
+#
+# WHY. At 1.0 the term (||h_T - h_{T-1}||^2 / ||h_T||^2 at each slot's last pass) holds the
+# slot loop still: coda K1-K6 +0.0009. At 0.0 the loop moves and earns +0.0123, and it
+# detonated once. The term is also the measured second hold against the detonation. This
+# arm asks whether a weak term keeps the hold without stopping the motion.
+# Prereg: lab/experiments/planned/2026-09-25-lxtul-nofp-followup.md.
+defaults:
+  - tul_slot_spandec_strict_e4probe_nofp
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.1
+
+wandb:
+  name: lxtul-e4probe-fp01
