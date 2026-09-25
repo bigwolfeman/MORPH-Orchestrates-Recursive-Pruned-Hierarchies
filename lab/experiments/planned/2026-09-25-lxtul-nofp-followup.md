@@ -2,7 +2,7 @@
 
 Status: planned
 
-Date: 2026-09-25 09:21 (frozen before either arm's first GPU step).
+Date: 2026-09-25 09:02 (frozen before either arm's first GPU step).
 Parent: [`../successes/2026-09-24-lxtul-stage3-map.md`](../successes/2026-09-24-lxtul-stage3-map.md).
 Wolfe's go: 2026-09-25 ("Yes queue both.").
 
