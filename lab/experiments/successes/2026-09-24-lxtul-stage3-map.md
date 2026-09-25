@@ -233,3 +233,22 @@ the motion. The term is also the second hold against the detonation, and arm A
 detonated once. Next: a second seed of arm A; and a stability hold that does not charge
 motion, so the loop can move without the single-slot excursion that E14 and arm A both
 died on.
+
+## Addendum 2026-09-25 09:06: anatomy of arm A's spike (verdict unchanged)
+
+Figure: [`../results/2026-09-24-lxtul-stage3-map/nofp_detonation.png`](../results/2026-09-24-lxtul-stage3-map/nofp_detonation.png),
+from `plot_detonation.py` in the same directory (arm A against arm C, per-step probe and
+the 500-step val loss).
+
+- At step 4048 `loss/total` was 50,192, of which the gain hinge's weighted penalty was
+  50,180. The training objective without the hinge was 11.50, an ordinary value. The bf16
+  hinge read one slot at gain 426 and the tail term (lambda 100) charged it; that penalty
+  carries the 2e8 gradient norm, which the clip cut.
+- A precursor at step 3594 (gradient norm 2.7e4, one slot at gain ~6).
+- Recovery is complete: the median gradient norm is 1.50 over steps 3000–4000 and 1.49
+  over steps 4100–5000.
+- Val loss, arm A minus arm C: within ±0.004 up to step 3500, +0.013 and +0.017 at steps
+  3750 and 4000 (after the precursor, before the spike), +0.010 to +0.013 after it, +0.015
+  at the end. The spike added no gap the run did not already have.
+- Wolfe (2026-09-25): spikes like this are fairly normal for AdEMAMix with ternary weights
+  at this scale. Read A-4 as a one-off recovered spike, not as a failure of the recipe.
