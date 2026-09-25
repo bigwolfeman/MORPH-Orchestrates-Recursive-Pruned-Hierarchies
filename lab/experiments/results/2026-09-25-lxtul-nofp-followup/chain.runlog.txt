@@ -1,0 +1,15 @@
+[09:02:51] chain at 10baceb nofp follow-up prereg: correct the frozen timestamp to 09:02 (typed before the clock was read).
+[09:05:05] SMOKE nofp_s2 exit=0 Final val_loss=10.8126  ppl=49640.16  va
+[09:07:22] SMOKE fp01 exit=0 Final val_loss=10.8150  ppl=49762.19  va
+[09:07:22] START nofp_s2
+[10:44:39] DONE nofp_s2 exit=0 tok/s=6315 Final val_loss=4.4089  ppl=82.18  val/attn_lift=0.5050  val/
+[10:44:39] TRIPWIRE nofp_s2: HEALTHY last=4999 max=38.8@1310
+[10:44:39] START fp01
+[12:23:40] DONE fp01 exit=0 tok/s=6178 Final val_loss=4.4199  ppl=83.09  val/attn_lift=0.5027  val/
+[12:23:40] TRIPWIRE fp01: HEALTHY last=4999 max=475@2777
+[12:24:31] MAP exit=0
+[12:36:46] SCORE exit=0
+[12:41:35] SWEEP nofp_s2 exit=0
+[12:46:24] SWEEP fp01 exit=0
+[12:46:29] PAIR exit=0
+[12:46:29] ALL_DONE

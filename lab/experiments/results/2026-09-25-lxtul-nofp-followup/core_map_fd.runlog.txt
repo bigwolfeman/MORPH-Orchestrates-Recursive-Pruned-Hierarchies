@@ -1,0 +1,181 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL PARALLEL SPAN HEAD ON (LXTUL-E): the K=4 loop rollouts' exit states under the exact mixture, weight=1.0, INSTEAD OF the teacher-forced span decoder — span s+1 decoded AT ONCE from z with NO token input. TRAINING-ONLY target and scorer, never a decoder (morph/model/tul_spandec_parallel.py)
+  TUL PARALLEL SPAN HEAD IS A PROBE: it reads the exit state DETACHED; its term trains the head alone and sends NO gradient to the loop, the codes, the front or the tied table
+  LXTUL-E CODE ON: K=4 enumerated codes, re-added at the end of EVERY slot-loop pass, h <- f(h) + 0.1 * rms(f(h)).detach() * u_k (u_k: a learned regular simplex, unit RMS, sum zero, no learned scale). The front runs ONCE; the slot loop and the coda run on K rollouts per row at train AND eval (shared depth draw and dropout masks; coda checkpointed per block). Coda loss: the exact per-span mixture over the K rollouts. A label-free forward returns the per-span sequential Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, `tul/enum_exit_sep` (morph/model/tul_code_enum.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 291.4M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=norm_match group=tensor dtype=fp16 modules=44 ({'backbone': 44, 'attention': 0, 'embeddings': 0}) params_ternary=127.8M (43.8% of model)
+  Embed QAT ON: mode=int6 modules=2 (['embed.hybrid.euc_embed', 'embed.bigram.embed']). LM head: LM head is WEIGHT-TIED to euc_embed (no separate weight). lm_head_quant is a NO-
+  CMS score_mode=taylor on 28 CMSBlockLinear layers
+  Resumed model+scaler+RNG from checkpoint step 5000; next_step=5000 (compact=False routed=False → optimizer_rebuild=False)
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+  [nofp_s2] batch 1/24 rows=4 8s
+  [nofp_s2] batch 2/24 rows=8 8s
+  [nofp_s2] batch 3/24 rows=12 9s
+  [nofp_s2] batch 4/24 rows=16 9s
+  [nofp_s2] batch 5/24 rows=20 10s
+  [nofp_s2] batch 6/24 rows=24 10s
+  [nofp_s2] batch 7/24 rows=28 11s
+  [nofp_s2] batch 8/24 rows=32 11s
+  [nofp_s2] batch 9/24 rows=36 11s
+  [nofp_s2] batch 10/24 rows=40 12s
+  [nofp_s2] batch 11/24 rows=44 12s
+  [nofp_s2] batch 12/24 rows=48 13s
+  [nofp_s2] batch 13/24 rows=52 13s
+  [nofp_s2] batch 14/24 rows=56 14s
+  [nofp_s2] batch 15/24 rows=60 15s
+  [nofp_s2] batch 16/24 rows=64 15s
+  [nofp_s2] batch 17/24 rows=68 16s
+  [nofp_s2] batch 18/24 rows=72 16s
+  [nofp_s2] batch 19/24 rows=76 17s
+  [nofp_s2] batch 20/24 rows=80 17s
+  [nofp_s2] batch 21/24 rows=84 18s
+  [nofp_s2] batch 22/24 rows=88 18s
+  [nofp_s2] batch 23/24 rows=92 19s
+  [nofp_s2] batch 24/24 rows=96 19s
+
+=== nofp_s2 (step 5000, 96 rows, depth 6, eps 0.02) replay_err={'t0': 0.09950373321771622, 't1': 0.09941130876541138, 't2': 0.09926889091730118, 't3': 0.09911339730024338, 't4': 0.09900931268930435}
+  -- bf16
+  pass    mean    p10    p50    p90    p99    max      >1   >1.05 |    row pooled    iso | nrm_pos nrm_row
+  t0     1.353  1.217  1.324  1.519  1.846  3.607  1.0000  1.0000 |  1.359  1.360  1.361 |   2.638   2.659
+  t1     1.006  0.967  1.002  1.049  1.108  1.348  0.5229  0.0959 |  1.003  1.003  1.006 |   1.092   1.116
+  t2     0.971  0.940  0.969  1.004  1.042  1.219  0.1222  0.0068 |  0.965  0.965  0.970 |   1.088   1.121
+  t3     0.960  0.931  0.958  0.991  1.029  1.136  0.0595  0.0025 |  0.951  0.950  0.957 |   1.067   1.100
+  t4     0.951  0.924  0.949  0.982  1.021  1.129  0.0334  0.0023 |  0.941  0.939  0.948 |   1.061   1.092
+  t5     0.946  0.918  0.943  0.977  1.020  1.247  0.0265  0.0022 |  0.935  0.933  0.943 |   1.052   1.081
+  all    1.031  0.931  0.970  1.298  1.581  3.607  0.2941  0.1850 |  1.026
+  -- fp32
+  pass    mean    p10    p50    p90    p99    max      >1   >1.05 |    row pooled    iso | nrm_pos nrm_row
+  t0     1.174  1.066  1.147  1.304  1.620  3.279  0.9986  0.9486 |  1.179  1.180  1.179 |   2.639   2.660
+  t1     0.973  0.941  0.970  1.010  1.063  1.211  0.1542  0.0182 |  0.971  0.971  0.974 |   1.092   1.116
+  t2     0.943  0.919  0.942  0.969  1.000  1.107  0.0101  0.0004 |  0.938  0.938  0.944 |   1.088   1.121
+  t3     0.936  0.913  0.935  0.961  0.992  1.091  0.0060  0.0003 |  0.929  0.928  0.936 |   1.067   1.100
+  t4     0.931  0.908  0.929  0.955  0.985  1.079  0.0042  0.0003 |  0.923  0.921  0.931 |   1.061   1.092
+  t5     0.928  0.905  0.926  0.953  0.989  1.171  0.0048  0.0005 |  0.919  0.918  0.928 |   1.052   1.081
+  all    0.981  0.914  0.944  1.127  1.364  3.279  0.1963  0.1613 |  0.976
+  linearity (row-aggregate mean, batch 0):
+    fp32_t0_eps0.005   1.2044
+    bf16_t0_eps0.005   2.8169
+    fp32_t0_eps0.08    1.1835
+    bf16_t0_eps0.08    1.1981
+    fp32_t1_eps0.005   0.9614
+    bf16_t1_eps0.005   1.3136
+    fp32_t1_eps0.08    0.9608
+    bf16_t1_eps0.08    0.9627
+    fp32_t2_eps0.005   0.9375
+    bf16_t2_eps0.005   1.2266
+    fp32_t2_eps0.08    0.9370
+    bf16_t2_eps0.08    0.9386
+    fp32_t3_eps0.005   0.9281
+    bf16_t3_eps0.005   1.1828
+    fp32_t3_eps0.08    0.9280
+    bf16_t3_eps0.08    0.9292
+    fp32_t4_eps0.005   0.9235
+    bf16_t4_eps0.005   1.1295
+    fp32_t4_eps0.08    0.9233
+    bf16_t4_eps0.08    0.9246
+    fp32_t5_eps0.005   0.9220
+    bf16_t5_eps0.005   1.1081
+    fp32_t5_eps0.08    0.9219
+    bf16_t5_eps0.08    0.9226
+  carrier peak/rms per position: t0:p50=4.2,max=7.3 t1:p50=4.4,max=8.3 t2:p50=4.4,max=7.7 t3:p50=4.3,max=7.5 t4:p50=4.3,max=7.2 t5:p50=4.2,max=7.1
+  operator t0: typical(VJP)=1.1874 sigma_max=23.5867 (rel_change 3.2e-03) fd_iso_same_batch=1.1937
+  operator t1: typical(VJP)=0.9626 sigma_max=9.0728 (rel_change 8.5e-05) fd_iso_same_batch=0.9631
+  operator t2: typical(VJP)=0.9412 sigma_max=7.9337 (rel_change 4.1e-05) fd_iso_same_batch=0.9414
+  operator t3: typical(VJP)=0.9345 sigma_max=8.1391 (rel_change 5.9e-06) fd_iso_same_batch=0.9349
+  operator t4: typical(VJP)=0.9296 sigma_max=8.2873 (rel_change 1.8e-05) fd_iso_same_batch=0.9298
+  operator t5: typical(VJP)=0.9270 sigma_max=8.9524 (rel_change 1.4e-05) fd_iso_same_batch=0.9275
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL PARALLEL SPAN HEAD ON (LXTUL-E): the K=4 loop rollouts' exit states under the exact mixture, weight=1.0, INSTEAD OF the teacher-forced span decoder — span s+1 decoded AT ONCE from z with NO token input. TRAINING-ONLY target and scorer, never a decoder (morph/model/tul_spandec_parallel.py)
+  TUL PARALLEL SPAN HEAD IS A PROBE: it reads the exit state DETACHED; its term trains the head alone and sends NO gradient to the loop, the codes, the front or the tied table
+  LXTUL-E CODE ON: K=4 enumerated codes, re-added at the end of EVERY slot-loop pass, h <- f(h) + 0.1 * rms(f(h)).detach() * u_k (u_k: a learned regular simplex, unit RMS, sum zero, no learned scale). The front runs ONCE; the slot loop and the coda run on K rollouts per row at train AND eval (shared depth draw and dropout masks; coda checkpointed per block). Coda loss: the exact per-span mixture over the K rollouts. A label-free forward returns the per-span sequential Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, `tul/enum_exit_sep` (morph/model/tul_code_enum.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+  TG SCOPED KERNELS ON: HC-Cayley + CCA prologue + core window fused; TG-restricted attention branches eager by construction; CE chunked
+MORPHTransformer: 291.4M params, loop 4:6×6:4 (kernels=EAGER+TGSCOPED, residual=hc_cayley(n=4))
+  Ternary QAT ON: scope=backbone threshold=0.5 mode=norm_match group=tensor dtype=fp16 modules=44 ({'backbone': 44, 'attention': 0, 'embeddings': 0}) params_ternary=127.8M (43.8% of model)
+  Embed QAT ON: mode=int6 modules=2 (['embed.hybrid.euc_embed', 'embed.bigram.embed']). LM head: LM head is WEIGHT-TIED to euc_embed (no separate weight). lm_head_quant is a NO-
+  CMS score_mode=taylor on 28 CMSBlockLinear layers
+  Resumed model+scaler+RNG from checkpoint step 5000; next_step=5000 (compact=False routed=False → optimizer_rebuild=False)
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+  [fp01] batch 1/24 rows=4 7s
+  [fp01] batch 2/24 rows=8 7s
+  [fp01] batch 3/24 rows=12 8s
+  [fp01] batch 4/24 rows=16 8s
+  [fp01] batch 5/24 rows=20 9s
+  [fp01] batch 6/24 rows=24 9s
+  [fp01] batch 7/24 rows=28 10s
+  [fp01] batch 8/24 rows=32 10s
+  [fp01] batch 9/24 rows=36 11s
+  [fp01] batch 10/24 rows=40 11s
+  [fp01] batch 11/24 rows=44 12s
+  [fp01] batch 12/24 rows=48 12s
+  [fp01] batch 13/24 rows=52 13s
+  [fp01] batch 14/24 rows=56 13s
+  [fp01] batch 15/24 rows=60 14s
+  [fp01] batch 16/24 rows=64 14s
+  [fp01] batch 17/24 rows=68 15s
+  [fp01] batch 18/24 rows=72 15s
+  [fp01] batch 19/24 rows=76 16s
+  [fp01] batch 20/24 rows=80 16s
+  [fp01] batch 21/24 rows=84 17s
+  [fp01] batch 22/24 rows=88 17s
+  [fp01] batch 23/24 rows=92 18s
+  [fp01] batch 24/24 rows=96 18s
+
+=== fp01 (step 5000, 96 rows, depth 6, eps 0.02) replay_err={'t0': 0.09950373321771622, 't1': 0.09940174967050552, 't2': 0.09933299571275711, 't3': 0.09920702874660492, 't4': 0.09912040084600449}
+  -- bf16
+  pass    mean    p10    p50    p90    p99    max      >1   >1.05 |    row pooled    iso | nrm_pos nrm_row
+  t0     1.009  0.963  1.004  1.061  1.127  1.314  0.5482  0.1417 |  1.010  1.010  1.010 |  13.136  13.151
+  t1     0.907  0.874  0.899  0.948  1.031  1.376  0.0239  0.0067 |  0.907  0.908  0.908 |   1.112   1.112
+  t2     0.896  0.873  0.893  0.921  0.965  1.132  0.0027  0.0005 |  0.896  0.896  0.896 |   1.042   1.043
+  t3     0.892  0.873  0.890  0.912  0.944  1.140  0.0009  0.0001 |  0.892  0.892  0.892 |   1.022   1.022
+  t4     0.890  0.873  0.888  0.909  0.938  1.242  0.0002  0.0001 |  0.890  0.890  0.890 |   1.014   1.015
+  t5     0.890  0.873  0.888  0.908  0.936  1.122  0.0003  0.0001 |  0.889  0.890  0.889 |   1.010   1.010
+  all    0.914  0.874  0.895  0.998  1.078  1.376  0.0960  0.0248 |  0.914
+  -- fp32
+  pass    mean    p10    p50    p90    p99    max      >1   >1.05 |    row pooled    iso | nrm_pos nrm_row
+  t0     0.758  0.750  0.758  0.766  0.773  0.790  0.0000  0.0000 |  0.758  0.758  0.758 |  13.130  13.144
+  t1     0.897  0.869  0.891  0.932  1.004  1.196  0.0111  0.0027 |  0.898  0.898  0.898 |   1.112   1.111
+  t2     0.888  0.869  0.886  0.909  0.939  1.135  0.0003  0.0001 |  0.888  0.888  0.888 |   1.042   1.043
+  t3     0.885  0.869  0.884  0.902  0.924  0.983  0.0000  0.0000 |  0.885  0.885  0.885 |   1.022   1.022
+  t4     0.884  0.869  0.883  0.899  0.917  0.995  0.0000  0.0000 |  0.884  0.884  0.884 |   1.014   1.015
+  t5     0.883  0.870  0.883  0.898  0.916  1.029  0.0001  0.0000 |  0.883  0.883  0.883 |   1.010   1.010
+  all    0.866  0.759  0.881  0.905  0.949  1.196  0.0019  0.0005 |  0.866
+  linearity (row-aggregate mean, batch 0):
+    fp32_t0_eps0.005   0.7581
+    bf16_t0_eps0.005   2.5103
+    fp32_t0_eps0.08    0.7584
+    bf16_t0_eps0.08    0.7860
+    fp32_t1_eps0.005   0.8972
+    bf16_t1_eps0.005   1.0057
+    fp32_t1_eps0.08    0.9305
+    bf16_t1_eps0.08    0.9313
+    fp32_t2_eps0.005   0.8874
+    bf16_t2_eps0.005   0.9725
+    fp32_t2_eps0.08    0.8976
+    bf16_t2_eps0.08    0.8982
+    fp32_t3_eps0.005   0.8846
+    bf16_t3_eps0.005   0.9617
+    fp32_t3_eps0.08    0.8894
+    bf16_t3_eps0.08    0.8899
+    fp32_t4_eps0.005   0.8833
+    bf16_t4_eps0.005   0.9526
+    fp32_t4_eps0.08    0.8869
+    bf16_t4_eps0.08    0.8874
+    fp32_t5_eps0.005   0.8824
+    bf16_t5_eps0.005   0.9602
+    fp32_t5_eps0.08    0.8855
+    bf16_t5_eps0.08    0.8860
+  carrier peak/rms per position: t0:p50=3.9,max=6.7 t1:p50=4.3,max=4.7 t2:p50=4.7,max=5.4 t3:p50=4.8,max=5.9 t4:p50=4.9,max=6.1 t5:p50=4.9,max=6.3
+  operator t0: typical(VJP)=0.7577 sigma_max=4.5413 (rel_change 9.4e-05) fd_iso_same_batch=0.7584
+  operator t1: typical(VJP)=0.8967 sigma_max=11.0134 (rel_change 6.0e-04) fd_iso_same_batch=0.8978
+  operator t2: typical(VJP)=0.8878 sigma_max=10.3835 (rel_change 1.0e-03) fd_iso_same_batch=0.8876
+  operator t3: typical(VJP)=0.8844 sigma_max=7.9502 (rel_change 1.4e-02) fd_iso_same_batch=0.8842
+  operator t4: typical(VJP)=0.8833 sigma_max=6.9727 (rel_change 7.9e-03) fd_iso_same_batch=0.8834
+  operator t5: typical(VJP)=0.8828 sigma_max=6.9686 (rel_change 2.0e-03) fd_iso_same_batch=0.8827
+wrote /home/wolfe/morph-scratch/lxtul-fu/core_map_fd.json

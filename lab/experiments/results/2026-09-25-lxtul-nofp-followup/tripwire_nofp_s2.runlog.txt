@@ -1,0 +1,1 @@
+HEALTHY last=4999 max=38.8@1310
