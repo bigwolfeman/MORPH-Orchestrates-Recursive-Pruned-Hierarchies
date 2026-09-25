@@ -1,0 +1,22 @@
+# LXTUL arm "lxtul-e4probe-fp01-nextlat": span-level NextLat on the fp01 recipe.
+# Composes `tul_slot_spandec_strict_e4probe_fp01` and changes ONE key plus the run name:
+#
+#   tul.nextlat_weight  0.0 -> 1.0
+#
+# WHAT. A GRU started at slot s's exit readout z_s steps through span s+1's tokens and
+# predicts stop_grad(z_{s+1}) under SmoothL1 (morph/model/tul_nextlat.py; arXiv 2511.05963).
+# The gradient reaches z_s, so the term asks the loop's exit to be a state the NEXT slot
+# follows from given the span in between (a belief state), not only a summary of span s+1.
+# WHY fp01. The nofp follow-up (lab/experiments/successes/2026-09-25-lxtul-nofp-followup.md)
+# found fp01 earns (coda K1-K6 +0.0126) with no detonation; the term at 0.1 is the base.
+# Weight 1.0 is the paper's weight for the SmoothL1 term.
+# Prereg: lab/experiments/planned/2026-09-25-lxtul-fp01-nextlat.md.
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  nextlat_weight: 1.0
+
+wandb:
+  name: lxtul-e4probe-fp01-nextlat

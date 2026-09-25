@@ -256,3 +256,35 @@ def test_the_val_loss_subtracts_the_weighted_term():
     avg, _ppl = evaluate(_AuxStub(), torch.device("cpu"), iter([(x, x, _Layout())]),
                          n_batches=1, tul=True, extra={})
     assert avg == pytest.approx(3.75)
+
+
+def test_the_fp01_nextlat_arm_differs_from_fp01_by_the_stated_key(monkeypatch):
+    """The arm composes, differs from its parent by `tul.nextlat_weight` and the run name
+    alone, builds the transition, and trains one step with a finite, positive term."""
+    from omegaconf import OmegaConf
+    from test_slot_gain_tail import _leaves, _MISSING
+    from test_tul_strict_geometry import _runtime
+
+    from morph.training.train import build_morph_config
+
+    name, parent = "tul_slot_spandec_strict_e4probe_fp01_nextlat", "tul_slot_spandec_strict_e4probe_fp01"
+    cfg, rt = _runtime(name, monkeypatch)
+    pcfg, prt = _runtime(parent, monkeypatch)
+    c = _leaves(OmegaConf.to_container(cfg, resolve=True))
+    p = _leaves(OmegaConf.to_container(pcfg, resolve=True))
+    diff = {k for k in c.keys() | p.keys() if c.get(k, _MISSING) != p.get(k, _MISSING)}
+    assert diff == {"tul.nextlat_weight", "wandb.name"}, sorted(diff)
+    assert c["tul.nextlat_weight"] == 1.0 and c["wandb.name"] == "lxtul-e4probe-fp01-nextlat"
+    assert rt.model_cfg.nextlat_weight == 1.0 and prt.model_cfg.nextlat_weight == 0.0
+    mc = build_morph_config(cfg, tul=rt.model_cfg)
+    assert mc.core_fixed_point_lambda == 0.1
+    torch.manual_seed(7)
+    m = MORPHTransformer(_tiny(tul=rt.model_cfg, d_ff=_D_FF,
+                               core_fixed_point_lambda=mc.core_fixed_point_lambda)).train().float()
+    assert m.tul_nextlat is not None and m.tul_spandec_par is not None
+    _ids, inp, lab, layout = _pack()
+    out = m(inp, labels=lab, slot_layout=layout)
+    out["loss"].backward()
+    assert torch.isfinite(out["loss"]) and float(out["nextlat_weighted"]) > 0.0
+    assert any(q.grad is not None and float(q.grad.abs().sum()) > 0
+               for q in m.tul_nextlat.parameters())
