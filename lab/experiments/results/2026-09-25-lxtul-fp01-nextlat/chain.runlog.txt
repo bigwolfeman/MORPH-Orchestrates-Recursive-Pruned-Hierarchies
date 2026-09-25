@@ -1,0 +1,8 @@
+[13:02:36] chain at 444a574 NextLat on fp01: prereg (N-1..N-5), frozen before the 5000-step run.
+[13:02:36] START nextlat
+[15:01:37] DONE nextlat exit=0 tok/s=5373 Final val_loss=4.4196  ppl=83.07  val/attn_lift=0.5014  val/
+[15:01:37] TRIPWIRE nextlat: HEALTHY last=4999 max=23@1486
+[15:02:07] MAP exit=0
+[15:09:20] SCORE exit=0
+[15:16:15] SWEEP exit=0
+[15:16:15] ALL_DONE

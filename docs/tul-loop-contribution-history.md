@@ -1693,6 +1693,12 @@ lxtul-gk4-shared (filed 2026-09-23, [failures/2026-09-23-lxtul-gk-multisample.md
 the floor's top edge and its width gain is 0.00005. Its −0.0044 against the ruler is inside
 the seed floor.
 
+lxtul-e4probe-fp01-nextlat (filed 2026-09-25, [failures/2026-09-25-lxtul-fp01-nextlat.md](../lab/experiments/failures/2026-09-25-lxtul-fp01-nextlat.md))
+adds no positive row: span-level NextLat on fp01 dropped coda K1−K6 from +0.0126 to +0.0010.
+The term collapsed the exit's per-slot part 7x (diff_rel 0.230 → 0.032) and a no-change
+guess met it. Its probe also found that every arm's exit readout is 91–97 % one shared
+direction, with neighbouring slots no more alike than slots of unrelated rows.
+
 ## 7. Retractions and qualifications
 
 One table for both parts, in order of the original claim. "Same file" means the file in

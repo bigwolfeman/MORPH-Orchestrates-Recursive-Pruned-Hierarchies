@@ -65,3 +65,15 @@ holds up, and only if the nofp positive replicates. The prereg comes before the 
   wall-clock cost are unmeasured. Trace memory before the queue (e4probe peaks at 16.65 GB).
 - A moving target: `z_{s+1}` is live. The stop-grad is the paper's only guard against
   collapse to a constant state. Watch `nextlat_copy_l1` and the state RMS together.
+
+## Outcome log
+
+- 2026-09-25: the arm as built FAILED
+  ([lab/experiments/failures/2026-09-25-lxtul-fp01-nextlat.md](../../../../lab/experiments/failures/2026-09-25-lxtul-fp01-nextlat.md)).
+  Coda K1−K6 fell from +0.0126 (fp01) to +0.0010. The term collapsed the exit's per-slot
+  part 7x (diff_rel 0.230 → 0.032) inside the LR ramp, and the no-change guess met it. The
+  stop-grad on a LIVE target is not a collapse guard when the source state has no strong
+  reader. Not built, open for Wolfe's call: (a) an EMA copy of the loop as the target
+  (BYOL/JEPA), (b) a variance floor on the per-slot part (VICReg), (c) the term with the
+  parallel head NOT detached, so a strong reader holds `z` up, (d) close the lane. Keep
+  the module: weight 0 builds nothing.
