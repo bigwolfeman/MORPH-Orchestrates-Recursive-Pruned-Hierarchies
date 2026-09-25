@@ -240,6 +240,7 @@ class _AuxStub(torch.nn.Module):
 
     def tul_forward_with_plan_nats(self, x, y, layout):
         return {"loss": torch.tensor(5.0), "nextlat_weighted": torch.tensor(1.25),
+                "nextlat_draft_gap": torch.tensor(0.5), "nextlat_copy_l1": torch.tensor(0.25),
                 "ce_tokens": 3.75, "layer_passes": 8.0, "n_tokens": 4.0}
 
 
@@ -250,12 +251,16 @@ class _Layout:
         return self
 
 
-def test_the_val_loss_subtracts_the_weighted_term():
+def test_the_val_loss_subtracts_the_weighted_term_and_logs_the_readings():
     from morph.training.train import evaluate
     x = torch.zeros(1, 4, dtype=torch.long)
-    avg, _ppl = evaluate(_AuxStub(), torch.device("cpu"), iter([(x, x, _Layout())]),
-                         n_batches=1, tul=True, extra={})
+    extra: dict = {}
+    avg, _ppl = evaluate(_AuxStub(), torch.device("cpu"), iter([(x, x, _Layout())] * 2),
+                         n_batches=2, tul=True, extra=extra)
     assert avg == pytest.approx(3.75)
+    # The readings reach the val log, averaged over batches (held-out draft gap).
+    assert extra["val/nextlat_draft_gap"] == pytest.approx(0.5)
+    assert extra["val/nextlat_copy_l1"] == pytest.approx(0.25)
 
 
 def test_the_fp01_nextlat_arm_differs_from_fp01_by_the_stated_key(monkeypatch):

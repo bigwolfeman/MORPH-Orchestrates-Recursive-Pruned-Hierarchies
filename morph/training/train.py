@@ -239,6 +239,13 @@ def evaluate(
             for _ek in [k for k in out if str(k).startswith("enum_")]:
                 if torch.is_tensor(out[_ek]):
                     acc.setdefault(f"val/{_ek}", []).append(float(out[_ek]))
+            # span-level NextLat (tul.nextlat_weight): the term, the copy baseline it must
+            # beat and, with the parallel head, the draft reading on HELD-OUT rows
+            # (`nextlat_draft_gap`: the head's CE of span s+2 from the drafted state minus
+            # from the loop's own). A scan, like `par_*`.
+            for _nk in [k for k in out if str(k).startswith("nextlat")]:
+                if torch.is_tensor(out[_nk]):
+                    acc.setdefault(f"val/{_nk}", []).append(float(out[_nk]))
             # ── LXTUL's fan (tul.fan_k), accumulated over the val batches ─────────
             # The ORACLE family is eval-only and has no train-side twin, so it keeps the
             # `fan/` namespace the arm is read in. The two readings the TRAIN step also
