@@ -160,3 +160,36 @@ loop's motion. Two facts outlive this arm and bear on any slot-state objective: 
 readout is 91–97 % one shared direction in every arm, and consecutive exit states are no
 more alike than states from unrelated rows. The next step is Wolfe's call; the options are
 in the note [`../../../.agents/notes/proposed/architecture/2026-09-25-span-level-nextlat.md`](../../../.agents/notes/proposed/architecture/2026-09-25-span-level-nextlat.md).
+
+## Addendum 2026-09-25 16:48: the common mode is a seed-1 fact (verdict unchanged)
+
+Fact 1 above ("in every arm the exit readout is one shared vector") was read on four arms
+that are ALL seed 1. `lab/divergence/slot_share_probe.py` (new; `share_probe.json`,
+`share_mu.json`) reads the per-slot share of the energy, E|z − mean|² / E|z|², in the head's
+view AND in the coda's own input (prefix cells, HC streams flattened), at forced depths 1-6,
+on 96 held-out rows, now with the seed-2 twin:
+
+| arm | seed | head share d1 → d6 | coda cell1 share d1 → d6 | coda K1−K6 |
+|---|---|---|---|---|
+| fp01 | 1 | 0.15 % → 3.39 % | 0.56 % → 2.53 % | 0.0126 |
+| nofp | 1 | 0.88 % → 4.90 % | 2.08 % → 4.35 % | 0.0123 |
+| **nofp_s2** | **2** | **79.0 % → 68.7 %** | **65.3 % → 72.0 %** | 0.0077 |
+| map | 1 | 7.80 % → 9.13 % | 6.63 % → 7.69 % | 0.0009 |
+| nextlat | 1 | 0.03 % → 0.07 % | 0.59 % → 0.79 % | 0.0010 |
+
+1. **The common mode depends on the seed.** Seed 1 puts 91-99.9 % of the exit's energy in
+   one shared direction in every arm; seed 2 puts about 30 % there. The coda's input shows
+   the same split, so this is not an artifact of the head's readout.
+2. **Per-slot share does not predict depth use.** nofp_s2 has 20-30x fp01's per-slot share
+   and earns less (0.0077 vs 0.0126). The share ADDED by passes 2-6 does not separate the
+   arms either (cell1: nofp_s2 +6.7 pts earns 0.0077; map +1.1 earns 0.0009; fp01 +2.0
+   earns 0.0126). The 4-arm pattern I reported to Wolfe earlier today was a seed-1 pattern.
+3. **The common mode is a spread direction, not massive channels.** The mean vector's
+   participation ratio is 259-360 coordinates in the seed-1 views; its top 8 coordinates hold
+   6-12 % of its energy. In fp01's coda cells its largest coordinates all sit in HC stream 3;
+   nofp_s2's in streams 0-1.
+
+What stands: NextLat still shrank its own arm's per-slot share relative to its same-seed
+parent (head 3.39 % → 0.07 % at depth 6), and depth use died with it. The idea "centre the
+slot write to stop the common mode drowning the passes" loses its basis: the seed-2 model has
+no dominant common mode and does not earn more.

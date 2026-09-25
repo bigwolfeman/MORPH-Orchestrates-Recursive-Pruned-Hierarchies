@@ -68,7 +68,7 @@ holds up, and only if the nofp positive replicates. The prereg comes before the 
 
 ## Outcome log
 
-- 2026-09-25: the arm as built FAILED
+- 2026-09-25: the arm as built FAILED (the "common mode in every arm" fact is seed-1 only; see the filing's addendum)
   ([lab/experiments/failures/2026-09-25-lxtul-fp01-nextlat.md](../../../../lab/experiments/failures/2026-09-25-lxtul-fp01-nextlat.md)).
   Coda K1−K6 fell from +0.0126 (fp01) to +0.0010. The term collapsed the exit's per-slot
   part 7x (diff_rel 0.230 → 0.032) inside the LR ramp, and the no-change guess met it. The
