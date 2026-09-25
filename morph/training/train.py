@@ -165,7 +165,9 @@ def evaluate(
                           "coda_logit_l2_weighted",
                           # tul.spandec_parallel (LXTUL-E, 2026-09-23): the parallel
                           # head's mixture term, so val loss stays the MODEL's CE.
-                          "par_weighted"):
+                          "par_weighted",
+                          # span-level NextLat (tul.nextlat_weight, 2026-09-25)
+                          "nextlat_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -3747,6 +3749,7 @@ def main(cfg: DictConfig) -> None:
                                                    # (code_enc_var_lambda), separate from
                                                    # code_target_weight
                         "par_weighted",   # tul.spandec_parallel (LXTUL-E)
+                        "nextlat_weighted",   # span-level NextLat, 2026-09-25
                         "coda_logit_l2_weighted"):  # tul.coda_logit_l2 (spectral
                                                      # decoupling, 2026-09-23): folded
                                                      # into the fused CE kernel
@@ -3962,6 +3965,12 @@ def main(cfg: DictConfig) -> None:
                 # and `par_width_gain`. Detached tensors from the forward (no sync there).
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if (_k == "par" or _k.startswith("par_")) and torch.is_tensor(out[_k]):
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # span-level NextLat (tul.nextlat_weight): `nextlat` / `nextlat_weighted`,
+                # `nextlat_l1`, `nextlat_copy_l1`, `nextlat_cos`, `nextlat_pairs` and, with
+                # the parallel head, `nextlat_draft_ce` / `_true_ce` / `_draft_gap`.
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("nextlat") and torch.is_tensor(out[_k]):
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_enum_k (LXTUL-E Stage 1): `enum_ce_mix` (it IS train/loss's CE
                 # part), `enum_ce_code{k}`, `enum_width_gain[_best]`, `enum_w_entropy`,

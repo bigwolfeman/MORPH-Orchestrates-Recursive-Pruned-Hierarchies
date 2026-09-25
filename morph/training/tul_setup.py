@@ -106,6 +106,8 @@ KNOWN_TUL_KEYS = frozenset({
     "code_enum_k", "code_enum_ratio",
     # map-cause I-2 (2026-09-24): the slot loop's source enters at pass 0 only
     "slot_source_once",
+    # span-level NextLat (arXiv 2511.05963, 2026-09-25)
+    "nextlat_weight", "nextlat_beta",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
@@ -332,6 +334,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         code_enum_k=int(tc.get("code_enum_k", 1)),
         code_enum_ratio=float(tc.get("code_enum_ratio", 0.1)),
         slot_source_once=bool(tc.get("slot_source_once", False)),
+        nextlat_weight=float(tc.get("nextlat_weight", 0.0)),
+        nextlat_beta=float(tc.get("nextlat_beta", 1.0)),
         horizon_weight=float(tc.get("horizon_weight", 0.0)),
         horizon_free_first=bool(tc.get("horizon_free_first", True)),
         horizon_tokens=int(tc.get("horizon_tokens", 0)),
@@ -582,6 +586,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "code_enum_k": model_cfg.code_enum_k,
         "code_enum_ratio": model_cfg.code_enum_ratio,
         "slot_source_once": model_cfg.slot_source_once,
+        "nextlat_weight": model_cfg.nextlat_weight,
+        "nextlat_beta": model_cfg.nextlat_beta,
         "horizon_weight": model_cfg.horizon_weight,
         "horizon_free_first": model_cfg.horizon_free_first,
         "horizon_tokens": (model_cfg.horizon_tokens or model_cfg.bound_span_cap),

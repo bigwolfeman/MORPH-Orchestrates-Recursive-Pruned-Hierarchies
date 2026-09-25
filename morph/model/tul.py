@@ -971,6 +971,14 @@ class TULConfig:
     # something to keep. The account predicts the decay `A` rises (mean >= 0.7) and the
     # map with it, with no depth value on the coda.
     slot_source_once: bool = False
+    # ── SPAN-LEVEL NEXTLAT (arXiv 2511.05963, 2026-09-25) ────────────────────────────
+    # nextlat_weight lambda > 0: a transition (morph/model/tul_nextlat.py, a GRU started at
+    # the slot's exit readout z_s and stepped through span s+1's tokens) predicts
+    # stop_grad(z_{s+1}); lambda * SmoothL1(beta = nextlat_beta), folded as
+    # `nextlat_weighted`. The gradient reaches z_s, so the loop's exit is pushed toward a
+    # belief state whose successor the next span determines. 0 = off: nothing is built.
+    nextlat_weight: float = 0.0
+    nextlat_beta: float = 1.0
     # ── TUL-CODE (arm `tul-code`, 2026-09-14; docs/tul-code-spec.md) ─────────────
     #
     # The slot holds the CODE of the span it precedes. At training time an encoder E
@@ -2548,6 +2556,7 @@ class TULConfig:
         self._check_spandec_parallel()
         self._check_code_enum()
         self._check_source_once()
+        self._check_nextlat()
         if self.coda_span_source not in ("cell", "token"):
             raise ValueError(
                 f"tul.coda_span_source must be 'cell' or 'token', got "
@@ -3564,6 +3573,36 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.code_enum_k > 1 with {why}.")
+
+    def _check_nextlat(self) -> None:
+        """``tul.nextlat_weight`` (span-level NextLat). The transition reads ONE exit state
+        per slot through ``_readout`` and pairs slot ``s`` with slot ``s + 1`` of the same
+        row; every refusal names a path where that state or that pairing is not what the
+        slot loop writes."""
+        if self.nextlat_weight < 0.0 or not self.nextlat_beta > 0.0:
+            raise ValueError(
+                f"tul.nextlat_weight must be >= 0 (0 = off) and tul.nextlat_beta > 0, got "
+                f"{self.nextlat_weight} / {self.nextlat_beta}")
+        if self.nextlat_weight == 0.0:
+            if self.nextlat_beta != 1.0:
+                raise ValueError("tul.nextlat_beta set at tul.nextlat_weight=0: the knob "
+                                 "would be silently ignored.")
+            return
+        _refused = [
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop): no per-slot exit state"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens (the token path): the loop runs `_core_region`"),
+            (self.code, "tul.code: no slot loop runs"),
+            (self.slot_cells > 1, "tul.slot_cells > 1: M cells per slot, not one state"),
+            (self.fan_k > 0, "tul.fan_k > 0: K streams per slot, not one state"),
+            (self.core_stage_cond != "none",
+             f"tul.core_stage_cond={self.core_stage_cond!r}: the db1 step and the Euler "
+             f"ladder bypass `_tul_core`"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.nextlat_weight > 0 with {why}.")
 
     def _check_source_once(self) -> None:
         """``tul.slot_source_once`` (I-2). Every refusal names a path on which the slot

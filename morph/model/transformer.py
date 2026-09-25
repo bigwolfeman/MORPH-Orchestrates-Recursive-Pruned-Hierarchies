@@ -57,6 +57,7 @@ from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
+from .tul_nextlat import SpanTransition, nextlat_pairs, span_token_embeddings
 from .tul_code_enum import TULCodeEnum
 from .rollout_mixture import (evidence_labels, mixture_label_nll, mixture_logprobs,
                               sequential_log_weights, span_segment_start)
@@ -2259,6 +2260,18 @@ class MORPHTransformer(nn.Module):
                 assert (self.tul_spandec_par.max_tokens == self.tul_spandec.per_span_tokens
                         and self.tul_spandec_par.target_offset
                         == self.tul_spandec.target_offset)
+
+        # ── Span-level NextLat (TULConfig.nextlat_weight; arXiv 2511.05963) ──────
+        # A GRU transition from slot s's exit readout through span s+1's tokens to a
+        # prediction of slot s+1's (morph/model/tul_nextlat.py). Built RNG-neutral (a
+        # forked stream), so the arm's base weights are byte-identical to its parent's.
+        # J is the span cap the ruler decoder reads, so every span's full token run
+        # reaches the transition.
+        self.tul_nextlat: SpanTransition | None = None
+        self._nextlat_J = 0
+        if cfg.tul is not None and cfg.tul.nextlat_weight > 0.0:
+            self.tul_nextlat = SpanTransition(d)
+            self._nextlat_J = int(cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap)
 
         # ── Parallel span decoding from the coda (TULConfig.coda_span_heads) ──────
         # J offset heads on the coda's FINAL state at each slot's emitting position. The
@@ -8819,6 +8832,97 @@ class MORPHTransformer(nn.Module):
                 stats.update(code_usage_stats(logp_slot.detach(), n, loss))
         return loss
 
+    def _tul_nextlat_loss(self, h_slots: Tensor, input_ids: Tensor, layout: SlotLayout,
+                          stats: dict | None = None, n_rollouts: int = 1) -> Tensor:
+        """Span-level NextLat (``tul.nextlat_weight``; ``morph/model/tul_nextlat.py``).
+
+        ``z = self._readout(h_slots)``, the seam every reader grades. For every slot pair
+        ``(s, s + 1)`` of a row with a complete span ``s + 1`` between them
+        (:func:`nextlat_pairs` on ``span_slots(shift=1)``), the transition steps from
+        ``z_s`` through span ``s + 1``'s tokens (the DETACHED tied table, RMS-normalised) and
+        predicts ``stop_grad(z_{s+1})``; the term is the SmoothL1 mean over the valid pairs
+        and channels. The gradient reaches ``z_s`` and the transition. Every slot but the
+        last runs through the GRU and the loss is MASKED, so there is no host sync.
+
+        Under ``tul.code_enum_k`` (``n_rollouts`` K) each rollout's ``z_s`` predicts that
+        SAME rollout's ``z_{s+1}``; the tokens come from the base rows.
+
+        ``stats`` (detached 0-dim tensors): ``nextlat_l1`` (the term), ``nextlat_copy_l1``
+        (the same distance for the no-change guess ``z_hat = z_s``: the transition must beat
+        it to have learned anything), ``nextlat_cos`` (a diagnostic, never a verdict),
+        ``nextlat_pairs``. With the parallel head built, the DRAFT instrument, under
+        ``no_grad``: the head's mixture CE of span ``s + 2`` read from the drafted
+        ``z_hat_{s+1}`` (``nextlat_draft_ce``) and from the loop's own ``z_{s+1}``
+        (``nextlat_true_ce``) on the SAME slots and tokens, and their difference
+        ``nextlat_draft_gap``.
+        """
+        tc = self.cfg.tul
+        tr = self.tul_nextlat
+        assert tr is not None
+        z = self._readout(h_slots)                                           # [R*B0, S, C]
+        R = max(int(n_rollouts), 1)
+        B0, S, C = z.shape[0] // R, z.shape[1], z.shape[-1]
+        lay = layout.head_rows(B0) if R > 1 else layout
+        ids, valid = span_slots(input_ids[:B0], lay, self._nextlat_J, shift=1)  # [B0, S, J]
+        pair = nextlat_pairs(valid)[:, :-1]                                  # [B0, S-1]
+        emb = span_token_embeddings(ids[:, :-1], valid[:, :-1], self.embed.lm_weight())
+        J = emb.shape[-2]
+        lengths = valid[:, :-1].sum(-1).clamp_min(1)                         # [B0, S-1]
+        zr = z.view(R, B0, S, C)
+        z_s = zr[:, :, :-1].reshape(R * B0 * (S - 1), C)
+        z_t = zr[:, :, 1:].detach().float().reshape(R * B0 * (S - 1), C)
+        emb_r = emb.unsqueeze(0).expand(R, -1, -1, -1, -1).reshape(-1, J, C)
+        len_r = lengths.unsqueeze(0).expand(R, -1, -1).reshape(-1)
+        z_hat = tr(z_s, emb_r, len_r)                                        # [N, C] fp32
+        m = pair.unsqueeze(0).expand(R, -1, -1).reshape(-1).float()          # [N]
+        n = m.sum().clamp_min(1.0)
+        per = F.smooth_l1_loss(z_hat, z_t, beta=float(tc.nextlat_beta),
+                               reduction="none").mean(-1)
+        loss = (per * m).sum() / n
+        if stats is not None:
+            with torch.no_grad():
+                copy = F.smooth_l1_loss(z_s.detach().float(), z_t, beta=float(tc.nextlat_beta),
+                                        reduction="none").mean(-1)
+                stats["nextlat_l1"] = loss.detach()
+                stats["nextlat_copy_l1"] = (copy * m).sum() / n
+                stats["nextlat_cos"] = (F.cosine_similarity(z_hat.detach(), z_t, dim=-1)
+                                        * m).sum() / n
+                stats["nextlat_pairs"] = m.sum() / R
+                head = self.tul_spandec_par
+                if head is not None:
+                    self._nextlat_draft_stats(head, zr, z_hat.detach(), pair, input_ids[:B0],
+                                              lay, R, stats)
+        return loss
+
+    @torch.no_grad()
+    def _nextlat_draft_stats(self, head, zr: Tensor, z_hat: Tensor, pair: Tensor,
+                             input_ids: Tensor, lay: SlotLayout, R: int, stats: dict) -> None:
+        """The draft instrument of :meth:`_tul_nextlat_loss`: the parallel head reads slot
+        ``s + 1``'s state as DRAFTED from slot ``s`` and as the loop wrote it, on the slots
+        where a draft exists AND the head has a target (span ``s + 2`` complete)."""
+        B0, S, C = zr.shape[1], zr.shape[2], zr.shape[3]
+        zh = torch.zeros_like(zr)
+        zh[:, :, 1:] = z_hat.view(R, B0, S - 1, C).to(zr.dtype)
+        dmask = torch.zeros(B0, S, dtype=torch.bool, device=zr.device)
+        dmask[:, 1:] = pair
+        ids2, valid2 = head.targets(input_ids, lay)
+        valid_d = valid2 & dmask.unsqueeze(-1)
+        w = self.embed.lm_weight().detach()
+        kw = dict(chunk_size=self.cfg.ce_chunk_size, mask_token_id=self.cfg.tul.slot_id)
+        if R > 1:
+            lp_hat, n_tok, _ = head.rollout_logp(zh, ids2, valid_d, w, **kw)
+            lp_true, _, _ = head.rollout_logp(zr, ids2, valid_d, w, **kw)
+        else:
+            lp_hat, n_tok, _ = head.slot_logp(zh[0], ids2, valid_d, w, **kw)
+            lp_true, _, _ = head.slot_logp(zr[0], ids2, valid_d, w, **kw)
+        nn_ = n_tok.clamp_min(1.0)
+        d_ce = mixture_span_nll(lp_hat, nn_)
+        t_ce = mixture_span_nll(lp_true, nn_)
+        stats["nextlat_draft_ce"] = d_ce
+        stats["nextlat_true_ce"] = t_ce
+        stats["nextlat_draft_gap"] = d_ce - t_ce
+        stats["nextlat_draft_tokens"] = n_tok
+
     @torch.no_grad()
     def _enum_exit_stats(self, h_slots: Tensor, layout: SlotLayout, K: int,
                          stats: dict) -> None:
@@ -10290,6 +10394,7 @@ class MORPHTransformer(nn.Module):
         # fold after the dispatch RAISES if a model that built the head reaches it with no
         # term (a path that silently skipped the head would read as its own ruler).
         par_loss, par_stats, enum_stats = None, {}, {}
+        nextlat_loss, nextlat_stats = None, {}
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -10830,6 +10935,14 @@ class MORPHTransformer(nn.Module):
                 par_loss = self._tul_spandec_par_loss(
                     h_slots, input_ids, layout, stats=par_stats,
                     **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
+            # ── span-level NextLat (tul.nextlat_weight) ───────────────────────────
+            # The SAME seam as the parallel head: slot s's exit readout, stepped through
+            # span s+1's tokens, predicts stop_grad of slot s+1's. Train and eval alike,
+            # so the val pass reads the term and the draft instrument the trainer sees.
+            if self.tul_nextlat is not None:
+                nextlat_loss = self._tul_nextlat_loss(
+                    h_slots, input_ids, layout, stats=nextlat_stats,
+                    **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
             if self._code_enum_k:
                 self._enum_exit_stats(h_slots, layout, _iw_k, enum_stats)
             # ── C2: the within-row contrastive term (tul.row_contrast_lambda) ──
@@ -11215,6 +11328,21 @@ class MORPHTransformer(nn.Module):
             _parw = tc.spandec_parallel_weight * par_loss
             groups["par_weighted"] = _parw.detach()
             groups["loss"] = groups["loss"] + _parw
+        if self.tul_nextlat is not None and groups is not None:
+            # Span-level NextLat. Same contract as `par_weighted`: the WEIGHTED term is
+            # exposed so train.py subtracts it and train/loss and the val loss stay the
+            # MODEL's CE. `nextlat_*` stats are detached tensors (no host sync).
+            if nextlat_loss is None:
+                raise RuntimeError(
+                    "tul.nextlat_weight built the transition but this forward path never "
+                    "computed the term (it is wired next to the parallel head in the slot-"
+                    "loop branch only). Refusing to return a loss without it.")
+            groups = dict(groups)
+            groups["nextlat"] = nextlat_loss.detach()
+            groups.update(nextlat_stats)
+            _nlw = self.cfg.tul.nextlat_weight * nextlat_loss
+            groups["nextlat_weighted"] = _nlw.detach()
+            groups["loss"] = groups["loss"] + _nlw
         if enum_stats and groups is not None:
             # tul.code_enum_k: the exit separation between the K rollouts (detached).
             groups = dict(groups)
