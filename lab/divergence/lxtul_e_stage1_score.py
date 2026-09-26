@@ -27,7 +27,10 @@ TERMS (one meaning each):
                  states (the head's input state), averaged over pairs. ``sep_ratio`` is its
                  value at depth 6 over depth 1; the note's linear theory reads
                  (1 - g^6)/(1 - g) = 4.6 at gain g = 0.89.
-  block          stream index // 1,024 (``sweep_score.BLOCK``), the bootstrap unit. A head
+  code sep       exit sep restricted to the code subspace span(u_k), per stream, over the
+                 same n*C denominator (``sep_code`` <= ``sep_abs``; added 2026-09-26 for
+                 ``lx_amp_matched.py``, a diagnostic only).
+  block         stream index // 1,024 (``sweep_score.BLOCK``), the bootstrap unit. A head
                  token's unit is its slot's first target token's (a span never splits).
 
 STATISTICS. Token-weighted means; paired block bootstrap (``_stats.paired_bootstrap_ci``,
@@ -165,6 +168,20 @@ def forward_readings(m, inp, labels, layout, idx, depth: int, device: str) -> di
             res["sep_sum"] = float(dist.double().sum())
             res["rms_sum"] = float(rms.double().sum())
             res["n_slots"] = int(v.sum())
+            # the same pairwise RMS distance restricted to the code subspace span(u_k),
+            # per Hyper-Connection stream (the code is added to every stream), over the
+            # same n*C denominator: sep_code <= sep_abs, and sep_code / sep_abs is the
+            # square root of the separation's energy share in the code directions
+            # (gpt.md C's "code-direction component", a diagnostic).
+            from morph.model.tul_code_enum import gram_schmidt_rows
+            q = gram_schmidt_rows(m.tul_code_enum.basis.detach().float())    # [K-1, C]
+            C = q.shape[-1]
+            hc = h_slots.detach().float().reshape(K, B0, h_slots.shape[1], -1, C)
+            pr = hc @ q.T                                                  # [K,B0,S,n,K-1]
+            n_str = hc.shape[3]
+            dc = [((pr[i] - pr[j]).pow(2).sum((-1, -2)) / (n_str * C)).sqrt()[v]
+                  for i in range(K) for j in range(i + 1, K)]
+            res["sep_code_sum"] = float(torch.stack(dc).mean(0).double().sum())
     return res
 
 
@@ -199,7 +216,7 @@ def score_arm(m, batches, depths: list[int], device: str, tol: float) -> dict:
     devs = {"coda": 0.0, "par": 0.0}
     for d in depths:
         parts: dict[str, list] = {}
-        sep = [0.0, 0.0, 0]
+        sep = [0.0, 0.0, 0, 0.0]
         for inp, labels, layout, idx in batches:
             r = forward_readings(m, inp, labels, layout.to(device), idx, d, device)
             devs["coda"] = max(devs["coda"], r.pop("dev_coda"))
@@ -209,6 +226,7 @@ def score_arm(m, batches, depths: list[int], device: str, tol: float) -> dict:
                 sep[0] += r.pop("sep_sum")
                 sep[1] += r.pop("rms_sum")
                 sep[2] += r.pop("n_slots")
+                sep[3] += r.pop("sep_code_sum")
             for k, v in r.items():
                 if v is not None:
                     parts.setdefault(k, []).append(v)
@@ -216,6 +234,7 @@ def score_arm(m, batches, depths: list[int], device: str, tol: float) -> dict:
         if sep[2]:
             arr["sep_abs"] = sep[0] / sep[2]
             arr["sep_rel"] = sep[0] / sep[1]
+            arr["sep_code"] = sep[3] / sep[2]
         per[d] = arr
         print(f"    depth {d}: coda {arr['coda_mix'].mean():.4f}"
               + (f"  par {arr['par_mix'].mean():.4f}" if "par_mix" in arr else "")
