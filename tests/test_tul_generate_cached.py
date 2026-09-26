@@ -188,6 +188,15 @@ def test_refuses_the_coda_token_reach():
         generate_tul_graphed(m, PROMPT_MID, _rule(), _spec(), max_new_tokens=2,
                              temperature=0.0, device="cpu", use_graphs=False)
 
+
+def test_refuses_the_xhc_slot_loop():
+    """`tul.xhc_streams` (plan C) widens the slot loop to 16 streams and a 4-cell exit, which
+    this decoder does not reproduce: it must refuse."""
+    m = _model(xhc_streams=8, prefix_k=2).eval()
+    with pytest.raises(NotImplementedError, match="xhc_streams"):
+        generate_tul_cached(m, PROMPT_MID, _rule(), _spec(), max_new_tokens=2,
+                            temperature=0.0, device="cpu")
+
 # ── sabotage: the comparison above must FAIL on a decoder that is wrong ──────────────
 
 
