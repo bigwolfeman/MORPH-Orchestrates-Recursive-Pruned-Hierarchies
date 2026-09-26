@@ -1,0 +1,741 @@
+{
+  "fp01_5k": {
+    "step": 5000,
+    "config": "tul_slot_spandec_strict_e4probe_fp01",
+    "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-e4probe-fp01/step_5000.pt",
+    "tul": true,
+    "fixed": {
+      "topk50_t0.8": {
+        "metrics": {
+          "boundary_frac": 0.8664592352092351,
+          "distinct3": 0.9547244094488189,
+          "distinct4": 0.9874835309617919,
+          "mean_span": 17.9301606957857,
+          "n_spans": 14.416666666666666,
+          "n_tokens": 256.0,
+          "p50_span": 16.833333333333332,
+          "rep4": 0.012516469038208168,
+          "rep4_sd": 0.012790835203522793,
+          "distinct3_sd": 0.029788869981144814
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.968503937007874,
+            "n_tokens": 256.0,
+            "n_spans": 11.0,
+            "mean_span": 21.363636363636363,
+            "p50_span": 26.0,
+            "boundary_frac": 0.7272727272727273,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.007905138339920948,
+            "distinct4": 0.9920948616600791,
+            "distinct3": 0.9645669291338582,
+            "n_tokens": 256.0,
+            "n_spans": 15.0,
+            "mean_span": 18.0,
+            "p50_span": 19.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.015810276679841896,
+            "distinct4": 0.9841897233201581,
+            "distinct3": 0.9488188976377953,
+            "n_tokens": 256.0,
+            "n_spans": 16.0,
+            "mean_span": 15.75,
+            "p50_span": 14.0,
+            "boundary_frac": 0.9375,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.03162055335968379,
+            "distinct4": 0.9683794466403162,
+            "distinct3": 0.9015748031496063,
+            "n_tokens": 256.0,
+            "n_spans": 16.0,
+            "mean_span": 16.0625,
+            "p50_span": 14.0,
+            "boundary_frac": 0.9375,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.984251968503937,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.071428571428573,
+            "p50_span": 15.5,
+            "boundary_frac": 0.7142857142857143,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.015810276679841896,
+            "distinct4": 0.9841897233201581,
+            "distinct3": 0.9409448818897638,
+            "n_tokens": 256.0,
+            "n_spans": 11.0,
+            "mean_span": 21.272727272727273,
+            "p50_span": 21.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.039525691699604744,
+            "distinct4": 0.9604743083003953,
+            "distinct3": 0.889763779527559,
+            "n_tokens": 256.0,
+            "n_spans": 18.0,
+            "mean_span": 14.333333333333334,
+            "p50_span": 11.0,
+            "boundary_frac": 0.8888888888888888,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9803149606299213,
+            "n_tokens": 256.0,
+            "n_spans": 18.0,
+            "mean_span": 13.88888888888889,
+            "p50_span": 13.0,
+            "boundary_frac": 0.9444444444444444,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.968503937007874,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 19.53846153846154,
+            "p50_span": 19.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.003952569169960474,
+            "distinct4": 0.9960474308300395,
+            "distinct3": 0.9763779527559056,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 21.333333333333332,
+            "p50_span": 22.0,
+            "boundary_frac": 0.6666666666666666,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.984251968503937,
+            "n_tokens": 256.0,
+            "n_spans": 15.0,
+            "mean_span": 17.333333333333332,
+            "p50_span": 15.0,
+            "boundary_frac": 0.8666666666666667,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.023715415019762844,
+            "distinct4": 0.9762845849802372,
+            "distinct3": 0.9488188976377953,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.214285714285715,
+            "p50_span": 12.5,
+            "boundary_frac": 0.7142857142857143,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some of the most expensive, high-end, or more tactile-like.\n\nThe 12-year-old war, a well-designed child, was a good one and has been able to see a societ of humanity. Some of the feminism and the mentality of the universities that have begun to make it a decent thing for a woman.\n\nA recent study study found her nine conscience in 1845, and 50,000 children have a criminals in the world. It is also a big threat.\n\nThe 1994 poll in which the world is unacceptable is found in the UK and the United States, which has been established from the world\u2019s most vulnerable people. This part of the United States is being influenced by a majority of American citizens and a world-class economy. In a country that is still a major thing for a family, we have to have a right to pay to meet such a new tactics.\n\nFor example, the Mormon government has been using the Civil Union-Palestinian government to keep an em",
+          "Once upon a time in a distant land, there lived a plea in the United States. But this is the kind of thing that will have a chance to help us do this and will be done.\n\nSo now we think that you can\u2019t be a good idea for the country. It is a sense of terrorism that we have to support. We have an opportunity.\n\nAt the same time, we have seen it as a shelter of criminals. We\u2019re going to have a good job of looking at our community.\u201d\n\nBut the government can also be used to support its efforts to address mass asylum.\n\n\u201cWe are going to go into there for the next two years,\u201d he said. \u201cNow we have to keep the money from our people around us.\u201d\n\n\u201cThere is already many people who want to talk about it,\u201d said the former Secretary of State John Wilcoler. \u201cWe have to tell you that we just want to move back to the country.\u201d\n\nThe new lawyers and the government are working on the ground in the future. The National State District of Kansas will be the third largest part and the market is a 20-year place.\n\n\u201cWe\u2019re all so good.",
+          "In machine learning, the key insight is that the banks have become more of a very competitive way to improve the future of the world.\n\nThe most important approach for the world is to be a shelter right by local municipality, and if most people think it is, the world of environmentalism is still too big. I can\u2019t tell people that they have the power of the federal government, and we must be sure that it has not enough to do that. That\u2019s why it\u2019s a great way to change business and the politics of the country.\n\nWhat is the best option?\n\nWhat\u2019s the first time we get to see it?\n\nThis is a big challenge. I\u2019m outright a pantheon of my life. They\u2019re not at different risk. We are now getting rid of us. But we are all part of it. We\u2019ve got to go over a little more than some other economic ways.\n\nThis is a very complex way to be a long-term thing. When we\u2019ve got a more dangerous one, we will see the money you want. It\u2019s a much more realistic thing. It\u2019s a big fantastic solution, but we\u2019",
+          "The capital of France is not necessarily for the country, he says.\n\n\"These are the military population,\" he said of the American Palestinians. \"I feel like the way it is to continue to be.\"\n\n\"I'm not going to believe that he has done it right. I don't have to be honest in the comments about that. I'm not going to get all that and that's why I'm not sure if he could see it and that's why I think that there was a lot of what we're going to do.\"\n\nHe said he was going to have his job and was going to give the country an opportunity to be \"a cruel\"\n\n\"I think he has been on the right for that. I don't know what I should do with the people. They are not going to be ready in the election,\" he said.\n\n\"They're going to be the fight.\"\n\nThere are no issues under Germans and Washington-based terrorist. \"We're going to live a game with our people in the country and our state.\"\n\n\"I'll have to do it for the next two years. He has been a political prosecutor. If he was to",
+          "def quicksort(arr):\n\n- * *\n\n1. Napoli is prohibing the first and final mound of its railway bombing, but she\u2019s not a much better way to use an aging of the cage.The military\u2019s new national security advisors have been looking to avoid a new national nation\u2019s ability to support these agencies and to protect its ages.\n\nIn response to a conservative group, Somalia has repeatedly said he has a much more expensive choice than the two-billion students will need to be a better example of what needs to be done.\n\nThe new report was originally published in the letter, saying there is so much evidence that the government has grown at least 27 percent of the city\u2019s population which holds the economy.\n\nAcademic research is a major role in the country\u2019s economic growth. The government has no effect on how the market has been in our homes, but it has also been enforced for many years to work.\n\nSome are concerned that the government is a huge part of the future, and not by any other economic crisis. The plan is to help revenue of the",
+          "Yesterday the committee announced that the project would be a good option to continue the new network.\n\n\"I want to be a new organization that's got to be on the floor and that\u2019s not what makes these actions good. It should be a good place to improve what I'm doing and what happened next to the next day. For me, the next step is to make the case for something that is going to be a good thing.\"\n\nAs you might see, if you can imagine the information that would have been announced in this post, you are not going to be the case.\n\n\"I don't know if you have to do it anymore. It is possible to come out on our own with the workforce of the current system.\n\n\"It's a good thing for us and they're going to do this.\"\n\nThe HUD is always a powerful opportunity to look at the program up until the end of a month.\n\n\"In the next five years we've worked with the Climate Change Protection Council. The company is continuing to help us all come into the direction to run.\"\n\n\"Sometime good news is for a new product that is, you can get a small number of people in the world, and they have just",
+          "Water boils at a temperature of 5.5mm for the average one. All two are less likely to be around 66.7% of the time. If you have any other product and feel good, you can get a 15% increase, you can do the same for the 2008-2016\n\nThe average value and economic speed of the price is 98 percent in 1976, and a 1,000% increase, down 2.6% in 2004.\n\nAs a result, 12% of the pounds are used to increase a price of 2.75% in 2010, with a good percentage of 27.27 percent in total, and 34 percent lower than those of one that average 13.8 percent in 2011.\n\nThe biggest difference between the percentage of average averages of 35.4 percent since 2009 were 28.4 percent, including 32.3,000 total.\n\nThe biggest possibility of being in the end, and that is not a problem. Their 28",
+          "She opened the letter and read, \u201cWhat the battles are and how many times we do?\u201d A lot was like, \u201cI\u2019m also not a person.\u201d\n\nI was just saying the most. I could tell what I was doing now. I was on track. This time, my sister was a pretty good fan of it, she was a little scary. And I was not in the same way. Now I went to Jay. I wasn\u2019t on the board. I was almost tired and then I was able to play for my life and the best that I wanted. I was working on it, so I was so tired of being a woman in my house. He couldn\u2019t tell you, because she was in my colleague. He was a bullying.\n\n\u201cNo!\" Mr. Smith laid back, after his homework and later was arrested by an impeachment in Alberta and had been a veteran of the family. He had a few months and never got a job. Some time, with that, he was a good friend.\n\nHe was a longtime guy, and was a good singer.\n\nA fucking home, a panthe",
+          "The main advantage of this approach is that there is no way of keeping the public into a large one.\n\nThe first phase is the \u201cgreat\u201d model that I should. The ISPs are also being used to develop the same as the two types and the thesis of the world. You\u2019re not the only one of the most successful, the most important version of the world is. If we do know the results we can have into the most productive world you can see.\n\nI\u2019ve read this article on Google, and that\u2019s why we\u2019ve got some of our worlds. So we have to argue that we have the same way we can change our world. We always have to have a problem with our own and how we do that. We are going to be relieved of the future, we have very little to do with the entire world.\n\nThere are other ways to understand what the community is looking on. We need to support this kind of world and they will make our own decisions.\n\nThis is just one of the many things we want to look at, and you have to be doing this:\n\nThe main thing that we have to do is to have this story. We want to get us together and we can",
+          "After the war ended, the government announced that it was a \"deland-hundred\" system that will join the city as the revolutionary rail.\n\n\"It was a great deal of action,\" he said. \"There can be no evidence to be done, but what the two are.\"\n\nThe Saudi Arabia-based policy of state to the US inaugural, which did not include a federal government by reconsidering an \"in-perceived system\" in the United States, such as the United States, that the country is \"the best,\" which is now in the Southern Lord. \"As a result, there is now a number of international reimbursement and the best of the country,\" Catholic President Bush said on Friedman, an international law professor at the University of Virginia, told The Associated Press. \"It is important to note that the United States will have the potential to form a political, so-called Kremlin.The United States is not a clearer, but the military movement is not necessarily a disasters. It is not a war to have to be rebuilt to some extent as a result.\"\n\n\"In the end, it",
+          "import numpy as np\n\ndefvests from local residents are uninsured by the findings of their findings here, so they should make up for a larger amount of time. What is the most important?\n\nThe question, of course, is that in their own future, the problem in the history of their culture is now the first to make the best sense to the future of this postbook. With the idea of developing the future, that\u2019s not what they do \u2013 so you don\u2019t need to keep it doing.\n\nWhen we start to see some changes to the public, we need to use the same process to reduce the number of employees with more power. At the point of how we understand the problem we are going to find.\n\nIn fact, that would certainly be a little easier to find out about the Internet, but there are a lot of people who want to do something about the future.\n\nSo why don\u2019t you have to do that?\n\nI\u2019ve done a little since that of the 2017 World Cup that they have not yet been doing. A lot of the jobs in the country are important. This is where we do with our 30th anniversary of that year. In the meantime",
+          "According to the report published last week, the Supreme Court of Justice had put up a federal judge\u2019s decision to make an action to \"the university is not a good part of it\" \u2014 and it was time for him to leave a conference.\n\nBut as a senior official, the remarks from the Department of Justice have been more of a major senate since the 2013 decision, they were told that the administration had been told that the government can be \"dreadable\" a \"an oversight that could not be passed off the Senate.\" Mr. Bryan D. C. Gary Bush, the lawyer, said that if she would vote on the administration, she was not able to comment on the U.S. Senate and the U.S. and said he was not the only person to be held or not about the \"demonds\" in the government. He promised to \"prescribing a reconciliation\" on the issue of a 2013 election, and the Supreme Court ruled the law.\n\n\"No,\" the lawyer says. \"I don't know if I was upset.\"\n\nThe Senate, which is a brief attempt"
+        ]
+      },
+      "greedy": {
+        "metrics": {
+          "boundary_frac": 0.7704008954008953,
+          "distinct3": 0.19553805774278213,
+          "distinct4": 0.22661396574440051,
+          "mean_span": 18.495431818208147,
+          "n_spans": 15.916666666666666,
+          "n_tokens": 256.0,
+          "p50_span": 18.375,
+          "rep4": 0.7733860342555993,
+          "rep4_sd": 0.1302783160758711,
+          "distinct3_sd": 0.10962915586139213
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.7351778656126482,
+            "distinct4": 0.2648221343873518,
+            "distinct3": 0.2204724409448819,
+            "n_tokens": 256.0,
+            "n_spans": 22.0,
+            "mean_span": 11.545454545454545,
+            "p50_span": 11.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.857707509881423,
+            "distinct4": 0.1422924901185771,
+            "distinct3": 0.13385826771653545,
+            "n_tokens": 256.0,
+            "n_spans": 16.0,
+            "mean_span": 16.4375,
+            "p50_span": 16.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.5731225296442688,
+            "distinct4": 0.4268774703557312,
+            "distinct3": 0.38188976377952755,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.357142857142858,
+            "p50_span": 20.0,
+            "boundary_frac": 0.9285714285714286,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8300395256916996,
+            "distinct4": 0.16996047430830039,
+            "distinct3": 0.14566929133858267,
+            "n_tokens": 256.0,
+            "n_spans": 31.0,
+            "mean_span": 8.32258064516129,
+            "p50_span": 7.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9881422924901185,
+            "distinct4": 0.011857707509881422,
+            "distinct3": 0.011811023622047244,
+            "n_tokens": 256.0,
+            "n_spans": 8.0,
+            "mean_span": 32.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.0,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7747035573122529,
+            "distinct4": 0.22529644268774704,
+            "distinct3": 0.2047244094488189,
+            "n_tokens": 256.0,
+            "n_spans": 10.0,
+            "mean_span": 24.1,
+            "p50_span": 25.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8142292490118577,
+            "distinct4": 0.1857707509881423,
+            "distinct3": 0.15354330708661418,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 19.692307692307693,
+            "p50_span": 16.0,
+            "boundary_frac": 0.5384615384615384,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8853754940711462,
+            "distinct4": 0.11462450592885376,
+            "distinct3": 0.1062992125984252,
+            "n_tokens": 256.0,
+            "n_spans": 21.0,
+            "mean_span": 12.0,
+            "p50_span": 12.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7984189723320159,
+            "distinct4": 0.2015810276679842,
+            "distinct3": 0.16929133858267717,
+            "n_tokens": 256.0,
+            "n_spans": 18.0,
+            "mean_span": 14.0,
+            "p50_span": 14.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8695652173913043,
+            "distinct4": 0.13043478260869565,
+            "distinct3": 0.12598425196850394,
+            "n_tokens": 256.0,
+            "n_spans": 17.0,
+            "mean_span": 14.823529411764707,
+            "p50_span": 16.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.6245059288537549,
+            "distinct4": 0.37549407114624506,
+            "distinct3": 0.28346456692913385,
+            "n_tokens": 256.0,
+            "n_spans": 9.0,
+            "mean_span": 29.0,
+            "p50_span": 32.0,
+            "boundary_frac": 0.1111111111111111,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.5296442687747036,
+            "distinct4": 0.47035573122529645,
+            "distinct3": 0.4094488188976378,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 21.666666666666668,
+            "p50_span": 19.5,
+            "boundary_frac": 0.6666666666666666,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that the world is not a good thing.\n\nThe fact that the world is not a good thing, is that the world is not a good thing. Their own world is the most important thing to do.\n\nThe world is a very good thing. It is a very good thing to do. It is a great place to be done.\n\nThe world is a great place to be. It is a great place to be in the world.\n\nThe world is a great place to be. It is a great place to be in the world.\n\nThe world is a great place to be. It is a great place to be in the world.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to be.\n\nThe world is a great place to",
+          "Once upon a time in a distant land, there lived a lot of the time.\n\nThe first thing I\u2019ve been doing is that I\u2019m not a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I\u2019m going to be a good person. I\u2019m not sure if I",
+          "In machine learning, the key insight is that the newspaper has been a major part of the world.\n\nThe first thing we have to do is to make a clear and unusual decision to get a new idea of how we can do it.\n\nThe first thing we have to do is to get our own ideas to the point where we are going to be able to do something that we have to do our best to get our community together.\n\nWe have been working on our own and we have to be able to do this. We have been working on our own and we have to be able to do our best to get our community together. We will be able to get our community together and we will be able to get our community together.\n\nWe will be able to get our community together and we will be able to get our community together. We will be able to get our community together and we will be able to get our community together. We will be able to get our community together and we will be able to get our community together. We will be able to get our community together. We will be able to get our community together. We will be able to get our community together. We will be able to get our community together. We will be able to get our community",
+          "The capital of France is the only one in the world.\n\nThe first time the world was in the world, the world was the first time the world was in the world. The world was the first time we were in the world. The world was the first time we were in the world. We were all in the world, and we were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all in the world. We were all",
+          "def quicksort(arr): 100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "Yesterday the committee announced that the company would not be able to use the same information to the company.\n\nThe company has been working on a new network of users to provide a new software for the company.\n\nThe company has been working on a new network of users and users to provide a new software service to the company.\n\nThe company has been working on a new network of users and users to provide a new software service to the company.\n\nThe company has been working on a new software network for the company, which is currently available to users.\n\nThe company has been working on a new network of users and users to provide a new software service to the company.\n\nThe company has been working on a new software network for the company, which is currently available to users.\n\nThe company has been working on a new network of users and users to provide a new software service to the company.\n\nThe company has been working on a new network of users and users to provide a new software service to the company.\n\nThe company has been working on a new network of users and users to provide a new software service to the company.\n\nThe company has been working on a new network of users and users to provide a new software service to the",
+          "Water boils at a temperature of 100,000.\n\nThe 2016-14-2015 study found that 100,000 people were 1000,000 people.\n\nThe 2016 study found that 10,000 people were 100,000 people were 100,000 people.\n\nThe 2016 study found that 10,000 people were 100,000 people were 100,000 people.\n\nThe 2014 study found that 10,000 people were 100,000 people were 100,000 people.\n\nThe 2014 study found that 10,000 people were 100,000 people were 100,000 people.\n\nThe 2014 study found that 10,000 people were 100,000 people were 100,000 people.\n\nThe 201",
+          "She opened the letter and read the story.\n\n\"I'm not going to be a good person,\" she said. \"I'm not going to be a person.\"\n\n\"I'm not going to be a person.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman.\"\n\n\"I'm not going to be a woman",
+          "The main advantage of this approach is to be a major part of the world.\n\nThe first step is to be a major part of the world, and the world is a very good place to be. The world is a very good place to be.\n\nThe world is a great place to be in the world. It is a great place to be a great place to be.\n\nThe world is a great place to be in the world. It is a great place to be in the world.\n\nThe world is a great place to be in the world. It is a great place to be in the world.\n\nThe world is a great place to be in the world. It is a great place to be in the world.\n\nThe world is a great place to be in the world.\n\nThe world is a great place to be in the world.\n\nThe world is a great place to be in the world.\n\nThe world is a great place to be in the world.\n\nThe world is a great place to be in the world.\n\nThe world is a great place to be in the world.\n\nThe world is a great place to be in the world.\n\nThe world is a great place to be in",
+          "After the war ended, the government was in the process of being a \u201ca great man.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good person,\u201d he said. \u201cI\u2019m not going to be a good person.\u201d\n\n\u201cI\u2019m not going to be a good",
+          "import numpy as np\n\ndefinitely the same thing as the \u201ctheirical\u201d of the \u201ctheirical\u201d of the \u201ctheirathetic\u201d of the \u201ctheirical\u201d (1980s) and the \u201ctheirical of the \u201ctheirical\u201d of the \u201ctheirical\u201d of the \u201cthe \u201ctheories of the \u201cthe\u201d of the \u201cthe\u201d of the \u201cthe\u201d of the \u201cthe\u201d of the \u201cthe\u201d of the \u201cthe \u201ctheories\u201d of the \u201cthe\u201d of the \u201cthe\u201d of the \u201cthe\u201d of the \u201cthe\u201d of the \u201cthe\u201d of the \u201cthe \u201cthe\u201d of the \u201cthe\u201d (the \u201cthe) of the \u201cthe\u201d (the) of the \u201cthe) of the \u201cthe \u201cthe\u201d of the \u201cthe\u201d (1) \u201c1) \u201c1999\u201d (1999) and \u201cthe \u201cthe\u201d (1981) \u201cThe \u201cTheir\u201d (1999) \u201cThe \u201cTheir\u201d (1999) was \u201cThe \u201cTheir\u201d (1999) was \u201cthe \u201cthe \u201cthe\u201d of the \u201cthe\u201d (1990s) and the",
+          "According to the report published last week, the U.S. Department of Justice said it would be \u201ca very important step in the process.\u201d\n\nThe U.S. Department of Justice said the government would \u201creform the government\u2019s decision to reconsider the decision to re-enter the government\u2019s decision to the government\u2019s decision to reconsider the decision.\n\n\u201cThe government\u2019s decision to reconsider the decision to address the decision to address the decision to address the decision to prevent the government\u2019s decision to the government\u2019s decision to reconsider the decision to address the decision.\n\n\u201cThe government has been working on a new policy that will be a major part of the government\u2019s decision to reform the government\u2019s decision to the government\u2019s decision to reconsider the decision to address the decision,\u201d he said.\n\nThe government\u2019s decision to reconsider the decision to address the decision to address the decision to address the decision, which was not immediately available.\n\nThe government\u2019s decision to reconsider the decision to address the decision to address the decision to address the decision, which was not immediately available, would be a \u201cinnovative\u201d of the government\u2019s decision to address the decision.\n\nThe government\u2019"
+        ]
+      }
+    }
+  },
+  "fp01_10k": {
+    "step": 10000,
+    "config": "tul_slot_spandec_strict_e4probe_fp01",
+    "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-e4probe-fp01/step_10000.pt",
+    "tul": true,
+    "fixed": {
+      "topk50_t0.8": {
+        "metrics": {
+          "boundary_frac": 0.7867521367521367,
+          "distinct3": 0.9130577427821521,
+          "distinct4": 0.9578392621870884,
+          "mean_span": 19.19274609490127,
+          "n_spans": 16.666666666666668,
+          "n_tokens": 256.0,
+          "p50_span": 20.208333333333332,
+          "rep4": 0.04216073781291172,
+          "rep4_sd": 0.09535900222168765,
+          "distinct3_sd": 0.14143540587747416
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.9566929133858267,
+            "n_tokens": 256.0,
+            "n_spans": 9.0,
+            "mean_span": 26.444444444444443,
+            "p50_span": 32.0,
+            "boundary_frac": 0.4444444444444444,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.9606299212598425,
+            "n_tokens": 256.0,
+            "n_spans": 15.0,
+            "mean_span": 18.0,
+            "p50_span": 18.0,
+            "boundary_frac": 0.9333333333333333,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9724409448818898,
+            "n_tokens": 256.0,
+            "n_spans": 9.0,
+            "mean_span": 27.22222222222222,
+            "p50_span": 31.0,
+            "boundary_frac": 0.5555555555555556,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.015810276679841896,
+            "distinct4": 0.9841897233201581,
+            "distinct3": 0.9645669291338582,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 19.166666666666668,
+            "p50_span": 18.0,
+            "boundary_frac": 0.9166666666666666,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.3557312252964427,
+            "distinct4": 0.6442687747035574,
+            "distinct3": 0.44881889763779526,
+            "n_tokens": 256.0,
+            "n_spans": 58.0,
+            "mean_span": 4.4655172413793105,
+            "p50_span": 4.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.0,
+            "distinct4": 1.0,
+            "distinct3": 0.9921259842519685,
+            "n_tokens": 256.0,
+            "n_spans": 10.0,
+            "mean_span": 24.7,
+            "p50_span": 24.0,
+            "boundary_frac": 0.7,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.937007874015748,
+            "n_tokens": 256.0,
+            "n_spans": 26.0,
+            "mean_span": 9.807692307692308,
+            "p50_span": 8.0,
+            "boundary_frac": 0.9615384615384616,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.9645669291338582,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 18.923076923076923,
+            "p50_span": 21.0,
+            "boundary_frac": 0.8461538461538461,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.007905138339920948,
+            "distinct4": 0.9920948616600791,
+            "distinct3": 0.9724409448818898,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 21.333333333333332,
+            "p50_span": 24.0,
+            "boundary_frac": 0.6666666666666666,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.05138339920948617,
+            "distinct4": 0.9486166007905138,
+            "distinct3": 0.9173228346456693,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 19.666666666666668,
+            "p50_span": 17.0,
+            "boundary_frac": 0.8333333333333334,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.015810276679841896,
+            "distinct4": 0.9841897233201581,
+            "distinct3": 0.9251968503937008,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 20.333333333333332,
+            "p50_span": 19.5,
+            "boundary_frac": 0.75,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.011857707509881422,
+            "distinct4": 0.9881422924901185,
+            "distinct3": 0.9448818897637795,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 20.25,
+            "p50_span": 26.0,
+            "boundary_frac": 0.8333333333333334,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that some of the top 100 students can be controlled by a person named \"Chairman\" or the first member to the school because, \"the class of children, the school, is the most important thing, but of course they need to be a part of the community.\"\n\nThe student and teacher of the school, he said, \"we have to find out which students have been able to build a social science game in the school. It's a very high school person.\"\n\nIf that's the case, there's no reason to believe that a school students are going to be an abusive student, but if the school is looking for a school program the students will have to keep it going and they are going to be very happy and happy to see them.\n\nBut this may be the real opportunity for students to consider each other's personal plans about the way students feel, \"When they're really making a student, they're really happy for the school.\"\n\nThe student also says she has a family full school, with only a few of her children, and that is at the bottom of the school.\n\nIt's the first time students would be able to live online at school in a time when students like Elias",
+          "Once upon a time in a distant land, there lived a lot of people, most of them at the same time as the old victims. I couldn\u2019t do that without a chance that I would have been proud of. I was unaware of my family. When I got a phone call from 45-year-old Trent Sharche, I was going to be part of my own home and I felt I was in the street. That\u2019s the first time I received all of my advice, but I am looking forward to being a good friend for all I can. I am still in place for a long time as I moved.\n\nI am a doctor of the same. I don\u2019t know if I would have been in my house. I think I can\u2019t do that for myself, so I do what I would have been doing.\n\nIt is also a business development for me to see how I get to my bathroom. I am just one of my first fellow members of my family in the town of Fitzgerald. I have been here now for three months. I will not have been ready to be taken down. I am a counselling cousin and I have never been convicted of what I am seeing.",
+          "In machine learning, the key insight is that the banks are the ones that can take advantage of the catastrophe.\n\nIt would be a wonderful tool to change the problem, and so many of the piano miles (the tuna of the vegan, the gamer\u2019s headroom). The same is where the desserts are in the marijuana, and the plants, the hunt, the punch, the back, the mantle of the rifle, the carpet, the bridges, the thick, your bathroom, the back of your face to the ground, and the way your smoking is going, the oyster, or your car, but the pistol, and the bully's tube should go around this, and you need to be able to get the sandwich.\n\nIn the past 60 years, the Mannus is a swearing, and the toll is the greatest in the world. The crowds are the same, the ones that are very different from the other, the most significant we can do today. We just found a lot of blossomers, and there are so many of those that have",
+          "The capital of France is not only for the country, but the economy. However, it is also being done to support the future of American capital, and now, there are a lot of the more important, which is why China is more efficient than that, although it is far from very difficult to figure out.\n\nThe European Union is not in its interests yet. However, the US have been pushing for a long time now, and the European Union has been seeking additional reforms, as well as the international investment.\n\nBut the Pentagon is not the only one who has been in the world for the 50 years since then. But it has now been announced that the EU is a key part of the nation's wealth-to-trade policy.The country's government has reached out to the U.S. in order to increase the number of reforms the US has put together to the Gulf of Iran. (The Germans and Washington D.C.) said the IRS is being invited across the country to the Soviet Union.\n\nBut the US's government has to do with the government now as it is the 1990s to be a key part of the",
+          "def quicksort(arr):\n\n-d.p-1.10008(a_t)\n\n-3.f--w/.1.001/f6.1.6.0.102.0.3.0.1.1.0.23.4.0.2.13.5.5.5.0.15\n\n- 2.0.5.0.2.1.2.0.3.0.2.6.0.5.1.1.1.3.4.9.0.8.4.2.0.2.2.1.3.1.0.5.3.1.1.5.47.12.9.9.5.3.14.5.8.1.0.0.1.0.5.1.1.7.0.8.1.0.0.0.15.5.5.9.0.0.4.4.0.6.9.8.4.8.1.0.9.0.4.6.7.1.8",
+          "Yesterday the committee announced that the project was on the sidelines of the United Kingdom's 29 January 2015. This was the first time that the US had been engaging in a new development that was needed to help the Nuclear Commission and its foreign minister, and the Senate Military Commission that had been under threat of any kind of diplomatic support. It was called the \"Federal Trade Act,\" which was aimed at the EU's regulatory regulations, in which the US is on the same basis as a \"unprecedented step\", and that would have a \"very important impact.\"\n\nThe US government, which has also proven to be in line with its support for launching the Russian-born Chinese-based nuclear program, has been a \"very largely high point of view\" for several years.\n\n\"The FBI has been able to see how things are available for us,\" the dealer asked in a statement. \"If this was going to happen, it would be a long way possible. We would not be able to see if one of those targets is going to be a business. But I don't think of a deal as much as possible, as they have been",
+          "Water boils at a temperature of 5.5mm and 1.810K/L.420mm, with an average of 1.24mm/m per share. In contrast, the pressure could be 1.6, plus the number of temperatures that have been used in this category, by 1.3GB of RAM and 3.8 MST-P, 2.91 C RAM and 6.11, 4.2 Nexus.\n\nThe 2.5-liter is the same 9.5 x 12.6mm tons, 5.6mmC of Mars 1.16.1.1-246-4.00.4\"-MMAL-C.B.\n\n\u201cIt\u2019s a very good idea to think about the future of the planet, but it\u2019s not possible that we are looking at the very front-ended field.\u201dA major development of the American Civil War has revealed that the U.S. and China are making an impact on the wealthy of the West Bank.\n\nThe latest expansion of the U.S. is now on its own,",
+          "She opened the letter and read, \u201cWhat the bay is?\u201d 11-7\u201317-10. \u201cSo, again, they\u2019re going to get a message, and they\u2019re doing something that they don\u2019t want to.\u201d\n\nFor more about that issue, follow her on Facebook.Newly owned and a 1,000-year-old girl on a mile day in Somalia has been killed, after a man and mother with an illness of blood pressure in a coffin, according to reporters from Pakistan's Hamas militia.\n\nThe couple from Tammyhong to Nakamai were arrested after they were injured.\n\nThe protesters said that the two men were killed after an emergency officer, and Kabul was involved in a crime.\n\nA person was arrested on Tuesday but remains unarmed, officials said.\n\nThe suspects were allegedly shot dead in the back with a gun at a village in a country that killed 40 people and killed two people.\n\nA judge said the arrests were not a valid violation of the court",
+          "The main advantage of this approach is that both sides of the industry, where they are able to work together, are in the right direction. We can't even use that to the people who can get a problem.\n\nThe Congressional Budget Office is the first to release an event in a series of early, early newsletters and the latest steps to improve the revelation for the future of the area. But for those members, we are not likely to keep up with the situation in the next few generations.\n\nBut, we are able to be responsible for our revenue and to implement this effort, which will increase the number of people who are currently under control. The best part is to be the one we are looking for in the U.S..\n\nBut there is a clear need for a better future for the city: the government is more likely to be able to meet the people and ensure that the need for the change to happen. However, it will not be a long-term deal for our partners without a further increase in the risk of the state.\n\nThe new plan, for example, would cost $574 million for the 58 states to be recruited as an agreement to expand the budget into 15 years",
+          "After the war ended, the government announced that people are indicted in the Gulf of Haiti, a mammal bomb rifes and bombs, and the U.S. has been reassuring of its ties to the Iraqi government and for some time the government has settled into the state.\n\n\u201cWe need to change our own situation and get our own peace with the US,\u201d the senior said. \u201cThey must be the first time they\u2019re talking about such an attack.\u201d\n\nThe U.S. military has been working on the case, and in recent years, the Iraqi government has made no sense to believe the U.S. has been fighting a war that was being threatened by the U.S. military.\n\nThe US has now been enforced by the Russia government for the past six years, and it has been in the past decade since it was in sharp contrast, but the main issue was as much a risk. The Iraqis could not have been terrorist attacks on the U.S. and its allies, including Saudi Arabia, as well as the United States of America and the United States",
+          "import numpy as np\n\ndef block\n\nthen use the server to ensure the user code is not intended to be used to the public, and can be changed in the form of the data.\n\nAdditionally, I hope, or just consider a lot of the data that contains the full data.\n\nI often see what the other major issues are in the right place. The idea of using this data is that the number of different variables that are not based on the data are so different from what I am thinking about.\n\nAnd there are the 705 and 450 data.\n\nThe very fact that there\u2019s a lot of data on the data above is that some of the data we\u2019ve learned to find on the topic \u2014 the data that people were looking for \u2014 was the reason the data is a good reason to describe this problem.\n\nBut in this case, the data do not even get an accurate look at the data, and to think of a lot of outcomes in the data data.\n\nI\u2019m saying that this data is based on what I was seeing and what I was saying, and what we were reading is that we\u2019ve got to test our data because we have one of the most efficient data stored on the data",
+          "According to the report published last week, the Gov. Jeff Sessions had concluded that there would be nothing wrong with the United States and would have been able to do a good job of reaching a foreign policy.\"\n\n\"I said that I was not going to have a decision, but, \u2018That\u2019s a really fun thing.\u2019\u2019\n\n\"I think if there\u2019s a lot of people that have a lot of respect, I think it\u2019s a really bad one. It\u2019s not a big deal, but a lot of people get off the wall, and they\u2019re going to get to a moment when they\u2019ve got their own picks, but if you have a problem if the big thing about it is, it\u2019s easy to keep things close. That\u2019s something I think about it. I want to see him play a lot of him in business, that\u2019s not good for him, no matter how good it is.\n\nAnd then there\u2019s no reason for that. It's a great thing, and that\u2019s the most important thing you come to, if you're making the same deal anymore. I don\u2019t think it would be good to know that he\u2019s done, but he\u2019s going"
+        ]
+      },
+      "greedy": {
+        "metrics": {
+          "boundary_frac": 0.7256171143671143,
+          "distinct3": 0.25721784776902884,
+          "distinct4": 0.288866930171278,
+          "mean_span": 18.867662151170215,
+          "n_spans": 15.666666666666666,
+          "n_tokens": 256.0,
+          "p50_span": 19.916666666666668,
+          "rep4": 0.711133069828722,
+          "rep4_sd": 0.13164150479281664,
+          "distinct3_sd": 0.1153587349375268
+        },
+        "per_prompt": [
+          {
+            "rep4": 0.782608695652174,
+            "distinct4": 0.21739130434782608,
+            "distinct3": 0.18503937007874016,
+            "n_tokens": 256.0,
+            "n_spans": 31.0,
+            "mean_span": 8.387096774193548,
+            "p50_span": 6.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 0.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.6561264822134387,
+            "distinct4": 0.3438735177865613,
+            "distinct3": 0.3110236220472441,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.642857142857142,
+            "p50_span": 17.0,
+            "boundary_frac": 0.7142857142857143,
+            "prompt_index": 1.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.6956521739130435,
+            "distinct4": 0.30434782608695654,
+            "distinct3": 0.2795275590551181,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 19.846153846153847,
+            "p50_span": 14.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 2.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.8300395256916996,
+            "distinct4": 0.16996047430830039,
+            "distinct3": 0.15354330708661418,
+            "n_tokens": 256.0,
+            "n_spans": 27.0,
+            "mean_span": 9.444444444444445,
+            "p50_span": 8.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 3.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.9407114624505929,
+            "distinct4": 0.05928853754940711,
+            "distinct3": 0.05905511811023622,
+            "n_tokens": 256.0,
+            "n_spans": 9.0,
+            "mean_span": 26.333333333333332,
+            "p50_span": 32.0,
+            "boundary_frac": 0.2222222222222222,
+            "prompt_index": 4.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.5098814229249012,
+            "distinct4": 0.4901185770750988,
+            "distinct3": 0.4409448818897638,
+            "n_tokens": 256.0,
+            "n_spans": 25.0,
+            "mean_span": 10.36,
+            "p50_span": 10.0,
+            "boundary_frac": 0.96,
+            "prompt_index": 5.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.6007905138339921,
+            "distinct4": 0.39920948616600793,
+            "distinct3": 0.3543307086614173,
+            "n_tokens": 256.0,
+            "n_spans": 12.0,
+            "mean_span": 20.416666666666668,
+            "p50_span": 21.0,
+            "boundary_frac": 0.9166666666666666,
+            "prompt_index": 6.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.5810276679841897,
+            "distinct4": 0.4189723320158103,
+            "distinct3": 0.37401574803149606,
+            "n_tokens": 256.0,
+            "n_spans": 13.0,
+            "mean_span": 19.307692307692307,
+            "p50_span": 22.0,
+            "boundary_frac": 0.7692307692307693,
+            "prompt_index": 7.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.7509881422924901,
+            "distinct4": 0.2490118577075099,
+            "distinct3": 0.22440944881889763,
+            "n_tokens": 256.0,
+            "n_spans": 14.0,
+            "mean_span": 18.571428571428573,
+            "p50_span": 14.0,
+            "boundary_frac": 1.0,
+            "prompt_index": 8.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.5928853754940712,
+            "distinct4": 0.40711462450592883,
+            "distinct3": 0.3425196850393701,
+            "n_tokens": 256.0,
+            "n_spans": 11.0,
+            "mean_span": 22.636363636363637,
+            "p50_span": 31.0,
+            "boundary_frac": 0.6363636363636364,
+            "prompt_index": 9.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.924901185770751,
+            "distinct4": 0.07509881422924901,
+            "distinct3": 0.07086614173228346,
+            "n_tokens": 256.0,
+            "n_spans": 11.0,
+            "mean_span": 22.09090909090909,
+            "p50_span": 32.0,
+            "boundary_frac": 0.36363636363636365,
+            "prompt_index": 10.0,
+            "draw": 0.0
+          },
+          {
+            "rep4": 0.6679841897233202,
+            "distinct4": 0.33201581027667987,
+            "distinct3": 0.29133858267716534,
+            "n_tokens": 256.0,
+            "n_spans": 8.0,
+            "mean_span": 30.375,
+            "p50_span": 32.0,
+            "boundary_frac": 0.125,
+            "prompt_index": 11.0,
+            "draw": 0.0
+          }
+        ],
+        "samples": [
+          "The theory of relativity states that the world is not a problem.\n\nThe idea that the world is not a human being is a problem is that it is not a human being. It is a very good idea to have a human being, and it is a good idea to have a human being.\n\nThe idea that the world is not a human being is a human being, and that it is not a human being. It is a human being that is a human being. It is a human being that is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a human being. It is a",
+          "Once upon a time in a distant land, there lived a lot of people, and I think it was a good thing to see.\n\nI think that\u2019s the best thing I\u2019ve ever done. I think it\u2019s a good thing to have a lot of people who are in the same position. I think it\u2019s a good thing to have a lot of people who are going to be able to get a lot of people to get to the bottom of the world.\n\nI think that\u2019s the best thing I\u2019ve seen in the past. I think it\u2019s a good thing to have a lot of people who are going to be able to get a lot of people to get to the bottom of the world.\n\nI think that\u2019s the best thing I\u2019ve seen in the past. I think it\u2019s a great thing to have a lot of people who are going to be able to get a lot of people to get to the bottom of the world.\n\nI think that\u2019s the best thing I\u2019ve seen in the past. I think it\u2019s a great thing to have a lot of people who are going to be able to get a lot of people to get to the top of the world.\n\nI think that\u2019s the way I",
+          "In machine learning, the key insight is that the technology is not a good thing, and it is a good idea to see how the technology works.\n\nThe idea of a project is to create a new system that is designed to create a new system that is designed to create a new system. The project is a new project that will be used to create a new system that will be used to create a new system.\n\nThe project will be launched in 2015, and will be launched in 2015.\n\nThe project will be launched in 2015, and will be completed in 2015.\n\nThe project will be launched in 2015, and will be completed in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched",
+          "The capital of France is the most important part of the world. The world is a world-class, and the world is a world of a world.\n\nThe world of the world is a world of humanity, and it is a world of humanity. It is a world of humanity, and it is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of humanity. It is a world of human",
+          "def quicksort(arr):\n\n(http://www.facebook.com/p/100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "Yesterday the committee announced that it was \"a very good deal\" for the U.S. to be able to make a decision on the issue.\n\n\"We have to be able to get the information that we have in the past,\" said Mike Duncan, a former president of the U.S. Senate. \"It's a very good decision to have a lot of people in the country.\"\n\nThe U.S. has been a key part of the U.S. Senate, and the U.S. Senate, which has been a major part of the U.S. Senate, has been a key part of the U.S. Senate.\n\n\"The U.S. has been a major part of the U.S. and the United States,\" said the U.S. Senate.\n\n\"The U.S. has been a major part of the U.S. and the U.S. and the United States,\" said the U.S. Senate.\n\n\"The U.S. has been a major part of the U.S. and the U.S. and the U.S. is a major part of the U.S. and the U",
+          "Water boils at a temperature of 1.5.5.\n\nThe 100-mile-and-a-half-year-old is the first time the city has been able to reach a new city of Michigan.\n\nThe city has been a long-term city, and the city has been working on a new building in the city.\n\nThe city has been working on a new building in the city, and has been working on a new building for the city.\n\nThe city has been working on a new building in the city, and has been working on a new building for the city.\n\nThe city has been working on a new building in the city, and has been working on a new building for the city.\n\nThe city has been building a new building, and the city has been building a new building.\n\nThe city has been building a new building, and the city has been building a new building.\n\nThe city has been building a new building, and the city has been building a new building.\n\nThe city has been building a new building, and the city has been building a new building.\n\nThe city is the largest city in the world, and the city has a ",
+          "She opened the letter and read the letter.\n\n\u201cI think it\u2019s a very good idea to have a lot of people who are in the same position that I\u2019ve been able to do,\u201d she said. \u201cI think that\u2019s the best way to get the money to get the money to work.\u201d\n\n\u201cI think that\u2019s the best thing I\u2019ve done in my life. I think I\u2019m going to be able to get a lot of money to get the money to work. I think I\u2019m going to be able to get a lot of money to get the money to work. I think I\u2019m going to be able to get a lot of money to get the money to work.\u201d\n\n\u201cI think I\u2019m going to be able to get a lot of money to get the money to work, and I\u2019m going to get to the next step.\u201d\n\n\u201cI think I\u2019m going to be able to get a lot of money to get the money to work, and I\u2019m going to get to the next step,\u201d she said. \u201cI think I\u2019m going to be able to get a lot of money to get the money to work.\u201d\n\n\u201cI think I\u2019m going to be able",
+          "The main advantage of this approach is that the government has been able to provide a new and effective solution to the development of the new technology.\n\nThe project is aimed at the development of the project, and the development of the project will be aimed at the development of the project.\n\nThe project will be launched in 2015, and will be completed in 2015.\n\nThe project will be launched in 2015, and will be completed in 2015.\n\nThe project will be launched in 2015, and will be completed in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe project will be launched in 2015.\n\nThe",
+          "After the war ended, the government was forced to take a look at the 10th anniversary of the 2016 election.\n\nThe 2016 election was aimed at the 2016 election, which was aimed at the 2016 elections.\n\nThe 2016 election was a \"very important\" decision, and the 2016 election was a \"very serious\" decision.\n\nThe vote was a \"very serious\" vote, and the election was a \"very serious\" vote.\n\nThe vote was a \"very serious\" vote, and the vote was a \"very serious\" vote.\n\nThe vote was a \"very serious\" vote, and the vote was \"a very strong majority\" and \"a very strong majority\" in the election.\n\nThe vote was a \"very serious\" vote, and the vote was \"a very strong majority\" and \"a very strong majority\" in the election.\n\nThe vote was a \"very serious\" vote, and the vote was \"a very strong majority\" and \"an election\" in the 2008 election.\n\nThe vote was a \"very serious\" vote, and the vote was",
+          "import numpy as np\n\ndef\n\nhttp://www.youtube.com/watch?v=11111100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "According to the report published last week, the group was inducted into the National Academy of Sciences (NASDAQ), a group of 100,000 people, including 10,000 people, including 1,000 people, including 1,000 people, and 1,000,000 people.\n\nThe group, which was published in 2015, was published in 2011, and was published in 2015, 2006, 2007, 2015, 2015, 2015, 2016, 2015, 2015, 2015, 2015, 2016, 2015, 2015, 2015, 2015, 2015, 2015, 2015, 2015, 2015, 2015, 2016, 2015, 2015, 201"
+        ]
+      }
+    }
+  },
+  "_real_text": {
+    "n_rows": 256,
+    "n_tokens": 256,
+    "rep4": 0.025182188735177864,
+    "rep4_std": 0.04086310846442259,
+    "rep4_p10": 0.0,
+    "rep4_p50": 0.011857707509881422,
+    "rep4_p90": 0.05533596837944664,
+    "rep4_frac_zero": 0.15625,
+    "distinct3": 0.9475578248031495,
+    "distinct3_std": 0.05427222294309213
+  },
+  "_meta": {
+    "n_tokens": 256,
+    "seed": 1234,
+    "max_slots": 0,
+    "n_prompts": 12,
+    "decodes": [
+      "topk50_t0.8",
+      "greedy"
+    ],
+    "samples_per_prompt": 1,
+    "arms_done": [
+      "fp01_5k",
+      "fp01_10k"
+    ]
+  }
+}
