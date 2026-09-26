@@ -1,0 +1,27 @@
+# Plan C, arm C1 "lxtul-e4probe-fp01-xhc": expanded hyper-connections (xHC, arXiv 2607.14530)
+# in the SLOT LOOP only. Composes `tul_slot_spandec_strict_e4probe_fp01` and changes:
+#
+#   tul.prefix_k      2 -> 4    the exit writes 4 cells, one per group of 4 streams
+#   tul.xhc_streams   0 -> 16   the slot-loop core carrier: 16 streams (entry: the 4-stream
+#                               slot carrier in streams 0-3, streams 4-15 start at 0)
+#   tul.xhc_active    4         streams written per core sublayer (the Cayley 4x4 mixer)
+#   tul.xhc_fixed     2         of them always streams 0-1; 2 routed per slot and per pass
+#                               by a deterministic TopK of a sigmoid router
+#
+# No temporal augmentation (C2 adds it). Every sublayer READS all 16 streams. The prelude,
+# the coda and the token path keep the 4-stream carrier; cell j carries streams 4j..4j+3
+# through W_prefix[j]. Control: a1 (fp01 with prefix_k 4, every cell the same state), so
+# C1 - a1 isolates distinct content in the cells.
+# Design and measurements: .agents/notes/proposed/architecture/2026-09-26-plan-c-xhc-slot-loop.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  prefix_k: 4
+  xhc_streams: 16
+  xhc_active: 4
+  xhc_fixed: 2
+
+wandb:
+  name: lxtul-e4probe-fp01-xhc

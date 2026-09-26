@@ -3055,6 +3055,63 @@ class MORPHTransformer(nn.Module):
                   f"blocks={cfg.n_core} -> {_n_lora:,} params ({_n_lora / 1e6:.2f}M), bf16, not "
                   f"ternarised, not pruned (Bae et al. 2024)", flush=True)
 
+        # ── Expanded hyper-connections in the slot loop (tul.xhc_streams; plan C) ──
+        # The core blocks' two residuals are REPLACED by `XHCResidual` (morph/model/
+        # tul_xhc.py). Built LAST, from a PRIVATE generator, after every other module: the
+        # replaced `HyperConnectionResidual`s were already drawn, so every other weight of
+        # the model — prelude, coda, attention, MLPs, embeddings — is byte-identical to the
+        # same-seed model without the key and the global RNG stream is untouched. The core
+        # then runs ONLY inside `_tul_core`; `_core_region` refuses it (`_xhc_streams`).
+        # Config-only refusals live in `TULConfig._check_xhc`; the ones below need the
+        # model's own shape.
+        self._xhc_streams = 0
+        self._xhc_temporal = False
+        if cfg.tul is not None and cfg.tul.xhc_streams > 0:
+            _tx = cfg.tul
+            _why_not = [
+                (self._core_is_parcae, "model.core_impl='parcae' (a single-stream core)"),
+                (cfg.scse_enabled or cfg.core_init_scale > 0.0,
+                 "SCSE / core_init_scale (the carrier is a deviation)"),
+                (cfg.n_core == 0, "n_core=0 (no core loop)"),
+                (cfg.fm is not None, "an FM planner (no slot loop)"),
+                (not self._is_hc, "a non-HC residual"),
+            ]
+            for _bad, _why in _why_not:
+                if _bad:
+                    raise NotImplementedError(f"tul.xhc_streams > 0 with {_why}.")
+            if _tx.xhc_streams != _tx.prefix_k * cfg.hc_streams:
+                raise ValueError(
+                    f"tul.xhc_streams={_tx.xhc_streams} must equal tul.prefix_k "
+                    f"({_tx.prefix_k}) x model.hc_streams ({cfg.hc_streams}): the exit maps "
+                    f"the streams 1:1 onto prefix_k cells of hc_streams streams each.")
+            if _tx.xhc_streams <= cfg.hc_streams:
+                raise ValueError(
+                    f"tul.xhc_streams={_tx.xhc_streams} must exceed model.hc_streams "
+                    f"({cfg.hc_streams}): the entry keeps the n-stream carrier in streams "
+                    f"0..n-1 and starts the rest at 0.")
+            from .tul_xhc import XHCResidual
+            _gx = torch.Generator(device="cpu").manual_seed(0x78C)
+            _xk = dict(n_streams=int(_tx.xhc_streams), n_active=int(_tx.xhc_active),
+                       n_fixed=int(_tx.xhc_fixed), tau=cfg.hc_tau,
+                       cayley_alpha=cfg.hc_cayley_alpha, init_gain=cfg.hc_init_gain,
+                       generator=_gx)
+            for _i, _blk in enumerate(self.core):
+                _blk.mrr_attn = XHCResidual(d, **_xk)
+                _blk.mrr_mlp = XHCResidual(
+                    d, temporal_kernels=tuple(_tx.xhc_temporal_kernels), **_xk)
+                _blk.mrr_attn.route_key = f"core.{_i}.attn"
+                _blk.mrr_mlp.route_key = f"core.{_i}.mlp"
+            self._xhc_streams = int(_tx.xhc_streams)
+            self._xhc_temporal = bool(_tx.xhc_temporal_kernels)
+            _n_x = sum(p.numel() for b in self.core
+                       for mm in (b.mrr_attn, b.mrr_mlp) for p in mm.parameters())
+            print(f"  TUL xHC ON (plan C): slot-loop core carrier {cfg.hc_streams} -> "
+                  f"{_tx.xhc_streams} streams, {_tx.xhc_active} written per sublayer "
+                  f"({_tx.xhc_fixed} fixed + {_tx.xhc_active - _tx.xhc_fixed} routed), dense "
+                  f"read; temporal kernels {tuple(_tx.xhc_temporal_kernels) or 'off'}; exit "
+                  f"{_tx.prefix_k} cells x {cfg.hc_streams} streams -> {_n_x:,} params "
+                  f"(bf16, never ternarised)", flush=True)
+
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
         # so the choice is captured in the run; the fused-CE branch in forward()
@@ -3157,7 +3214,8 @@ class MORPHTransformer(nn.Module):
 
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
                          ret_state=None, iter_idx=0, inj_terms=None, source_free=False,
-                         stage_cond=None, attn_kw=None, source_decay_only=False):
+                         stage_cond=None, attn_kw=None, source_decay_only=False,
+                         xhc_valid=None, xhc_route=None):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
@@ -3185,6 +3243,12 @@ class MORPHTransformer(nn.Module):
         default keeps the graph unchanged. When given, EVERY core layer's input is
         AdaLN-modulated by ``self.tul_stage_cond`` before that layer runs (zero-init,
         so this is a no-op until training moves the gate weights).
+
+        ``xhc_valid`` ``[B, S]`` bool (``tul.xhc_temporal_kernels``, plan C): the slot pad
+        mask the MLP residual's slot-axis convolutions need. ``None`` — every caller of a
+        model without temporal augmentation — calls each block exactly as before.
+        ``xhc_route`` (plan C, the slot-gain hinge only): the record/replay dict of the
+        expanded residuals' stream choice (`XHCResidual.route`); ``None`` elsewhere.
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
@@ -3244,7 +3308,9 @@ class MORPHTransformer(nn.Module):
             _akw = attn_kw[i] if isinstance(attn_kw, (list, tuple)) else attn_kw
             h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
                                ret_state=rs_arg, ret_capture=rc_arg,
-                               attn_kwargs=_akw, pass_idx=iter_idx)
+                               attn_kwargs=_akw, pass_idx=iter_idx,
+                               **({} if xhc_valid is None else {"xhc_valid": xhc_valid}),
+                               **({} if xhc_route is None else {"xhc_route": xhc_route}))
         new_ret = ret_cap.get("state") if ret_cap is not None else None
         if _parcae:
             # Broadcast the single-stream pass output back over the n streams. `.expand`
@@ -3857,6 +3923,19 @@ class MORPHTransformer(nn.Module):
         out["mtp_weighted"] = float(self.cfg.mtp_weight) * total
         out["loss"] = out["loss"] + out["mtp_weighted"]
 
+    def _xhc_expand(self, t: Tensor) -> Tensor:
+        """plan C entry: ``[B, S, n, C]`` -> ``[B, S, N, C]``, streams n..N-1 exactly 0."""
+        B, S, n, C = t.shape
+        return torch.cat([t, t.new_zeros(B, S, self._xhc_streams - n, C)], dim=2)
+
+    def _xhc_cells(self, h: Tensor) -> Tensor:
+        """plan C exit: ``[B, S, N, C]`` -> ``[B, S, prefix_k, n, C]``; cell ``j`` is streams
+        ``j*n .. j*n+n-1`` (a view, no copy), so each cell reaches the coda through its own
+        ``W_prefix[j]`` as an ordinary n-stream carrier."""
+        B, S, N, C = h.shape
+        K = self.cfg.tul.prefix_k
+        return h.reshape(B, S, K, N // K, C)
+
     def _readout(self, x: Tensor) -> Tensor:
         """HC stream mean → lm_mixer → final_norm.
 
@@ -4025,6 +4104,15 @@ class MORPHTransformer(nn.Module):
         only in ``training``; every other caller leaves it None and the forward is
         untouched. It is a parameter rather than a stash because the term is a per-iteration
         loss on states that exist only inside this function."""
+        if self._xhc_streams:
+            # plan C: the core blocks hold `XHCResidual`s on the slot loop's expanded
+            # carrier. A token-path core pass (a TUL model before `activate_at`, a TST bag
+            # step, the paid loop, an eval forward without a slot layout) would hand them
+            # the n-stream token carrier. Raise here, once, with the reason.
+            raise RuntimeError(
+                "tul.xhc_streams > 0: the core runs inside `_tul_core` only (the expanded "
+                "slot-loop carrier); `_core_region` was reached, i.e. a forward without a "
+                "slot layout. Set tul.activate_at: 0 and pass `slot_layout`.")
         B = x.shape[0]
         # LoopMTP: a Python-level constant set at build, so with both knobs off every
         # branch below traces out and the loop is bit-identical to the pre-LoopMTP tree.
@@ -4978,6 +5066,17 @@ class MORPHTransformer(nn.Module):
                 # `gather_valid` zeroes pad slots, and both projections are bias-free, so a
                 # pad has h* = 0 AND Delta_0 = 0 exactly — invariant S8.
                 h_star, h = _scse.entry(e)
+        # ── tul.xhc_streams (plan C): THE EXPANDED CARRIER, AT THE ENTRY ─────────
+        # Streams 0..n-1 are the n-stream slot carrier `core_init(e)`; streams n..N-1 start
+        # at exactly 0. `e` — the per-pass source `DiagonalInjection` reads elementwise
+        # against the carrier — is expanded the same way, so `dt * e` refills streams
+        # 0..n-1 only and the extra streams hold nothing the loop did not write (their
+        # context channels decay by `A` like every stream's). The per-layer x0/bigram term
+        # and the LXTUL-E code are single-stream terms and broadcast into all N streams,
+        # the carrier's standing rule. A Python-level constant: 0 traces the old graph.
+        if self._xhc_streams:
+            h = self._xhc_expand(h)
+            e = self._xhc_expand(e)
         # ── tul.fan_seed_noise: the K streams as K SAMPLES (LXTUL-P rung P1) ──
         # One independent draw per (row, cell, channel), added to the ENTRY STATE and
         # nowhere else. `e` is deliberately NOT touched: it is the per-pass injection
@@ -5436,7 +5535,7 @@ class MORPHTransformer(nn.Module):
                              + tuple(_core_akw[1:]))
 
         def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None,
-                       carry=None, want_carry=False):
+                       carry=None, want_carry=False, xhc_route=None):
             if _rr is not None:
                 h_in = self._apply_injection(
                     h_in, _rr.read(h_in, _rr_k, _rr_v, _rr_allow, layout.slot_valid))
@@ -5478,7 +5577,9 @@ class MORPHTransformer(nn.Module):
                     h_in, e_in, None, None, None,
                     ret_state=ret_state, iter_idx=iter_idx,
                     inj_terms=inj_terms, stage_cond=stage_cond, attn_kw=_core_akw,
-                    source_decay_only=_src_once and int(iter_idx) >= 1)
+                    source_decay_only=_src_once and int(iter_idx) >= 1,
+                    xhc_valid=layout.slot_valid if self._xhc_temporal else None,
+                    xhc_route=xhc_route)
                 if want_carry:
                     return _h_out, _rs, _carry_cap["win"]
                 return _h_out, _rs
@@ -6284,13 +6385,38 @@ class MORPHTransformer(nn.Module):
         vn = v.flatten(2).float().norm(dim=2)
         scale = (float(self.cfg.slot_gain_eps) * hn / (vn + 1e-6)).to(hp.dtype)
         d = v * scale.view(*scale.shape, *([1] * (hp.dim() - 2)))
+        # plan C (`tul.xhc_streams`): the expanded residuals choose their written streams
+        # by a TopK of the state, so the map jumps where `d` flips a choice, and a jump over
+        # a step of `slot_gain_eps` is not a gain (measured on the tiny fixture: row gain
+        # 1.17 and a slot at 4.8 with the choice free, against the ruler's < 0.9). The
+        # first application RECORDS every module's choice and the second REPLAYS it, so the
+        # difference is the map's within the operating point's own routing. `{}` on every
+        # other model: the two calls are the ones from before.
+        _xr0 = ({"xhc_route": {"replay": False, "idx": {}}} if self._xhc_streams else {})
+        _xr1 = ({"xhc_route": {"replay": True, "idx": _xr0["xhc_route"]["idx"]}}
+                if self._xhc_streams else {})
+        # plan C also CHECKPOINTS the two applications. They carry grad (the penalty shapes
+        # the core weights) and are not inside the loop's own checkpoint, so each keeps a
+        # whole pass's activations until the backward; on the 16-stream carrier that was
+        # 8.5 GB of a 24.0 GB step at the fp01 panel shape (measured 2026-09-26, eager; the
+        # same step with the hinge off: 15.5 GB). The recompute replays the RNG state each
+        # call saw (`preserve_rng_state`), the first call re-records the same deterministic
+        # choice and the second replays it, so the value and the gradient are the same
+        # function. A Python-level constant: every other model runs the two calls as before.
+        if self._xhc_streams:
+            def _app(h_, xr):
+                return checkpoint(core_step, h_, e_arg, inj_arg, ret_state=ret_state,
+                                  iter_idx=t, stage_cond=stage_cond, carry=carry,
+                                  use_reentrant=False, **xr)
+        else:
+            def _app(h_, xr):
+                return core_step(h_, e_arg, inj_arg, ret_state=ret_state, iter_idx=t,
+                                 stage_cond=stage_cond, carry=carry, **xr)
         try:
             _restore()
-            f0, _ = core_step(hp, e_arg, inj_arg, ret_state=ret_state, iter_idx=t,
-                              stage_cond=stage_cond, carry=carry)
+            f0, _ = _app(hp, _xr0)
             _restore()
-            f1, _ = core_step(hp + d, e_arg, inj_arg, ret_state=ret_state, iter_idx=t,
-                              stage_cond=stage_cond, carry=carry)
+            f1, _ = _app(hp + d, _xr1)
         finally:
             _restore()
         df = (f1 - f0) * m
@@ -11044,6 +11170,18 @@ class MORPHTransformer(nn.Module):
                 # draws ONE permutation and the coda's cells and the reported `h_slots`
                 # agree — the register's contract, at the same seam.
                 _cells = self._tul_plan_ablate(_vq_cells, layout, plan_mode)
+                h_slots = _cells.mean(dim=2)
+            elif self._xhc_streams:
+                # ── plan C's exit (tul.xhc_streams) ──────────────────────────────
+                # The N looped streams go 1:1 into the prefix_k cells: cell j carries
+                # streams j*n .. j*n+n-1 through its own W_prefix[j] (the register's
+                # `cells=` route), so the coda's carrier stays n-stream and it reads all N
+                # streams across the cells. The ablation runs on the STACK, so `zero` and
+                # `shuffle` hit every cell together and draw ONE permutation. `h_slots`
+                # becomes the per-stream mean over the cells, whose stream mean is the
+                # N-stream mean that the readers above (the parallel head, NextLat, the
+                # enum stats) already read through `_readout`.
+                _cells = self._tul_plan_ablate(self._xhc_cells(h_slots), layout, plan_mode)
                 h_slots = _cells.mean(dim=2)
             elif tc.prefix_source != "exit":
                 _cells, _pad_cells, _pad_pos = self._tul_prefix_cells(

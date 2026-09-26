@@ -979,6 +979,24 @@ class TULConfig:
     # belief state whose successor the next span determines. 0 = off: nothing is built.
     nextlat_weight: float = 0.0
     nextlat_beta: float = 1.0
+    # ── EXPANDED HYPER-CONNECTIONS IN THE SLOT LOOP (xHC, plan C, 2026-09-26) ──────────
+    # xhc_streams N > 0: the core blocks' residuals become `XHCResidual`
+    # (morph/model/tul_xhc.py; Zhang et al., arXiv 2607.14530) on an N-stream carrier that
+    # exists ONLY inside `_tul_core`. Entry: streams 0..n-1 are the n = model.hc_streams
+    # slot carrier, the rest start at 0 (the per-pass injection source `e` likewise). Each
+    # sublayer READS all N streams (one softmax row) and WRITES k = xhc_active of them:
+    # streams 0..xhc_fixed-1 always, the rest chosen per slot and per pass by a
+    # deterministic TopK of a sigmoid router on the RMS-normed full state. Exit: the N
+    # streams map 1:1 onto prefix_k = N / n cells of n streams (cell j = streams
+    # j*n .. j*n+n-1, through W_prefix[j]), so the coda's carrier stays n-stream.
+    # xhc_temporal_kernels: after the MLP sublayer, causal depthwise convolutions of the
+    # sublayer output over the SLOT axis (kernel sizes in slots), Gram-Schmidt-orthogonalised
+    # and written into the k active streams; () = off. 0 = off: nothing is built and the
+    # forward is the one from before these keys.
+    xhc_streams: int = 0
+    xhc_active: int = 4
+    xhc_fixed: int = 2
+    xhc_temporal_kernels: tuple[int, ...] = ()
     # ── TUL-CODE (arm `tul-code`, 2026-09-14; docs/tul-code-spec.md) ─────────────
     #
     # The slot holds the CODE of the span it precedes. At training time an encoder E
@@ -2557,6 +2575,7 @@ class TULConfig:
         self._check_code_enum()
         self._check_source_once()
         self._check_nextlat()
+        self._check_xhc()
         if self.coda_span_source not in ("cell", "token"):
             raise ValueError(
                 f"tul.coda_span_source must be 'cell' or 'token', got "
@@ -3603,6 +3622,81 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.nextlat_weight > 0 with {why}.")
+
+    def _check_xhc(self) -> None:
+        """``tul.xhc_streams`` (plan C). The expanded carrier lives inside `_tul_core` and
+        leaves it as ``prefix_k`` cells through the ordinary single-source-per-cell write.
+        Every refusal names a path that bypasses `_tul_core`, replaces or interposes on the
+        loop's exit state, or reads the loop state per stream, per cell or per pass: on
+        those the 16-stream layout has no defined meaning here. The readers that go
+        through `_readout` (the MUX, the span decoder, the parallel head, NextLat,
+        SIGReg, the row contrast) read the stream MEAN, which is defined for any stream
+        count: on an xHC model they read the mean over all N streams."""
+        ks = tuple(int(k) for k in self.xhc_temporal_kernels)
+        self.xhc_temporal_kernels = ks
+        if self.xhc_streams == 0:
+            if self.xhc_active != 4 or self.xhc_fixed != 2 or ks:
+                raise ValueError(
+                    "tul.xhc_active / xhc_fixed / xhc_temporal_kernels set at "
+                    "tul.xhc_streams=0: the expanded residual is not built, so the knobs "
+                    "would be silently ignored.")
+            return
+        if self.xhc_streams < 0:
+            raise ValueError(f"tul.xhc_streams must be >= 0 (0 = off), got {self.xhc_streams}")
+        if not (0 <= self.xhc_fixed < self.xhc_active <= self.xhc_streams):
+            raise ValueError(
+                f"tul.xhc_* needs 0 <= xhc_fixed < xhc_active <= xhc_streams, got "
+                f"fixed={self.xhc_fixed}, active={self.xhc_active}, "
+                f"streams={self.xhc_streams}. xhc_fixed == xhc_active would leave the "
+                f"router with nothing to choose and no gradient.")
+        if any(k < 2 for k in ks) or len(set(ks)) != len(ks):
+            raise ValueError(
+                f"tul.xhc_temporal_kernels must be distinct ints >= 2 (slots), got {ks}: a "
+                f"kernel of 1 is the sublayer output itself, which Gram-Schmidt removes.")
+        if self.prefix_k < 1 or self.xhc_streams % self.prefix_k:
+            raise ValueError(
+                f"tul.xhc_streams={self.xhc_streams} must split into tul.prefix_k="
+                f"{self.prefix_k} equal cells (the exit writes cell j from streams "
+                f"j*n .. j*n+n-1).")
+        _refused = [
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop): the core runs `_core_region`"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens: the core stage runs `_core_region`"),
+            (self.code, "tul.code: no slot loop runs"),
+            (self.code_target or self.code_grade,
+             "tul.code_target / code_grade: the code projection replaces the exit write"),
+            (self.loop_denoise, "tul.loop_denoise: the entry of every pass is replaced"),
+            (self.slot_cells > 1, "tul.slot_cells > 1: the register owns the cell axis"),
+            (self.fan_k > 0, "tul.fan_k > 0: the fan owns the cell axis"),
+            (self.vq_codes > 0, "tul.vq_codes > 0: the codes replace the exit write"),
+            (self.prefix_source != "exit",
+             f"tul.prefix_source={self.prefix_source!r}: the cells come from the trajectory"),
+            (self.core_stage_cond != "none",
+             f"tul.core_stage_cond={self.core_stage_cond!r}: the db1 step and the Euler "
+             f"ladder bypass `_tul_core`"),
+            (self.db_loop, "tul.db_loop: per-pass readouts of the carrier"),
+            (self.gram, "tul.gram: a Gaussian step shaped on the n-stream carrier"),
+            (self.gate is not None, "tul.gate: the halting readout of the carrier"),
+            (self.grad_pass, "tul.grad_pass: a per-pass feature of the carrier"),
+            (self.slot_chain, "tul.slot_chain: a per-pass feature of the carrier"),
+            (self.reread, "tul.reread: a per-pass read added to the carrier"),
+            (self.loop_carry != "none", f"tul.loop_carry={self.loop_carry!r}"),
+            (self.recur_gate != "none", f"tul.recur_gate={self.recur_gate!r}: reads `e`"),
+            (self.cond_layers > 0,
+             "tul.cond_layers > 0: the think-once stack runs n-stream blocks on the exit"),
+            (self.pass_readout != "last", f"tul.pass_readout={self.pass_readout!r}"),
+            (self.bcast, "tul.bcast: the unpack reads the exit state"),
+            (self.mux_readout != "mean", f"tul.mux_readout={self.mux_readout!r}: per stream"),
+            (self.mux_every_pass or self.mux_stage_own_iters > 0 or self.oracle_z
+             or self.spandec_per_pass or self.horizon_weight > 0.0,
+             "a per-pass reader of the loop trajectory"),
+            (self.core_token_aux, "tul.core_token_aux: runs the core on tokens"),
+            (self.center_exit, "tul.center_exit: rewrites the exit state"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.xhc_streams > 0 with {why}.")
 
     def _check_source_once(self) -> None:
         """``tul.slot_source_once`` (I-2). Every refusal names a path on which the slot
