@@ -152,7 +152,7 @@ def code_slice_energy(m, n_null: int = 2000, seed: int = 0) -> dict:
 
     def stats(basis: torch.Tensor) -> tuple[list[float], float]:
         q = gram_schmidt_rows(basis.detach().double())
-        u = (enum.simplex.double() @ q) * math.sqrt(C)
+        u = (enum.simplex.detach().double().to(q.device) @ q) * math.sqrt(C)
         fk = ((u[:, s:e] ** 2).sum(1) / (u ** 2).sum(1)).tolist()
         fsub = float((q[:, s:e] ** 2).sum() / (K - 1))
         return fk, fsub
