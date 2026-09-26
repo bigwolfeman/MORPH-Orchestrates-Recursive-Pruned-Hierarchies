@@ -1701,6 +1701,11 @@ guess met it. Its probe also found that the exit readout of every SEED-1 arm is 
 shared direction (seed 2: about 30 %; the per-slot share does not predict depth use), with
 neighbouring slots no more alike than slots of unrelated rows.
 
+fp01 against the plain panel at 10k (filed 2026-09-26, [failures/2026-09-26-lxtul-fp01-vs-plain-10k.md](../lab/experiments/failures/2026-09-26-lxtul-fp01-vs-plain-10k.md))
+adds no positive row: the strict slot model's gap to plain on the same coda tokens WIDENED
+0.265 → 0.333 nats from 5k to 10k; fp01 at 10k equals plain at 5k. Plain's own core K1−K6
+grew 0.053 → 0.061.
+
 ## 7. Retractions and qualifications
 
 One table for both parts, in order of the original claim. "Same file" means the file in

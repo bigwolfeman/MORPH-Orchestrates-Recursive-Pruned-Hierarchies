@@ -1,0 +1,28 @@
+
+CODA tokens (each reader joined to notul in notul index space):
+[align fp01_10k coda] corr by shift {-1: 0.022, 0: 0.899, 1: 0.026} -> +0
+  fp01_10k coda    n=491520  4.0685  notul 4.0750  minus notul -0.0065 [-0.0105, -0.0025]   K1-K6 +0.0177
+[align fp01_5k coda] corr by shift {-1: 0.012, 0: 0.914, 1: 0.042} -> +0
+  fp01_5k coda     n=491520  4.3401  notul 4.0750  minus notul +0.2651 [+0.2612, +0.2686]   K1-K6 +0.0124
+
+HEAD tokens by span offset (each reader on its OWN tokens, notul on the same):
+[align fp01_10k par] corr by shift {-1: 0.05, 0: -0.069, 1: 0.571} -> +1
+  [fp01_10k par] 476712 of 486031 matched
+    offset    n                notul    fp01_10k par fp01_10k par d1
+    all      476712            4.0731          6.9174          7.0975
+    0         23874            3.4838          4.5490          5.4528
+    1         23676            3.5307          5.5746          6.0729
+    2-3       47299            4.1636          6.8717          7.1003
+    4-7       85883            4.1668          7.1264          7.2660
+    8-15     136662            4.1512          7.1561          7.2653
+    16+      159318            4.0977          7.1680          7.2606
+[align fp01_5k par] corr by shift {-1: 0.049, 0: -0.075, 1: 0.565} -> +1
+  [fp01_5k par] 476712 of 486031 matched
+    offset    n                notul     fp01_5k par  fp01_5k par d1
+    all      476712            4.0731          6.9934          7.1236
+    0         23874            3.4838          4.7259          5.3695
+    1         23676            3.5307          5.6867          6.1001
+    2-3       47299            4.1636          6.9801          7.1235
+    4-7       85883            4.1668          7.1994          7.2927
+    8-15     136662            4.1512          7.2176          7.2983
+    16+      159318            4.0977          7.2279          7.2977

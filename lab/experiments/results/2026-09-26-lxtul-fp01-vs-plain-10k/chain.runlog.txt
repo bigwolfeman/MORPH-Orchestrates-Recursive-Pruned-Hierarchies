@@ -1,0 +1,9 @@
+[03:07:30] chain at d5ddf6e fp01 10k: whole slot-channel worth addendum (0.20-0.26 nats at 10k, growing).
+[03:07:30] START resume 5000 -> 10000
+[04:07:10] DONE exit=0 tok/s=8762 Final val_loss=3.8395  ppl=46.50
+[04:07:10] OPT:   [opt] optimizer state restored (479 param tensors) 
+[04:07:11] TRIPWIRE: HEALTHY last=9999 max=29.2@9570
+[04:10:05] SWEEP exit=0
+[04:10:07] PAIR10k exit=0
+[04:10:10] PAIR5k exit=0
+[04:10:10] ALL_DONE
