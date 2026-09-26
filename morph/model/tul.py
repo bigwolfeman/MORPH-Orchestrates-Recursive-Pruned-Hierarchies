@@ -638,6 +638,30 @@ class TULConfig:
     #             gating `tg_soft_prev_span` takes).
     # Meaningless at tg_geometry="restrict" and refused there rather than ignored.
     tg_coda_prefix_reach: str = "all"
+    # ── A LOOSER CODA (arm `lxtul-e4probe-fp01-reach1`, 2026-09-26) ──────────────
+    # tg_coda_token_reach r: how many PREVIOUS spans' TOKENS a coda token may read directly
+    # under "strict", beside its own span's tokens and the prefix cells.
+    #    0 — today, and bit-identical: no new mask term is built (`tg_strict_allow`).
+    #    r — a coda token of span s also reads the tokens of spans s-r .. s-1, in the window
+    #        branch (the compressed branch reads slot columns only, so tokens never reach
+    #        it). The open tail (dump bin) is span n_slots (`strict_span_ordinal`), so it
+    #        reads the last real span. The prelude stays same-span only; a prefix cell
+    #        still reads itself alone; which cells a token reads is still
+    #        `tg_coda_prefix_reach`.
+    # THE CONV, THE VALUE SHIFT, THE RETENTION CARRY keep the `tg_segment_ids` partition
+    # (reset at every segment). They compute ONE feature per KEY position that every query
+    # reads, so a conv allowed to cross into the previous segment would put span s-2's
+    # tail into the key features of span s-1's head, and span s would read s-2 in ONE
+    # layer. Keeping the partition makes the attention relation the only new route.
+    # REAL RECEPTIVE FIELD: one coda layer reaches r spans back through the token path;
+    # layer l reads span s-1's layer l-1 states, which already read s-2, so a coda of n
+    # layers reaches r * n spans back without the loop (fp01: n_coda 4 -> 4 spans at r=1).
+    # Measured by perturbation in tests/test_tul_arms_ab.py. The slot loop stays the only
+    # channel beyond that. WHY: fp01 trails the plain model by 0.265 nats at 5k and 0.333
+    # at 10k (lab/experiments/failures/2026-09-26-lxtul-fp01-vs-plain-10k.md); this arm
+    # tests whether the channel's narrowness, not loop depth, is the gap.
+    # Note: .agents/notes/proposed/architecture/2026-09-26-slot-channel-width-and-reach.md
+    tg_coda_token_reach: int = 0
     # ── DEPTH AS REACH (arm `slot-spandec-strict-reach1`, 2026-09-12) ─────────────
     # loop_reach: how many slots BACK a slot may attend inside the loop, per pass.
     #    0 — unlimited (today, and bit-identical: no mask is built at all).
@@ -2859,6 +2883,23 @@ class TULConfig:
                 "tul.tg_coda_prefix_reach is a tul.tg_geometry='strict' knob; at "
                 f"'restrict' it would be silently ignored (got "
                 f"{self.tg_coda_prefix_reach!r}).")
+        if self.tg_coda_token_reach < 0:
+            raise ValueError(
+                f"tul.tg_coda_token_reach must be >= 0 (0 = own span only), got "
+                f"{self.tg_coda_token_reach}")
+        if self.tg_coda_token_reach and self.tg_geometry != "strict":
+            raise ValueError(
+                "tul.tg_coda_token_reach is a tul.tg_geometry='strict' knob: it widens the "
+                "strict CODA relation by the previous spans' tokens. At "
+                f"tg_geometry={self.tg_geometry!r} the coda relation is not the strict one "
+                "(and without tg_restrict every earlier token is already visible), so the "
+                f"key would be silently ignored (got {self.tg_coda_token_reach}).")
+        if self.tg_coda_token_reach and self.code_grade:
+            raise NotImplementedError(
+                "tul.tg_coda_token_reach > 0 with tul.code_grade: the graded target decodes "
+                "a candidate for EVERY span of a row in one forward, which is valid only "
+                "while a coda token cannot read another span's tokens. Under the wider "
+                "reach span s+2's candidate would read span s+1's CANDIDATE tokens.")
         if self.oracle_z:
             if not self.spandec:
                 raise ValueError(

@@ -10077,10 +10077,18 @@ class MORPHTransformer(nn.Module):
             # own cells, the next span's tokens — and the retention carry is reset on the
             # same partition rather than on `bag_id`, which does not separate a span from
             # its own cells. `tg_strict_allow` carries the relation and the reasoning.
+            # `tul.tg_coda_token_reach` widens the CODA relation only (the previous spans'
+            # tokens); `_seg` stays the segment partition for the conv / value shift /
+            # retention carry at every reach, which is what keeps the widening to the
+            # attention relation alone (the reasoning is in `tg_strict_allow`).
             _seg = tg_segment_ids(layout)
             _pre_allow = tg_strict_allow(layout, "prelude")
+            # At reach 0 the call is the tree's call, argument for argument.
+            _reach_kw = ({"coda_token_reach": tc.tg_coda_token_reach}
+                         if tc.tg_coda_token_reach else {})
             _coda_allow = tg_strict_allow(layout, "coda",
-                                          coda_prefix_reach=tc.tg_coda_prefix_reach)
+                                          coda_prefix_reach=tc.tg_coda_prefix_reach,
+                                          **_reach_kw)
             _strict_front_kw = {"tg_allow": _pre_allow, "tg_slot_mask": layout.slot_mask,
                                 "tg_comp_allow": _pre_allow, "tg_seg": _seg}
             tg_attn_kwargs = {"tg_allow": _coda_allow, "tg_slot_mask": layout.slot_mask,

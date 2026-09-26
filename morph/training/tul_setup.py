@@ -110,6 +110,8 @@ KNOWN_TUL_KEYS = frozenset({
     "nextlat_weight", "nextlat_beta",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
+    # the looser strict coda (2026-09-26): previous spans' tokens in the coda relation
+    "tg_coda_token_reach",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
     "tg_span_gate", "token_state_dropout", "tokens_through_core", "xattn",
 })
@@ -419,6 +421,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         tg_restrict_scope=str(tc.get("tg_restrict_scope", "all")),
         tg_geometry=str(tc.get("tg_geometry", "restrict")),
         tg_coda_prefix_reach=str(tc.get("tg_coda_prefix_reach", "all")),
+        tg_coda_token_reach=int(tc.get("tg_coda_token_reach", 0)),
         loop_reach=int(tc.get("loop_reach", 0)),
         loop_carry=str(tc.get("loop_carry", "none")),
         oracle_z=bool(tc.get("oracle_z", False)),
@@ -651,6 +654,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "tg_restrict_scope": model_cfg.tg_restrict_scope,
         "tg_geometry": model_cfg.tg_geometry,
         "tg_coda_prefix_reach": model_cfg.tg_coda_prefix_reach,
+        "tg_coda_token_reach": model_cfg.tg_coda_token_reach,
         "loop_reach": model_cfg.loop_reach,
         "loop_carry": model_cfg.loop_carry,
         "oracle_z": model_cfg.oracle_z,
@@ -1297,6 +1301,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"coda's per-layer injections at the slot cells are zeroed — the slot LOOP is "
               f"the only cross-span channel "
               f"(lab/experiments/planned/2026-09-12-arc-strict-geometry.md)", flush=True)
+        if model_cfg.tg_coda_token_reach:
+            print(f"  TUL STRICT CODA TOKEN REACH {model_cfg.tg_coda_token_reach}: a coda "
+                  f"token ALSO reads the tokens of the {model_cfg.tg_coda_token_reach} "
+                  f"previous span(s) directly; conv/value-shift/retention resets unchanged; "
+                  f"token-path receptive field = reach x n_coda spans, the loop beyond "
+                  f"(.agents/notes/proposed/architecture/"
+                  f"2026-09-26-slot-channel-width-and-reach.md)", flush=True)
     if model_cfg.oracle_z:
         print(f"  TUL ORACLE-Z ON: T={model_cfg.oracle_z_steps} lr={model_cfg.oracle_z_lr} "
               f"weight={model_cfg.oracle_z_weight} J={model_cfg.oracle_z_max_tokens} — each "

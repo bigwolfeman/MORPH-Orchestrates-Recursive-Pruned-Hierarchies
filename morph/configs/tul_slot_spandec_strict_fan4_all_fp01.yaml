@@ -1,0 +1,31 @@
+# Arm (a2) "slot-spandec-strict-fan4-all-fp01": DISTINCT content per cell, same strict
+# geometry. Composes `tul_slot_spandec_strict_fan4_all` (write-all: K=4 loop streams, each
+# written 1:1 into its own prefix cell, prefix_k 4; the coda's attention selects per
+# token) and changes ONE key plus the run name:
+#
+#   model.core_fixed_point_lambda  1.0 -> 0.1   (fp01's term)
+#
+# WHY NOT fp01 + fan. The fan is REFUSED on fp01's two LXTUL-E features:
+# `tul.code_enum_k > 1 with tul.fan_k > 0` (TULConfig._check_code_enum: "the fan's K
+# streams are a second width axis") and `tul.spandec_parallel with tul.fan_k`
+# (_check_spandec_parallel: "the fan's K streams are Phase B's to define"). Those
+# refusals were not hacked away. So this arm LACKS, against fp01:
+#   tul.code_enum_k 4 (the K=4 enumerated loop code and its per-span mixture read),
+#   tul.spandec_parallel + spandec_parallel_detach (the committed parallel span probe),
+# and differs from fp01 in keys it inherits from the fan chain:
+#   tul.spandec true (fp01: false), model.slot_gain_target 0.9 (fp01: 0.98),
+#   model.slot_gain_tail_lambda 0.0 (fp01: 100.0), plus the fan's own keys (fan_k 4,
+#   fan_mix all, fan_all_wta_lambda 1.0, fan_select_eps 0.05, epivol repulsion
+#   0.1 over 2 passes, slot_cell_init distinct, prefix_k 4).
+# It is therefore NOT a one-factor arm against fp01; its one-factor partner is
+# `tul_slot_spandec_strict_fan4_all` (fixed-point term 1.0).
+# Note: .agents/notes/proposed/architecture/2026-09-26-slot-channel-width-and-reach.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.1
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01
