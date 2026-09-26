@@ -1,6 +1,6 @@
 # Planned: how much could any selector over the LX rollouts buy (credit concentration and the oracle ceiling)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-26 15:06 (frozen before the script existed and before any number of this probe was
 computed. The unit tests run on the tiny CPU model and on synthetic arrays only.)
@@ -96,3 +96,53 @@ From the external council reviewers (space-bunny, mimo-flash), 2026-09-26:
   shows how much of the ceiling sits where a causal read has no evidence yet.
 - Argmax agreement across depths near chance says which rollout wins is not a property of
   the code at a given span; well above chance says it is.
+
+## Results (filed 2026-09-26 15:12)
+
+`lab/divergence/lx_selection_ceiling.py` (commit 9e3496c) on the stored per-rollout log-probs
+of fp01 at 5k and 10k, all 480 rows (501,106 coda tokens, 25,278 spans, 19.8 tokens per
+span); 8.8 s on one CPU core. Identities checked at run time: per span oracle <= mixture <=
+oracle + log 4, mixture - oracle = log(4 c_max); overall the span mixture equals today's
+Bayes read (largest per-span deviation 6e-6). Artifacts:
+[`../results/2026-09-26-lx-selection-ceiling/`](../results/2026-09-26-lx-selection-ceiling/).
+
+| | 5k d1 | 5k d6 | 10k d1 | 10k d6 |
+|---|---|---|---|---|
+| mean KL(c ‖ uniform), nats | 0.4387 | 0.4474 [0.4419, 0.4532] | 0.4586 | 0.4586 [0.4524, 0.4647] |
+| Bayes − oracle, overall | +0.0408 | +0.0413 [0.0408, 0.0418] | +0.0418 | +0.0418 [0.0412, 0.0423] |
+| Bayes − oracle, offset 0 | +0.0455 | +0.0491 | +0.0488 | +0.0507 |
+| best fixed rollout − Bayes | +0.0213 | +0.0246 | +0.0358 | +0.0356 |
+| token-shuffle null: KL | 0.4092 | 0.4164 | 0.4375 | 0.4349 |
+| token-shuffle null: Bayes − oracle | 0.0400 | 0.0404 | 0.0413 | 0.0412 |
+| observed − null, Bayes − oracle | +0.0008 | +0.0008 | +0.0005 | +0.0005 |
+
+- The argmax rollout at depth 1 equals the one at depth 6 on 0.819 (5k) and 0.799 (10k) of
+  spans (chance 0.25); on spans with c_max > 0.9 at both depths, 1.000 / 0.999.
+- The mixture beats the best single rollout by 0.025 (5k) and 0.036 (10k): an ensemble gain.
+
+## Clause by clause
+
+- **R-1 FAILS.** KL is 0.447 (5k) and 0.459 (10k) at depth 6, above [0.05, 0.20].
+- **Ceiling rule (Bayes − oracle < 0.02) does not trigger by its letter** (0.041-0.042).
+- **Post-hoc, flagged:** the token-shuffle null (added by a dated Method amendment, no CI,
+  overall only) gives the lookahead oracle 0.040-0.041 from per-token noise alone. The
+  span-coherent part of the ceiling is +0.0005 to +0.0008 nats per token, about the size of
+  the observed CI half-width. Most of the raw KL is also token noise (null 0.41-0.44).
+
+## Verdict
+
+**Failure of the prediction, and the reading rule as written was the wrong test.** A
+lookahead oracle over exchangeable rollouts earns about 0.04 nats from token noise, so the
+0.02 bar could never trigger. Against the null, a per-span selector over the fixed codes
+has at most about 0.0006 nats per token to buy. The rollouts differ systematically (the
+same code wins the same span at both depths 80 % of the time), but the differences act as
+token-level quirks that add up over a span, not as span-level hypotheses. The width gain
+LX has is an ensemble gain (0.025-0.036 over the best single rollout).
+
+## Updated hypothesis
+
+Selector, prior and gate designs over the FIXED codes are closed at the span level (with
+the carry result, 2026-09-26-lx-carry-stage0). A per-token gate is the one selector shape
+not measured. Hypotheses that are to be selected must first differ at the span level,
+which the fixed codes do not do: that is the LX-Concept direction (per-span hypotheses
+from context).
