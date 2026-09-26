@@ -1,6 +1,7 @@
-"""The two LX probes of 2026-09-26: the amplitude-matched K-curve
-(`lab/divergence/lx_amp_matched.py`) and the LX-Carry Stage 0 re-scoring
-(`lab/divergence/lx_carry_stage0.py`, the math in `morph/model/rollout_mixture.py`).
+"""The three LX probes of 2026-09-26: the amplitude-matched K-curve
+(`lab/divergence/lx_amp_matched.py`), the LX-Carry Stage 0 re-scoring
+(`lab/divergence/lx_carry_stage0.py`, the math in `morph/model/rollout_mixture.py`) and the
+selection ceiling (`lab/divergence/lx_selection_ceiling.py`).
 
 What each test pins, on the tiny strict `code_enum_k = 4` model in fp32 on CPU:
   * the code multiplier at 1 is the trained model bit for bit, any other value reaches the
@@ -15,7 +16,14 @@ What each test pins, on the tiny strict `code_enum_k = 4` model in fp32 on CPU:
     exact log-likelihood computed here by an independent loop;
   * an EOS run resets the carry to uniform;
   * the offline re-scoring of a forward's stored arrays reproduces that forward's coda
-    CE (the stream-index join and the scatter are right).
+    CE (the stream-index join and the scatter are right);
+  * selection ceiling: per span oracle <= span mixture <= oracle + log K <= ..., mixture -
+    oracle = log(K c_max), mixture <= the mean single rollout, oracle <= best fixed <=
+    mean single overall; the span mixture is the sum of an independently computed
+    per-token Bayes read; credit KL is 0 when the rollouts tie; a hand-computed K = 2 case;
+    on the tiny model the stored arrays' Bayes read sums to the span mixture per span, and
+    grouping spans without the row is caught; the token-shuffle null keeps each token's
+    values, is 0 when the rollouts tie, and removes a span-coherent rollout advantage.
 """
 from __future__ import annotations
 
@@ -30,9 +38,11 @@ sys.path.insert(0, "lab/divergence")
 from lx_amp_matched import (  # noqa: E402
     code_ratio_scale, code_slice_energy, match_multiplier, ratio_ci, run_point)
 from lx_carry_stage0 import rescore  # noqa: E402
+from lx_selection_ceiling import (  # noqa: E402
+    check_identities, credit, selection_reads, span_index, token_shuffle_null)
 
 from morph.model.rollout_mixture import (  # noqa: E402
-    carried_position_nll, fixed_share_log_prior, span_segment_start)
+    carried_position_nll, fixed_share_log_prior, segment_index, span_segment_start)
 from morph.model.transformer import MORPHTransformer  # noqa: E402
 from morph.model.tul_code_enum import gram_schmidt_rows  # noqa: E402
 from morph.model.tul_layout import slot_layout_from_ids  # noqa: E402
@@ -266,3 +276,154 @@ def test_offline_rescoring_reproduces_the_forwards_coda_ce():
     # a stored array from DIFFERENT rows is refused, not silently joined
     with pytest.raises(RuntimeError, match="not in the stored coda_idx"):
         rescore(bt, per["coda_idx"] + 1, per["coda_code"], [1.0], eos_id=0)
+
+
+# ── probe 3: the selection ceiling ───────────────────────────────────────────────────
+
+
+def _synthetic(K: int = 4, G: int = 40, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """``(lp [K, N], span [N])``: random log-probs, spans of 1-11 tokens in order."""
+    rng = np.random.default_rng(seed)
+    span = np.repeat(np.arange(G), rng.integers(1, 12, size=G))
+    return -rng.gamma(2.0, 1.5, size=(K, span.size)), span
+
+
+def _bayes_reference(lp: np.ndarray, span: np.ndarray) -> np.ndarray:
+    """Independent per-token Bayes read, uniform restart per span: at token i the weights
+    are the softmax of the span's EARLIER tokens' summed log-probs (plain Python)."""
+    K, N = lp.shape
+    out = np.empty(N)
+    for i in range(N):
+        prev = [j for j in range(N) if span[j] == span[i] and j < i]
+        C = [sum(lp[k][j] for j in prev) for k in range(K)]
+        mx = max(C)
+        w = [math.exp(c - mx) for c in C]
+        z = sum(w)
+        out[i] = -math.log(sum(w[k] / z * math.exp(lp[k][i]) for k in range(K)))
+    return out
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_selection_inequalities_hold_on_random_scores(seed):
+    lp, span = _synthetic(seed=seed)
+    K, N = lp.shape
+    G = int(span.max()) + 1
+    rd = selection_reads(lp, span, G)
+    mix, orc = rd["mix_span"], rd["oracle_span"]
+    assert (orc <= mix + 1e-12).all()                         # max S >= log mean exp S
+    assert (mix <= orc + math.log(K) + 1e-12).all()           # log mean exp S >= max S - log K
+    assert (mix <= -rd["S"].mean(0) + 1e-12).all()            # Jensen: >= mean_k S_k
+    assert (mix - orc > 1e-6).any()                           # not all ties on random data
+    np.testing.assert_allclose(mix - orc, np.log(K * rd["c_max"]), rtol=0, atol=1e-12)
+    totals = -lp.sum(1)
+    assert rd["k_fixed"] == int(np.argmin(totals))
+    assert rd["oracle"].sum() <= rd["fixed"].sum() == pytest.approx(totals.min())
+    assert rd["fixed"].sum() <= totals.mean()
+    assert rd["single_ce"] == pytest.approx((totals / N).tolist())
+    for g in range(G):                                        # brute-force oracle
+        m = span == g
+        kb = int(np.argmax(lp[:, m].sum(1)))
+        np.testing.assert_array_equal(rd["oracle"][m], -lp[kb, m])
+    assert ((rd["kl"] >= -1e-12) & (rd["kl"] <= math.log(K) + 1e-12)).all()
+    np.testing.assert_allclose(rd["kl"] + rd["entropy"], math.log(K), atol=1e-12)
+    # the span mixture is the per-token Bayes read summed over the span (chain rule)
+    today = _bayes_reference(lp, span)
+    chk = check_identities(rd, span, today, 1e-9)
+    assert chk["bayes_span_sum_vs_mixture_max_abs_dev"] < 1e-9
+    assert today.mean() == pytest.approx(mix.sum() / N, rel=1e-12)
+    # a read whose span sums are wrong is refused
+    with pytest.raises(RuntimeError, match="span sums"):
+        check_identities(rd, span, today[::-1].copy(), 1e-9)
+
+
+def test_credit_is_uniform_and_the_oracle_is_the_mixture_when_rollouts_tie():
+    lp1, span = _synthetic(K=1)
+    lp = np.repeat(lp1, 4, axis=0)
+    rd = selection_reads(lp, span, int(span.max()) + 1)
+    np.testing.assert_allclose(rd["kl"], 0.0, atol=1e-12)
+    np.testing.assert_allclose(rd["entropy"], math.log(4), atol=1e-12)
+    np.testing.assert_allclose(rd["c_max"], 0.25, atol=1e-12)
+    np.testing.assert_allclose(rd["mix_span"], rd["oracle_span"], atol=1e-12)
+    np.testing.assert_array_equal(rd["oracle"], -lp1[0])
+    np.testing.assert_array_equal(rd["fixed"], -lp1[0])
+    # and one decisive rollout drives KL to log K
+    c = credit(np.array([[0.0], [-80.0], [-80.0], [-80.0]]))
+    assert c["kl"][0] == pytest.approx(math.log(4), abs=1e-12)
+    assert c["c_max"][0] == pytest.approx(1.0) and c["argmax"][0] == 0
+
+
+def test_selection_hand_computed_case():
+    # K = 2; span 0 has two tokens, span 1 one token.
+    #   S(span 0) = (-2, -5): c = (0.952574, 0.047426), H = 0.190865, KL = 0.502282,
+    #     mixture = 2 + log 2 - log(1 + e^-3) = 2.644560, oracle 2.
+    #   S(span 1) = (-4, -1.5): mixture 2.114257, oracle 1.5 (rollout 1).
+    #   totals: rollout 0 = 6, rollout 1 = 6.5 -> best fixed 0; oracle 3.5.
+    lp = np.array([[-1.0, -1.0, -4.0], [-2.0, -3.0, -1.5]])
+    span = np.array([0, 0, 1])
+    rd = selection_reads(lp, span, 2)
+    np.testing.assert_allclose(rd["S"], [[-2.0, -4.0], [-5.0, -1.5]])
+    assert rd["kl"][0] == pytest.approx(0.5022822094535027, rel=1e-12)
+    assert rd["entropy"][0] == pytest.approx(0.19086497110644257, rel=1e-12)
+    assert rd["c_max"][0] == pytest.approx(0.952574126822433, rel=1e-12)
+    assert rd["argmax"].tolist() == [0, 1]
+    np.testing.assert_allclose(rd["oracle"], [1.0, 1.0, 1.5])
+    np.testing.assert_allclose(rd["mix_span"], [2.644559828986203, 2.1142574462673958],
+                               rtol=1e-12)
+    assert rd["k_fixed"] == 0
+    np.testing.assert_allclose(rd["fixed"], [1.0, 1.0, 4.0])
+    assert rd["single_ce"] == pytest.approx([2.0, 6.5 / 3])
+    # span numbering: (row, seg) pairs, row-major; equal seg in two rows are two spans
+    sp, first = span_index(np.array([0, 0, 0, 1, 1]), np.array([0, 0, 2, 0, 1]))
+    assert sp.tolist() == [0, 0, 1, 2, 3] and first.tolist() == [0, 2, 3, 4]
+
+
+def test_selection_reads_on_the_tiny_model_stored_arrays():
+    """The ceiling path end to end: the Stage 1 scorer's stored arrays, rebuilt by
+    ``rescore``, grouped by ``span_index``: the Bayes read sums to the span mixture on every
+    span, the span count is the layout's, and a grouping that ignores the row is caught."""
+    from lxtul_e_stage1_score import score_arm
+    m = _model().eval()
+    bt = _batches()
+    per = score_arm(m, bt, [2], "cpu", 2e-3)["per"][2]
+    r = rescore(bt, per["coda_idx"], per["coda_code"], [1.0], eos_id=0)
+    span, first = span_index(r["row"], r["seg"])
+    rd = selection_reads(-per["coda_code"].astype(np.float64), span, int(first.shape[0]))
+    chk = check_identities(rd, span, r["today"], 1e-4)
+    assert chk["bayes_span_sum_vs_mixture_max_abs_dev"] < 1e-4
+    inp, lab, layout, _idx = bt[0]
+    sc = (~layout.slot_mask) & (lab >= 0)
+    seg = segment_index(span_segment_start(layout.bag_id))
+    want = sum(int(seg[b][sc[b]].unique().numel()) for b in range(inp.shape[0]))
+    assert first.shape[0] == want > inp.shape[0]
+    assert r["today"].mean() == pytest.approx(rd["mix_span"].sum() / span.size, abs=1e-5)
+    assert rd["oracle"].mean() < r["today"].mean()
+    # grouping by run index alone merges row 0's and row 1's runs: refused
+    _u, bad = np.unique(r["seg"], return_inverse=True)
+    rd_bad = selection_reads(-per["coda_code"].astype(np.float64), bad, int(_u.shape[0]))
+    with pytest.raises(RuntimeError, match="span sums"):
+        check_identities(rd_bad, bad, r["today"], 1e-4)
+
+
+def test_token_shuffle_null_removes_span_coherent_advantage_only():
+    rng = np.random.default_rng(3)
+    K, G, n = 4, 200, 10
+    span = np.repeat(np.arange(G), n)
+    N = span.size
+    # coherent: in each span one rollout is 0.3 nats better on EVERY token
+    lp = -rng.gamma(2.0, 1.5, size=(1, N)).repeat(K, 0) - 0.3
+    win = rng.integers(0, K, size=G)
+    lp[win[span], np.arange(N)] += 0.3
+    rd = selection_reads(lp, span, G)
+    obs = float((rd["mix_span"] - rd["oracle_span"]).sum() / N)
+    nl = token_shuffle_null(lp, span, G, 3, 0)
+    assert obs > 0.08                                   # log(K c_max) / 10 per token
+    assert nl["bayes_minus_oracle_mean"] < 0.5 * obs    # the shuffle breaks the coherence
+    assert nl["kl_mean"] < 0.5 * float(rd["kl"].mean())
+    # each token keeps its K values (a permutation, not a resample)
+    perm = np.argsort(np.random.default_rng(0).random((K, N)), axis=0)
+    np.testing.assert_array_equal(np.sort(np.take_along_axis(lp, perm, 0), 0), np.sort(lp, 0))
+    # tied rollouts: the null gap and KL are exactly what the observed ones are, 0
+    lp1, sp1 = _synthetic(K=1)
+    z = token_shuffle_null(np.repeat(lp1, 4, 0), sp1, int(sp1.max()) + 1, 2, 0)
+    assert max(z["bayes_minus_oracle"]) == pytest.approx(0.0, abs=1e-12)
+    assert max(z["kl"]) == pytest.approx(0.0, abs=1e-12)

@@ -109,8 +109,9 @@ def switching_loglik(lp: np.ndarray, seg: np.ndarray, scored: np.ndarray,
 
 def rescore(batches: list, coda_idx: np.ndarray, coda_code: np.ndarray,
             eps_list: list[float], eos_id: int, check_rows: bool = True) -> dict:
-    """Per coda token (stored order): today's NLL, the carried NLL per eps, its row, offset,
-    and per run-start diagnostics. ``batches`` are ``val_batches`` output
+    """Per coda token (stored order): today's NLL, the carried NLL per eps, its row, its run
+    index within the row (``seg``; ``(row, seg)`` names its span), offset, and per run-start
+    diagnostics. ``batches`` are ``val_batches`` output
     ``[(inp, labels, layout, idx)]``; ``coda_code [K, N]`` the stored ``-lp``."""
     if 1.0 not in eps_list:
         raise ValueError("eps 1 (today's read) must be in the list: it is the reference")
@@ -118,7 +119,7 @@ def rescore(batches: list, coda_idx: np.ndarray, coda_code: np.ndarray,
         raise RuntimeError("coda_idx is not strictly increasing: the stream map is ambiguous")
     K, N = coda_code.shape
     out = {"today": np.empty(N), "row": np.empty(N, dtype=np.int64),
-           "off": np.empty(N, dtype=np.int64),
+           "seg": np.empty(N, dtype=np.int64), "off": np.empty(N, dtype=np.int64),
            "eps": {e: np.empty(N) for e in eps_list},
            "prior_entropy": {e: [] for e in eps_list},
            "run_best": [], "n_resets": 0}
@@ -146,6 +147,7 @@ def rescore(batches: list, coda_idx: np.ndarray, coda_code: np.ndarray,
         out["off"][pos] = off[sc].numpy()
         seg_start = span_segment_start(layout.bag_id)
         seg = segment_index(seg_start)
+        out["seg"][pos] = seg[sc].numpy()
         _ev_l, _ev = evidence_labels(inp, layout)
         for e in eps_list:
             nll = carried_position_nll(lp, inp, layout, sc, e, reset)
