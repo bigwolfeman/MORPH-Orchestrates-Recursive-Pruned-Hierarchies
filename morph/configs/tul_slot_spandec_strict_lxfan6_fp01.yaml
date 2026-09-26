@@ -1,0 +1,19 @@
+# Arm "lxtul-lxfan6-fp01": `tul_slot_spandec_strict_lxfan4_fp01` with SIX cells per slot.
+# ONE key (prefix_k follows it through the parent's interpolation):
+#
+#   tul.fan_k  4 -> 6   (prefix_k 4 -> 6)
+#
+# WHY. LaDiR encodes a sentence in about 6 latents (reconstruction near perfect at 6, flat
+# past it); MORPH writes 2 (fp01) or 4 (a2). K = 4 codes x M = 6 cells = 24 loop streams
+# per slot. The row keeps its 1024 text tokens and grows to 1024 + 6 * 64 = 1408 positions
+# (lxfan4: 1280), so the step costs more but sees the same tokens.
+# Note: .agents/notes/proposed/architecture/2026-09-26-lx-fan.md
+defaults:
+  - tul_slot_spandec_strict_lxfan4_fp01
+  - _self_
+
+tul:
+  fan_k: 6
+
+wandb:
+  name: lxtul-lxfan6-fp01

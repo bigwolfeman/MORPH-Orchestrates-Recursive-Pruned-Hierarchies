@@ -59,8 +59,8 @@ from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
 from .tul_nextlat import SpanTransition, nextlat_pairs, span_token_embeddings
 from .tul_code_enum import TULCodeEnum
-from .rollout_mixture import (evidence_labels, mixture_label_nll, mixture_logprobs,
-                              sequential_log_weights, span_segment_start)
+from .rollout_mixture import (evidence_labels, log_mean_exp, mixture_label_nll,
+                              mixture_logprobs, sequential_log_weights, span_segment_start)
 from .tul_vq import TULThoughtVQ
 from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        cfm_null_floor, cfm_pair, code_rmsnorm, code_target_infonce,
@@ -4925,6 +4925,7 @@ class MORPHTransformer(nn.Module):
         gidx, gvalid = layout.slot_index, layout.slot_valid
 
         xn = self.input_norm(x)
+        _xn_base = xn
         if iw_rollouts > 1:
             xn = repeat_along_batch(xn, iw_rollouts)
         e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
@@ -4940,8 +4941,18 @@ class MORPHTransformer(nn.Module):
             # their own) and broadcast into the Hyper-Connection carrier the way every
             # other injection is. `W_o` is zero-init, so this line is an exact no-op at
             # step 0 and the arm starts at its ruler.
-            _reg_term = self.tul_register(
-                xn.mean(dim=2) if self._is_hc else xn, _layout_slots)
+            if iw_rollouts > 1:
+                # LX-Fan (`tul.code_enum_k` on the write-all fan): the register pools the
+                # PRELUDE, which the K rollouts share, so it runs ONCE on the base rows and
+                # is tiled rollout-major, as the depth draw below is. Its gradient is the
+                # sum of the K rollouts' through the repeat. Only LX-Fan reaches here: GK
+                # refuses `slot_cells > 1`, and the code refuses the register without a fan.
+                _reg_term = repeat_along_batch(self.tul_register(
+                    _xn_base.mean(dim=2) if self._is_hc else _xn_base,
+                    _layout_slots.head_rows(B // iw_rollouts)), iw_rollouts)
+            else:
+                _reg_term = self.tul_register(
+                    xn.mean(dim=2) if self._is_hc else xn, _layout_slots)
             e = e + (_reg_term.unsqueeze(2) if self._is_hc else _reg_term).to(e.dtype)
 
         # ── n_core == 0: NO LOOP AT ALL (arm GL1, the gist baseline) ─────────
@@ -7334,7 +7345,7 @@ class MORPHTransformer(nn.Module):
     def _tul_fan_oracle(self, cells: Tensor, xh: Tensor, base: Tensor, x0: Tensor,
                         bigram_emb, input_ids: Tensor, labels: Tensor,
                         layout: SlotLayout, L: int, keep, coda_kw, tg_reset,
-                        stats: dict) -> None:
+                        stats: dict, n_rollouts: int = 1) -> None:
         """LXTUL's ORACLE-OVER-STREAM (``tul.fan_k``) — the arm's falsifier, eval only.
 
         PLR Figure 4 and Parallel-TTS's coverage@N, in the units MORPH is scored in. For
@@ -7359,6 +7370,13 @@ class MORPHTransformer(nn.Module):
         spans whose best stream IS stream 0. At 1/K the argmin is uninformative noise; at
         1.0 the other streams never win and the fan is one stream plus decoration.
 
+        ``n_rollouts`` (LX-Fan, ``tul.code_enum_k``): every tensor is the K-fold rollout
+        batch, so each replay decodes stream ``i`` under all K codes, and every span CE
+        (a stream's, and the shipped write's ``mixed_ce``) is read as the model is scored:
+        the per-span mixture ``-log mean_k exp(-CE_k(span))`` over the rollouts, on the
+        BASE rows. The oracle's minimum is then over streams of mixtures. ``1`` — every
+        other model — reads the rows as they are.
+
         COST: K extra ``_back_region`` passes per eval batch, no backward, ``no_grad``,
         and compiled code is left out of it (``torch.compiler.disable``) because the
         loop's trip count is ``K`` and the logit matmul is per row. Never called on a
@@ -7382,6 +7400,15 @@ class MORPHTransformer(nn.Module):
         ce = torch.stack(per_stream, dim=-1)                           # [B, S, K]
         mixed = accumulate_span_ce(xh, w_head_pad, gid, keep_tok, lab, g_bins,
                                    vocab_size=vocab_size)[:, 1:]
+        if n_rollouts > 1:
+            # LX-Fan: [R*B0, S, ...] rollout-major -> the per-span mixture on [B0, S, ...].
+            # The labels are tiled, so n_tok and the valid slots are the base rows'.
+            b0 = ce.shape[0] // n_rollouts
+            ce = -log_mean_exp(-ce.float().view(n_rollouts, b0, *ce.shape[1:]), dim=0)
+            mixed = -log_mean_exp(-mixed.float().view(n_rollouts, b0, *mixed.shape[1:]),
+                                  dim=0)
+            n_tok = n_tok[:b0]
+            layout = layout.head_rows(b0)
         # A span is scored only when its slot is real AND the span has scored tokens: a
         # tail-pad slot and a slot whose next span fell off the row would otherwise enter
         # the minimum at CE 0 and drag the oracle to an artefact.
@@ -7600,8 +7627,9 @@ class MORPHTransformer(nn.Module):
         carrier before token dropout and cut the slot cells' own injections exactly as
         the shipped strict coda does (the select arm's rule).
 
-        EVAL, or a plan ablation: nothing extra; the oracle instrument after the coda
-        reports ``stream_ce_k{i}`` on the same one-stream write.
+        EVAL, a plan ablation, or ``fan_all_wta_lambda == 0`` (LX-Fan): nothing extra and
+        no pass; the oracle instrument after the coda reports ``stream_ce_k{i}`` on the
+        same one-stream write.
 
         COST at train: K no-grad ``_back_region`` passes (the select arm's) plus ONE
         ``_back_region`` pass with activations — one more coda backward per step.
@@ -7610,7 +7638,10 @@ class MORPHTransformer(nn.Module):
         k = int(cells.shape[2])
         B = int(cells.shape[0])
         state, w = self.tul_fan(cells)                                       # mean, uniform
-        if not self.training or labels is None or plan_mode != "normal":
+        # `fan_all_wta_lambda: 0` (LX-Fan) builds NO term and runs NO pass: the K no-grad
+        # coda passes exist only to pick the winner the term charges. A build-time float.
+        if (not self.training or labels is None or plan_mode != "normal"
+                or tc.fan_all_wta_lambda == 0.0):
             return state, w, None
         if tc.coda_token_input == "embed":
             base = x0.unsqueeze(2).expand_as(xn) if self._is_hc else x0
@@ -9057,7 +9088,9 @@ class MORPHTransformer(nn.Module):
         RMS (``tul.code_enum_k``). A ratio of two RMS values, so it is scale-free; its
         depth-6 over depth-1 value is the note's separation diagnostic (linear theory
         (1 - g^6)/(1 - g) = 4.6 at gain 0.89, with one pass's separation
-        ``r * |u_k - u_l|_rms = r sqrt(2K/(K-1))``). Detached 0-dim tensors, no sync."""
+        ``r * |u_k - u_l|_rms = r sqrt(2K/(K-1))``). Detached 0-dim tensors, no sync.
+        ``h_slots`` may carry trailing axes (LX-Fan hands ``[K*B, S, M, n, C]``, the
+        written cells): everything after the slot axis is one flattened state."""
         B0 = h_slots.shape[0] // K
         hv = h_slots.detach().float().flatten(2).view(K, B0, h_slots.shape[1], -1)
         valid = layout.slot_valid[:B0].float()                            # [B0, S]
@@ -10820,6 +10853,14 @@ class MORPHTransformer(nn.Module):
                     # cosines are instruments and there is no term.
                     if db_traj is not None:
                         _mode = str(tc.fan_repel_mode)
+                        # LX-Fan: the epi term's ridge readout is a BATCH fit over the valid
+                        # slots, and on the K-fold batch every seed (`traj[0]`, before any
+                        # code) appears K times. K duplicated rows are a ridge at lam / K on
+                        # the rollout-MEAN deviations, so lam * K makes the fit exactly the
+                        # base batch's ridge on those deviations (the code, sum-zero over k,
+                        # cancels in their mean to first order). Every other model: lam.
+                        _epi_ridge = (float(tc.fan_epi_ridge) * _iw_k if self._code_enum_k
+                                      else float(tc.fan_epi_ridge))
                         _h = self._fan_history_streams
                         if _h == 0:
                             if _mode == "cos":
@@ -10837,7 +10878,7 @@ class MORPHTransformer(nn.Module):
                                 if _mode in ("epi", "epivol"):
                                     _parts.append(fan_epi_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
-                                        self.tul_fan_epi, float(tc.fan_epi_ridge),
+                                        self.tul_fan_epi, _epi_ridge,
                                         float(tc.fan_epi_eta), stats=fan_stats))
                                 if _mode in ("vol", "epivol"):
                                     _parts.append(fan_vol_term(
@@ -10862,7 +10903,7 @@ class MORPHTransformer(nn.Module):
                                 if _mode in ("epi", "epivol"):
                                     fan_epi_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
-                                        self.tul_fan_epi, float(tc.fan_epi_ridge),
+                                        self.tul_fan_epi, _epi_ridge,
                                         float(tc.fan_epi_eta), stats=fan_stats)
                                 if _mode in ("vol", "epivol"):
                                     fan_vol_term(
@@ -10879,7 +10920,7 @@ class MORPHTransformer(nn.Module):
                                     _parts.append(fan_epi_term(
                                         _traj_plan, layout.slot_valid, _m_plan,
                                         int(tc.fan_repel_passes), self.tul_fan_epi,
-                                        float(tc.fan_epi_ridge), float(tc.fan_epi_eta),
+                                        _epi_ridge, float(tc.fan_epi_eta),
                                         stats=None))
                                 if _mode in ("vol", "epivol"):
                                     _parts.append(fan_vol_term(
@@ -11078,7 +11119,11 @@ class MORPHTransformer(nn.Module):
                     h_slots, input_ids, layout, stats=nextlat_stats,
                     **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
             if self._code_enum_k:
-                self._enum_exit_stats(h_slots, layout, _iw_k, enum_stats)
+                # LX-Fan: the separation of the WRITTEN cells (the coda reads each one), not
+                # of their mean. `_reg_cells` is not None under the code only on the
+                # write-all fan (the code refuses the bare register and the mixing fans).
+                self._enum_exit_stats(h_slots if _reg_cells is None else _reg_cells,
+                                      layout, _iw_k, enum_stats)
             # ── C2: the within-row contrastive term (tul.row_contrast_lambda) ──
             # Read at the SAME seam as the MUX and the span decoder: the loop's exit
             # state, before the gate's budget, before `detach_z` and before the eval-only
@@ -11611,7 +11656,8 @@ class MORPHTransformer(nn.Module):
                 and labels is not None and groups is not None and xh is not None
                 and plan_mode == "normal"):
             self._tul_fan_oracle(_fan_cells, xh, base, x0, bigram_emb, input_ids, labels,
-                                 layout, L, keep, _coda_kw, tg_reset, fan_stats)
+                                 layout, L, keep, _coda_kw, tg_reset, fan_stats,
+                                 **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
         if fan_repel_loss is not None and groups is not None:
             # Same contract as `row_contrast_weighted` / `spandec_weighted`: the WEIGHTED
             # term is exposed so train.py subtracts it and train/loss stays the MODEL's

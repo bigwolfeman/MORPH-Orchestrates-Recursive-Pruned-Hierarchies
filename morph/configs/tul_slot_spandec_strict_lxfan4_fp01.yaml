@@ -1,0 +1,48 @@
+# Arm "lxtul-lxfan4-fp01" (LX-Fan, design D1 of the 2026-09-26 TUL v2 review): fp01's LX
+# (K = 4 enumerated loop codes, the exact per-span mixture, the Bayes read) on top of the
+# write-all fan's DISTINCT cells. Composes fp01 (`tul_slot_spandec_strict_e4probe_fp01`)
+# and ADDS the fan; the rest of fp01's recipe is kept as it is (fixed-point term 0.1, row
+# gain hinge 0.98 + tail hinge 100 @ 1.1, strict geometry, token-state dropout 0.15).
+#
+#   tul.fan_k               1 -> 4   (the cell count; prefix_k follows it, `all` needs ==)
+#   tul.prefix_k            2 -> ${tul.fan_k}
+#   tul.fan_mix             all      (every cell written 1:1 into ITS prefix cell)
+#   tul.slot_cell_init      distinct (M different attention-pooling queries: the seeds)
+#   tul.fan_repel_*         epivol, lambda 0.1 over passes 1-2 (a2's diversity term; the
+#                                    only thing left that keeps the CELLS apart: the codes
+#                                    are shared by every cell of a rollout)
+#   tul.fan_all_wta_lambda  0.0      (NO winner-take-all: a second credit assignment beside
+#                                    the K-code mixture, refused under the code at > 0)
+#   tul.spandec_parallel    true -> false (+ _detach true -> false): the probe head would
+#                                    read the MEAN of the cells, which no reader consumes;
+#                                    refused with the fan
+#
+# So rollout k re-adds u_k to EVERY cell at the end of every pass: K x M = 16 loop streams
+# per slot. Against a2 (`tul_slot_spandec_strict_fan4_all_fp01`) it differs by the code,
+# the dropped WTA term, spandec false and fp01's two hinge keys; against fp01 by the fan
+# and the dropped probe head. Neither is a one-factor partner; the pair is the reading.
+# The prefix width is 4 cells per slot (fp01: 2): the packer keeps 1024 TEXT tokens per row
+# and adds prefix_k * max_slots cell positions, so a row is 1280 positions (fp01: 1152) and
+# the tokens seen per step are unchanged. training.steps 5000 is fp01's, inherited.
+# Note: .agents/notes/proposed/architecture/2026-09-26-lx-fan.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  spandec_parallel: false
+  spandec_parallel_detach: false
+  fan_k: 4
+  prefix_k: ${tul.fan_k}
+  slot_cell_init: distinct
+  fan_mix: all
+  fan_all_wta_lambda: 0.0
+  fan_repel_mode: epivol
+  fan_repel_lambda: 0.1
+  fan_repel_passes: 2
+  fan_epi_features: 64
+  fan_epi_ridge: 3.0
+  fan_epi_eta: 30.0
+
+wandb:
+  name: lxtul-lxfan4-fp01

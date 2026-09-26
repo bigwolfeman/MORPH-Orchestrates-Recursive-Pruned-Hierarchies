@@ -6,7 +6,8 @@ strict geometry the slot loop is the only cross-span channel, so two arms test t
 
 * (a1) `tul_slot_spandec_strict_e4probe_fp01_pk4`: fp01 + `tul.prefix_k: 4`.
 * (a2) `tul_slot_spandec_strict_fan4_all_fp01`: fan4 write-all + fp01's fixed-point term.
-  The fan is REFUSED on fp01's code_enum / parallel head, and a test pins that refusal.
+  The fan was REFUSED on fp01's code_enum / parallel head; since LX-Fan the code takes the
+  write-all fan at WTA 0 and the head still refuses it (a test pins both).
 * (b)  `tul_slot_spandec_strict_e4probe_fp01_reach1`: fp01 + `tul.tg_coda_token_reach: 1`,
   a coda token also reads the PREVIOUS span's tokens directly.
 
@@ -417,15 +418,22 @@ def test_arm_a2_fan4_all_fp01_differs_from_fan4_all_by_the_fp_term(monkeypatch):
     assert mc.core_fixed_point_lambda == 0.1
 
 
-def test_the_fan_is_refused_on_fp01_which_is_why_a2_is_the_fan_recipe(monkeypatch):
+def test_fp01_takes_the_fan_only_as_lx_fan(monkeypatch):
+    """a2 was built as the fan recipe because the fan was refused on fp01's two LXTUL-E
+    features. Since LX-Fan (2026-09-26, tests/test_tul_lxfan.py) the CODE takes the
+    write-all fan at WTA 0; the parallel head still refuses it, and so does the code at
+    a2's WTA 1.0."""
     _cfg, rt = _runtime("tul_slot_spandec_strict_e4probe_fp01", monkeypatch)
     tc = rt.model_cfg
     with pytest.raises(NotImplementedError, match="fan"):
         dataclasses.replace(tc, fan_k=4, slot_cells=4, prefix_k=4, fan_mix="all")
-    # and each of fp01's two LXTUL-E features refuses it on its own
-    with pytest.raises(NotImplementedError, match="code_enum_k > 1 with tul.fan_k"):
+    with pytest.raises(NotImplementedError, match="code_enum_k > 1 with tul.fan_all_wta"):
         dataclasses.replace(tc, spandec_parallel=False, spandec_parallel_detach=False,
                             fan_k=4, slot_cells=4, prefix_k=4, fan_mix="all")
     with pytest.raises(NotImplementedError, match="spandec_parallel with tul.fan_k"):
         dataclasses.replace(tc, code_enum_k=1, fan_k=4, slot_cells=4, prefix_k=4,
                             fan_mix="all")
+    lx_fan = dataclasses.replace(tc, spandec_parallel=False, spandec_parallel_detach=False,
+                                 fan_k=4, slot_cells=4, prefix_k=4, fan_mix="all",
+                                 fan_all_wta_lambda=0.0)
+    assert lx_fan.code_enum_k == 4 and lx_fan.fan_k == 4

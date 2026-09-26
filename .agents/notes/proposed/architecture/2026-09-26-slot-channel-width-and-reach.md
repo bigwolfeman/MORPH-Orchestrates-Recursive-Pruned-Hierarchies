@@ -36,6 +36,8 @@ per slot (four keys and values), not the state the loop carries.
 **(a2) distinct content per cell.** The ideal arm, fp01 + fan4 write-all, cannot be built:
 `TULConfig._check_code_enum` refuses `fan_k > 0` ("the fan's K streams are a second width
 axis"), and `_check_spandec_parallel` refuses it too. Those refusals stay.
+(Amended 2026-09-26: LX-Fan lifts the code's refusal for the write-all fan at WTA 0; the
+parallel head's refusal stays. See [2026-09-26-lx-fan.md](2026-09-26-lx-fan.md).)
 `tul_slot_spandec_strict_fan4_all_fp01.yaml` = the filed fan4-all recipe +
 `model.core_fixed_point_lambda: 0.1` (fp01's term). Against fp01 it lacks `code_enum_k 4`
 and the parallel head, and it inherits `spandec: true`, `slot_gain_target 0.9` and

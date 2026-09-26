@@ -966,9 +966,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               + (f"ALL eps={model_cfg.fan_select_eps} wta_lambda={model_cfg.fan_all_wta_lambda} "
                  f"(no mixture, no gate: every stream is written into ITS prefix cell "
                  f"through W_prefix[i], the register's 1:1 route, and the coda reads all "
-                 f"K; at train K no-grad passes with stream i alone in its cell pick each "
-                 f"slot's winner and one more pass with grad charges the winner-alone span "
-                 f"CE, the responsibility term) " if model_cfg.fan_mix == "all" else "")
+                 f"K; "
+                 + ("at train K no-grad passes with stream i alone in its cell pick each "
+                    "slot's winner and one more pass with grad charges the winner-alone "
+                    "span CE, the responsibility term) "
+                    if model_cfg.fan_all_wta_lambda > 0.0 else
+                    "wta_lambda 0: NO responsibility term and NO extra coda pass) ")
+                 if model_cfg.fan_mix == "all" else "")
               + ("TRIGGER EVERY PASS (the per-stream trigger W_o(pooled)+P_cell, the "
                  "SAME tensor the seed adds once, is added to the cell carrier at the "
                  "start of passes 2..T, so stream identity is re-supplied to the map "
@@ -1164,6 +1168,16 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"over the K rollouts. A label-free forward returns the per-span sequential "
               f"Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, "
               f"`tul/enum_exit_sep` (morph/model/tul_code_enum.py)", flush=True)
+    if model_cfg.code_enum_k > 1 and model_cfg.fan_k > 0:
+        print(f"  LX-FAN ON: K={model_cfg.code_enum_k} code rollouts x M={model_cfg.fan_k} "
+              f"write-all cells per slot. Rollout k re-adds u_k to EVERY cell at the end of "
+              f"every pass (sized by that cell's own rms); each cell is written 1:1 into its "
+              f"prefix cell; the coda reads all M under each code and the token loss is the "
+              f"exact per-span mixture over the K rollouts. The register pools the prelude "
+              f"ONCE (base rows) and is tiled. No WTA term, no parallel head (refused). "
+              f"`fan/*_ce` oracle readings are per-span MIXTURES over the K rollouts; "
+              f"`tul/enum_exit_sep` reads the written cells "
+              f"(.agents/notes/proposed/architecture/2026-09-26-lx-fan.md)", flush=True)
     if model_cfg.gram and model_cfg.gram_objective == "iw":
         # LXTUL-GK (tul.gram_objective="iw", 2026-09-23). NOT the LXTUL-G banner below:
         # there is no posterior and no KL, and train and eval draw from the SAME prior.

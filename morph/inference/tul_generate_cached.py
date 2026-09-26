@@ -95,6 +95,10 @@ def _check_supported(model) -> None:
     need(not tc.tokens_through_core, "the paid loop (tul.tokens_through_core)")
     need(not getattr(tc, "loop_reads_tokens", False), "tul.loop_reads_tokens")
     need(not tc.code and not tc.code_target, "TUL-Code / code_target")
+    # LX-Fan (fan_k > 0 under code_enum_k, 2026-09-26): the loop caches here hold ONE cell
+    # per slot per rollout and the coda cell cache one write per slot; M write-all cells
+    # per slot were not built. Named before the register line so the refusal says so.
+    need(int(tc.fan_k) == 0, "the fan (tul.fan_k > 0, incl. LX-Fan's K rollouts x M cells)")
     need(int(tc.slot_cells) == 1, "the Thought Register (tul.slot_cells > 1)")
     need(tc.prefix_source == "exit", f"tul.prefix_source={tc.prefix_source!r}")
     need(tc.slot_seed in ("boundary", "bag_mean"), f"tul.slot_seed={tc.slot_seed!r}")

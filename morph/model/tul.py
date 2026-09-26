@@ -349,6 +349,7 @@ class TULConfig:
     # grad, writes the winner alone the same way; its token-weighted span CE is the WTA
     # term, weight `fan_all_wta_lambda`. The register (same write, free read, no term)
     # collapsed its cells to rank 1.24 of 4; this arm differs from it by the term.
+    # 0 builds no term and runs no coda pass (LX-Fan runs at 0; > 0 is refused under the code).
     fan_all_wta_lambda: float = 1.0      # weight of the winner-alone span CE (fan_mix=all)
     fan_repel_mode: str = "cos"          # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
@@ -979,6 +980,12 @@ class TULConfig:
     #
     # 1 = off: nothing is built, no RNG is drawn, the forward is the one from before the
     # key. code_enum_ratio is refused at K = 1.
+    #
+    # LX-Fan (2026-09-26): on the write-all fan (`fan_k: M`, `fan_mix: all`,
+    # `fan_all_wta_lambda: 0`, no parallel head) the loop runs on the cell axis, so the code
+    # is added to EVERY cell of rollout k, sized by that cell's own rms: K x M loop streams
+    # per slot, each cell written 1:1, the same per-span mixture over the K rollouts.
+    # Note: .agents/notes/proposed/architecture/2026-09-26-lx-fan.md
     # Note: .agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md
     code_enum_k: int = 1
     code_enum_ratio: float = 0.1
@@ -2167,6 +2174,12 @@ class TULConfig:
         if self.fan_all_wta_lambda < 0.0:
             raise ValueError(
                 f"tul.fan_all_wta_lambda must be >= 0, got {self.fan_all_wta_lambda}")
+        if (self.fan_mix == "all" and self.fan_all_wta_lambda == 0.0
+                and self.fan_select_eps != 0.05):
+            raise ValueError(
+                "tul.fan_select_eps set with tul.fan_all_wta_lambda=0: under fan_mix='all' "
+                "the eps is read only by the WTA winner draw, which lambda 0 does not run, "
+                "so the knob would be a silent no-op.")
         if self.fan_mix != "all" and self.fan_all_wta_lambda != 1.0:
             raise ValueError(
                 "tul.fan_all_wta_lambda is read only under tul.fan_mix='all' "
@@ -3556,7 +3569,13 @@ class TULConfig:
             (self.spandec_reads_cells,
              "tul.spandec_reads_cells: the head reads z alone and would ignore the cells"),
             (self.gram, "tul.gram: the rollout batch is Phase B's to define"),
-            (self.fan_k > 0, "tul.fan_k: the fan's K streams are Phase B's to define"),
+            # LX-Fan (2026-09-26) keeps this refusal on purpose. Under `fan_mix: all` the
+            # head's input `h_slots` is the MEAN of the M cells, while the coda reads each
+            # cell 1:1, so the head would grade an object no reader consumes. Reading the
+            # M cells is a new head, not a flag. Note 2026-09-26-lx-fan.md.
+            (self.fan_k > 0,
+             "tul.fan_k: under the write-all fan the head's input is the MEAN of the M "
+             "cells, which the coda never reads (LX-Fan drops the head)"),
         ]
         for bad, why in _refused:
             if bad:
@@ -3584,12 +3603,30 @@ class TULConfig:
         _refused = [
             (self.gram, "tul.gram: a Gaussian step is a second, sampled choice; the "
              "rollouts must differ in the code alone"),
-            (self.fan_k > 0, "tul.fan_k > 0: the fan's K streams are a second width axis"),
+            # LX-Fan (2026-09-26): the K code rollouts x the M write-all cells. Supported
+            # for `fan_mix: all` ONLY, where every cell reaches the coda 1:1 and the code
+            # rides on every cell (`_tul_core` adds it per CELL). Everything else a fan can
+            # carry is refused by name: note
+            # .agents/notes/proposed/architecture/2026-09-26-lx-fan.md.
+            (self.fan_k > 0 and self.fan_mix != "all",
+             f"tul.fan_k > 0 with fan_mix={self.fan_mix!r}: only the write-all fan (LX-Fan, "
+             f"fan_mix='all') is built under the code; a mixing or select fan collapses the "
+             f"cells to one state BEFORE the coda, so the fan would be a second width axis "
+             f"in front of the rollouts"),
+            (self.fan_k > 0 and self.fan_all_wta_lambda > 0.0,
+             f"tul.fan_all_wta_lambda={self.fan_all_wta_lambda} (LX-Fan): the WTA term is a "
+             f"SECOND credit assignment (a winner stream per slot) beside the per-span "
+             f"mixture over the K codes, costs M no-grad coda passes plus one with grad on "
+             f"the K-fold batch, and its batched no-grad pass stacks M*K*B rows under the "
+             f"rollout-shared dropout, which ties the wrong rows' masks. Set it to 0"),
+            (self.fan_k > 0 and self.fan_seed_noise > 0.0,
+             "tul.fan_seed_noise (LX-Fan): one draw per ROW, so the K rollouts of a row "
+             "would differ in their noise as well as their code"),
             (self.spandec_reads_cells,
              "tul.spandec_reads_cells: a register reader; the code loop is one cell per slot"),
-            (self.slot_cells > 1,
+            (self.slot_cells > 1 and self.fan_k == 0,
              "tul.slot_cells > 1 (the Thought Register): M cells per slot and a mean "
-             "before the readers"),
+             "before the readers (the write-all FAN is the supported cell axis)"),
             (self.spandec_parallel_k > 1,
              "tul.spandec_parallel_k > 1: a code table at the head INPUT is Stage 0's "
              "design; Stage 1's code lives in the loop state"),

@@ -197,6 +197,22 @@ def test_refuses_the_xhc_slot_loop():
         generate_tul_cached(m, PROMPT_MID, _rule(), _spec(), max_new_tokens=2,
                             temperature=0.0, device="cpu")
 
+def test_refuses_lx_fan():
+    """LX-Fan (the code on the write-all fan, 2026-09-26) writes M cells per slot per
+    rollout; the loop and coda-cell caches here hold one. Both decoders must refuse it by
+    name, not run it silently wrong."""
+    torch.manual_seed(0)
+    tc = _tul(tg_geometry="strict", spandec=False, code_enum_k=4, plast_weight=1.0,
+              fan_k=4, slot_cells=4, prefix_k=4, fan_mix="all", fan_all_wta_lambda=0.0)
+    m = MORPHTransformer(_tiny(tul=tc, d_ff=96, dropout=0.0)).eval()
+    with pytest.raises(NotImplementedError, match="the fan"):
+        generate_tul_cached(m, PROMPT_MID, _rule(), _spec(prefix_k=4), max_new_tokens=2,
+                            temperature=0.0, device="cpu")
+    with pytest.raises(NotImplementedError, match="the fan"):
+        generate_tul_graphed(m, PROMPT_MID, _rule(), _spec(prefix_k=4), max_new_tokens=2,
+                             temperature=0.0, device="cpu", use_graphs=False)
+
+
 # ── sabotage: the comparison above must FAIL on a decoder that is wrong ──────────────
 
 
