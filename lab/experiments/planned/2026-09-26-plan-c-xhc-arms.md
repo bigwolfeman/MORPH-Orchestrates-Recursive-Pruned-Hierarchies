@@ -41,8 +41,13 @@ under activation checkpointing (the first C1 smoke OOMed at 24 GB without it).
 - NOT available: `lxtul_e_stage2_score.py` builds its batches from the first arm's layout
   (prefix_k 2) and fails on prefix_k 4 models, as it did on a1; the notul pairing needs its
   output. `core_map_fd.py` does not replay the router and reads the stream-choice jump, so no
-  fp32 map reading is planned. No per-cell ablation mode exists, so per-cell worth is not
-  measured.
+  fp32 map reading is planned.
+- Amended 2026-09-26 09:53, before either arm's first 5000-step GPU step, instruments only
+  (no prediction changed): per-cell worth by `worth_profile.py --modes
+  zero,cellall,cell0,cell1,cell2,cell3` (192 rows) on C1, C2 and a1, built in 649f7e6
+  (`cellall` equals `zero` exactly on tiny models; the check that it does on the 5k
+  checkpoints is the TOTAL lines); and C1/C2 paired against fp01's and a1's 5k sweeps with
+  `paired_vs_ruler.py`, which replaces the stage-2 scorer's fp01 pairing.
 
 ## Predictions
 
