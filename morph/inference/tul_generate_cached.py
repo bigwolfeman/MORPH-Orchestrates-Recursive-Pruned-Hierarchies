@@ -103,6 +103,9 @@ def _check_supported(model) -> None:
          "a gathered coda (coda_sees_slots false or coda_token_cut > 0)")
     need(not tc.bcast, "tul.bcast (the unpack term)")
     need(int(tc.loop_reach) == 0, "tul.loop_reach")
+    # Added after the build: the coda token reach (2026-09-26) widens a coda token's read to
+    # the previous spans' TOKENS, which this decoder drops at every boundary.
+    need(int(tc.tg_coda_token_reach) == 0, "tul.tg_coda_token_reach (previous-span token read)")
     need(not tc.slot_source_once, "tul.slot_source_once")
     need(not tc.tg_span_comp, "tul.tg_span_comp")
     need(not tc.center_bag_mean, "tul.center_bag_mean")

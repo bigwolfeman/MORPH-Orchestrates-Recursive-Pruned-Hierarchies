@@ -175,6 +175,19 @@ def test_refuses_a_model_it_does_not_reproduce():
                             temperature=0.0, device="cpu")
 
 
+
+def test_refuses_the_coda_token_reach():
+    """`tul.tg_coda_token_reach` (added after this decoder) widens a coda token's read to the
+    previous spans' tokens, which the decoder drops at every boundary: it must refuse, for
+    both the cached and the graphed decoder, not run silently wrong."""
+    m = _model(tg_coda_token_reach=1).eval()
+    with pytest.raises(NotImplementedError, match="tg_coda_token_reach"):
+        generate_tul_cached(m, PROMPT_MID, _rule(), _spec(), max_new_tokens=2,
+                            temperature=0.0, device="cpu")
+    with pytest.raises(NotImplementedError, match="tg_coda_token_reach"):
+        generate_tul_graphed(m, PROMPT_MID, _rule(), _spec(), max_new_tokens=2,
+                             temperature=0.0, device="cpu", use_graphs=False)
+
 # ── sabotage: the comparison above must FAIL on a decoder that is wrong ──────────────
 
 
