@@ -1,0 +1,27 @@
+# Arm (b) "lxtul-e4probe-fp01-reach1": a LOOSER coda geometry, the slot loop kept for
+# long range. Composes `tul_slot_spandec_strict_e4probe_fp01` and changes ONE key plus
+# the run name:
+#
+#   tul.tg_coda_token_reach  0 -> 1
+#
+# WHAT IT CHANGES. A coda token of span s reads its own span's tokens, the prefix cells of
+# every earlier slot (as fp01), AND the tokens of span s-1 directly (window branch;
+# window_size 256 covers a whole previous span, span_cap 32). The prelude stays same-span
+# only; a prefix cell still reads itself alone; the conv / W_v_prev value shift / retention
+# carry still reset at every segment (`tg_strict_allow`, `TULConfig.tg_coda_token_reach`).
+# THE REAL RECEPTIVE FIELD. One coda layer reaches one span back through tokens. Layers
+# compose: layer l reads span s-1's layer l-1 states, which read s-2. With n_coda 4 the
+# token path reaches 4 spans back; beyond that the slot loop is the only channel.
+# Measured by perturbation in tests/test_tul_arms_ab.py.
+# WHY. fp01 trails the plain model by 0.265 nats at 5k and 0.333 at 10k
+# (lab/experiments/failures/2026-09-26-lxtul-fp01-vs-plain-10k.md).
+# Note: .agents/notes/proposed/architecture/2026-09-26-slot-channel-width-and-reach.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  tg_coda_token_reach: 1
+
+wandb:
+  name: lxtul-e4probe-fp01-reach1

@@ -56,6 +56,7 @@ __all__ = [
     "span_ids_from_ids",
     "slot_cell_inject_keep",
     "span_start_mask",
+    "strict_span_ordinal",
     "tg_reset_from_ids",
     "tg_segment_ids",
     "tg_strict_allow",
@@ -868,8 +869,25 @@ def tg_reset_from_ids(ids: Tensor) -> Tensor:
     return reset
 
 
+def strict_span_ordinal(layout: "SlotLayout") -> Tensor:
+    """``[B, L]`` int64: each position's SPAN ORDINAL in its row, for span-distance relations.
+
+    ``bag_id`` already is the ordinal for every span a slot closes (``0 .. n_slots-1``,
+    ``pack_tul_row`` numbers them in row order). The one exception is the row's OPEN TAIL:
+    the real tokens after the last boundary carry the dump-bin id ``max_slots`` whatever
+    ``n_slots`` is, so ``bag_id - 1`` is not "the previous span" there. Here the dump bin
+    is mapped to ``n_slots`` (``slot_valid.sum``), the ordinal it would have if its
+    boundary were in the row, so the tail is span ``n_slots`` and its previous span is the
+    last real one. Tail PADS share the dump-bin id and are mapped the same way; they are
+    slot positions, which every caller separates by ``slot_mask``.
+    """
+    n_valid = layout.slot_valid.sum(dim=1, keepdim=True).to(layout.bag_id.dtype)  # [B, 1]
+    return torch.where(layout.bag_id == layout.max_slots, n_valid, layout.bag_id)
+
+
 def tg_strict_allow(layout: "SlotLayout", stage: str,
-                    coda_prefix_reach: str = "all") -> Tensor:
+                    coda_prefix_reach: str = "all",
+                    coda_token_reach: int = 0) -> Tensor:
     """``[B, 1, L, L]`` bool — the STRICT allow relation (``tul.tg_geometry="strict"``).
 
     ``tg_restrict``'s relation is ``causal AND (same span OR j is ANY slot cell)``, in the
@@ -902,6 +920,22 @@ def tg_strict_allow(layout: "SlotLayout", stage: str,
                   span". A dump-bin token therefore reads no cell at all under ``"prev"``,
                   and every cell under ``"all"``.
 
+    ``coda_token_reach`` (``tul.tg_coda_token_reach``, 2026-09-26; coda only): ``r >= 1``
+    adds ONE disjunct to a TOKEN query's relation, the TOKENS of the ``r`` previous spans:
+    ``not slot_mask[j] AND 1 <= span[i] - span[j] <= r`` with ``span`` the
+    :func:`strict_span_ordinal` (so the open tail reads the last real span). ``0`` builds
+    nothing and is the relation above, bit for bit. Cell queries, the cells a token reads
+    and the prelude are unchanged. The conv, the ``W_v_prev`` value shift and the
+    retention carry keep the :func:`tg_segment_ids` partition under every ``r``: they
+    produce ONE feature per KEY position that every query reads, so a conv at the head of
+    span ``s-1`` that read span ``s-2``'s tail would hand ``s-2`` to span ``s`` in one
+    layer; the partition keeps each key's features inside its own segment.
+
+    RECEPTIVE FIELD, stated rather than hidden: the relation bounds ONE coda layer to
+    ``r`` spans back. Layer ``l`` reads span ``s-1``'s layer ``l-1`` states, which read
+    ``s-2``, so through the token path alone a coda of ``n`` layers reaches ``r * n``
+    spans back (``tests/test_tul_arms_ab.py`` measures it on the model).
+
     This relation is only PART of the strict geometry: the conv / value shift
     (:func:`tg_segment_ids`), the retention carry (:func:`tg_reset_from_ids`) and the
     coda's per-layer injections at the slot cells are cut in ``_forward_tul``, and the
@@ -913,6 +947,13 @@ def tg_strict_allow(layout: "SlotLayout", stage: str,
         raise ValueError(
             f"tg_strict_allow coda_prefix_reach must be 'all' or 'prev', got "
             f"{coda_prefix_reach!r}")
+    if coda_token_reach < 0:
+        raise ValueError(
+            f"tg_strict_allow coda_token_reach must be >= 0, got {coda_token_reach}")
+    if stage == "prelude" and coda_token_reach:
+        raise ValueError(
+            "tg_strict_allow: coda_token_reach is a CODA relation; the strict prelude is "
+            f"same-span only (got coda_token_reach={coda_token_reach} at stage='prelude').")
     bag_id = layout.bag_id                                      # [B, L] int64
     slot_mask = layout.slot_mask                                # [B, L] bool
     device = bag_id.device
@@ -932,6 +973,11 @@ def tg_strict_allow(layout: "SlotLayout", stage: str,
         else:
             reach = (bag_j == bag_i - 1) & (bag_i < layout.max_slots)
         tok_allow = same | (slot_mask.unsqueeze(1) & reach)
+        if coda_token_reach:
+            span = strict_span_ordinal(layout)
+            back = span.unsqueeze(2) - span.unsqueeze(1)          # [B, L, L] span[i]-span[j]
+            tok_allow = tok_allow | ((~slot_mask).unsqueeze(1)
+                                     & (back >= 1) & (back <= coda_token_reach))
         # A prefix cell's query: itself and nothing else.
         self_only = (row == col).unsqueeze(0).expand_as(tok_allow)
         allow = torch.where(slot_mask.unsqueeze(2), self_only, tok_allow)

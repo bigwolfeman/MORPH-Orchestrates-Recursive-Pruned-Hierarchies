@@ -1,0 +1,27 @@
+# Arm (a1) "lxtul-e4probe-fp01-pk4": a WIDER slot channel, same strict geometry.
+# Composes `tul_slot_spandec_strict_e4probe_fp01` and changes ONE key plus the run name:
+#
+#   tul.prefix_k  2 -> 4
+#
+# WHAT IT CHANGES. Each slot writes 4 prefix cells instead of 2; cell k is
+# `W_prefix[k] @ z` (`TULSlots.prefix_project`), so the four cells are four learned
+# projections of the SAME exit state z. The coda gets 4 keys and values per slot to read
+# (read bandwidth), not a larger state: z is still one d_model vector. Tokens still reach
+# the past ONLY through slot cells.
+# THE ROW. L_total = seq_len + prefix_k * max_slots = 1024 + 4 * 64 = 1280 positions
+# (fp01: 1152). max_slots 64 and seq 1024 are unchanged; the packer's row budget grows by
+# 128 positions, so a row still holds 1024+ tokens (`pack_tul_row`).
+# PRIOR READING. On the plain strict ruler, prefix_k 8 was 0.035 nats better than 2 at
+# 5k (lab/experiments/successes/2026-09-21-strict-pk8-ruler.md).
+# WHY. fp01 trails the plain model by 0.265 nats at 5k and 0.333 at 10k
+# (lab/experiments/failures/2026-09-26-lxtul-fp01-vs-plain-10k.md).
+# Note: .agents/notes/proposed/architecture/2026-09-26-slot-channel-width-and-reach.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  prefix_k: 4
+
+wandb:
+  name: lxtul-e4probe-fp01-pk4
