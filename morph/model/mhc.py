@@ -310,6 +310,8 @@ class MORPHBlock(nn.Module):
         ret_capture: dict | None = None,
         ret_reset_mask: Tensor | None = None,
         pass_idx: int = 0,
+        xhc_valid: Tensor | None = None,
+        xhc_route: dict | None = None,
     ) -> Tensor:
         """Forward pass: attention sublayer then MLP sublayer with HC residuals.
 
@@ -335,6 +337,13 @@ class MORPHBlock(nn.Module):
                          parameters with it. Ignored — and the default 0 is never even
                          looked at — on a block without one, which is every block of every
                          model that does not set the knob.
+            xhc_valid:   [B, S] bool | None — plan C (`tul.xhc_temporal_kernels`): the slot
+                         pad mask the MLP residual's slot-axis convolutions read. Passed ONLY
+                         to a core block whose `mrr_mlp` is an `XHCResidual` with temporal
+                         augmentation; None (every other call) leaves the call unchanged.
+            xhc_route:   dict | None — plan C: the slot-gain hinge's record/replay of the
+                         expanded residuals' stream choice (`XHCResidual.route`). None on
+                         every training pass and on every non-xHC block.
 
         Returns:
             [B, T, D] updated residual stream.
@@ -405,7 +414,16 @@ class MORPHBlock(nn.Module):
                 y = y + lora.delta("mlp", xm.to(y.dtype), pass_idx)
             return self.drop(y)
 
-        h = self.mrr_attn(h, _attn_fn)
+        # plan C (`XHCResidual` in `mrr_attn` / `mrr_mlp`): the pad mask of the MLP
+        # residual's slot-axis convolutions and the gain hinge's fixed stream choice. Both
+        # None on every other block, where the two calls below are the ones from before.
+        # Never combined with the carrier-engine fold (the slot loop does not use it and
+        # `XHCResidual` refuses it).
+        _xa = {} if xhc_route is None else {"fixed_route": xhc_route}
+        _xm = dict(_xa) if xhc_valid is None else {**_xa, "valid": xhc_valid}
+        h = self.mrr_attn(h, _attn_fn, **_xa)
+        if _xm:
+            return self.mrr_mlp(h, _mlp_fn, **_xm)
         if next_inject_term is not None:
             # HC carrier-engine: fold the next layer's inject into the MLP POST write.
             h = self.mrr_mlp(h, _mlp_fn, post_inject=next_inject_term)

@@ -125,3 +125,55 @@ write different streams?); and the per-cell worth (ablate one cell at a time).
 - **The capacity argument above says width alone will not help.** If a1 and C1 both gain
   nothing over fp01, the channel's limit is the coda's read, not the write, and plan (b) is
   the lead.
+
+## Build notes (2026-09-26)
+
+Built on branch `tul-xhc` from 21e9705. Module `morph/model/tul_xhc.py`; tests
+`tests/test_tul_xhc.py`; configs `tul_slot_spandec_strict_e4probe_fp01_xhc.yaml` (C1) and
+`..._xhc_ta.yaml` (C2). What was built, and where the code forced a choice the plan did not make:
+
+- **The core's residuals are replaced, not added to.** On an xHC model the six core
+  blocks' `mrr_attn` / `mrr_mlp` hold `XHCResidual` (built last, private generator, so every
+  other weight equals the same-seed model without the key). The core then has no n = 4
+  residual, so `_core_region` (the token path) raises. The arm needs `tul.activate_at: 0`
+  (fp01 has it). An fp01 checkpoint cannot initialise the core residuals of C1.
+- **Router gradient.** TopK is not differentiable in its index. The router score multiplies
+  the routed streams' WRITE (`H_post y` and the temporal components); the fixed streams have
+  gate 1; the Cayley mixer is never scaled, so it stays orthogonal. No straight-through, no
+  noise, no balancing loss. Ties go to the lower stream index (stable sort).
+- **Write weights.** The main write keeps MORPH's HC form (row sum of a column softmax over
+  the k x k block, about 1 per stream at init). The temporal components are written through
+  `tanh` weights `[k, R]` whose bias starts at atanh(0.01). Gram-Schmidt removes projections
+  and does not renormalise. Conv kernels start as the causal moving average `1/kappa`.
+- **Entry.** The per-pass source `e` is zero-padded like the carrier, so `DiagonalInjection`
+  refills streams 0-3 only. The per-layer x0/bigram term and the LXTUL-E code are
+  single-stream terms and broadcast into all 16 streams (the carrier's standing rule). The
+  code's size is `r * rms` over all 16 streams, so it is smaller relative to streams 0-3
+  than on fp01 while streams 4-15 are small.
+- **Readers of the exit state.** Parallel head, NextLat and the enum stats: `_readout`, the
+  16-stream mean. Fixed-point term and gain hinge: the full 16-stream carrier. After the
+  write, `h_slots` is the per-stream mean over the four cells. Plan ablations act on the
+  four-cell stack together.
+- **Deviation: the gain hinge replays the routing.** A finite difference across a TopK flip
+  is a jump. Tiny fixture at init: row gain 1.17 and a slot at 4.77 with the router free
+  (penalty 24 at lambda 100), 0.87 with the perturbed call reusing the unperturbed call's
+  stream choice. Without the replay the hinge charges the router for being decisive.
+  `core_map_fd.py` and other external finite-difference probes do not replay and read the
+  jump on an xHC model.
+- **Deviation: the hinge's two applications are checkpointed on xHC models.** The first
+  C1 smoke OOMed. Eager, one fwd+bwd at the panel shape: fp01 14.28 GB, fp01 with
+  `prefix_k: 4` 15.76, C1 24.04, C1 hinge off 15.52, C1 after the change 15.70, C2 15.71.
+- **Refused** (`TULConfig._check_xhc` and the build): the paid loop, `loop_reads_tokens`,
+  `code`, `code_target` / `code_grade`, `loop_denoise`, `slot_cells > 1`, `fan_k > 0`,
+  `vq_codes`, `prefix_source != exit`, `core_stage_cond`, `db_loop`, `gram`, `gate`,
+  `grad_pass`, `slot_chain`, `reread`, `loop_carry`, `recur_gate`, `cond_layers`,
+  `pass_readout != last`, `bcast`, `mux_readout != mean`, the per-pass trajectory readers,
+  `core_token_aux`, `center_exit`, a parcae core, SCSE, an FM planner, and
+  `xhc_streams != prefix_k * hc_streams`.
+- **Smoke (60 steps, compile on, 2026-09-26).** fp01: peak 15.86 GB, 5966 tok/s, val 9.489.
+  C1: 17.51 GB, 3765 tok/s, val 9.515. C2: 17.51 GB, 3428 tok/s, val 9.505. C1 runs at
+  0.63x fp01's throughput (a1's 5k run logged 5723 tok/s early). The plan asked for a
+  30-step smoke with peak within 1 GB of fp01's; C1 is 1.65 GB above fp01 at 60 steps.
+- **Router after 60 steps (one val batch, depth 6).** Streams 2-15 are all used; at pass 0
+  most residuals send almost every slot to one pair of routed streams; by pass 5 the routed
+  pair differs from pass 0's for 52 % (C1) and 50 % (C2) of (slot, residual) cases.

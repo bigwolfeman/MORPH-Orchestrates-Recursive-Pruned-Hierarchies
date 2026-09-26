@@ -108,6 +108,8 @@ KNOWN_TUL_KEYS = frozenset({
     "slot_source_once",
     # span-level NextLat (arXiv 2511.05963, 2026-09-25)
     "nextlat_weight", "nextlat_beta",
+    # expanded hyper-connections in the slot loop (xHC, plan C, 2026-09-26)
+    "xhc_streams", "xhc_active", "xhc_fixed", "xhc_temporal_kernels",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
     "tg_coda_prefix_reach", "tg_geometry",
     # the looser strict coda (2026-09-26): previous spans' tokens in the coda relation
@@ -338,6 +340,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         slot_source_once=bool(tc.get("slot_source_once", False)),
         nextlat_weight=float(tc.get("nextlat_weight", 0.0)),
         nextlat_beta=float(tc.get("nextlat_beta", 1.0)),
+        xhc_streams=int(tc.get("xhc_streams", 0)),
+        xhc_active=int(tc.get("xhc_active", 4)),
+        xhc_fixed=int(tc.get("xhc_fixed", 2)),
+        xhc_temporal_kernels=tuple(int(k) for k in tc.get("xhc_temporal_kernels", ())),
         horizon_weight=float(tc.get("horizon_weight", 0.0)),
         horizon_free_first=bool(tc.get("horizon_free_first", True)),
         horizon_tokens=int(tc.get("horizon_tokens", 0)),
@@ -591,6 +597,10 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "slot_source_once": model_cfg.slot_source_once,
         "nextlat_weight": model_cfg.nextlat_weight,
         "nextlat_beta": model_cfg.nextlat_beta,
+        "xhc_streams": model_cfg.xhc_streams,
+        "xhc_active": model_cfg.xhc_active,
+        "xhc_fixed": model_cfg.xhc_fixed,
+        "xhc_temporal_kernels": list(model_cfg.xhc_temporal_kernels),
         "horizon_weight": model_cfg.horizon_weight,
         "horizon_free_first": model_cfg.horizon_free_first,
         "horizon_tokens": (model_cfg.horizon_tokens or model_cfg.bound_span_cap),

@@ -1,0 +1,20 @@
+# Plan C, arm C2 "lxtul-e4probe-fp01-xhc-ta": C1 plus xHC's temporal feature augmentation on
+# the SLOT axis. Composes `tul_slot_spandec_strict_e4probe_fp01_xhc` and changes ONE key:
+#
+#   tul.xhc_temporal_kernels  [] -> [2, 4, 8]
+#
+# After the MLP sublayer of every core block, causal depthwise convolutions of the sublayer
+# output over the previous 2, 4 and 8 SLOTS (pads zeroed), Gram-Schmidt-orthogonalised
+# against the output and each other, are written into the 4 active streams (write weights
+# start at 1 %). Kernel sizes are in slots: the paper's {4, 8, 12} tokens is under one slot
+# (a span is about 20 tokens). The convolution is a cross-slot carry, so C2 must beat C1,
+# not only fp01 (the plan's risk list).
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01_xhc
+  - _self_
+
+tul:
+  xhc_temporal_kernels: [2, 4, 8]
+
+wandb:
+  name: lxtul-e4probe-fp01-xhc-ta
