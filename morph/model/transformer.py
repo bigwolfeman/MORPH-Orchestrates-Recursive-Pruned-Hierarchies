@@ -1502,6 +1502,16 @@ class MORPHTransformer(nn.Module):
     # the shipped graph never sees it.
     _carry_capture: list | None = None
 
+    # The EVAL-ONLY slot-pass hook (`lab/divergence/lx_amp_pin.py`, the amplitude PIN):
+    # a callable ``hook(t, h, h_new, layout) -> h_new`` that `_tul_core` calls once per
+    # slot-loop pass, on the pass output AFTER the LXTUL-E code term and BEFORE `_h_det`
+    # (so the gram step, the probes, the fixed-point term and the exit all read the hooked
+    # state). ``h`` is the carrier the pass started from, so at ``t == 0`` it is the loop's
+    # ENTRY state. None by default — a Python-level branch, so the shipped graph never sees
+    # it; `tests/test_lx_concept.py` pins that an identity hook leaves the forward
+    # bit-identical.
+    _slot_pass_hook = None
+
     # `tul.fan_seed_noise`'s generator. `None` — every training and eval forward — draws
     # the per-stream seed noise from the model's own DEVICE generator, exactly as
     # `fan_select_eps`'s `select_winners` draws its random writes. A probe or a test that
@@ -6066,6 +6076,9 @@ class MORPHTransformer(nn.Module):
             if _enum is not None and not (_src_once and t >= 1):
                 h_new = self._apply_injection(
                     h_new, _enum.term(h_new, layout.slot_valid, iw_rollouts))
+            if self._slot_pass_hook is not None:
+                # EVAL-ONLY instrument seam (see the class attribute). None: no-op.
+                h_new = self._slot_pass_hook(t, h, h_new, layout)
             _h_det = h_new
             if _gctx is not None:
                 h_new = self._gram_step(h_new, t, active, layout, _gctx)

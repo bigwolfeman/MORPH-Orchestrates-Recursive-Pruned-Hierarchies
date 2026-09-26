@@ -18,6 +18,19 @@ import os
 from sweep_score import load_sweep, paired
 
 
+def within_arm(arm: dict, search: tuple[str, ...] = ()) -> dict:
+    """The arm's own K1-K6 and K3-K6 (``arm_K<a>-K<b>``), token-paired against itself with
+    the same stream-block bootstrap as the ruler gaps (``sweep_score.paired``). Appended
+    beside the ruler rows (2026-09-26): forced depth 1 is off the training distribution
+    (about 1.7 % of Poisson(6) draws), K3-K6 is the within-distribution read."""
+    out = {}
+    for a, b in ((1, 6), (3, 6)):
+        if str(a) in arm["row_ce_sum"] and str(b) in arm["row_ce_sum"]:
+            p = paired(arm, str(a), arm, str(b), search)
+            out[f"arm_K{a}-K{b}"] = [p[0], p[1], p[2]]
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ruler", required=True, help="the ruler's core_depth_sweep JSON")
@@ -38,11 +51,15 @@ def main() -> None:
             p = paired(arm, str(k), ruler, a.ruler_depth, search)
             row[f"ce_{k}_minus_ruler_ce{a.ruler_depth}"] = [p[0], p[1], p[2]]
             row.setdefault("pairing", p[3])
+        within = within_arm(arm, search)
+        row.update(within)
         out[label] = row
         print(label, row["pairing"])
         for k, v in row.items():
             if k.startswith("ce_"):
                 print(f"  {k}: {v[0]:+.4f} [{v[1]:+.4f}, {v[2]:+.4f}]")
+        for k, v in within.items():
+            print(f"  {k}: {v[0]:+.4f} [{v[1]:+.4f}, {v[2]:+.4f}]")
     with open(a.out, "w") as f:
         json.dump(out, f, indent=1)
     print(f"wrote {a.out}")

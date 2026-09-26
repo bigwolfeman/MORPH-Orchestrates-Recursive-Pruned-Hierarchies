@@ -246,6 +246,22 @@ def score_arm(m, batches, depths: list[int], device: str, tol: float) -> dict:
     return {"per": per, "devs": devs}
 
 
+def k36_clauses(p4: dict, p1: dict, cblk: np.ndarray, hblk: np.ndarray, depths: list[int],
+                n_boot: int, seed: int) -> dict:
+    """The K3-K6 twins of the P-3 / P-4 K1-K6 clauses (empty when depth 3 or 6 was not
+    swept). Keys end the clause dict, so every earlier line of the summary is unchanged."""
+    if 3 not in depths or 6 not in depths:
+        return {}
+    return {
+        "P-3 e4 par K3-K6": _ci(p4[3]["par_mix"], p4[6]["par_mix"], hblk, None, n_boot, seed),
+        "P-3 e1 par K3-K6": _ci(p1[3]["par_mix"], p1[6]["par_mix"], hblk, None, n_boot, seed),
+        "P-4 e4 coda K3-K6 (mixture)": _ci(p4[3]["coda_mix"], p4[6]["coda_mix"], cblk, None,
+                                           n_boot, seed),
+        "P-4 e1 coda K3-K6": _ci(p1[3]["coda_mix"], p1[6]["coda_mix"], cblk, None, n_boot,
+                                 seed),
+    }
+
+
 def abs_path(p: str) -> str:
     """A relative checkpoint path is taken against the repo root."""
     from _build import ROOT
@@ -396,6 +412,10 @@ def main() -> None:
                                                   None, nb, sd)
         P["e1 coda - ruler coda @6"] = _ci(p1[6]["coda_mix"], pr["coda_mix"], cblk, None,
                                          nb, sd)
+    # K3-K6 beside K1-K6 (appended, 2026-09-26): forced depth 1 is off the training
+    # distribution (T ~ Poisson(6) clamped to [1, 8] draws depth 1 about 1.7 % of the time),
+    # so K3-K6 is the within-distribution read of the same curve. Same bootstrap.
+    P.update(k36_clauses(p4, p1, cblk, hblk, depths, nb, sd))
     res["clauses"] = P
     res["wall_s"] = round(time.time() - t0, 1)
     npz = a.out.rsplit(".", 1)[0] + ".tokens.npz"
