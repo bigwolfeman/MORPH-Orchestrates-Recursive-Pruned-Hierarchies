@@ -1,0 +1,8 @@
+lxtul-e4probe-fp01-pk4 tokens n=491520 blocks=481
+  ce_1_minus_ruler_ce6: +0.2839 [+0.2690, +0.3004]
+  ce_2_minus_ruler_ce6: +0.2749 [+0.2599, +0.2916]
+  ce_3_minus_ruler_ce6: +0.2735 [+0.2585, +0.2903]
+  ce_4_minus_ruler_ce6: +0.2730 [+0.2581, +0.2898]
+  ce_5_minus_ruler_ce6: +0.2729 [+0.2580, +0.2897]
+  ce_6_minus_ruler_ce6: +0.2729 [+0.2580, +0.2897]
+wrote /home/wolfe/morph-scratch/abc/lxtul-e4probe-fp01-pk4/gap_vs_plain.json

@@ -131,3 +131,15 @@ Tests: `tests/test_tul_arms_ab.py`. Brief: [morph/model/CLAUDE.md](../../../../m
 - **The window must cover the reach.** fp01's `window_size 256` covers one previous span
   (cap 32 tokens plus its cells) with room to spare. At large `r` the window, not the
   relation, would bound the read.
+
+## Outcome at 5k (2026-09-26)
+
+Filed in [`../../../../lab/experiments/successes/2026-09-26-slot-channel-arms-ab.md`](../../../../lab/experiments/successes/2026-09-26-slot-channel-arms-ab.md).
+Gap to plain on the same tokens (fp01 +0.265): a1 (`prefix_k: 4`) +0.273, b
+(`tg_coda_token_reach: 1`) +0.250, a2 (fan4 write-all, fixed-point term 0.1) +0.218.
+a1 and b fail their gap clauses. b's direct read replaces the slot channel (worth 0.197 →
+0.082) for a 0.015 gain. a2 succeeds on the gap but is not one-factor, and its loop earns
+the least (K1−K6 +0.0057). The lifecycle of this note (keep the `tg_coda_token_reach`
+knob or reject it) waits for Wolfe; plan C
+([`2026-09-26-plan-c-xhc-slot-loop.md`](2026-09-26-plan-c-xhc-slot-loop.md)) is the
+next test of distinct cell content.

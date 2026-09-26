@@ -1689,6 +1689,9 @@ One row per positive reading from both parts, sorted by date (stable within a da
 | B90 | 09-25 | +0.0077 [+0.0071, +0.0082]; exit separation 3.48 at depth 6 | coda K1−K6 under the 4-rollout mixture | lxtul-e4probe-nofp-s2 (seed 2) | 5000 | [successes/2026-09-25-lxtul-nofp-followup.md](../lab/experiments/successes/2026-09-25-lxtul-nofp-followup.md) | qualified: replicates B88 at 63 % of its size; tripwire HEALTHY (max 38.8); eval map 0.93–0.96, the highest in the strict family, with the smaller earning |
 | B91 | 09-25 | +0.0126 [+0.0119, +0.0134]; exit separation 5.61 at depth 6 | coda K1−K6 under the 4-rollout mixture | lxtul-e4probe-fp01 (fixed-point term 0.1, seed 1) | 5000 | same | qualified: one seed; tripwire HEALTHY (one hinge fire at 2777, preclip 475); coda mix @6 +0.0063 worse than nofp seed 1, inside the 0.0137 seed spread |
 | B92 | 09-25 | +0.0177 [+0.0166, +0.0188] at 10k (+0.0125 at 5k, same run and rows) | coda K1−K6 under the 4-rollout mixture | lxtul-e4probe-fp01, resumed 5000 → 10000 | 10000 | [successes/2026-09-25-lxtul-fp01-10k.md](../lab/experiments/successes/2026-09-25-lxtul-fp01-10k.md) | qualified: one seed; grows 42 % over 5k steps; one recovered excursion at 8091 (gain crossed 1) |
+| B93 | 09-26 | +0.0112 [+0.0103, +0.0120] | coda K1−K6 under the 4-rollout mixture | lxtul-e4probe-fp01-pk4 (a1: fp01 with `prefix_k: 4`, seed 1) | 5000 | [successes/2026-09-26-slot-channel-arms-ab.md](../lab/experiments/successes/2026-09-26-slot-channel-arms-ab.md) | qualified: one seed; gap to plain +0.2729, 0.0074 worse than fp01 on the same tokens; tripwire HEALTHY |
+| B94 | 09-26 | +0.0085 [+0.0077, +0.0092] | coda K1−K6 under the 4-rollout mixture | lxtul-e4probe-fp01-reach1 (b: `tg_coda_token_reach: 1`, seed 1) | 5000 | same | qualified: the direct read replaced the channel (worth 0.197 → 0.082); gap +0.2501; tripwire HEALTHY |
+| B95 | 09-26 | +0.0057 [+0.0052, +0.0063]; gap to plain +0.2181, 0.0472 better than fp01 on the same tokens | coda K1−K6; coda @6 vs plain and vs fp01 | slot-spandec-strict-fan4-all-fp01 (a2, seed 1) | 5000 | same | qualified: not one-factor vs fp01; the best gap in the strict family at 5k, with the smallest depth use of the three arms; tripwire HEALTHY |
 
 lxtul-gk4-shared (filed 2026-09-23, [failures/2026-09-23-lxtul-gk-multisample.md](../lab/experiments/failures/2026-09-23-lxtul-gk-multisample.md)) adds no positive row: its K1−K6 +0.0036 sits at
 the floor's top edge and its width gain is 0.00005. Its −0.0044 against the ruler is inside
@@ -1705,6 +1708,11 @@ fp01 against the plain panel at 10k (filed 2026-09-26, [failures/2026-09-26-lxtu
 adds no positive row: the strict slot model's gap to plain on the same coda tokens WIDENED
 0.265 → 0.333 nats from 5k to 10k; fp01 at 10k equals plain at 5k. Plain's own core K1−K6
 grew 0.053 → 0.061.
+
+The slot-channel arms a1, b, a2 (filed 2026-09-26, [successes/2026-09-26-slot-channel-arms-ab.md](../lab/experiments/successes/2026-09-26-slot-channel-arms-ab.md)) add B93-B95.
+Four cells of one state (a1) and a direct previous-span read (b) do not close the gap to
+plain; b's read replaces the channel. fan4 write-all with the fixed-point term 0.1 (a2)
+closes 0.047 of it at 5k, with the least depth use; its 10k resume is queued.
 
 ## 7. Retractions and qualifications
 

@@ -1,0 +1,8 @@
+lxtul-e4probe-fp01-reach1 tokens n=491520 blocks=481
+  ce_1_minus_ruler_ce6: +0.2585 [+0.2433, +0.2754]
+  ce_2_minus_ruler_ce6: +0.2501 [+0.2350, +0.2668]
+  ce_3_minus_ruler_ce6: +0.2499 [+0.2348, +0.2666]
+  ce_4_minus_ruler_ce6: +0.2500 [+0.2349, +0.2667]
+  ce_5_minus_ruler_ce6: +0.2500 [+0.2350, +0.2667]
+  ce_6_minus_ruler_ce6: +0.2501 [+0.2350, +0.2668]
+wrote /home/wolfe/morph-scratch/abc/lxtul-e4probe-fp01-reach1/gap_vs_plain.json

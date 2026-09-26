@@ -4,7 +4,7 @@ Status: planned
 
 Date: 2026-09-26 09:48 (frozen before either arm's first 5000-step GPU step; 60-step smokes
 ran during the build and read nothing about CE at 5k).
-Parent: [`2026-09-26-slot-channel-arms-ab.md`](2026-09-26-slot-channel-arms-ab.md) (a1 is the
+Parent: [`../successes/2026-09-26-slot-channel-arms-ab.md`](../successes/2026-09-26-slot-channel-arms-ab.md) (a1 is the
 control here).
 Note: [`../../../.agents/notes/proposed/architecture/2026-09-26-plan-c-xhc-slot-loop.md`](../../../.agents/notes/proposed/architecture/2026-09-26-plan-c-xhc-slot-loop.md).
 Wolfe's go: 2026-09-26 ("I also have a C based around this https://arxiv.org/abs/2607.14530";

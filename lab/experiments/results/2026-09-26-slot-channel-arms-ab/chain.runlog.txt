@@ -1,0 +1,27 @@
+[09-26 05:35:52] lxtul-e4probe-fp01-reach1 START at accc9fa Slot channel arms a1/b/a2: prereg frozen before the  cfg=tul_slot_spandec_strict_e4probe_fp01_reach1
+[09-26 07:16:02] lxtul-e4probe-fp01-reach1 TRAIN exit=0 tok/s=6077 peak=17.03GB Final val_loss=4.4122  ppl=82.45  val/at
+[09-26 07:16:02] lxtul-e4probe-fp01-reach1 TRIPWIRE HEALTHY last=4999 max=47.3@2832
+[09-26 07:27:58] lxtul-e4probe-fp01-reach1 SWEEP exit=0 lxtul-e4probe-fp01-reach1 ce_tokens K1-K6: +0.0085 [+0.0077, +0.0092] over 480 rows
+[09-26 07:27:58] lxtul-e4probe-fp01-reach1 GAP exit=0  ce_6_minus_ruler_ce6: +0.2501 [+0.2350, +0.2668]
+[09-26 07:34:30] lxtul-e4probe-fp01-reach1 SCORE exit=0  coda_K1-K6 +0.0085 [+0.0078, +0.0092] n=501106
+[09-26 07:34:33] lxtul-e4probe-fp01-reach1 PAIR exit=0  lxtul-e4probe-fp01-reach1 coda n=491520 4.3251 notul 4.0750 minus notul +0.2501 [+0.2463, +0.2538] K1-K6 +0.0085
+[09-26 07:36:15] lxtul-e4probe-fp01-reach1 WORTH exit=0 lxtul-e4probe-fp01-reach1 zero TOTAL +0.0818 lxtul-e4probe-fp01-reach1 shuffle TOTAL +0.0245 
+[09-26 07:36:15] lxtul-e4probe-fp01-reach1 DONE
+[09-26 07:36:16] lxtul-e4probe-fp01-pk4 START at accc9fa Slot channel arms a1/b/a2: prereg frozen before the  cfg=tul_slot_spandec_strict_e4probe_fp01_pk4
+[09-26 09:24:46] lxtul-e4probe-fp01-pk4 TRAIN exit=0 tok/s=5723 peak=18.98GB Final val_loss=4.4919  ppl=89.29  val/at
+[09-26 09:24:46] lxtul-e4probe-fp01-pk4 TRIPWIRE HEALTHY last=4999 max=27.9@4328
+[09-26 09:34:03] lxtul-e4probe-fp01-pk4 SWEEP exit=0 lxtul-e4probe-fp01-pk4 ce_tokens K1-K6: +0.0112 [+0.0103, +0.0120] over 480 rows
+[09-26 09:34:03] lxtul-e4probe-fp01-pk4 GAP exit=0  ce_6_minus_ruler_ce6: +0.2729 [+0.2580, +0.2897]
+[09-26 09:41:12] lxtul-e4probe-fp01-pk4 SCORE exit=1 
+[09-26 09:41:12] lxtul-e4probe-fp01-pk4 PAIR exit=1 
+[09-26 09:42:47] lxtul-e4probe-fp01-pk4 WORTH exit=0 lxtul-e4probe-fp01-pk4 zero TOTAL +0.2104 lxtul-e4probe-fp01-pk4 shuffle TOTAL +0.1736 
+[09-26 09:42:47] lxtul-e4probe-fp01-pk4 DONE
+[09-26 09:42:47] slot-spandec-strict-fan4-all-fp01 START at accc9fa Slot channel arms a1/b/a2: prereg frozen before the  cfg=tul_slot_spandec_strict_fan4_all_fp01
+[09-26 11:04:28] slot-spandec-strict-fan4-all-fp01 TRAIN exit=0 tok/s=7783 peak=18.61GB Final val_loss=4.4365  ppl=84.48  fan/mi
+[09-26 11:04:28] slot-spandec-strict-fan4-all-fp01 TRIPWIRE HEALTHY last=4999 max=30.1@1846
+[09-26 11:09:36] slot-spandec-strict-fan4-all-fp01 SWEEP exit=0 slot-spandec-strict-fan4-all-fp01 ce_tokens K1-K6: +0.0057 [+0.0052, +0.0063] over 480 rows
+[09-26 11:09:36] slot-spandec-strict-fan4-all-fp01 GAP exit=0  ce_6_minus_ruler_ce6: +0.2181 [+0.2027, +0.2353]
+[09-26 11:13:05] slot-spandec-strict-fan4-all-fp01 SCORE exit=1 
+[09-26 11:13:05] slot-spandec-strict-fan4-all-fp01 PAIR exit=1 
+[09-26 11:14:06] slot-spandec-strict-fan4-all-fp01 WORTH exit=0 slot-spandec-strict-fan4-all-fp01 zero TOTAL +0.2003 slot-spandec-strict-fan4-all-fp01 shuffle TOTAL +0.1903 
+[09-26 11:14:06] slot-spandec-strict-fan4-all-fp01 DONE

@@ -1,0 +1,8 @@
+slot-spandec-strict-fan4-all-fp01 tokens n=491520 blocks=481
+  ce_1_minus_ruler_ce6: +0.2238 [+0.2082, +0.2412]
+  ce_2_minus_ruler_ce6: +0.2197 [+0.2043, +0.2370]
+  ce_3_minus_ruler_ce6: +0.2186 [+0.2031, +0.2358]
+  ce_4_minus_ruler_ce6: +0.2182 [+0.2027, +0.2354]
+  ce_5_minus_ruler_ce6: +0.2181 [+0.2027, +0.2353]
+  ce_6_minus_ruler_ce6: +0.2181 [+0.2027, +0.2353]
+wrote /home/wolfe/morph-scratch/abc/slot-spandec-strict-fan4-all-fp01/gap_vs_plain.json
