@@ -1,0 +1,20 @@
+# Plan C, arm C1b-ta "lxtul-e4probe-fp01-xhc-c1b-ta": C2 (C1 + slot-axis temporal
+# augmentation, kernels 2/4/8) with C1b's scale pin. C2 detonated at 2711; its hinge reading
+# crossed 0.98 near step 1890, ~800 steps earlier than C1's. Composes
+# `tul_slot_spandec_strict_e4probe_fp01_xhc_c1b` and changes ONE key:
+#
+#   tul.xhc_temporal_kernels  [] -> [2, 4, 8]
+#
+# The renorm acts on the carrier after the whole pass, the augmentation inside the MLP
+# residual's write, so the two compose with no new code. C1b-ta must beat C1b, not only
+# fp01 (the plan's cross-slot-carry risk).
+# Design: .agents/notes/proposed/architecture/2026-09-26-plan-c-xhc-slot-loop.md, "C1b".
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01_xhc_c1b
+  - _self_
+
+tul:
+  xhc_temporal_kernels: [2, 4, 8]
+
+wandb:
+  name: lxtul-e4probe-fp01-xhc-c1b-ta

@@ -177,3 +177,141 @@ Built on branch `tul-xhc` from 21e9705. Module `morph/model/tul_xhc.py`; tests
 - **Router after 60 steps (one val batch, depth 6).** Streams 2-15 are all used; at pass 0
   most residuals send almost every slot to one pair of routed streams; by pass 5 the routed
   pair differs from pass 0's for 52 % (C1) and 50 % (C2) of (slot, residual) cases.
+
+## 2026-09-26 outcome and C1b
+
+**C1 and C2 detonated.** C1 crossed the tripwire at 3190 (`preclip/total` 5.7e4; 9.8e5 at
+3200), never recovered, and finished at val 4.923 against ~4.49 for the 4-cell control, with
+the slot channel worth 0.020 (`plan_worth_zero`). C2 crossed 1e4 at 2679 and the guard killed
+it at 2711. C1 also had one recovered single-step spike at 1831-1832 (`preclip/total` 4.3e4,
+back to 1.26 at 1833) with the same signature as the detonating step: a tail-hinge excursion.
+
+**Anatomy** (per-step `probe.jsonl` of both arms and of the N = 4 control a1/pk4; onset =
+first step where the 50-step rolling median crosses the threshold; `core_gain_t*` is the
+trainer's norm ratio `|h_out| / |h_in|`, max over rows, not a Jacobian):
+
+| reading | C1 | C2 | pk4 (control) |
+|---|---|---|---|
+| `loss/gain_est` (hinge, routing replayed) > 0.98 | 2698 | 1887 | 1752 |
+| `loss/gain_est` > 1.00 | 2799 | 2111 | 1947 |
+| `loss/gain_reg_weighted` > 0.1 / > 1 | 2810 / 2895 | 2119 / 2195 | 1975 / never |
+| `preclip/core` > 1 / > 10 (baseline ~0.1) | 2815 / 2910 | 2121 / 2278 | 1937 / never |
+| `loop/delta_ratio_t1` > 0.8 | 2905 | 2214 | never |
+| `loop/core_gain_t1` > 1.3 / > 3 | 2956 / 3043 | (1.3 from step 200) / 2446 | never > 3 |
+| `preclip/total` > 1e4 | 3175-3200 | 2679 | never |
+
+- **The hinge's own reading led, and it did not hold.** It crossed its 0.98 target 258 steps
+  (C1) and 559 steps (C2) before the carrier grew, and 490 / 792 steps before the tripwire.
+  The hinge then fired at penalty 1-5 with the core gradient 10-300x its baseline for
+  ~400 steps, while `loss/ce_main` rose (C1 median 11.85 over 2000-2500, 15.19 over
+  2900-3100; with the global clip at 1.0 the hinge's direction took most of each update).
+  The reading kept climbing (C1 median 1.134 over 2900-3100, C2 1.088 over 2000-2500).
+- **The carrier grew in two stages.** At 3000 every pass grew it (per-pass ratios 1.3-1.5,
+  row norm 740 -> 1990 over passes 1-6). From 3025 one pass carried it: pass 1 jumped
+  x4.2 (3025) -> x10.7 (3100) -> x15.8 (3150), row norm 810 -> 12,600 at 3150, with passes
+  2-7 at 1.0-1.3.
+- **The detonating gradient was the hinge's.** At 3190 the penalty was 49.6 (tail 31.0,
+  per-slot gain max 8.1); at 3200 it was 4042 (tail 2222, per-slot max 73.6). The 1831
+  spike: per-slot max 7.2 / 16.5, penalty 24.7 / 445.
+- **The control met the same crossing through scale.** pk4's reading crossed 0.98 at 1752
+  and 1.00 at 1947 under the same hinge, and fell back to 0.955-0.965 by 2200 for the rest
+  of the run (penalty rolling median above 0.1 from 1975, never above 1). Over the same window its PASS-0
+  write grew: `core_gain_t0` 4.7 (1500) -> 20.6 (2000) -> 21-22, pass-1 entry norm
+  1990 -> 7500-9500. A pre-norm block writes `w(h/|h|)`, whose size the weights set, so the
+  pass map's gain grows like `|w| / |h|`; a large carried state makes every later pass
+  quiet. The xHC arms did not take this route at pass 0 (`core_gain_t0` 1.1-1.4 while the
+  reading crossed and the fight began, ~2 later) and took it late at pass 1, under the fight. So a norm ratio of 10-20 is not by
+  itself a detonation signature: pk4 lives at 20 for 3000 steps. WHY xHC did not grow its
+  pass-0 write is not measured (the GPU diagnostic below reads it).
+
+**The working diagnosis, scored.**
+1. *"The hinge replays the routing, so it is blind to growth the routing adds."* Refuted as
+   the cause: the replayed reading was the FIRST instrument to move, in both arms. The
+   replay is also the right quantity for the backward: autograd differentiates the chosen
+   piece (TopK indices carry no gradient), so the backward product sees the replayed
+   Jacobian. The router-free reading is a different map: on the tiny fixture at init it
+   reads 1.04-1.32 per row and up to 5.9 per slot against 0.87 replayed (the diagnostic
+   below, CPU).
+2. *"Streams 4-15 start at 0 and get additive writes with no decay."* Partly wrong on the
+   mechanism and not decidable from the probe. `DiagonalInjection`'s `A` multiplies the
+   context slice of EVERY stream (the carrier is `[B, S, N, C]`, `A` acts on the last axis);
+   only the `dt * e` refill is limited to streams 0-3. The 704 non-context channels have no
+   decay in any stream, entry streams included, on the N = 4 carrier too. The probe logs
+   whole-carrier norms, so which streams grew is open.
+
+**C1b, the fix** (`morph/configs/tul_slot_spandec_strict_e4probe_fp01_xhc_c1b.yaml`,
+`..._c1b_ta.yaml`; wandb `lxtul-e4probe-fp01-xhc-c1b[-ta]`, 5000 steps). Two keys on C1 / C2:
+
+- `model.slot_state_renorm: true` (existing lever, 2026-09-04): after every pass each slot's
+  16-stream carrier is rescaled to the norm it entered the loop with, direction kept. It
+  already acts on the expanded carrier (`_n0` is taken after `_xhc_expand`), and is now the
+  function `MORPHTransformer._renorm_to`, shared with the hinge.
+- `model.slot_gain_renorm: true` (new, default false): the gain hinge differences `R(f(h))`,
+  the map the loop applies under the renorm, instead of `f(h)`. The router replay is kept.
+  The raw reading of the same two applications is logged as `loss/gain_est_raw`. It raises
+  unless both the renorm and the hinge are on.
+
+Why this pair. With `f(h) = h + w(h/|h|)` a hinge can be met in two ways: grow `|h|` (pk4's
+route, C1's late route) or lower the blocks' angular sensitivity. The renorm removes the
+first, so the scale jump cannot happen. The hinge on `R(f)` reads
+`(|h| / |f(h)|) P_perp J_f`, which stays bounded by the angular part however large the write
+is, so the hinge stops charging the write size and keeps charging directional expansion
+(the tail hinge, per slot, target 1.1, is the lever E14 said was missing). Measured on the
+tiny test models: with the core writes scaled x30 and the renorm on, today's hinge reads the
+raw step at 2.09 and charges a penalty of 863 for a map the loop never applies, while `R(f)`
+reads 0.26 and charges 0; on the linear step `f(h) = 3h` the raw reading is 3.0 and `R(f)`
+reads 1.00005.
+
+Why this is not the magnitude clamp CLAUDE.md warns about. `core_gain_clip` clamped the
+realised ratio only when it passed a threshold, and the spectral caps bounded weights; the
+optimizer trained the unclamped map in the normal regime. The renorm is part of the map at
+every pass from step 0, so the optimizer trains the loop as a map on the sphere; measured on
+Y1 (2026-09-04): healthy to 5000 with 0 spikes and a raw map that drifted less
+(`rms_t3` <= 0.950). It does NOT bound directional expansion: E14 (hinge on the RAW map at
+target 1.02 plus the renorm) still spiked at 4639 through single-sample directional
+excursions. C1b differs from E14 in what the hinge reads and in the tail hinge.
+
+**Alternatives considered.**
+- (a) The hinge reads the router-free map. Rejected: the replayed reading led the onset, and
+  the free reading charges TopK flips (1.04-1.32 per row at init on the fixture, against a
+  0.98 target), i.e. the router for being decisive.
+- (b) A decay (A-style) or an RMS bound on streams 4-15. Rejected: the growth was not a
+  steady per-pass accumulation until the hinge fight was already on, a decay does not bound
+  one pass's write, and a new decay is a new floor lever the hinge can be met through (the
+  injection-floor README). A per-stream RMS bound is a conditional clamp, the pattern above.
+- The renorm with the hinge on the raw map (the E14 pairing). Rejected: under the renorm
+  that hinge charges the write size (863 vs 0 on the grown fixture).
+- The renorm with the hinge off (the Y1 pairing). Not chosen: it changes the fp01 recipe's
+  constraint as well, one more factor against C1.
+- No secondary lever. C1b-ta is C1b with C2's temporal augmentation (the renorm acts after
+  the pass, the augmentation inside the MLP write; no new code).
+
+**Risks.**
+- The renormed hinge can be met by writes that swamp the carried state (`|w| >> |h|`, small
+  angular part): each pass then forgets most of its input (gain 0.26 on the grown fixture).
+  Read `gain_est` against `gain_est_raw` and `loop/delta_ratio_t*`.
+- `loop/core_gain_t*` reads ~1.00 by construction under the renorm. The LXTUL-E code is
+  added after the renorm, so the carried norm moves ~1 % per pass (0.992-1.017 on the
+  fixture at k = 4).
+- C1b against a1 (pk4) changes two things, xHC and the renorm pair. A C1b gap to a1 is not
+  an xHC effect until a1 with the same two keys has run (config not built).
+- Nothing here has trained. A prereg with predictions comes before the 5k run.
+
+**Instruments and chain.** `lab/divergence/xhc_carrier_anatomy.py` (one eval forward at a
+forced depth): per pass and per stream the carrier's RMS (entry streams vs 4-15, context
+channels vs the rest), the common-mode share (the "large shared write" reading), the norm
+ratio, the hinge's finite difference replayed / router-free / renormed, and per residual the
+router's choice, gate, read mass on the entry streams, `|y|` and the write per stream group.
+Run on the tiny fixtures on CPU; NOT yet run on a checkpoint. The chain
+`/home/wolfe/morph-scratch/c1b/c1b_chain.sh SHA WT` waits for `PROBES DONE` in
+`/home/wolfe/morph-scratch/tulv2/probe.log`, reads the anatomy on C1 step_2500, C2
+step_2500, C1 step_5000 and pk4 step_2500, then runs a 300-step C1b smoke (peak memory,
+max `core_gain`, `gain_est`, `gain_est_raw`, `delta_ratio`, `preclip/total`); status lines in
+`/home/wolfe/morph-scratch/c1b/chain.log`, last line `C1B DONE`.
+
+**Tests** (`tests/test_tul_xhc.py`, the `c1b` block): `slot_gain_renorm` off is
+bit-identical to the tree before C1b (`36a9823`) with the renorm off and on; the renorm
+holds the 16-stream carrier at its entry norm on a model whose carrier grows ~10x per pass
+without it; the hinge reads `R(f)` (linear step, grown model; `gain_est_raw` equals today's
+reading bit for bit); the knob refuses where it would do nothing; both arms compose, differ
+from C1 / C2 by the two keys, build and train a step. Each was sabotaged once and failed.

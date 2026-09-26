@@ -24,6 +24,17 @@ What each test pins:
   * the gain hinge replays the operating point's routing;
   * both configs compose, differ from fp01 by the stated keys, build, train a step, and
     every new parameter gets a gradient; the refusals hold; a checkpoint round-trips.
+
+C1b (`model.slot_state_renorm` + `model.slot_gain_renorm`, the fix for C1/C2's detonation):
+  * `slot_gain_renorm` off is bit-identical to the tree before C1b (`_BASE_C1B`), with the
+    renorm off AND on (two subprocesses, `torch.equal` on loss, grads, params, logits);
+  * on a tiny xHC model whose core writes are scaled up, today's carrier grows ~10x per
+    pass and the renorm holds every slot of the 16-stream carrier at its entry norm;
+  * the hinge under `slot_gain_renorm` reads R(f): on the linear map f(h) = 3h it reads
+    3 without the knob and the renormed map's ~1 with it, and on the grown model its raw
+    instrument equals today's reading bit for bit while its own reading is below target;
+  * the knob refuses to be set where it would do nothing; the C1b arms compose, differ from
+    C1 / C2 by the two keys, build, and train a step.
 """
 from __future__ import annotations
 
@@ -60,12 +71,13 @@ def _pack4(B: int = 2, seed: int = 0):
 
 
 def _xm(kernels=(), seed: int = 1234, dropout: float = 0.0, gain_target: float = 0.9,
-        **kw) -> MORPHTransformer:
+        mkw: dict | None = None, **kw) -> MORPHTransformer:
     torch.manual_seed(seed)
     tc = _tc(prefix_k=4, xhc_streams=_N, xhc_temporal_kernels=tuple(kernels), **kw)
     m = MORPHTransformer(_tiny(tul=tc, d_ff=_D_FF, dropout=dropout,
                                core_fixed_point_lambda=0.1, slot_gain_lambda=100.0,
-                               slot_gain_target=gain_target, slot_cot_clip=4.0))
+                               slot_gain_target=gain_target, slot_cot_clip=4.0,
+                               **(mkw or {})))
     with torch.no_grad():
         m.embed.bigram.lambdas.fill_(0.5)
     return m.float()
@@ -694,3 +706,249 @@ def test_the_plan_ablations_act_on_every_cell():
         rows = c_norm[b][valid[b]].flatten(1)
         for s in torch.nonzero(valid[b]).flatten().tolist():
             assert (rows == c_shuf[b, s].flatten()).all(-1).any(), (b, s)
+
+
+# ── C1b: the scale pin and the hinge on the applied map ─────────────────────────────
+
+_BASE_C1B = "36a9823"      # master when C1b was built; the tree the knob-off test compares to
+
+_C1B_OFF_SCRIPT = r'''
+import sys
+import numpy as np
+import torch
+import morph
+from morph.model.transformer import MORPHConfig, MORPHTransformer
+from morph.model.tul import TULConfig
+from morph.model.tul_layout import BoundaryRule, TulLayoutSpec, slot_layout_from_ids
+import os
+assert os.path.realpath(morph.__file__).startswith(os.path.realpath(sys.argv[2])), morph.__file__
+V = 64
+lut = np.zeros(V, dtype=bool)
+lut[[0, 10, 11]] = True
+rule = BoundaryRule(is_boundary=lut, min_span=4, span_cap=32, eos_id=0)
+spec = TulLayoutSpec(seq_len=64, prefix_k=4, max_slots=10, slot_id=4)
+rng = np.random.default_rng(0)
+ids = rng.integers(5, V, size=(2, 120))
+ids[ids == 4] = 5
+ids[:, ::8] = 10
+inp, lab, layout, _ = slot_layout_from_ids(ids.astype(np.int64), rule, spec)
+res = {}
+for renorm in (False, True):
+    tc = TULConfig(prefix_k=4, slot_id=4, tg_restrict=True, tg_restrict_scope="all",
+                   emit_weight=0.0, token_state_dropout=0.0, mux_beta=0.0,
+                   tg_geometry="strict", spandec=False, spandec_parallel=True, code_enum_k=4,
+                   plast_weight=1.0, xhc_streams=16)
+    cfg = MORPHConfig(d_model=64, n_heads=2, n_kv_heads=2, vocab_size=V, max_seq_len=256,
+                      context_len=256, n_prelude=2, n_core=2, n_coda=2, mean_depth=2,
+                      max_depth=3, bptt_depth=3, channel_dims=(32, 20, 12), compression=2,
+                      csa_compress_ratio=4, hca_compress_ratio=8, top_k=8, window_size=16,
+                      retention=False, bigram_hash_vocab=V, use_kernels=False,
+                      hc_use_kernel=False, dropout=0.1, d_ff=96,
+                      core_fixed_point_lambda=0.1, slot_gain_lambda=100.0,
+                      slot_gain_target=0.5, slot_gain_tail_lambda=100.0,
+                      slot_gain_all_iters=True, slot_cot_clip=4.0,
+                      slot_state_renorm=renorm, tul=tc)
+    torch.manual_seed(1234)
+    m = MORPHTransformer(cfg).float().train()
+    with torch.no_grad():
+        m.embed.bigram.lambdas.fill_(0.5)
+    torch.manual_seed(5)
+    out = m(inp, labels=lab, slot_layout=layout)
+    out["loss"].backward()
+    r = {"loss": out["loss"].detach(), "keys": sorted(out.keys()),
+         "gain_est": out["gain_est"].detach(), "pen": out["gain_reg_weighted"].detach(),
+         "grads": {n: p.grad.clone() for n, p in m.named_parameters() if p.grad is not None},
+         "params": {n: p.detach().clone() for n, p in m.named_parameters()}}
+    m.eval()
+    with torch.no_grad():
+        r["logits"] = m(inp, slot_layout=layout)["logits"]
+    res[renorm] = r
+torch.save(res, sys.argv[1])
+'''
+
+
+def test_c1b_knob_off_is_bit_identical_to_the_pre_c1b_tree(tmp_path):
+    """The xHC fp01 twin (hinge 100 at target 0.5 on EVERY iteration so it is active, tail
+    100, fixed-point 0.1, cot clip 4, dropout 0.1, code_enum_k 4), with the renorm off and
+    on, run by the tree before C1b and by this tree with `slot_gain_renorm` at its default:
+    loss, output keys, the hinge's reading and penalty, every grad and param and the eval
+    logits are `torch.equal`. Covers the `_renorm_to` refactor of the loop's renorm and the
+    hinge's new argument."""
+    ok = subprocess.run(["git", "-C", _REPO, "cat-file", "-e", f"{_BASE_C1B}^{{commit}}"],
+                        capture_output=True)
+    if ok.returncode != 0:
+        pytest.skip(f"base commit {_BASE_C1B} is not in this clone")
+    base = tmp_path / "base"
+    base.mkdir()
+    arc = subprocess.run(["git", "-C", _REPO, "archive", _BASE_C1B, "morph"],
+                         capture_output=True, check=True).stdout
+    subprocess.run(["tar", "-x", "-C", str(base)], input=arc, check=True)
+    outs = []
+    for tree, name in ((str(base), "base.pt"), (_REPO, "head.pt")):
+        env = dict(os.environ, PYTHONPATH=tree, CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1",
+                   MKL_NUM_THREADS="1")
+        r = subprocess.run([sys.executable, "-c", _C1B_OFF_SCRIPT, str(tmp_path / name), tree],
+                           cwd=tree, env=env, capture_output=True, text=True)
+        assert r.returncode == 0, f"fixture failed in {tree}:\n{r.stderr[-3000:]}"
+        outs.append(torch.load(tmp_path / name))
+    ref, got = outs
+    for renorm in (False, True):
+        a, b = ref[renorm], got[renorm]
+        assert float(a["pen"]) > 0.0, "the hinge must be active for the grads to cover it"
+        for k in ("loss", "gain_est", "pen", "logits"):
+            assert torch.equal(a[k], b[k]), (renorm, k)
+        assert a["keys"] == b["keys"], renorm
+        assert a["params"].keys() == b["params"].keys()
+        assert a["grads"].keys() == b["grads"].keys() and len(b["grads"]) > 50
+        for n in a["params"]:
+            assert torch.equal(a["params"][n], b["params"][n]), (renorm, n)
+        for n in a["grads"]:
+            assert torch.equal(a["grads"][n], b["grads"][n]), (renorm, n)
+    # the renorm is live on this fixture: it changes the loss
+    assert not torch.equal(got[False]["loss"], got[True]["loss"])
+
+
+def _grown(renorm: bool, gain_renorm: bool = False, k: int = 1, scale: float = 30.0,
+           **mkw) -> MORPHTransformer:
+    """A tiny xHC model whose core WRITES are scaled up (the MLP down-projection and the
+    attention up-projection of every core block, x `scale`): each pass then adds several
+    times the carried state, the operating point C1 reached by pass 1 at step ~3000."""
+    m = _xm(k=k, gain_target=0.98,
+            mkw=dict(slot_state_renorm=renorm, slot_gain_renorm=gain_renorm,
+                     slot_gain_tail_lambda=100.0, **mkw))
+    with torch.no_grad():
+        for n, p in m.named_parameters():
+            if n.startswith("core.") and (n.endswith("mlp.down._cms.weight")
+                                          or n.endswith("cca.W_up.weight")):
+                p.mul_(scale)
+    return m
+
+
+def _pass_norms(m: MORPHTransformer, layout, inp, depth: int, k: int):
+    """Per-slot carrier norm (all 16 streams) entering each pass, valid slots, [depth, n]."""
+    m._jac_capture = []
+    depths = torch.full(layout.slot_index.shape, depth, dtype=torch.long)
+    with torch.no_grad():
+        m(inp, slot_layout=layout, slot_depths=depths)
+    cap, m._jac_capture = m._jac_capture, None
+    v = layout.slot_valid.repeat(k, 1)
+    return cap, torch.stack([c["h"].flatten(2).float().norm(dim=2)[v] for c in cap])
+
+
+def test_c1b_renorm_pins_the_16_stream_carrier_where_today_grows():
+    """Today (renorm off) the grown model's carrier grows ~10x per pass (the scale jump C1
+    ran into); with `slot_state_renorm` every slot's 16-stream norm at the entry of passes
+    1 and 2 equals its entry norm, and pads stay exactly 0. `code_enum_k` 1 here: the E code
+    is added AFTER the renorm and moves the norm by ~1 % (measured 0.992-1.017 at k 4)."""
+    _ids0, inp, _lab, layout = _pack4()
+    _c, grow = _pass_norms(_grown(False).eval(), layout, inp, 3, 1)
+    assert float((grow[1] / grow[0]).min()) > 3.0 and float((grow[2] / grow[0]).min()) > 5.0
+    cap, pin = _pass_norms(_grown(True).eval(), layout, inp, 3, 1)
+    assert pin.shape[0] == 3
+    torch.testing.assert_close(pin[1:], pin[0].expand(2, -1), rtol=1e-5, atol=0.0)
+    pad = ~layout.slot_valid
+    for c in cap:
+        assert torch.equal(c["h"][pad], torch.zeros_like(c["h"][pad]))
+
+
+def test_c1b_hinge_reads_the_renormed_map_on_a_linear_step(monkeypatch):
+    """With the core step replaced by f(h) = 3h: the raw hinge reads 3 (the gain of 3h),
+    with `slot_gain_renorm` it reads the gain of R(f)(h) = h * n0 / |h| at |h| = n0, which is
+    the tangential part of a random direction (~1), and `gain_est_raw` is 3. Target 1.05, so
+    the knob-on penalty is exactly 0 and the knob-off one is 100 * 1.95^2 per pass."""
+    _ids0, inp, lab, layout = _pack4()
+    res = {}
+    for gr in (False, True):
+        m = _xm(k=1, gain_target=1.05,
+                mkw=dict(slot_state_renorm=True, slot_gain_renorm=gr,
+                         slot_gain_all_iters=True)).train()
+        monkeypatch.setattr(m, "_apply_core_step",
+                            lambda h, *a, **kw: (3.0 * h, kw.get("ret_state")), raising=False)
+        torch.manual_seed(5)
+        res[gr] = m(inp, labels=lab, slot_layout=layout)
+    assert abs(float(res[False]["gain_est"]) - 3.0) < 1e-4
+    assert "gain_est_raw" not in res[False]
+    assert abs(float(res[True]["gain_est_raw"]) - 3.0) < 1e-4
+    # tangential part of d plus an O(eps^2) radial term: 1.00005 measured
+    assert 0.95 < float(res[True]["gain_est"]) < 1.01
+    assert float(res[True]["gain_slot_max"]) < 1.05
+    # the penalty follows the reading: 100 * (3 - 1.05)^2 per hinged pass against 0
+    assert float(res[False]["gain_reg_weighted"]) >= 380.0
+    assert float(res[True]["gain_reg_weighted"]) == 0.0
+
+
+def test_c1b_hinge_on_the_grown_model_charges_the_applied_map():
+    """The grown model, renorm on in both: today's hinge (knob off) reads the raw step at
+    ~2.1 and charges a penalty in the hundreds for a map the loop never applies; with the
+    knob its own reading (R(f)) is under the 0.98 target and charges nothing, and its
+    `gain_est_raw` is today's reading bit for bit (same two applications, same RNG)."""
+    _ids0, inp, lab, layout = _pack4()
+    res = {}
+    for gr in (False, True):
+        m = _grown(True, gr, k=4, slot_gain_all_iters=True).train()
+        torch.manual_seed(5)
+        res[gr] = m(inp, labels=lab, slot_layout=layout)
+    assert float(res[False]["gain_est"]) > 1.5 and float(res[False]["gain_reg_weighted"]) > 100.0
+    assert torch.equal(res[True]["gain_est_raw"], res[False]["gain_est"])
+    assert float(res[True]["gain_est"]) < 0.98
+    assert float(res[True]["gain_reg_weighted"]) == 0.0
+    # everything but the hinge term is the same forward
+    torch.testing.assert_close(res[True]["loss"] - res[True]["gain_reg_weighted"],
+                               res[False]["loss"] - res[False]["gain_reg_weighted"],
+                               rtol=1e-5, atol=1e-4)
+
+
+@pytest.mark.parametrize("mkw", [
+    dict(slot_gain_renorm=True),                                      # no renorm
+    dict(slot_gain_renorm=True, slot_state_renorm=True, slot_gain_lambda=0.0),   # no hinge
+])
+def test_c1b_knob_refuses_where_it_would_do_nothing(mkw):
+    torch.manual_seed(1)
+    kw = dict(d_ff=_D_FF, slot_gain_lambda=100.0)
+    kw.update(mkw)
+    with pytest.raises(ValueError, match="slot_gain_renorm"):
+        MORPHTransformer(_tiny(tul=_tc(prefix_k=4, xhc_streams=_N), **kw))
+
+
+@pytest.mark.parametrize("name,parent", [
+    ("tul_slot_spandec_strict_e4probe_fp01_xhc_c1b", "tul_slot_spandec_strict_e4probe_fp01_xhc"),
+    ("tul_slot_spandec_strict_e4probe_fp01_xhc_c1b_ta",
+     "tul_slot_spandec_strict_e4probe_fp01_xhc_ta"),
+])
+def test_c1b_arms_compose_differ_by_the_two_keys_and_train_a_step(name, parent, monkeypatch):
+    from omegaconf import OmegaConf
+    from test_slot_gain_tail import _MISSING, _leaves
+
+    from morph.training.train import build_morph_config
+
+    cfg, rt = _runtime(name, monkeypatch)
+    pcfg, _prt = _runtime(parent, monkeypatch)
+    c = _leaves(OmegaConf.to_container(cfg, resolve=True))
+    p = _leaves(OmegaConf.to_container(pcfg, resolve=True))
+    diff = {k for k in c.keys() | p.keys() if c.get(k, _MISSING) != p.get(k, _MISSING)}
+    assert diff == {"model.slot_state_renorm", "model.slot_gain_renorm", "wandb.name"}, diff
+    assert c["wandb.name"] == ("lxtul-e4probe-fp01-xhc-c1b-ta" if name.endswith("_ta")
+                               else "lxtul-e4probe-fp01-xhc-c1b")
+    tc = rt.model_cfg
+    mc = build_morph_config(cfg, tul=tc)
+    assert mc.slot_state_renorm and mc.slot_gain_renorm
+    assert (mc.slot_gain_lambda, mc.slot_gain_target, mc.slot_gain_tail_lambda) == (100.0, 0.98,
+                                                                                     100.0)
+    assert (tc.xhc_streams, tc.prefix_k) == (16, 4)
+    torch.manual_seed(7)
+    m = MORPHTransformer(_tiny(tul=tc, d_ff=_D_FF, dropout=0.1,
+                               core_fixed_point_lambda=mc.core_fixed_point_lambda,
+                               slot_gain_lambda=mc.slot_gain_lambda,
+                               slot_gain_target=mc.slot_gain_target,
+                               slot_gain_tail_lambda=mc.slot_gain_tail_lambda,
+                               slot_cot_clip=mc.slot_cot_clip,
+                               slot_state_renorm=mc.slot_state_renorm,
+                               slot_gain_renorm=mc.slot_gain_renorm)).train().float()
+    _ids0, inp, lab, layout = _pack4()
+    out = m(inp, labels=lab, slot_layout=layout)
+    assert torch.isfinite(out["loss"]) and "gain_est_raw" in out
+    out["loss"].backward()
+    opt = torch.optim.SGD(m.parameters(), lr=1e-3)
+    opt.step()
+    out2 = m(inp, labels=lab, slot_layout=layout)
+    assert torch.isfinite(out2["loss"])

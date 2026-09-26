@@ -135,6 +135,12 @@ model:
   slot_gain_floor_target: 0.95
   slot_cot_clip: 4.0
   slot_state_renorm: false
+  # slot_gain_renorm: with slot_state_renorm AND the hinge on, the hinge differences the map
+  #   the loop APPLIES, R(f(h)) (R = the renorm), instead of the raw step f(h); f's reading of
+  #   the same difference is logged as gain_est_raw. Needs both; raises otherwise. false =
+  #   the hinge reads f (arc E14's hinge + renorm pairing). First arms: plan C1b,
+  #   tul_slot_spandec_strict_e4probe_fp01_xhc_c1b{,_ta}.yaml.
+  slot_gain_renorm: false
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).

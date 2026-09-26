@@ -648,6 +648,18 @@ class MORPHConfig:
     # Read `injection.log_A` on any floor arm before reading its gain (DiagonalInjection).
     slot_gain_floor_lambda: float = 0.0
     slot_gain_floor_target: float = 0.95
+    # slot_gain_renorm — the gain hinge reads the map the loop APPLIES when
+    # `slot_state_renorm` is on (plan C1b, 2026-09-26): the finite difference is taken of
+    # R(f(h)), R the same per-slot pin to the entry norm the loop applies after every pass
+    # (`_renorm_to`), instead of the raw step f(h). Off, the hinge reads f, a map the loop
+    # never applies under the renorm (arc E14 ran that pairing). For pre-norm blocks
+    # f(h) = h + w(h / |h|), so f's gain grows like |w| / |h| with the write size; R removes
+    # the scale and keeps the angular part, so R(f)'s gain is bounded by the blocks' angular
+    # sensitivity however large the write is. The raw reading of the same difference is
+    # logged beside it (`gain_est_raw`). Needs slot_state_renorm and slot_gain_lambda > 0.
+    # False = the hinge before this existed.
+    # Note: .agents/notes/proposed/architecture/2026-09-26-plan-c-xhc-slot-loop.md (C1b).
+    slot_gain_renorm: bool = False
 
     @property
     def retention_carry_mode(self) -> str:
@@ -3024,6 +3036,14 @@ class MORPHTransformer(nn.Module):
                     f"model.slot_gain_floor_target {cfg.slot_gain_floor_target} must be below "
                     f"slot_gain_target {cfg.slot_gain_target}: the floor pushes the row gain UP "
                     "into [floor, target] and the row hinge holds it from above.")
+        if cfg.slot_gain_renorm and not (cfg.slot_state_renorm and cfg.slot_gain_lambda > 0.0):
+            # Inert otherwise: with no renorm the applied map IS f, and with no hinge nothing
+            # reads it. A knob that does nothing raises.
+            raise ValueError(
+                "model.slot_gain_renorm needs model.slot_state_renorm: true and "
+                f"model.slot_gain_lambda > 0 (got {cfg.slot_state_renorm} / "
+                f"{cfg.slot_gain_lambda}): it makes the gain hinge read the RENORMED map, "
+                "which exists only when both are on.")
         if cfg.slot_gain_lambda > 0.0 and cfg.scse_enabled and _why is None:
             raise NotImplementedError("model.slot_gain_lambda under SCSE is not defined (deviation carrier)")
         if cfg.tul is not None and cfg.tul.slot_source_once and cfg.scse_enabled:
@@ -3208,6 +3228,17 @@ class MORPHTransformer(nn.Module):
                 ctx = ctx + self.value_embeds[ve_idx].precompute(signal).to(dtype)
         # Drop x0(+ve) into the ctx slice — cat on the small single-stream term only.
         return torch.cat([full[..., :cs], full[..., cs:ce] + ctx, full[..., ce:]], dim=-1)
+
+    @staticmethod
+    def _renorm_to(h: Tensor, n0: Tensor) -> Tensor:
+        """``model.slot_state_renorm``'s pin: each slot of ``h`` ``[B, S, ...]`` rescaled to
+        the norm ``n0`` ``[B, S]`` (over every stream and channel), direction preserved; a
+        slot with ``n0 == 0`` (a pad) becomes exactly 0. The norm of ``h`` is NOT detached, so
+        the gradient is the renormed map's. ONE function for the loop and for the gain hinge
+        under ``slot_gain_renorm``, so the hinge differences the map the loop applies."""
+        _hn = h.flatten(2).float().norm(dim=2)                                    # [B, S]
+        _rs_ = (n0 / (_hn + 1e-6)).to(h.dtype)
+        return h * _rs_.view(*_rs_.shape, *([1] * (h.dim() - 2)))
 
     @staticmethod
     def _apply_injection(h: Tensor, term: Tensor) -> Tensor:
@@ -5234,6 +5265,9 @@ class MORPHTransformer(nn.Module):
         _n0 = h.detach().flatten(2).float().norm(dim=2) if _renorm else None      # [B, S]
         _gain_lambda = float(self.cfg.slot_gain_lambda)
         _gain_on = _gain_lambda > 0.0 and torch.is_grad_enabled() and self.training
+        # slot_gain_renorm (plan C1b): the hinge differences R(f(h)), the map the loop
+        # applies under the renorm, instead of f(h). None = the raw step, as before.
+        _gain_renorm_to = _n0 if (_renorm and bool(self.cfg.slot_gain_renorm)) else None
         # The terminal fixed-point term (base.yaml `core_fixed_point_lambda`, the twin of
         # `_core_region`'s): ||h_T - h_{T-1}||^2 / ||h_T||^2 on every VALID slot at its LAST
         # iteration, grad iterations only, training only. Stashed in `_core_aux` and consumed
@@ -5983,14 +6017,16 @@ class MORPHTransformer(nn.Module):
                 if (not _prog) or bool(_gm.any()):
                     _gain_terms.append(self._slot_gain_penalty(
                         _core_step, _h_in, _e_arg, _inj_arg, ret_state, t, _sc,
-                        _gm, _gain_lambda, carry=_cy))
+                        _gm, _gain_lambda, carry=_cy,
+                        # keyword passed only when on: the knob-off call is the old call
+                        **({} if _gain_renorm_to is None
+                           else {"renorm_to": _gain_renorm_to})))
             if _renorm:
                 # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
                 # raw step output, BEFORE the gain governor and the recurrence gate, so it is
-                # part of the map every later reader (gate, probes, exit) sees.
-                _hn = h_new.flatten(2).float().norm(dim=2)                       # [B, S]
-                _rs_ = (_n0 / (_hn + 1e-6)).to(h_new.dtype)
-                h_new = h_new * _rs_.view(*_rs_.shape, *([1] * (h_new.dim() - 2)))
+                # part of the map every later reader (gate, probes, exit) sees. The gain
+                # hinge applies the SAME function under `slot_gain_renorm`.
+                h_new = self._renorm_to(h_new, _n0)
 
             _tau = self.cfg.core_gain_clip
             if _tau > 0.0 and self._clip_applies(t):
@@ -6361,10 +6397,14 @@ class MORPHTransformer(nn.Module):
             "gain_slot_frac_gt1": (gs > 1.0).sum().float() / ok.sum().float(),
             "gain_tail_pen": torch.stack([g["tail_pen"] for g in terms]).sum(),
             "gain_floor_pen": torch.stack([g["floor_pen"] for g in terms]).sum(),
+            # `slot_gain_renorm` only: f's gain from the same differences, mean over rows
+            # and iterations like `gain` (every term carries it or none does).
+            **({"gain_raw": torch.stack([g["gain_raw"] for g in terms]).mean()}
+               if "gain_raw" in terms[0] else {}),
         }
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
-                           mask, lam: float, carry=None) -> dict:
+                           mask, lam: float, carry=None, renorm_to=None) -> dict:
         """Hinge penalty on the slot map's typical gain at the live operating point.
 
         The gain read here INCLUDES `DiagonalInjection`, whose identity-plus-decay Jacobian
@@ -6385,6 +6425,12 @@ class MORPHTransformer(nn.Module):
         with the penalty off. bf16 is enough here: the two outputs differ by ~eps of their
         magnitude and rounding noise adds in quadrature over ~1e5 elements (measured against
         the fp32 power-iteration probe in tests/test_slot_gain_reg.py).
+
+        ``renorm_to`` ``[B, S]`` (``model.slot_gain_renorm``, plan C1b): both applications are
+        passed through `_renorm_to` before the difference, so g is the gain of R(f), the
+        map the loop applies under ``slot_state_renorm``; the gain of f from the SAME two
+        applications is returned DETACHED as ``gain_raw`` (an instrument, not in the loss).
+        None: g is f's gain and ``gain_raw`` is absent.
         """
         cpu_rng = torch.get_rng_state()
         cuda_rng = torch.cuda.get_rng_state() if h_in.is_cuda else None
@@ -6443,9 +6489,17 @@ class MORPHTransformer(nn.Module):
             f1, _ = _app(hp + d, _xr1)
         finally:
             _restore()
+        den = d.float().flatten(1).norm(dim=1) + 1e-6
+        gain_raw = None
+        if renorm_to is not None:
+            # The raw map's reading of the same two applications, before R: detached, so
+            # it adds no node to the graph and nothing to the loss.
+            with torch.no_grad():
+                gain_raw = (((f1 - f0) * m).float().flatten(1).norm(dim=1) / den).mean()
+            f0 = self._renorm_to(f0, renorm_to)
+            f1 = self._renorm_to(f1, renorm_to)
         df = (f1 - f0) * m
         num = df.float().flatten(1).norm(dim=1)                                    # [B]
-        den = d.float().flatten(1).norm(dim=1) + 1e-6
         gain = (num / den)                                                         # [B]
         hinge = torch.relu(gain - float(self.cfg.slot_gain_target))
         pen = lam * (hinge * hinge).mean()
@@ -6479,9 +6533,12 @@ class MORPHTransformer(nn.Module):
         else:
             floor = gain.new_zeros(())
         g_det = g_slot.detach()
-        return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen,
-                "g_slot": torch.where(valid, g_det, torch.full_like(g_det, float("nan"))),
-                "tail_pen": tail.detach(), "floor_pen": floor.detach()}
+        out = {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen,
+               "g_slot": torch.where(valid, g_det, torch.full_like(g_det, float("nan"))),
+               "tail_pen": tail.detach(), "floor_pen": floor.detach()}
+        if gain_raw is not None:
+            out["gain_raw"] = gain_raw
+        return out
 
     # ── LXTUL-G (tul.gram; morph/model/tul_gram.py) ───────────────────────────────
 
@@ -11485,6 +11542,9 @@ class MORPHTransformer(nn.Module):
             for _gk in ("gain_slot_p50", "gain_slot_p90", "gain_slot_max",
                         "gain_slot_frac_gt1", "gain_tail_pen", "gain_floor_pen"):
                 groups[_gk] = gain_reg[_gk]
+            if "gain_raw" in gain_reg:
+                # `slot_gain_renorm`: `gain_est` is R(f)'s gain; this is f's, same difference.
+                groups["gain_est_raw"] = gain_reg["gain_raw"]
             groups["loss"] = groups["loss"] + gain_reg["penalty"]
 
         if mux_loss is not None and groups is not None:
