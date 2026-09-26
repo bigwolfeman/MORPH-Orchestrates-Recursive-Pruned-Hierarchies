@@ -1,0 +1,9 @@
+[16:56:50] chain at 26467cf fp01 5k->10k resume: prereg (G-1..G-4), frozen before the run.
+[16:56:50] START resume 5000 -> 10000
+[18:42:11] DONE exit=0 tok/s=5851 Final val_loss=4.1154  ppl=61.27  val/attn_lift=0.4836  val/
+[18:42:11] OPT:   [opt] optimizer state restored (394 param tensors) 
+[18:42:11] TRIPWIRE: EXCURSION last=9999 max=1.05e+04@8091 (one-step outliers at [8091], recovered)
+[18:48:42] SCORE exit=0
+[18:53:46] SWEEP exit=0
+[18:54:21] SHARE exit=0
+[18:54:21] ALL_DONE
