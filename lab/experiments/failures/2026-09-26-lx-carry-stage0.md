@@ -1,6 +1,6 @@
 # Planned: does carrying the rollout posterior across spans help the deployed LX read (LX-Carry Stage 0)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-26 14:37 (frozen before the re-scoring ran; no carried number had been computed. The unit
 tests ran on the tiny CPU model only.)
@@ -80,3 +80,50 @@ alpha = 0.5 is eps = 0.5 here), on the 10k checkpoint:
 - The carry is a cross-span route of at most log 4 = 1.39 nats per span outside the cells
   (opus.md D2 named cost). A K1-K6 reading under the carry is reported with the eps held
   identical across depths, never fitted per depth.
+
+## Results (filed 2026-09-26 14:59)
+
+CPU rescoring of the stored Stage 2 per-rollout log-probs (`lab/divergence/lx_carry_stage0.py`,
+commit 2194b08). Self-checks: the rebuilt rows match the stored coda indices exactly, and
+the eps = 1 read reproduces the stored mixture (max |dev| 1.9e-6). 381 EOS resets in the 480
+rows. eps fitted on rows 0-239 at depth 6; every number below is on rows 240-479 (250,376
+tokens, 12,265 at offset 0). Artifacts: [`../results/2026-09-26-lx-carry-stage0/`](../results/2026-09-26-lx-carry-stage0/).
+
+| eps | 5k overall | 5k offset 0 | 10k overall | 10k offset 0 |
+|---|---|---|---|---|
+| 1 (today) | 0 | 0 | 0 | 0 |
+| 0.5 | +0.0006 [+0.0003, +0.0010] | +0.0027 [+0.0003, +0.0051] | +0.0010 [+0.0007, +0.0014] | +0.0013 [−0.0008, +0.0034] |
+| 0.2 | +0.0037 | +0.0092 | +0.0046 | +0.0077 |
+| 0.05 | +0.0083 | +0.0160 | +0.0099 | +0.0152 |
+| 0.01 | +0.0122 | +0.0192 | +0.0145 | +0.0204 |
+
+- Every carry makes coda CE WORSE, most of all at offset 0, the bin it was meant to help.
+  eps* = 1 at both checkpoints, so K1−K6 under the carry equals today's (+0.0177 at 10k).
+- Run-best mutual information between consecutive spans: 0.0018 nats (5k) and 0.0009 (10k),
+  against a shuffle null q95 of 0.0003 / 0.0004. Above the null, 20-50x below Fable's
+  0.02 cut.
+
+## Clause by clause
+
+- **O-1 and O-2 hold only trivially.** By the reading rule they are read at eps* = 1, where
+  the delta is exactly 0. The best eps below 1 (0.5) lies OUTSIDE both predicted ranges, on
+  the wrong side. Read as a miss of the substance of the prediction.
+- **F-1 FAILS** (0.0009 vs >= 0.05). **F-2 FAILS** (offset 0 gets worse at eps 0.5).
+
+## Verdict
+
+**Failure.** The four LX rollouts carry almost no row-level identity: which rollout explained
+one span says next to nothing about which explains the next. The per-span restart is the
+right read for this model. Caveat, from the prereg: the model was trained with the restart,
+so this is a lower bound on a carry trained end to end; with MI at 0.001 nats the ceiling of
+such an arm is small.
+
+## Updated hypothesis
+
+LX's rollouts behave as per-span alternatives, not as coherent row-level "worlds". That fits
+the three analysts' reading that the fixed row-level codes are not hypotheses about content.
+Designs that make the hypotheses per span from context (LX-Concept, a context-oriented code)
+are the direction; a learned prior over the fixed codes (the gate) inherits this weak
+identity and drops in priority. Step 0 of the amplitude probe ran with this one: the codes did
+not move off the injected slice (share 0.314 at init, 0.324 at 5k, 0.331 at 10k, all inside
+the null band); it is filed with the amplitude-matched K-curve.

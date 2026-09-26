@@ -1,0 +1,64 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+  TUL ON: activate_at=0.0 slot_token='<fim_pad>'(id 4) |B|=1101 min_span=4 span_cap=32 prefix_k=2 max_slots=64 L_total=1152 p_drop=0.15 slot_seed='boundary'
+  TUL PARALLEL SPAN HEAD ON (LXTUL-E): the K=4 loop rollouts' exit states under the exact mixture, weight=1.0, INSTEAD OF the teacher-forced span decoder — span s+1 decoded AT ONCE from z with NO token input. TRAINING-ONLY target and scorer, never a decoder (morph/model/tul_spandec_parallel.py)
+  TUL PARALLEL SPAN HEAD IS A PROBE: it reads the exit state DETACHED; its term trains the head alone and sends NO gradient to the loop, the codes, the front or the tied table
+  LXTUL-E CODE ON: K=4 enumerated codes, re-added at the end of EVERY slot-loop pass, h <- f(h) + 0.1 * rms(f(h)).detach() * u_k (u_k: a learned regular simplex, unit RMS, sum zero, no learned scale). The front runs ONCE; the slot loop and the coda run on K rollouts per row at train AND eval (shared depth draw and dropout masks; coda checkpointed per block). Coda loss: the exact per-span mixture over the K rollouts. A label-free forward returns the per-span sequential Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, `tul/enum_exit_sep` (morph/model/tul_code_enum.py)
+  TUL TG-RESTRICT ON: soft_prev_span=False — window branch restricted to same-span-or-slot, compressed branch restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels must be false
+  TUL STRICT GEOMETRY ON (coda_prefix_reach=all): the prelude is same-span ONLY, a coda prefix cell reads itself alone, the conv/value-shift and the retention carry reset at every segment, and the coda's per-layer injections at the slot cells are zeroed — the slot LOOP is the only cross-span channel (lab/experiments/planned/2026-09-12-arc-strict-geometry.md)
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+fp01_5k d1: today 4.3533 (stored 4.3533, max|dev| 1.91e-06), 381 EOS resets
+    eps 1.0  : fit 4.2836 (+0.00000)  score 4.4230  d +0.0000 [+0.0000, +0.0000] n=250376  off0 +0.0000 [+0.0000, +0.0000] n=12265  H(prior) 1.000
+    eps 0.5  : fit 4.2839 (+0.00029)  score 4.4233  d +0.0003 [-0.0001, +0.0007] n=250376  off0 +0.0013 [-0.0006, +0.0032] n=12265  H(prior) 0.919
+    eps 0.2  : fit 4.2862 (+0.00252)  score 4.4257  d +0.0027 [+0.0021, +0.0034] n=250376  off0 +0.0058 [+0.0025, +0.0094] n=12265  H(prior) 0.751
+    eps 0.05 : fit 4.2897 (+0.00610)  score 4.4297  d +0.0067 [+0.0059, +0.0075] n=250376  off0 +0.0106 [+0.0062, +0.0154] n=12265  H(prior) 0.546
+    eps 0.01 : fit 4.2928 (+0.00920)  score 4.4331  d +0.0101 [+0.0092, +0.0110] n=250376  off0 +0.0133 [+0.0084, +0.0186] n=12265  H(prior) 0.403
+fp01_5k d6: today 4.3408 (stored 4.3408, max|dev| 1.91e-06), 381 EOS resets
+    eps 1.0  : fit 4.2711 (+0.00000)  score 4.4106  d +0.0000 [+0.0000, +0.0000] n=250376  off0 +0.0000 [+0.0000, +0.0000] n=12265  H(prior) 1.000
+    eps 0.5  : fit 4.2717 (+0.00057)  score 4.4112  d +0.0006 [+0.0003, +0.0010] n=250376  off0 +0.0027 [+0.0003, +0.0051] n=12265  H(prior) 0.918
+    eps 0.2  : fit 4.2744 (+0.00327)  score 4.4143  d +0.0037 [+0.0031, +0.0043] n=250376  off0 +0.0092 [+0.0048, +0.0134] n=12265  H(prior) 0.750
+    eps 0.05 : fit 4.2786 (+0.00749)  score 4.4189  d +0.0083 [+0.0075, +0.0091] n=250376  off0 +0.0160 [+0.0103, +0.0216] n=12265  H(prior) 0.546
+    eps 0.01 : fit 4.2823 (+0.01113)  score 4.4228  d +0.0122 [+0.0113, +0.0132] n=250376  off0 +0.0192 [+0.0132, +0.0252] n=12265  H(prior) 0.405
+[fp01_5k] eps* = 1.0 (fit on rows < 240, depth 6); score rows:
+    overall  +0.0000 [+0.0000, +0.0000] n=250376
+    offset 0 +0.0000 [+0.0000, +0.0000] n=12265
+    bin 0-0                +0.0000 [+0.0000, +0.0000] n=12265
+    bin 1-1                +0.0000 [+0.0000, +0.0000] n=12164
+    bin 2-2                +0.0000 [+0.0000, +0.0000] n=12156
+    bin 3-3                +0.0000 [+0.0000, +0.0000] n=12147
+    bin 4-7                +0.0000 [+0.0000, +0.0000] n=43987
+    bin 8-15               +0.0000 [+0.0000, +0.0000] n=69588
+    bin 16-1000000000      +0.0000 [+0.0000, +0.0000] n=80501
+    bin first_span_or_dump +0.0000 [+0.0000, +0.0000] n=7568
+    K1-K6_today              +0.0124 [+0.0115, +0.0134] n=250376
+    K1-K6_carried            +0.0124 [+0.0115, +0.0134] n=250376
+    K1-K6_carried - today    +0.0000 [+0.0000, +0.0000] n=250376
+    run-best MI 0.0018 nats (null mean 0.0002, q95 0.0003, 24419 pairs)
+fp01_10k d1: today 4.0868 (stored 4.0868, max|dev| 9.54e-07), 381 EOS resets
+    eps 1.0  : fit 4.0126 (+0.00000)  score 4.1611  d +0.0000 [+0.0000, +0.0000] n=250376  off0 +0.0000 [+0.0000, +0.0000] n=12265  H(prior) 1.000
+    eps 0.5  : fit 4.0133 (+0.00069)  score 4.1620  d +0.0008 [+0.0005, +0.0012] n=250376  off0 +0.0026 [+0.0006, +0.0046] n=12265  H(prior) 0.917
+    eps 0.2  : fit 4.0164 (+0.00373)  score 4.1652  d +0.0040 [+0.0034, +0.0046] n=250376  off0 +0.0089 [+0.0052, +0.0125] n=12265  H(prior) 0.747
+    eps 0.05 : fit 4.0211 (+0.00849)  score 4.1700  d +0.0088 [+0.0080, +0.0097] n=250376  off0 +0.0165 [+0.0116, +0.0215] n=12265  H(prior) 0.546
+    eps 0.01 : fit 4.0252 (+0.01258)  score 4.1741  d +0.0130 [+0.0119, +0.0140] n=250376  off0 +0.0215 [+0.0160, +0.0272] n=12265  H(prior) 0.411
+fp01_10k d6: today 4.0692 (stored 4.0692, max|dev| 1.91e-06), 381 EOS resets
+    eps 1.0  : fit 3.9951 (+0.00000)  score 4.1434  d +0.0000 [+0.0000, +0.0000] n=250376  off0 +0.0000 [+0.0000, +0.0000] n=12265  H(prior) 1.000
+    eps 0.5  : fit 3.9958 (+0.00072)  score 4.1444  d +0.0010 [+0.0007, +0.0014] n=250376  off0 +0.0013 [-0.0008, +0.0034] n=12265  H(prior) 0.917
+    eps 0.2  : fit 3.9990 (+0.00388)  score 4.1480  d +0.0046 [+0.0039, +0.0052] n=250376  off0 +0.0077 [+0.0041, +0.0113] n=12265  H(prior) 0.749
+    eps 0.05 : fit 4.0039 (+0.00883)  score 4.1533  d +0.0099 [+0.0090, +0.0109] n=250376  off0 +0.0152 [+0.0106, +0.0200] n=12265  H(prior) 0.551
+    eps 0.01 : fit 4.0082 (+0.01314)  score 4.1579  d +0.0145 [+0.0133, +0.0156] n=250376  off0 +0.0204 [+0.0150, +0.0262] n=12265  H(prior) 0.418
+[fp01_10k] eps* = 1.0 (fit on rows < 240, depth 6); score rows:
+    overall  +0.0000 [+0.0000, +0.0000] n=250376
+    offset 0 +0.0000 [+0.0000, +0.0000] n=12265
+    bin 0-0                +0.0000 [+0.0000, +0.0000] n=12265
+    bin 1-1                +0.0000 [+0.0000, +0.0000] n=12164
+    bin 2-2                +0.0000 [+0.0000, +0.0000] n=12156
+    bin 3-3                +0.0000 [+0.0000, +0.0000] n=12147
+    bin 4-7                +0.0000 [+0.0000, +0.0000] n=43987
+    bin 8-15               +0.0000 [+0.0000, +0.0000] n=69588
+    bin 16-1000000000      +0.0000 [+0.0000, +0.0000] n=80501
+    bin first_span_or_dump +0.0000 [+0.0000, +0.0000] n=7568
+    K1-K6_today              +0.0177 [+0.0163, +0.0192] n=250376
+    K1-K6_carried            +0.0177 [+0.0163, +0.0192] n=250376
+    K1-K6_carried - today    +0.0000 [+0.0000, +0.0000] n=250376
+    run-best MI 0.0009 nats (null mean 0.0002, q95 0.0004, 24419 pairs)
+wrote /home/wolfe/morph-scratch/tulv2/probes/carry_stage0_fp01.json
