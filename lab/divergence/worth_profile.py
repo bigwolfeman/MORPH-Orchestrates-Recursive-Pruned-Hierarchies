@@ -298,8 +298,8 @@ def main() -> None:
             lo, hi = np.percentile(bmeans, [2.5, 97.5], axis=0)
             arm["modes"][m] = {"mean": mean.tolist(), "ci_lo": lo.tolist(),
                                "ci_hi": hi.tolist()}
-            cells = "  ".join(f"{mu:+.3f}[{l:+.3f},{h:+.3f}]"
-                              for mu, l, h in zip(mean, lo, hi))
+            cells = "  ".join(f"{mu:+.3f}[{lo_:+.3f},{h:+.3f}]"
+                              for mu, lo_, h in zip(mean, lo, hi))
             print(f"{label:10s} {m:10s} {cells}", flush=True)
             # the token-weighted total, the one number the budget profile is compared with
             tot = float(sums.sum() / max(cnts.sum(), 1))
