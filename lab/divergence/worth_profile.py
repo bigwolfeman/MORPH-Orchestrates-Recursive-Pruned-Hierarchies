@@ -92,10 +92,49 @@ def token_strata(layout, labels_row, b: int, spec) -> list[tuple[int, int]]:
 
 
 @torch.no_grad()
+def _cell_mode(mode: str) -> int | None:
+    """``cell<j>`` -> j; ``cellall`` -> -1; any other mode -> None."""
+    if not mode.startswith("cell"):
+        return None
+    return -1 if mode == "cellall" else int(mode[4:])
+
+
+def _forward(model, inp, layout, mode: str) -> dict:
+    """``tul_forward_ablated`` under ``mode``. THE PER-CELL SPLIT (2026-09-26, plan C):
+    ``cell<j>`` zeroes prefix cell j of every slot AFTER ``TULSlots.prefix_project`` (the
+    projected value, ``E_pass`` included) and leaves the other cells intact; ``cellall``
+    zeroes every cell there. ``W_prefix`` has no bias, so with ``E_pass`` absent
+    ``cellall`` equals ``zero`` (the source state zeroed before the projection): that
+    equality is the self-check a hand run reads off the two TOTAL lines."""
+    j = _cell_mode(mode)
+    if j is None:
+        return model.tul_forward_ablated(inp, None, layout, plan_mode=mode)
+    tul = model.tul
+    K = int(tul.tul.prefix_k)
+    if j >= K:
+        raise ValueError(f"{mode}: the model has prefix_k={K} cells")
+    orig = tul.prefix_project
+
+    def _cut(*args, **kwargs):
+        values, pos = orig(*args, **kwargs)
+        values = values.clone()
+        if j < 0:
+            values.zero_()
+        else:
+            values[:, j::K] = 0                        # slot-major: index s*K + k
+        return values, pos
+
+    tul.prefix_project = _cut
+    try:
+        return model.tul_forward_ablated(inp, None, layout, plan_mode="normal")
+    finally:
+        del tul.prefix_project                         # back to the bound method
+
+
 def per_token_ce(model, inp, layout, labels, device, mode: str) -> torch.Tensor:
     """[B, L] CE at token positions (nan elsewhere), plan ablated per `mode`."""
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
-        res = model.tul_forward_ablated(inp.to(device), None, layout, plan_mode=mode)
+        res = _forward(model, inp.to(device), layout, mode)
     logits = res["logits"].float()
     B, L, V = logits.shape
     lab = labels.to(device).clone()
@@ -116,7 +155,8 @@ def main() -> None:
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--modes", default="auto",
                     help="comma-separated ablations, or 'auto' = zero,shuffle,wrong_seed "
-                         "plus all_slots wherever the arm supports it")
+                         "plus all_slots wherever the arm supports it. cell<j> zeroes prefix "
+                         "cell j only, cellall every cell (both after the projection)")
     ap.add_argument("--paired-rows", action="store_true",
                     help="pack the val rows with lab/divergence/_rows.py::pack_rows — the "
                          "SAME packer and the same stream core_depth_sweep.py uses — and "
