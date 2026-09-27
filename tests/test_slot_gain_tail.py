@@ -120,13 +120,18 @@ B, S, N, C = 3, 7, 4, 8          # a 4-D carrier: [B, S, n, C], per-slot norm ov
 
 
 class _Recorder:
-    """A core step that records its inputs: the hinge calls it on h and on h + d."""
+    """A core step that records its inputs: the hinge calls it on h and on h + d.
+
+    The hinge's two applications are checkpointed (2026-09-26), so the backward calls the
+    step again to recompute them. `inputs` keeps the FORWARD calls only; `replays` the
+    calls made inside a backward (an autograd graph task is running)."""
 
     def __init__(self, step):
-        self.step, self.inputs = step, []
+        self.step, self.inputs, self.replays = step, [], []
 
     def __call__(self, h, e, inj, **kw):
-        self.inputs.append(h.detach().clone())
+        in_bwd = torch._C._current_graph_task_id() != -1
+        (self.replays if in_bwd else self.inputs).append(h.detach().clone())
         return self.step(h, e, inj, **kw)
 
 
@@ -276,6 +281,11 @@ def test_per_slot_gain_on_the_real_model_matches_the_core_step_reapplied():
     assert len(calls) == 1
     c = calls[0]
     h0, h1 = c["rec"].inputs
+    # the checkpointed applications were recomputed in the backward at the same two
+    # points (in whatever order the backward reaches them)
+    rp = c["rec"].replays
+    assert len(rp) == 2 and not torch.equal(h0, h1)
+    assert {i for r in rp for i, x in enumerate((h0, h1)) if torch.equal(r, x)} == {0, 1}
 
     def step(h):
         with torch.no_grad():

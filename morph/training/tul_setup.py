@@ -104,6 +104,8 @@ KNOWN_TUL_KEYS = frozenset({
     "spandec_parallel_span_cap", "spandec_parallel_detach",
     # LXTUL-E Stage 1 (tul.code_enum_k, 2026-09-24): the enumerated loop code
     "code_enum_k", "code_enum_ratio",
+    # LX hard credit (2026-09-26): MCL over the K rollouts at train
+    "code_enum_credit", "code_enum_hard_eps",
     # map-cause I-2 (2026-09-24): the slot loop's source enters at pass 0 only
     "slot_source_once",
     # span-level NextLat (arXiv 2511.05963, 2026-09-25)
@@ -337,6 +339,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_parallel_detach=bool(tc.get("spandec_parallel_detach", False)),
         code_enum_k=int(tc.get("code_enum_k", 1)),
         code_enum_ratio=float(tc.get("code_enum_ratio", 0.1)),
+        code_enum_credit=str(tc.get("code_enum_credit", "soft")),
+        code_enum_hard_eps=float(tc.get("code_enum_hard_eps", 0.05)),
         slot_source_once=bool(tc.get("slot_source_once", False)),
         nextlat_weight=float(tc.get("nextlat_weight", 0.0)),
         nextlat_beta=float(tc.get("nextlat_beta", 1.0)),
@@ -594,6 +598,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "spandec_parallel_detach": model_cfg.spandec_parallel_detach,
         "code_enum_k": model_cfg.code_enum_k,
         "code_enum_ratio": model_cfg.code_enum_ratio,
+        "code_enum_credit": model_cfg.code_enum_credit,
+        "code_enum_hard_eps": model_cfg.code_enum_hard_eps,
         "slot_source_once": model_cfg.slot_source_once,
         "nextlat_weight": model_cfg.nextlat_weight,
         "nextlat_beta": model_cfg.nextlat_beta,
@@ -1168,16 +1174,31 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"over the K rollouts. A label-free forward returns the per-span sequential "
               f"Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, "
               f"`tul/enum_exit_sep` (morph/model/tul_code_enum.py)", flush=True)
+    if model_cfg.code_enum_k > 1 and model_cfg.code_enum_credit == "hard":
+        _ke, _eh = model_cfg.code_enum_k, model_cfg.code_enum_hard_eps
+        print(f"  LX HARD CREDIT ON: the TRAINING token loss is sum_k c_k CE_k(span), c = "
+              f"stop_grad({1.0 - _eh:g} on the span's best rollout, {_eh / (_ke - 1):g} on "
+              f"each other) instead of the mixture's posterior credit. Eval, the deploy "
+              f"read and every val metric stay the mixture; train/loss stays the mixture "
+              f"NLL (`tul/enum_ce_mix`), the objective is `tul/enum_hard_obj`, the wins "
+              f"`tul/enum_code_win{{k}}` / `tul/enum_win_entropy` "
+              f"(.agents/notes/proposed/architecture/2026-09-26-lx-hard-credit.md)",
+              flush=True)
     if model_cfg.code_enum_k > 1 and model_cfg.fan_k > 0:
         print(f"  LX-FAN ON: K={model_cfg.code_enum_k} code rollouts x M={model_cfg.fan_k} "
               f"write-all cells per slot. Rollout k re-adds u_k to EVERY cell at the end of "
               f"every pass (sized by that cell's own rms); each cell is written 1:1 into its "
               f"prefix cell; the coda reads all M under each code and the token loss is the "
               f"exact per-span mixture over the K rollouts. The register pools the prelude "
-              f"ONCE (base rows) and is tiled. No WTA term, no parallel head (refused). "
-              f"`fan/*_ce` oracle readings are per-span MIXTURES over the K rollouts; "
-              f"`tul/enum_exit_sep` reads the written cells "
-              f"(.agents/notes/proposed/architecture/2026-09-26-lx-fan.md)", flush=True)
+              f"ONCE (base rows) and is tiled. "
+              + (f"WTA over the cells ON (lambda {model_cfg.fan_all_wta_lambda}, eps "
+                 f"{model_cfg.fan_select_eps}): per (rollout, slot) winner, M no-grad coda "
+                 f"passes (one per stream, K-fold batch) + one grad pass. "
+                 if model_cfg.fan_all_wta_lambda > 0 else "No WTA term. ")
+              + "No parallel head (refused). "
+              "`fan/*_ce` oracle readings are per-span MIXTURES over the K rollouts; "
+              "`tul/enum_exit_sep` reads the written cells "
+              "(.agents/notes/proposed/architecture/2026-09-26-lx-fan.md)", flush=True)
     if model_cfg.gram and model_cfg.gram_objective == "iw":
         # LXTUL-GK (tul.gram_objective="iw", 2026-09-23). NOT the LXTUL-G banner below:
         # there is no posterior and no KL, and train and eval draw from the SAME prior.

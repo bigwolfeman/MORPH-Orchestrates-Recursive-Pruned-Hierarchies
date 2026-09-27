@@ -59,8 +59,9 @@ from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
 from .tul_nextlat import SpanTransition, nextlat_pairs, span_token_embeddings
 from .tul_code_enum import TULCodeEnum
-from .rollout_mixture import (evidence_labels, log_mean_exp, mixture_label_nll,
-                              mixture_logprobs, sequential_log_weights, span_segment_start)
+from .rollout_mixture import (evidence_labels, hard_credit_span_sum, log_mean_exp,
+                              mixture_label_nll, mixture_logprobs, sequential_log_weights,
+                              span_segment_start)
 from .tul_vq import TULThoughtVQ
 from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        cfm_null_floor, cfm_pair, code_rmsnorm, code_target_infonce,
@@ -2797,6 +2798,9 @@ class MORPHTransformer(nn.Module):
         # train AND eval, with or without labels.
         self.tul_code_enum: TULCodeEnum | None = None
         self._code_enum_k = 0
+        # LX hard credit (tul.code_enum_credit="hard"): the relaxed winner's eps, a
+        # build-time float, or None (the soft mixture). Read by `_enum_mix_losses` at train.
+        self._enum_hard_eps: float | None = None
         if cfg.tul is not None and int(cfg.tul.code_enum_k) > 1:
             if cfg.n_core == 0:
                 raise ValueError(
@@ -2818,6 +2822,8 @@ class MORPHTransformer(nn.Module):
             self._code_enum_k = int(cfg.tul.code_enum_k)
             self.tul_code_enum = TULCodeEnum(d, self._code_enum_k,
                                              float(cfg.tul.code_enum_ratio))
+            if cfg.tul.code_enum_credit == "hard":
+                self._enum_hard_eps = float(cfg.tul.code_enum_hard_eps)
         # The K rollouts must differ in their Gaussian steps (GK) or their codes (LXTUL-E)
         # ALONE: the core and the coda run on the expanded batch, so their dropout draws ONE
         # mask per base row (morph/model/rollout_dropout.py). The prelude runs once on the
@@ -4969,7 +4975,17 @@ class MORPHTransformer(nn.Module):
         _xn_base = xn
         if iw_rollouts > 1:
             xn = repeat_along_batch(xn, iw_rollouts)
-        e = gather_valid(xn, gidx, gvalid)                            # [B, S, n, C]
+            # The slots are gathered from the BASE rows and the gathered states tiled: the
+            # K rollouts share the prelude, so the values are the same, and `gather` saves
+            # its INPUT for the backward, which on the tiled `xn` kept a K-fold copy of the
+            # whole fp32 carrier alive until the backward (80 MiB, 60 MiB more than the base
+            # rows' copy, per base row on LX-Fan at M = 4; the 2026-09-26 credit memory table). The rollout layout's rows are K
+            # copies of the base layout's.
+            _b0 = B // iw_rollouts
+            e = repeat_along_batch(
+                gather_valid(_xn_base, gidx[:_b0], gvalid[:_b0]), iw_rollouts)
+        else:
+            e = gather_valid(xn, gidx, gvalid)                        # [B, S, n, C]
         # `tul.fan_trigger_every_pass` re-injects THIS tensor (the per-stream trigger,
         # `[B, S*M, C]`, single-stream, pads exactly 0) at every later pass. It is stashed
         # rather than recomputed: one register call per forward, one graph, so the seed add
@@ -6182,11 +6198,16 @@ class MORPHTransformer(nn.Module):
                 if _prog:
                     _prm = _prm & ~_pfx
                 if bool(_prm.any()):
-                    _pn = _h_det.flatten(2).float()
-                    _po = h.flatten(2).float()
-                    _pd = _po if _scse is None else _po + h_star.flatten(2).float()
+                    # Gathered to the charged slots BEFORE the fp32 casts: autograd keeps
+                    # the fp32 difference and denominator of every pass for the backward,
+                    # and at full width that was a carrier-sized fp32 pair per pass (the
+                    # fixed-point term below, 2026-09-26 credit memory table). Per slot the
+                    # same reduction over the same elements: the same numbers.
+                    _pn = _h_det[_prm].flatten(1).float()
+                    _po = h[_prm].flatten(1).float()
+                    _pd = _po if _scse is None else _po + h_star[_prm].flatten(1).float()
                     _pr = (_pn - _po).pow(2).sum(-1) / (_pd.pow(2).sum(-1) + 1e-6)
-                    _pr_terms.append(_pr[_prm])
+                    _pr_terms.append(_pr)
             if _fp_lam > 0.0 and t >= n_nograd and not halt:
                 _fin = active & layout.slot_valid & ~(depths > t + 1)        # finish here
                 if _prog:
@@ -6197,11 +6218,15 @@ class MORPHTransformer(nn.Module):
                 if bool(_fin.any()):
                     # `_h_det`: u_T, the deterministic part (tul.gram; `h_new` itself on
                     # every other arm) — ||u_T - h_{T-1}||^2 / ||u_T||^2.
-                    _fn = _h_det.flatten(2).float()
-                    _fo = h.flatten(2).float()
-                    _fd = _fn if _scse is None else _fn + h_star.flatten(2).float()
-                    _rel = (_fn - _fo).pow(2).sum(-1) / (_fd.pow(2).sum(-1) + 1e-6)   # [B, S]
-                    _fp_terms.append(_rel[_fin])
+                    # Gathered to the FINISHING slots before the fp32 casts (the pass
+                    # residual's rule above): each slot finishes once, so the saved fp32
+                    # difference and denominator over the whole loop are one carrier, not
+                    # one per pass (2.3 GB of fp32 at the lxfan6 panel shape).
+                    _fn = _h_det[_fin].flatten(1).float()
+                    _fo = h[_fin].flatten(1).float()
+                    _fd = _fn if _scse is None else _fn + h_star[_fin].flatten(1).float()
+                    _rel = (_fn - _fo).pow(2).sum(-1) / (_fd.pow(2).sum(-1) + 1e-6)   # [N_fin]
+                    _fp_terms.append(_rel)
 
             # ── tul.loop_denoise: THIS PASS'S PREDICTION, AND ITS TERM ────────────
             # Read off the SAME post-step state the exit is read off — after the
@@ -6465,23 +6490,22 @@ class MORPHTransformer(nn.Module):
         _xr0 = ({"xhc_route": {"replay": False, "idx": {}}} if self._xhc_streams else {})
         _xr1 = ({"xhc_route": {"replay": True, "idx": _xr0["xhc_route"]["idx"]}}
                 if self._xhc_streams else {})
-        # plan C also CHECKPOINTS the two applications. They carry grad (the penalty shapes
-        # the core weights) and are not inside the loop's own checkpoint, so each keeps a
-        # whole pass's activations until the backward; on the 16-stream carrier that was
-        # 8.5 GB of a 24.0 GB step at the fp01 panel shape (measured 2026-09-26, eager; the
-        # same step with the hinge off: 15.5 GB). The recompute replays the RNG state each
-        # call saw (`preserve_rng_state`), the first call re-records the same deterministic
-        # choice and the second replays it, so the value and the gradient are the same
-        # function. A Python-level constant: every other model runs the two calls as before.
-        if self._xhc_streams:
-            def _app(h_, xr):
-                return checkpoint(core_step, h_, e_arg, inj_arg, ret_state=ret_state,
-                                  iter_idx=t, stage_cond=stage_cond, carry=carry,
-                                  use_reentrant=False, **xr)
-        else:
-            def _app(h_, xr):
-                return core_step(h_, e_arg, inj_arg, ret_state=ret_state, iter_idx=t,
-                                 stage_cond=stage_cond, carry=carry, **xr)
+        # The two applications are CHECKPOINTED, on every model. They carry grad (the
+        # penalty shapes the core weights) and are not inside the loop's own checkpoint,
+        # so unchecked each keeps a whole pass's activations until the backward: on plan
+        # C's 16-stream carrier 8.5 GB of a 24.0 GB step at the fp01 panel shape (measured
+        # 2026-09-26, eager; hinge off: 15.5 GB), and on LX-Fan's K*B rows x S*M cells the
+        # largest saved item of the step (1.80 of 4.87 GiB at batch 1, 2026-09-26, the
+        # credit memory table). The recompute replays the RNG state each call saw
+        # (`preserve_rng_state`), and under plan C the first call re-records the same
+        # deterministic choice and the second replays it, so the value and the gradient
+        # are the same function (bit-identical pins: tests/test_tul_lx_credit.py and
+        # /home/wolfe/morph-scratch/credit/pin_compare.py). The cost is two core passes
+        # recomputed in the backward, the price the loop's own passes already pay.
+        def _app(h_, xr):
+            return checkpoint(core_step, h_, e_arg, inj_arg, ret_state=ret_state,
+                              iter_idx=t, stage_cond=stage_cond, carry=carry,
+                              use_reentrant=False, **xr)
         try:
             _restore()
             f0, _ = _app(hp, _xr0)
@@ -7674,8 +7698,8 @@ class MORPHTransformer(nn.Module):
     @torch.compiler.disable
     def _tul_fan_all(self, cells: Tensor, xn: Tensor, x0: Tensor, bigram_emb,
                      input_ids: Tensor, labels: Tensor | None, layout: SlotLayout,
-                     L: int, coda_kw, tg_reset, plan_mode: str, stats: dict
-                     ) -> tuple[Tensor, Tensor, Tensor | None]:
+                     L: int, coda_kw, tg_reset, plan_mode: str, stats: dict,
+                     n_rollouts: int = 1) -> tuple[Tensor, Tensor, Tensor | None]:
         """``tul.fan_mix="all"``: every stream is written, the coda picks per token,
         and responsibility is winner-takes-all.
 
@@ -7703,6 +7727,24 @@ class MORPHTransformer(nn.Module):
 
         COST at train: K no-grad ``_back_region`` passes (the select arm's) plus ONE
         ``_back_region`` pass with activations — one more coda backward per step.
+
+        ``n_rollouts`` R (LX-Fan WTA, ``tul.code_enum_k`` with ``fan_all_wta_lambda > 0``,
+        2026-09-26): every tensor is the R-fold rollout batch ``[R*B0, ...]``, rollout-major.
+        The port is a2's term run on that batch, unchanged: the winner is picked per
+        (rollout, slot) — the cells of rollout k compete under code k — and the term is
+        the token-weighted winner-alone CE over all R*B0 rows (the mean over rollouts of
+        a2's term; no posterior over rollouts, the soft mixture already assigns that
+        credit). ONE thing is not a2's: the no-grad table runs ONE PASS PER STREAM on the
+        rollout batch instead of one pass over the streams stacked. The core and coda
+        dropout of a code model is ``RolloutSharedDropout(n_rep=R)``, which draws ONE mask
+        per row of the first 1/R of a pass's rows and tiles it R times. A per-stream pass
+        gives row (k, i, b) its own draw's mask for (i, b): shared by the R rollouts of a
+        row, as in every other LX coda pass, and independent across the M streams (separate
+        draws) and the B0 rows, as in a2's pass. Stacked stream-major, the mask would have
+        gone to (k, b): each rollout a different mask, the M streams of a rollout one
+        shared mask. (A rollout-major [R, M, B0] stack gets the masks right too, but it is
+        M*R*B rows of eager strict-coda attention in one pass: 96 rows at batch 6, a 5 GB
+        score tensor per attention call.) At R = 1 the batched a2 pass is untouched.
         """
         tc = self.cfg.tul
         k = int(cells.shape[2])
@@ -7726,36 +7768,54 @@ class MORPHTransformer(nn.Module):
         w_head_pad = pad_vocab_align8(w_head)          # once per forward (perf: aligned GEMM)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]                # [B, S]
         ok = layout.slot_valid & (n_tok > 0)
+        R = int(n_rollouts)
+        # The stream GROUPS of the no-grad passes (docstring, n_rollouts). a2 (R = 1): ONE
+        # batched pass over all K streams, stacked stream-major [K, B]. Under the code
+        # (R > 1): one pass PER STREAM on the rollout batch [R*B0], the layout of the
+        # model's own coda pass. A group holds more than one stream ONLY at R = 1: the
+        # rollout-shared dropout tiles a mask over the first 1/R of a pass's rows, so a
+        # multi-stream group at R > 1 would tie the wrong rows' masks.
+        groups_i = [list(range(k))] if R == 1 else [[i] for i in range(k)]
         with torch.no_grad():
             base_d = base.detach()
             cells_d = cells.detach()
-            x_list = []
-            for i in range(k):
-                values, pos = self._tul_fan_stream_write(cells_d, i, layout, L)
-                x_list.append(scatter_positions(base_d, pos, values))
-            # ONE batched coda pass over the K written inputs stacked along the batch
-            # axis, instead of K sequential `_back_region` calls (perf: 971 ms/step
-            # measured on this arm, `aten::mm` 27.9%/`cudaLaunchKernel` 476 ms self CPU —
-            # coda launch/kernel overhead dominates at this shape, so K forwards of batch
-            # B pay it K times where one forward of batch K*B pays it once). Every OTHER
-            # coda input is stream-INDEPENDENT (only the written cells differ across the
-            # K streams), so it is repeated K times along the batch axis
-            # (`repeat_along_batch`) rather than recomputed — `x0`/`bigram_emb` carry no
-            # per-stream signal and `coda_kw`/`ret_reset_mask`/`inject_keep`/`input_ids`
-            # are one dict/mask/id-tensor built once per forward, upstream of the fan.
-            x_all = torch.cat(x_list, dim=0)                                   # [K*B, L, ...]
-            xh_all = self._back_region(
-                x_all, repeat_along_batch(x0, k), repeat_along_batch(bigram_emb, k),
-                repeat_along_batch(input_ids, k), inject_keep=repeat_along_batch(keep, k),
-                attn_kwargs=repeat_along_batch(coda_kw, k),
-                ret_reset_mask=repeat_along_batch(tg_reset, k))
-            # Split back into the K streams (row block i is stream i, the same order the
-            # inputs were concatenated in) — cheap CE bookkeeping against the ALREADY
-            # batched coda output, not a second coda pass.
-            per_stream = [accumulate_span_ce(xh_all[i * B:(i + 1) * B], w_head_pad, gid,
-                                             keep_tok, lab, g_bins,
-                                             vocab_size=vocab_size)[:, 1:]
-                         for i in range(k)]
+            per_stream: list[Tensor] = []
+            for grp in groups_i:
+                n = len(grp)
+                x_g = []
+                for i in grp:
+                    values, pos = self._tul_fan_stream_write(cells_d, i, layout, L)
+                    x_g.append(scatter_positions(base_d, pos, values))
+                # a2: ONE batched coda pass over the K written inputs stacked along the
+                # batch axis, instead of K sequential `_back_region` calls (perf: 971
+                # ms/step measured on this arm, `aten::mm` 27.9%/`cudaLaunchKernel` 476 ms
+                # self CPU — coda launch/kernel overhead dominates at this shape, so K
+                # forwards of batch B pay it K times where one forward of batch K*B pays
+                # it once). Under the code a pass is already the K-fold rollout batch, and
+                # stacking the M streams on top would be M*R*B rows of eager strict-coda
+                # attention in one go (the [rows, H, L, L] score tensor alone is 5 GB at
+                # 96 rows, L 1280), so each stream is its own pass. Every OTHER coda input
+                # is stream-INDEPENDENT (only the written cells differ across the streams),
+                # so it is repeated along the batch axis (`repeat_along_batch`) rather
+                # than recomputed — `x0`/`bigram_emb` carry no per-stream signal and
+                # `coda_kw`/`ret_reset_mask`/`inject_keep`/`input_ids` are one
+                # dict/mask/id-tensor built once per forward, upstream of the fan.
+                x_all = torch.cat(x_g, dim=0) if n > 1 else x_g[0]          # [n*B, L, ...]
+                del x_g
+                xh_all = self._back_region(
+                    x_all, repeat_along_batch(x0, n), repeat_along_batch(bigram_emb, n),
+                    repeat_along_batch(input_ids, n), inject_keep=repeat_along_batch(keep, n),
+                    attn_kwargs=repeat_along_batch(coda_kw, n),
+                    ret_reset_mask=repeat_along_batch(tg_reset, n))
+                del x_all
+                # Split back into the group's streams (row block j is stream grp[j], the
+                # order the inputs were concatenated in) — cheap CE bookkeeping against
+                # the ALREADY computed coda output, not a second coda pass.
+                per_stream += [accumulate_span_ce(xh_all[j * B:(j + 1) * B], w_head_pad,
+                                                  gid, keep_tok, lab, g_bins,
+                                                  vocab_size=vocab_size)[:, 1:]
+                               for j in range(n)]
+                del xh_all
             ce = torch.stack(per_stream, dim=-1)                                # [B, S, K]
             if self._fan_all_ce_capture is not None:
                 # Test hook (the `_trigger_capture` pattern): the ONLY way a test can
@@ -10184,6 +10244,17 @@ class MORPHTransformer(nn.Module):
         n_w = w.sum().clamp(min=1e-6)
         loss = -bound_sum / n_w
         out: dict = {"loss": loss, "n_targets": w.sum()}
+        if self._enum_hard_eps is not None and self.training:
+            # LX hard credit (tul.code_enum_credit="hard"): the TRAINING loss is the
+            # relaxed winner-take-all objective over the same per-span S_k(g) (so the same
+            # CE_k(g) = -S_k(g), the same scored tokens, no extra pass). `loss` above stays
+            # the model's CE: `enum_ce_mix` below reads it, and `enum_hard_weighted` is the
+            # objective's excess over it, which train.py subtracts so train/loss is the
+            # mixture NLL an fp01 run logs (the `*_weighted` contract).
+            hard = -hard_credit_span_sum(S, scored, self._enum_hard_eps) / n_w
+            out["loss"] = hard
+            out["enum_hard_obj"] = hard.detach()
+            out["enum_hard_weighted"] = (hard - loss).detach()
         with torch.no_grad():
             mix = loss.detach()
             ce_code = -(lp.detach() * w.unsqueeze(0)).sum(1) / n_w                 # [K]
@@ -10200,6 +10271,13 @@ class MORPHTransformer(nn.Module):
             win = S.detach().argmax(dim=0)
             for k in range(K):
                 out[f"enum_code_win{k}"] = ((win == k).float() * sf).sum() / n_sc
+            # The spread of the WINS over the rollouts (the hard credit's own winner, the
+            # same argmax): H(win fractions) / log K, 1 = every rollout wins equally often,
+            # 0 = one rollout wins every span. Not `enum_w_entropy`, which is the mean
+            # per-SPAN posterior entropy (how sharply each span is explained).
+            frac = torch.stack([out[f"enum_code_win{k}"] for k in range(K)])
+            out["enum_win_entropy"] = (
+                -(frac * torch.log(frac.clamp_min(1e-30))).sum() / math.log(K))
         if not want_groups:
             return out
         with torch.no_grad():
@@ -10897,9 +10975,12 @@ class MORPHTransformer(nn.Module):
                         # below takes the register's `cells=` route); `h_slots` here is
                         # only the mean the auxiliary readers see. The winner-alone
                         # span CE is charged at train (`_tul_fan_all`).
+                        # LX-Fan WTA: `n_rollouts` only under the code (the
+                        # `_tul_fan_oracle` precedent), so a2 calls it as it always did.
                         h_slots, _fan_w, fan_wta_loss = self._tul_fan_all(
                             _reg_cells, xn, x0, bigram_emb, input_ids, labels, layout, L,
-                            tg_attn_kwargs, tg_reset, plan_mode, fan_stats)
+                            tg_attn_kwargs, tg_reset, plan_mode, fan_stats,
+                            **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
                     else:
                         h_slots, _fan_w = self.tul_fan(_reg_cells)
                     # Detached 0-dim TENSORS, not `float(...)` (perf: no host sync on the

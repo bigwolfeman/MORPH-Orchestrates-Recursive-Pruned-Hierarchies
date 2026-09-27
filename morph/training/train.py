@@ -167,7 +167,12 @@ def evaluate(
                           # head's mixture term, so val loss stays the MODEL's CE.
                           "par_weighted",
                           # span-level NextLat (tul.nextlat_weight, 2026-09-25)
-                          "nextlat_weighted"):
+                          "nextlat_weighted",
+                          # LX hard credit (tul.code_enum_credit="hard", 2026-09-26): the
+                          # hard objective's excess over the mixture NLL. Train-only (the
+                          # eval forward is the mixture), listed so a train-mode val
+                          # forward still reports the MODEL's CE.
+                          "enum_hard_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -3758,6 +3763,7 @@ def main(cfg: DictConfig) -> None:
                                                    # code_target_weight
                         "par_weighted",   # tul.spandec_parallel (LXTUL-E)
                         "nextlat_weighted",   # span-level NextLat, 2026-09-25
+                        "enum_hard_weighted",  # LX hard credit: objective - mixture NLL
                         "coda_logit_l2_weighted"):  # tul.coda_logit_l2 (spectral
                                                      # decoupling, 2026-09-23): folded
                                                      # into the fused CE kernel

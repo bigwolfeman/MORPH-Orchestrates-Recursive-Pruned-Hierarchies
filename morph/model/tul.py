@@ -981,14 +981,29 @@ class TULConfig:
     # 1 = off: nothing is built, no RNG is drawn, the forward is the one from before the
     # key. code_enum_ratio is refused at K = 1.
     #
-    # LX-Fan (2026-09-26): on the write-all fan (`fan_k: M`, `fan_mix: all`,
-    # `fan_all_wta_lambda: 0`, no parallel head) the loop runs on the cell axis, so the code
-    # is added to EVERY cell of rollout k, sized by that cell's own rms: K x M loop streams
-    # per slot, each cell written 1:1, the same per-span mixture over the K rollouts.
+    # LX-Fan (2026-09-26): on the write-all fan (`fan_k: M`, `fan_mix: all`, no parallel
+    # head) the loop runs on the cell axis, so the code is added to EVERY cell of rollout
+    # k, sized by that cell's own rms: K x M loop streams per slot, each cell written 1:1,
+    # the same per-span mixture over the K rollouts. `fan_all_wta_lambda > 0` keeps a2's
+    # winner-take-all over the cells, per (rollout, slot) (`_tul_fan_all(n_rollouts=)`).
     # Note: .agents/notes/proposed/architecture/2026-09-26-lx-fan.md
     # Note: .agents/notes/proposed/architecture/2026-09-23-provable-loop-contribution.md
     code_enum_k: int = 1
     code_enum_ratio: float = 0.1
+    # code_enum_credit (LX hard credit, 2026-09-26): how the TRAINING token loss credits
+    # the K rollouts of a span. "soft" (the default, the forward from before the key) is
+    # the exact mixture -log mean_k exp(-CE_k(span)), whose gradient weights rollout k by
+    # its posterior softmax_k(-CE_k); with small fixed codes the CEs start equal, w ~ 1/K,
+    # and nothing breaks the symmetry (the rollouts were measured to be an ensemble,
+    # lab/experiments/failures/2026-09-26-lx-selection-ceiling.md). "hard" is Multiple
+    # Choice Learning with a relaxed winner: sum_k c_k CE_k(span), c = stop_grad of
+    # 1 - code_enum_hard_eps on argmin_k CE_k(span) (ties: lowest k) and eps / (K - 1) on
+    # every other rollout. Same CE_k, same scored tokens, no extra pass. TRAINING ONLY:
+    # eval, the deploy read and every val metric stay the mixture, and train/loss stays
+    # the mixture NLL (the hard objective's excess is `enum_hard_weighted`).
+    # Note: .agents/notes/proposed/architecture/2026-09-26-lx-hard-credit.md
+    code_enum_credit: str = "soft"
+    code_enum_hard_eps: float = 0.05
     # ── SOURCE ONCE (map-cause intervention I-2, 2026-09-24) ─────────────────────────
     # slot_source_once: the slot loop's per-pass SOURCE enters at pass 0 only. On passes
     # t >= 1 the core step keeps `DiagonalInjection`'s decay (h_ctx <- A * h_ctx) and drops
@@ -3590,12 +3605,38 @@ class TULConfig:
         over)."""
         if self.code_enum_k < 1:
             raise ValueError(f"tul.code_enum_k must be >= 1 (1 = off), got {self.code_enum_k}")
+        if self.code_enum_credit not in ("soft", "hard"):
+            raise ValueError(f"tul.code_enum_credit must be 'soft' or 'hard', got "
+                             f"{self.code_enum_credit!r}")
+        if self.code_enum_credit == "soft" and self.code_enum_hard_eps != 0.05:
+            raise ValueError(
+                "tul.code_enum_hard_eps set with tul.code_enum_credit='soft': the soft "
+                "mixture has no winner to relax, so the knob would be silently ignored.")
         if self.code_enum_k == 1:
             if self.code_enum_ratio != 0.1:
                 raise ValueError(
                     "tul.code_enum_ratio set at tul.code_enum_k=1: there is no code to "
                     "scale, so the knob would be silently ignored.")
+            if self.code_enum_credit != "soft":
+                raise ValueError(
+                    "tul.code_enum_credit='hard' at tul.code_enum_k=1: there is one "
+                    "rollout, so there is no credit to assign.")
             return
+        if self.code_enum_credit == "hard":
+            if self.spandec_parallel and not self.spandec_parallel_detach:
+                raise NotImplementedError(
+                    "tul.code_enum_credit='hard' with a LIVE parallel head "
+                    "(spandec_parallel true, spandec_parallel_detach false): the head's "
+                    "per-span mixture sends the loop a POSTERIOR credit over the same K "
+                    "rollouts beside the hard one, so the arm would not say which credit "
+                    "did what. fp01's head is detached (a probe); set "
+                    "spandec_parallel_detach true.")
+            _eps_max = (self.code_enum_k - 1) / self.code_enum_k
+            if not 0.0 <= self.code_enum_hard_eps <= _eps_max:
+                raise ValueError(
+                    f"tul.code_enum_hard_eps must be in [0, (K-1)/K = {_eps_max:g}] (at the "
+                    f"top every rollout gets 1/K, the uniform credit; above it the winner "
+                    f"gets LESS than a loser), got {self.code_enum_hard_eps}")
         if not self.code_enum_ratio > 0.0:
             raise ValueError(
                 f"tul.code_enum_ratio must be > 0 (at 0 the K rollouts are identical and "
@@ -3613,12 +3654,11 @@ class TULConfig:
              f"fan_mix='all') is built under the code; a mixing or select fan collapses the "
              f"cells to one state BEFORE the coda, so the fan would be a second width axis "
              f"in front of the rollouts"),
-            (self.fan_k > 0 and self.fan_all_wta_lambda > 0.0,
-             f"tul.fan_all_wta_lambda={self.fan_all_wta_lambda} (LX-Fan): the WTA term is a "
-             f"SECOND credit assignment (a winner stream per slot) beside the per-span "
-             f"mixture over the K codes, costs M no-grad coda passes plus one with grad on "
-             f"the K-fold batch, and its batched no-grad pass stacks M*K*B rows under the "
-             f"rollout-shared dropout, which ties the wrong rows' masks. Set it to 0"),
+            # `fan_all_wta_lambda > 0` under the code (a2's winner-take-all over the
+            # cells, kept) is BUILT since 2026-09-26: `_tul_fan_all(n_rollouts=K)` picks
+            # the winner per (rollout, slot) and runs its no-grad table one pass PER STREAM
+            # on the rollout batch, so the rollout-shared dropout ties each row's K
+            # rollouts and nothing else. Note: the LX-Fan note's 2026-09-26 amendment.
             (self.fan_k > 0 and self.fan_seed_noise > 0.0,
              "tul.fan_seed_noise (LX-Fan): one draw per ROW, so the K rollouts of a row "
              "would differ in their noise as well as their code"),

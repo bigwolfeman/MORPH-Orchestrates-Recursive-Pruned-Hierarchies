@@ -7,7 +7,10 @@ Three readers use it:
   deploy read (``MORPHTransformer._enum_mixture_logprobs``, the label-free forward);
 * LXTUL-E's parallel span head (:func:`morph.model.tul_spandec_parallel.mixture_span_nll`).
 
-Every one of them reduces to :func:`log_mean_exp` over the rollout axis.
+Every one of them reduces to :func:`log_mean_exp` over the rollout axis. LX's HARD credit
+(``tul.code_enum_credit="hard"``, :func:`hard_credit_span_sum`) replaces that training
+objective with a relaxed winner-take-all over the same per-span sums; it is not a
+mixture and no read uses it.
 
 THE PER-SPAN READ, AS A PREDICTOR. For one span ``g`` with scored positions ``p_1 < ... <
 p_n`` and per-rollout log-probs ``lp_r(p)`` of each position's label,
@@ -165,6 +168,32 @@ def fixed_share_log_prior(lp: Tensor, scored: Tensor, seg_start: Tensor, eps: fl
         nxt = torch.where(has[:, g].unsqueeze(0), nxt, cur)           # empty run: pass
         cur = torch.where(rst[:, g].unsqueeze(0), torch.zeros_like(nxt), nxt)
     return out.gather(-1, idx)
+
+
+def hard_credit_weights(S: Tensor, eps: float) -> Tensor:
+    """``[R, G]`` the relaxed one-hot credit of LX's hard credit
+    (``tul.code_enum_credit="hard"``): ``1 - eps`` on each group's best rollout
+    ``argmax_r S[r, g]`` (the lowest ``r`` on a tie: ``torch.argmax`` returns the first
+    maximum) and ``eps / (R - 1)`` on every other rollout. Each column sums to 1. No
+    gradient: it is built from ``S.detach()``."""
+    R = int(S.shape[0])
+    if R < 2:
+        raise ValueError(f"hard credit needs R >= 2 rollouts, got {R}")
+    win = S.detach().argmax(dim=0, keepdim=True)                          # [1, G]
+    c = torch.full_like(S, eps / (R - 1), dtype=torch.float32)
+    return c.scatter_(0, win, 1.0 - eps)
+
+
+def hard_credit_span_sum(S: Tensor, scored: Tensor, eps: float) -> Tensor:
+    """``sum_g sum_r c_r(g) S_r(g)`` over the ``scored`` groups, ``c`` =
+    :func:`hard_credit_weights` (stop-graded). ``S`` ``[R, G]`` the per-rollout weighted
+    span log-likelihoods of :func:`morph.model.tul_gram.iw_span_bound` (``-S`` is the
+    span's summed CE), ``scored`` ``[G]`` bool. Multiple Choice Learning with a relaxed
+    winner: the gradient into ``S_r(g)`` is ``c_r(g)`` exactly (the soft mixture's is
+    the posterior ``softmax_r S(g)``). fp32."""
+    c = hard_credit_weights(S, eps)
+    per = (c * S.float()).sum(dim=0)                                      # [G]
+    return torch.where(scored, per, torch.zeros_like(per)).sum()
 
 
 def mixture_label_nll(lp: Tensor, logw: Tensor) -> Tensor:

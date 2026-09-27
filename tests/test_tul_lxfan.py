@@ -27,8 +27,9 @@ What each test pins:
   * THE REGISTER RUNS ONCE on the base rows; WTA 0 runs NO extra coda pass; the epi
     ridge under the code is the base fit on the rollout-mean deviations.
   * THE EAGER GENERATOR runs on LX-Fan at M = 4 and 6 and repeats under a seed.
-  * REFUSALS: gone for write-all + WTA 0 + no probe head only; every other fan mode, WTA
-    > 0, seed noise, the bare register and the probe head stay refused; the cached
+  * REFUSALS: gone for write-all + no probe head only (WTA > 0 is built since the 2026-09-26
+    amendment, tests/test_tul_lx_credit.py); every other fan mode, seed noise, the bare
+    register and the probe head stay refused; the cached
     decoder refuses (tests/test_tul_generate_cached.py).
   * THE CONFIGS compose, differ from their parents by the stated keys, build and train a
     step on the tiny model.
@@ -465,13 +466,14 @@ def test_the_supported_combination_builds_at_four_and_six_cells():
      "fan_mix='softmax'"),
     (dict(fan_mix="select", fan_all_wta_lambda=1.0), NotImplementedError,
      "fan_mix='select'"),
-    (dict(fan_all_wta_lambda=1.0), NotImplementedError, "fan_all_wta_lambda=1.0"),
     (dict(fan_seed_noise=0.5), NotImplementedError, "fan_seed_noise"),
     (dict(spandec_parallel=True), NotImplementedError, "spandec_parallel with tul.fan_k"),
     (dict(spandec_parallel=True, spandec_parallel_detach=True), NotImplementedError,
      "spandec_parallel with tul.fan_k"),
 ])
-def test_everything_but_write_all_at_wta_zero_stays_refused(kw, exc, match):
+def test_everything_but_write_all_stays_refused(kw, exc, match):
+    """WTA > 0 under the code is BUILT since 2026-09-26 (tests/test_tul_lx_credit.py);
+    everything else a fan can carry stays refused."""
     with pytest.raises(exc, match=match):
         _tul(**_lxfan_kw(4, **kw))
 

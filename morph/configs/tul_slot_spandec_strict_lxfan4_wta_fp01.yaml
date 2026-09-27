@@ -1,0 +1,32 @@
+# Arm "lxtul-lxfan4-wta-fp01" (LX-Fan + a2's winner-take-all over the cells, 2026-09-26):
+# LX-Fan (`tul_slot_spandec_strict_lxfan4_fp01`: K = 4 codes x M = 4 write-all cells, the
+# exact per-span mixture over the rollouts) with a2's WTA term KEPT. Composes lxfan4 and
+# changes TWO keys plus the run name, to a2's values:
+#
+#   tul.fan_all_wta_lambda  0.0 -> 1.0
+#   tul.fan_select_eps      0.05 (stated; lxfan4 carries the default, a2 sets it)
+#
+# WHY. The question of the credit arms: does a COMMITTING credit make the cells (or the
+# rollouts) specialise? The soft mixture credits the rollouts by posterior; a2's WTA
+# credits the CELLS hard. Here both run: per (rollout, slot) the M cells compete (M no-grad
+# coda passes, one cell alone in its prefix cell, the others blank), and one grad pass
+# charges the winner-alone span CE, weight 1.0, eps 0.05 random winners. The no-grad table
+# runs one pass PER STREAM on the K-fold rollout batch, so the rollout-shared dropout gives
+# row (k, i, b) the mask of (i, b) (`_tul_fan_all(n_rollouts=)`). train/loss stays the mixture NLL (`fan_wta_weighted` is
+# subtracted, a2's contract). Against lxfan4 it is one factor; against a2 it differs by the
+# code, spandec false and fp01's two hinge keys.
+# Heaviest arm of the set: M = 4 no-grad coda passes of K*B = 24 rows plus a grad pass per
+# step, on top of lxfan4. The memory
+# trace (/home/wolfe/morph-scratch/credit/mem_trace.sh) decides whether batch 6 fits;
+# the batch is NOT lowered here. training.steps 5000 inherited.
+# Note: .agents/notes/proposed/architecture/2026-09-26-lx-fan.md (2026-09-26 amendment)
+defaults:
+  - tul_slot_spandec_strict_lxfan4_fp01
+  - _self_
+
+tul:
+  fan_all_wta_lambda: 1.0
+  fan_select_eps: 0.05
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01

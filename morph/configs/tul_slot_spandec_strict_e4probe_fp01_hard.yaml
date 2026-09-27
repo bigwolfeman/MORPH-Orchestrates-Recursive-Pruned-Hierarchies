@@ -1,0 +1,29 @@
+# Arm "lxtul-e4probe-fp01-hard" (LX hard credit, 2026-09-26): fp01's LX with the K = 4
+# rollouts credited by a relaxed WINNER instead of their posterior. Composes fp01
+# (`tul_slot_spandec_strict_e4probe_fp01`) and changes TWO keys plus the run name:
+#
+#   tul.code_enum_credit    soft -> hard
+#   tul.code_enum_hard_eps  0.05  (stated; the winner of a span gets 1 - eps = 0.95 of its
+#                                  gradient, each other rollout eps / (K - 1) = 0.0167)
+#
+# WHY. fp01's token loss is the exact mixture -log mean_k exp(-CE_k(span)); its gradient
+# weights rollout k by softmax_k(-CE_k). The codes are small (0.1 rms) and fixed, so the
+# CEs start equal, the credit is ~1/K, every rollout gets the same gradient and nothing
+# breaks the symmetry: the rollouts were measured to be an ENSEMBLE
+# (lab/experiments/failures/2026-09-26-lx-selection-ceiling.md). Multiple Choice Learning
+# commits the credit so the rollouts can specialise. The eval read, the deploy read and
+# every val metric stay the mixture; train/loss stays the mixture NLL (tul/enum_ce_mix);
+# the objective is tul/enum_hard_obj. The parallel probe head (detached), the fixed-point
+# term and the gain hinges are fp01's, unchanged: none of them reads the token credit.
+# training.steps 5000 is fp01's, inherited.
+# Note: .agents/notes/proposed/architecture/2026-09-26-lx-hard-credit.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  code_enum_credit: hard
+  code_enum_hard_eps: 0.05
+
+wandb:
+  name: lxtul-e4probe-fp01-hard

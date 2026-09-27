@@ -421,15 +421,15 @@ def test_arm_a2_fan4_all_fp01_differs_from_fan4_all_by_the_fp_term(monkeypatch):
 def test_fp01_takes_the_fan_only_as_lx_fan(monkeypatch):
     """a2 was built as the fan recipe because the fan was refused on fp01's two LXTUL-E
     features. Since LX-Fan (2026-09-26, tests/test_tul_lxfan.py) the CODE takes the
-    write-all fan at WTA 0; the parallel head still refuses it, and so does the code at
-    a2's WTA 1.0."""
+    write-all fan; the parallel head still refuses it. Since the 2026-09-26 amendment the
+    code also takes a2's WTA 1.0 (arm lxfan4_wta, tests/test_tul_lx_credit.py)."""
     _cfg, rt = _runtime("tul_slot_spandec_strict_e4probe_fp01", monkeypatch)
     tc = rt.model_cfg
     with pytest.raises(NotImplementedError, match="fan"):
         dataclasses.replace(tc, fan_k=4, slot_cells=4, prefix_k=4, fan_mix="all")
-    with pytest.raises(NotImplementedError, match="code_enum_k > 1 with tul.fan_all_wta"):
-        dataclasses.replace(tc, spandec_parallel=False, spandec_parallel_detach=False,
-                            fan_k=4, slot_cells=4, prefix_k=4, fan_mix="all")
+    wta = dataclasses.replace(tc, spandec_parallel=False, spandec_parallel_detach=False,
+                              fan_k=4, slot_cells=4, prefix_k=4, fan_mix="all")
+    assert wta.code_enum_k == 4 and wta.fan_all_wta_lambda == 1.0
     with pytest.raises(NotImplementedError, match="spandec_parallel with tul.fan_k"):
         dataclasses.replace(tc, code_enum_k=1, fan_k=4, slot_cells=4, prefix_k=4,
                             fan_mix="all")

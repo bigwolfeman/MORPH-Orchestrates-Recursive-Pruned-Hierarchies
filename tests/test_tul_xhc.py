@@ -797,7 +797,9 @@ def test_c1b_knob_off_is_bit_identical_to_the_pre_c1b_tree(tmp_path):
         assert float(a["pen"]) > 0.0, "the hinge must be active for the grads to cover it"
         for k in ("loss", "gain_est", "pen", "logits"):
             assert torch.equal(a[k], b[k]), (renorm, k)
-        assert a["keys"] == b["keys"], renorm
+        # `enum_win_entropy` (LX, 2026-09-26, tests/test_tul_lx_credit.py) is a detached
+        # instrument added after the base: the one key the base cannot have.
+        assert a["keys"] == [k for k in b["keys"] if k != "enum_win_entropy"], renorm
         assert a["params"].keys() == b["params"].keys()
         assert a["grads"].keys() == b["grads"].keys() and len(b["grads"]) > 50
         for n in a["params"]:
