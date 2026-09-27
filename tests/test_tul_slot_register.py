@@ -683,6 +683,22 @@ def test_the_worth_profile_modes_run_on_a_register_model(mode):
     assert torch.isfinite(res["loss"])
 
 
+@pytest.mark.parametrize("mode", ["zero", "cell1", "cellall"])
+def test_worth_profile_forward_runs_without_autograd(mode):
+    """worth_profile's `_forward` is an eval read: it must build no graph. 649f7e6 slid
+    `_cell_mode` between `@torch.no_grad()` and `_forward`, so every worth read kept its
+    activations and OOMed at batch 1 on the 4-cell models (fixed 2026-09-26)."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lab" / "divergence"))
+    import worth_profile
+    m = _model(4).eval()
+    _i, inp, _lab, layout = _batch(4)
+    assert torch.is_grad_enabled()
+    res = worth_profile._forward(m, inp, layout, mode)
+    assert res["logits"].grad_fn is None and not res["logits"].requires_grad
+
+
 def test_zero_and_all_slots_agree_under_strict_with_four_cells():
     m = _model(4).eval()
     _i, inp, lab, layout = _batch(4)

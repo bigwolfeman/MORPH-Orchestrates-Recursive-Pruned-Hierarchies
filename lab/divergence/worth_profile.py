@@ -91,7 +91,6 @@ def token_strata(layout, labels_row, b: int, spec) -> list[tuple[int, int]]:
     return out
 
 
-@torch.no_grad()
 def _cell_mode(mode: str) -> int | None:
     """``cell<j>`` -> j; ``cellall`` -> -1; any other mode -> None."""
     if not mode.startswith("cell"):
@@ -99,6 +98,7 @@ def _cell_mode(mode: str) -> int | None:
     return -1 if mode == "cellall" else int(mode[4:])
 
 
+@torch.no_grad()
 def _forward(model, inp, layout, mode: str) -> dict:
     """``tul_forward_ablated`` under ``mode``. THE PER-CELL SPLIT (2026-09-26, plan C):
     ``cell<j>`` zeroes prefix cell j of every slot AFTER ``TULSlots.prefix_project`` (the
