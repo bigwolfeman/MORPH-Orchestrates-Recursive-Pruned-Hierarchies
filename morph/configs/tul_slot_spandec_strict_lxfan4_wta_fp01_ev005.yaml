@@ -1,0 +1,24 @@
+# Arm "lxtul-lxfan4-wta-fp01-ev005": (b) `tul_slot_spandec_strict_lxfan4_wta_fp01` at
+# `tul.fan_repel_lambda` = 0.05 (half of (b)'s 0.1), run to 3000 steps. Sibling of
+# `..._ev001` (0.01) and `..._ev011` (0.11) — READ `..._ev001` for the full audit of every
+# training.steps-derived quantity (LR schedule, AdEMAMix t_alpha/t_beta3, TST, prune/
+# carve/route, tul.activate_at, checkpoint cadence) and why each one is either pinned or
+# provably unaffected by the steps 5000 -> 3000 change. Same two overrides as ev001/ev011,
+# only the lambda differs:
+#
+#   tul.fan_repel_lambda    0.1 -> 0.05
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000   (pinned defensively; see ev001)
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01
+  - _self_
+
+tul:
+  fan_repel_lambda: 0.05
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-ev005

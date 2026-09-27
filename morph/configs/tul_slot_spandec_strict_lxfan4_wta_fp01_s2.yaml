@@ -1,0 +1,25 @@
+# Arm "lxtul-lxfan4-wta-fp01-s2": (b) `tul_slot_spandec_strict_lxfan4_wta_fp01` at a second
+# seed. Composes (b) and changes:
+#
+#   training.seed        1 -> 2
+#   training.ckpt_every  2500 -> 3000   (writes step_3000.pt, then the final step_5000.pt)
+#
+# WHY. (b) is one draw (lab/experiments/failures/2026-09-26-lx-credit-arms.md, arm (b)):
+# K1-K6 +0.0162 against a2's +0.0057, and 0.0303 nats of CE over the soft fan
+# (lab/experiments/failures/2026-09-27-lx-soft-fan-retry.md). MORPH runs decorrelate within
+# ~11 steps at a fixed seed, so one draw cannot carry either claim.
+#
+# WHY step_3000. The epivol sweep (`..._ev001`, `_ev005`, `_ev011`) runs to 3000 steps and
+# (b) kept only step_2500 / step_5000. This run's step_3000.pt is the lambda-0.1 point of
+# that sweep at the same step count. ckpt_every only sets when the trainer saves; it does
+# not touch the loss, the data order or the RNG.
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01
+  - _self_
+
+training:
+  seed: 2
+  ckpt_every: 3000
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-s2

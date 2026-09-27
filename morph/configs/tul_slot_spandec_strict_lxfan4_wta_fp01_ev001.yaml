@@ -1,0 +1,67 @@
+# Arm "lxtul-lxfan4-wta-fp01-ev001": (b) `tul_slot_spandec_strict_lxfan4_wta_fp01` at
+# `tul.fan_repel_lambda` = 0.01 (one tenth of (b)'s 0.1), run to 3000 steps for an early
+# epivol-lambda reading. Sibling arms: `..._ev005` (0.05), `..._ev011` (0.11, literal, not
+# 0.1 — a distinct point past (b), not a restatement of it). Composes (b) and changes:
+#
+#   tul.fan_repel_lambda    0.1 -> 0.01
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000
+#
+# WHY THE LAMBDA. epivol (epiplexity of the between-stream deviations plus within-slot
+# volume, passes 1-2; morph/model/tul_fan.py) is the one
+# fan diversity term the model has not gamed (morph/model/tul.py, the fan_seed_noise comment). It
+# has only run at 0.1. WTA now adds its own pressure for distinct cells, so 0.1 may be
+# more, or less, than the fan needs. This sweep reads the term's strength at a fixed
+# budget, with every other key at (b)'s value.
+#
+# WHY 3000 STEPS, AND WHY training.lr_decay_steps IS PINNED (audited against (b)'s
+# resolved config, morph/training/train.py and morph/training/optimizer.py, not guessed):
+#
+# - LR schedule (`optimizer.py::create_lr_schedule`): `total_steps = lr_decay_steps or
+#   steps`; (b) resolves `lr` = `min_lr` = 1e-4, so `schedule(step) = min_lr + (lr - min_lr)
+#   * cosine(...)` = min_lr exactly for every step past warmup, REGARDLESS of the cosine's
+#   denominator — `lr - min_lr` is exactly 0.0 in IEEE754, so the cosine term vanishes bit-
+#   for-bit. A 3000-step run is therefore already schedule-identical to (b) for steps
+#   0-3000 with no override. `lr_decay_steps: 5000` is pinned anyway, belt-and-suspenders,
+#   so the denominator itself matches (b)'s even if a future edit ever moves `min_lr` off
+#   `lr`.
+# - AdEMAMix beta3/alpha horizon (`optimizer.py` line ~326): `ademamix_t_alpha` / `_t_beta3`
+#   resolve to explicit ints (1600 / 3500) on (b), NOT null, so `optimizer.py`'s
+#   `int(tr.steps)` fallback never fires either way. No pin needed; inherited unchanged.
+# - TST superposition (`training/phase.py`): (b) resolves `tst_bag_size: 0`, and
+#   `PhaseSchedule.tst_phase1_steps = int(tst_ratio * total_steps) if tst_bag_size > 0 else
+#   0` — TST is fully off regardless of `tst_ratio` or `total_steps`. No pin needed.
+# - Prune / carve / route (`training/pruning.py`, `train.py`): (b) resolves `prune_start`,
+#   `compact_step`, `route_start` all at 999999999, far past 3000 or 5000 either way; the
+#   `PruneSchedule.saliency_active` gate stays False and nothing fires on either step
+#   count. No pin needed.
+# - `tul.activate_at` / `mux_activate_at` / `sigreg_activate_at`: (b) resolves these to
+#   literal 0.0 (not `${training.tst_ratio}`). `int(0.0 * total_steps) == 0` for any
+#   `total_steps`, so the TUL/mux/sigreg on-step is step 0 either way. No pin needed.
+# - Eval / checkpoint cadence (`eval_every: 250`, `ckpt_every: 2500`): absolute, not
+#   fractions of `training.steps`, and both are inherited unchanged, so the same eval
+#   calls fire at the same steps (250, 500, ..., 3000) under either step count — no RNG-
+#   stream divergence from cadence. The checkpoint used for readout is the FINAL one,
+#   written unconditionally at `total_steps` regardless of `ckpt_every`
+#   (`train.py:4306-4307`, `step_{total_steps}.pt`), so a 3000-step run writes
+#   `step_3000.pt` even though `ckpt_every` never lands on 3000 by itself.
+# - No depth curriculum, no context-length curriculum block is present in this recipe
+#   (no `curriculum:` key in the resolved config), so no schedule there to pin.
+#
+# THE 0.1-LAMBDA REFERENCE AT 3000 STEPS. (b) kept only step_2500.pt and step_5000.pt.
+# The seed-2 arm `..._s2` sets ckpt_every 3000, so its step_3000.pt is the lambda-0.1
+# point at this step count (seed 2 against seed 1 here; MORPH runs decorrelate within
+# ~11 steps at any seed, so a seed-1 rerun would be no closer a match).
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01
+  - _self_
+
+tul:
+  fan_repel_lambda: 0.01
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-ev001
