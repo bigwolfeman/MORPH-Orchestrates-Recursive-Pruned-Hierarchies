@@ -1,0 +1,15 @@
+[09-27 11:28:21] lxtul-lxfan4-fp01 START at 591d99a Prereg: retry the two soft-credit LX-Fan arms that d cfg=tul_slot_spandec_strict_lxfan4_fp01
+[09-27 14:16:03] lxtul-lxfan4-fp01 TRAIN exit=0 tok/s=3981 peak=17.46GB Final val_loss=4.4663  ppl=87.03  fan/mi
+[09-27 14:16:03] lxtul-lxfan4-fp01 TRIPWIRE HEALTHY last=4999 max=222@3254
+[09-27 14:19:25] lxtul-lxfan4-fp01 SWEEP exit=0 lxtul-lxfan4-fp01 ce_tokens K1-K6: +0.0161 [+0.0151, +0.0170] over 480 rows
+[09-27 14:19:25] lxtul-lxfan4-fp01 GAP exit=0  ce_6_minus_ruler_ce6: +0.2495 [+0.2345, +0.2665]
+[09-27 14:22:49] lxtul-lxfan4-fp01 SCORE exit=1 
+[09-27 14:22:49] lxtul-lxfan4-fp01 PAIR exit=1 
+[09-27 14:24:25] lxtul-lxfan4-fp01 WORTH exit=0 lxtul-lxfan4-fp01 zero TOTAL +0.1947 lxtul-lxfan4-fp01 shuffle TOTAL +0.1730 
+[09-27 14:24:25] lxtul-lxfan4-fp01 DONE
+[09-27 14:24:27] lxtul-lxfan6-fp01 START at 591d99a Prereg: retry the two soft-credit LX-Fan arms that d cfg=tul_slot_spandec_strict_lxfan6_fp01
+[09-27 16:00:41] RETRY-GUARD killing lxtul-lxfan6-fp01 pid 3438054: DETONATED step=2113 max=8.16e+04@2113 (2 rows > 1e4 within 40 steps: 2108, 2113)
+[09-27 16:00:41] lxtul-lxfan6-fp01 TRAIN exit=143 tok/s=2794 peak=20.27GB 
+[09-27 16:00:41] lxtul-lxfan6-fp01 TRIPWIRE DETONATED step=2113 max=8.16e+04@2113 (2 rows > 1e4 within 40 steps: 2108, 2113)
+[09-27 16:00:41] lxtul-lxfan6-fp01 NO CKPT, readouts skipped
+[09-27 16:00:41] QUEUE EMPTY, runner exits

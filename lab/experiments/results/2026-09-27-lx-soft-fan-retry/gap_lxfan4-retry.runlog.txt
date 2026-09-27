@@ -1,0 +1,10 @@
+lxtul-lxfan4-fp01 tokens n=491520 blocks=481
+  ce_1_minus_ruler_ce6: +0.2654 [+0.2503, +0.2823]
+  ce_2_minus_ruler_ce6: +0.2630 [+0.2477, +0.2802]
+  ce_3_minus_ruler_ce6: +0.2519 [+0.2369, +0.2689]
+  ce_4_minus_ruler_ce6: +0.2499 [+0.2348, +0.2668]
+  ce_5_minus_ruler_ce6: +0.2494 [+0.2344, +0.2663]
+  ce_6_minus_ruler_ce6: +0.2495 [+0.2345, +0.2665]
+  arm_K1-K6: +0.0161 [+0.0152, +0.0170]
+  arm_K3-K6: +0.0024 [+0.0021, +0.0028]
+wrote /home/wolfe/morph-scratch/abc/lxtul-lxfan4-fp01/gap_vs_plain.json

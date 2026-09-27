@@ -1,0 +1,10 @@
+a tokens n=511089 blocks=500
+  ce_1_minus_ruler_ce6: +0.0464 [+0.0440, +0.0488]
+  ce_2_minus_ruler_ce6: +0.0440 [+0.0417, +0.0465]
+  ce_3_minus_ruler_ce6: +0.0327 [+0.0304, +0.0350]
+  ce_4_minus_ruler_ce6: +0.0307 [+0.0283, +0.0329]
+  ce_5_minus_ruler_ce6: +0.0302 [+0.0279, +0.0324]
+  ce_6_minus_ruler_ce6: +0.0303 [+0.0280, +0.0325]
+  arm_K1-K6: +0.0161 [+0.0152, +0.0170]
+  arm_K3-K6: +0.0024 [+0.0021, +0.0028]
+wrote /home/wolfe/morph-scratch/abc/retry_a_vs_b.json
