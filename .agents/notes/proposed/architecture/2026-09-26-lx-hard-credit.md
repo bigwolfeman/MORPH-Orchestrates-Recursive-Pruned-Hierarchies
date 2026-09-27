@@ -99,3 +99,12 @@ The arm is `morph/configs/tul_slot_spandec_strict_e4probe_fp01_hard.yaml`, wandb
   difference is `tul/enum_hard_weighted`.
 - **The logged `ce_main` moves.** The train-side `ce_main` now includes the hard excess.
   Compare arms on `train/loss` or `tul/enum_ce_mix`, never on the train-side `ce_main`.
+
+## Outcome (amended 2026-09-27 11:20)
+
+Arm (c) ran 5000 steps healthy and FAILED its prereg
+([`2026-09-26-lx-credit-arms.md`](../../../../lab/experiments/failures/2026-09-26-lx-credit-arms.md)).
+The rollouts specialize (singles 0.05 nats behind the Bayes read, fp01 0.025; span-coherent
+selection +0.0048 vs fp01 +0.0008, under the +0.005 bar), the mixture CE is 0.0118 worse than
+fp01, K1-K6 falls to +0.0100 and K3-K6 to zero: the winner is fixed in pass 1 on 89 % of spans.
+The knob stays in the tree, default soft; this note stays proposed until a decision on it.

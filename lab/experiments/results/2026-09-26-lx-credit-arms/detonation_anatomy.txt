@@ -1,0 +1,36 @@
+== lxtul-lxfan4-fp01 3338 rows
+   1811 gain_est=1 gain_slot_max=1.29 gain_reg_weighted=0.0675 core_gain_t0=14.2 core_gain_t1=0.634 total=2.87 fixed_point=0.0722
+   2311 gain_est=0.948 gain_slot_max=1.31 gain_reg_weighted=0.0105 core_gain_t0=17.2 core_gain_t1=0.753 total=1.63 fixed_point=0.0438
+   2811 gain_est=0.942 gain_slot_max=1.43 gain_reg_weighted=0.0439 core_gain_t0=21 core_gain_t1=0.777 total=1.61 fixed_point=0.0419
+   3061 gain_est=0.933 gain_slot_max=1.57 gain_reg_weighted=0.0843 core_gain_t0=20.9 core_gain_t1=0.847 total=1.83 fixed_point=0.0398
+   3211 gain_est=0.912 gain_slot_max=1.45 gain_reg_weighted=0.0347 core_gain_t0=18.7 core_gain_t1=0.897 total=1.63 fixed_point=0.0406
+   3281 gain_est=0.958 gain_slot_max=2.73 gain_reg_weighted=0.253 core_gain_t0=17.3 core_gain_t1=1.47 total=1.28e+03 fixed_point=0.93
+   3306 gain_est=0.992 gain_slot_max=4.53 gain_reg_weighted=1.28 core_gain_t0=17.2 core_gain_t1=3.04 total=2.01e+03 fixed_point=2.16
+   first loss/gain_est>0.98: 262
+   first loss/gain_est>1.0: 1624
+   first loop/core_gain_t1>1.3: 596
+   first preclip/total>1000.0: 3245
+== lxtul-lxfan6-fp01 1564 rows
+     45 gain_est=0.912 gain_slot_max=0.967 gain_reg_weighted=0 core_gain_t0=1.47 core_gain_t1=1.43 total=9.04 fixed_point=0.0632
+    545 gain_est=0.971 gain_slot_max=1.1 gain_reg_weighted=3.89e-07 core_gain_t0=1.43 core_gain_t1=1.25 total=1.52 fixed_point=0.0393
+   1045 gain_est=0.978 gain_slot_max=1.1 gain_reg_weighted=3.41e-05 core_gain_t0=2.7 core_gain_t1=1.27 total=1.25 fixed_point=0.0327
+   1295 gain_est=1.14 gain_slot_max=1.79 gain_reg_weighted=3.4 core_gain_t0=13 core_gain_t1=0.421 total=36.7 fixed_point=0.222
+   1445 gain_est=1.49 gain_slot_max=2.68 gain_reg_weighted=44.1 core_gain_t0=34.4 core_gain_t1=1.33 total=82.3 fixed_point=0.0426
+   1515 gain_est=1.52 gain_slot_max=2.83 gain_reg_weighted=49.1 core_gain_t0=40.9 core_gain_t1=1.39 total=75 fixed_point=0.0541
+   1540 gain_est=1.5 gain_slot_max=2.82 gain_reg_weighted=46.3 core_gain_t0=42 core_gain_t1=1.44 total=79.7 fixed_point=0.056
+   first loss/gain_est>0.98: 202
+   first loss/gain_est>1.0: 1275
+   first loop/core_gain_t1>1.3: 720
+   first preclip/total>1000.0: 1518
+== lxtul-lxfan4-wta-fp01 5000 rows
+   1811 gain_est=0.979 gain_slot_max=1.24 gain_reg_weighted=0.002 core_gain_t0=3.1 core_gain_t1=1.18 total=2.59 fixed_point=0.0492
+   2311 gain_est=0.976 gain_slot_max=1.22 gain_reg_weighted=0.000973 core_gain_t0=2.65 core_gain_t1=1.2 total=2.68 fixed_point=0.0552
+   2811 gain_est=0.977 gain_slot_max=1.19 gain_reg_weighted=0.000731 core_gain_t0=3.1 core_gain_t1=1.25 total=2.87 fixed_point=0.0521
+   3061 gain_est=0.977 gain_slot_max=1.2 gain_reg_weighted=0.000903 core_gain_t0=3.26 core_gain_t1=1.26 total=3.02 fixed_point=0.0482
+   3211 gain_est=0.977 gain_slot_max=1.18 gain_reg_weighted=0.000756 core_gain_t0=3.46 core_gain_t1=1.26 total=2.86 fixed_point=0.0496
+   3281 gain_est=0.977 gain_slot_max=1.2 gain_reg_weighted=0.000922 core_gain_t0=3.5 core_gain_t1=1.27 total=2.87 fixed_point=0.0512
+   3306 gain_est=0.978 gain_slot_max=1.19 gain_reg_weighted=0.000912 core_gain_t0=3.64 core_gain_t1=1.26 total=3.13 fixed_point=0.0472
+   first loss/gain_est>0.98: 750
+   first loss/gain_est>1.0: None
+   first loop/core_gain_t1>1.3: 518
+   first preclip/total>1000.0: None

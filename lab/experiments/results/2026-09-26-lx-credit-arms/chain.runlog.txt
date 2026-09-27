@@ -1,0 +1,28 @@
+[09-26 22:07:29] lxtul-e4probe-fp01-hard START at ce1b7dc Prereg: LX credit arms (hard credit c, LX-Fan a, LX- cfg=tul_slot_spandec_strict_e4probe_fp01_hard
+[09-26 23:57:39] lxtul-e4probe-fp01-hard TRAIN exit=0 tok/s=5538 peak=14.51GB Final val_loss=4.4321  ppl=84.11  val/at
+[09-26 23:57:39] lxtul-e4probe-fp01-hard TRIPWIRE HEALTHY last=4999 max=581@3350
+[09-27 00:02:41] lxtul-e4probe-fp01-hard SWEEP exit=0 lxtul-e4probe-fp01-hard ce_tokens K1-K6: +0.0100 [+0.0093, +0.0108] over 480 rows
+[09-27 00:02:41] lxtul-e4probe-fp01-hard GAP exit=0  ce_6_minus_ruler_ce6: +0.2769 [+0.2615, +0.2941]
+[09-27 00:08:48] lxtul-e4probe-fp01-hard SCORE exit=0  coda_K1-K6 +0.0100 [+0.0093, +0.0108] n=501106
+[09-27 00:08:50] lxtul-e4probe-fp01-hard PAIR exit=0  lxtul-e4probe-fp01-hard coda n=491520 4.3519 notul 4.0750 minus notul +0.2769 [+0.2731, +0.2805] K1-K6 +0.0101
+[09-27 00:10:03] lxtul-e4probe-fp01-hard WORTH exit=0 lxtul-e4probe-fp01-hard zero TOTAL +0.1883 lxtul-e4probe-fp01-hard shuffle TOTAL +0.1628 
+[09-27 00:10:03] lxtul-e4probe-fp01-hard DONE
+[09-27 00:10:05] lxtul-lxfan4-fp01 START at ce1b7dc Prereg: LX credit arms (hard credit c, LX-Fan a, LX- cfg=tul_slot_spandec_strict_lxfan4_fp01
+[09-27 02:02:46] CREDIT-GUARD killing lxtul-lxfan4-fp01 pid 3600292: DETONATED step=3311 max=2.94e+04@3310 (2 rows > 1e4 within 40 steps: 3310, 3311)
+[09-27 02:02:47] lxtul-lxfan4-fp01 TRAIN exit=143 tok/s=4271 peak=17.46GB 
+[09-27 02:02:47] lxtul-lxfan4-fp01 TRIPWIRE DETONATED step=3311 max=2.94e+04@3310 (2 rows > 1e4 within 40 steps: 3310, 3311)
+[09-27 02:02:47] lxtul-lxfan4-fp01 NO CKPT, readouts skipped
+[09-27 02:02:47] lxtul-lxfan4-wta-fp01 START at ce1b7dc Prereg: LX credit arms (hard credit c, LX-Fan a, LX- cfg=tul_slot_spandec_strict_lxfan4_wta_fp01
+[09-27 06:12:41] lxtul-lxfan4-wta-fp01 TRAIN exit=0 tok/s=2306 peak=21.09GB Final val_loss=4.4320  ppl=84.10  fan/mi
+[09-27 06:12:41] lxtul-lxfan4-wta-fp01 TRIPWIRE HEALTHY last=4999 max=270@2274
+[09-27 06:15:45] lxtul-lxfan4-wta-fp01 SWEEP exit=0 lxtul-lxfan4-wta-fp01 ce_tokens K1-K6: +0.0162 [+0.0153, +0.0172] over 480 rows
+[09-27 06:15:46] lxtul-lxfan4-wta-fp01 GAP exit=0  ce_6_minus_ruler_ce6: +0.2193 [+0.2038, +0.2368]
+[09-27 06:18:52] lxtul-lxfan4-wta-fp01 SCORE exit=1 
+[09-27 06:18:52] lxtul-lxfan4-wta-fp01 PAIR exit=1 
+[09-27 06:20:16] lxtul-lxfan4-wta-fp01 WORTH exit=0 lxtul-lxfan4-wta-fp01 zero TOTAL +0.1998 lxtul-lxfan4-wta-fp01 shuffle TOTAL +0.1696 
+[09-27 06:20:16] lxtul-lxfan4-wta-fp01 DONE
+[09-27 06:20:18] lxtul-lxfan6-fp01 START at ce1b7dc Prereg: LX credit arms (hard credit c, LX-Fan a, LX- cfg=tul_slot_spandec_strict_lxfan6_fp01
+[09-27 07:23:12] CREDIT-GUARD killing lxtul-lxfan6-fp01 pid 1386353: DETONATED step=1545 max=1.25e+04@1545 (2 rows > 1e4 within 40 steps: 1518, 1545)
+[09-27 07:23:12] lxtul-lxfan6-fp01 TRAIN exit=143 tok/s=3224 peak=20.27GB 
+[09-27 07:23:12] lxtul-lxfan6-fp01 TRIPWIRE DETONATED step=1545 max=1.25e+04@1545 (2 rows > 1e4 within 40 steps: 1518, 1545)
+[09-27 07:23:12] lxtul-lxfan6-fp01 NO CKPT, readouts skipped

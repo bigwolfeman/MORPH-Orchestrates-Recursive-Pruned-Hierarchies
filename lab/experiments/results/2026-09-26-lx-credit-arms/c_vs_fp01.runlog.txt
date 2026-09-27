@@ -1,0 +1,10 @@
+c tokens n=501106 blocks=490
+  ce_1_minus_ruler_ce6: +0.0218 [+0.0194, +0.0244]
+  ce_2_minus_ruler_ce6: +0.0127 [+0.0103, +0.0152]
+  ce_3_minus_ruler_ce6: +0.0116 [+0.0092, +0.0141]
+  ce_4_minus_ruler_ce6: +0.0115 [+0.0091, +0.0140]
+  ce_5_minus_ruler_ce6: +0.0116 [+0.0092, +0.0142]
+  ce_6_minus_ruler_ce6: +0.0118 [+0.0094, +0.0143]
+  arm_K1-K6: +0.0100 [+0.0093, +0.0108]
+  arm_K3-K6: -0.0002 [-0.0004, -0.0000]
+wrote /home/wolfe/morph-scratch/abc/credit_c_vs_fp01.json
