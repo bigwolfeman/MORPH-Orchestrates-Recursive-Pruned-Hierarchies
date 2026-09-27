@@ -166,3 +166,9 @@ loop earns more depth at the same CE. Next reads, in order: (1) (b)'s per-cell w
 selection structure over cells (does the depth use live in one cell?); (2) a second seed of
 (b), since its depth use is the only positive; (3) the soft fans' pass-0 growth as the
 detonation route, read with `xhc_carrier_anatomy.py`-style per-pass norms before any fix.
+
+**Amendment 2026-09-27 13:34 (Wolfe's reading).** (c)'s +0.0118 CE and its lower K-curve are
+5k-step readings on a looped model, which converges slower than the plain model it is compared
+to; they are not a verdict against hard credit. What (c) does establish at 5k: the rollouts
+specialize, and the commit is made in pass 1. The verdict above stays a failure on the
+prereg's own bar (P-c1, P-all); hard credit stays open as a longer-horizon candidate.
