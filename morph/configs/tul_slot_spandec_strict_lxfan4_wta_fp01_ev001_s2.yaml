@@ -1,0 +1,15 @@
+# Arm "lxtul-lxfan4-wta-fp01-ev001-s2": `tul_slot_spandec_strict_lxfan4_wta_fp01_ev001` (epivol lambda 0.01, 3000 steps) at a
+# second seed. Composes it and changes training.seed 1 -> 2 and the run name.
+#
+# WHY. ev001 read K1-K6 +0.0301 at 3000 steps, the largest in the LX-Fan family, on one draw
+# (lab/experiments/failures/2026-09-27-epivol-lambda-sweep.md). The only K1-K6 seed spread
+# measured on this recipe is 0.0069 ((b) seeds 1 and 2), so the reading needs its own band.
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01_ev001
+  - _self_
+
+training:
+  seed: 2
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-ev001-s2

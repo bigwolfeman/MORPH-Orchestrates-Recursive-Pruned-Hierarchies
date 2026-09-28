@@ -1,0 +1,26 @@
+# Arm "lxtul-lxfan4-wta-fp01-ev0": (b) `tul_slot_spandec_strict_lxfan4_wta_fp01` at `tul.fan_repel_lambda` = 0.0, run to 3000
+# steps. Second grid of the epivol-lambda sweep (lab/experiments/failures/2026-09-27-epivol-
+# lambda-sweep.md; first grid 0.01 / 0.05 / 0.11). READ `tul_slot_spandec_strict_lxfan4_wta_fp01_ev001` for the audit of every
+# training.steps-derived value and why each is pinned or unaffected. Same overrides as ev001,
+# only the lambda differs:
+#
+#   tul.fan_repel_lambda    0.1 -> 0.0
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000
+#
+# lambda 0 turns the term off and keeps its instruments: `fan_repel_mode` stays `epivol`, so
+# the reservoir is built and the per-pass readings are logged, but transformer.py adds the
+# term to the loss only when fan_repel_lambda > 0. WTA stays on. This is the sweep's floor.
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01
+  - _self_
+
+tul:
+  fan_repel_lambda: 0.0
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-ev0
