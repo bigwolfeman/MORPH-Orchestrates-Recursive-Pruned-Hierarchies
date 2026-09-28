@@ -56,3 +56,10 @@ Pass: P-2 and P-4 hold.
   against the seed-2 lambda-0.1 point at 3000, and ev0 against ev00001.
 - The stage-2 scorer and notul pair exit 1 on fan arms (no parallel head); they are not readouts
   of this experiment.
+
+## Method amendment 2026-09-28 16:44
+
+Paused by Wolfe after ev0005. ev001_s2 read K1-K6 +0.0026 against seed 1's +0.0301, so a single
+draw per lambda cannot resolve depth. The three held arms (ev0015, ev0001, ev00001) move behind
+the three-seed bands of [`2026-09-28-epivol-seed-bands.md`](2026-09-28-epivol-seed-bands.md).
+Predictions unchanged.

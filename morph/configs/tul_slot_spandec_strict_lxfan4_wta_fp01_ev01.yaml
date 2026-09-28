@@ -1,0 +1,19 @@
+# Arm "lxtul-lxfan4-wta-fp01-ev01": (b) `tul_slot_spandec_strict_lxfan4_wta_fp01` itself (epivol lambda 0.1) run to 3000 steps,
+# with the same overrides as `tul_slot_spandec_strict_lxfan4_wta_fp01_ev001` (read it for the steps audit):
+#
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000
+#
+# WHY. The seed-band runs (lab/experiments/planned/2026-09-28-epivol-seed-bands.md) need
+# lambda 0.1 at 3000 steps at seeds 1 and 3. Seed 2 already exists: `tul_slot_spandec_strict_lxfan4_wta_fp01_s2`'s step_3000.pt,
+# whose first 3000 steps run this same schedule.
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01
+  - _self_
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-ev01

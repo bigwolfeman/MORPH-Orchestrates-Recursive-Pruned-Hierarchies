@@ -1,0 +1,13 @@
+# Arm "lxtul-lxfan4-wta-fp01-ev0-s3": `tul_slot_spandec_strict_lxfan4_wta_fp01_ev0` at seed 3. Composes it and
+# changes training.seed and the run name only. A seed-band run for
+# lab/experiments/planned/2026-09-28-epivol-seed-bands.md: one config spanned K1-K6 +0.0026 to
+# +0.0301 over two seeds (lambda 0.01), so every lambda point needs three draws.
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01_ev0
+  - _self_
+
+training:
+  seed: 3
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-ev0-s3
