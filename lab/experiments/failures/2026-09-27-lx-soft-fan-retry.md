@@ -105,3 +105,12 @@ One surviving draw, 5000 steps: read directions, not sizes.
 A per-cell training signal (WTA) is what keeps the fan's cells individually useful, and that is
 where the fan's CE comes from; the depth use comes from the LX codes and does not need WTA.
 Next: (b)'s second seed, and a2 with WTA 0 and no codes (the WTA effect without the codes).
+
+## Amendment 2026-09-28
+
+"Every WTA fan held it near 3x" was one draw. (b) at seed 2 grew its pass-0 write almost
+linearly to 23x by step 5000 and did not detonate (tripwire max 38.5):
+[`../successes/2026-09-27-lxfan-wta-seed2.md`](../successes/2026-09-27-lxfan-wta-seed2.md). The
+second seed also reads K1−K6 +0.0093 against seed 1's +0.0162, so the K1−K6 seed spread on this
+recipe is about 0.007. The soft retry's +0.0161 against (b)'s +0.0162 is well inside that
+spread; "the codes buy the depth" rests on both arms with codes beating a2's one draw.

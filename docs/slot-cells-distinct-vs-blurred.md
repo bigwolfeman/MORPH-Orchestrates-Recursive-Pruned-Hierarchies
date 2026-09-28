@@ -28,8 +28,10 @@ carry the span (Multiple Choice Learning).
   is not the limit; the READER is: the coda trained on the mixture only."
 - WTA is that per-cell signal. With WTA and a write-all read, the cells stay distinct and the
   channel pays. Removing only WTA (under the codes) turns the cells into a committee and costs
-  0.030 nats; it also leaves the pass-0 write free to grow past 10x (4 of 4 soft draws; the WTA
-  fans hold it near 3x), and 3 of 4 soft draws detonated.
+  0.030 nats. 3 of 4 soft draws detonated, and all 4 grew the pass-0 write past 10x. Amended
+  2026-09-28: WTA does not hold that write. (b) at seed 2 grew it to 23x and stayed healthy
+  ([successes/2026-09-27-lxfan-wta-seed2.md](../lab/experiments/successes/2026-09-27-lxfan-wta-seed2.md)),
+  so the write's size does not by itself separate the fans that detonated.
 - The blur that hurt is a blur of STATES (or of what the reader is trained on). The LX Bayes
   read mixes PREDICTIONS, which is the correct use of K hypotheses for next-token CE.
 

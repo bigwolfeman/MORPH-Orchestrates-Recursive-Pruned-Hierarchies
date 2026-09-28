@@ -1,0 +1,46 @@
+[09-27 20:08:35] === queue_next launch (893be0f): s2, ev001, ev005, ev011, s2@3000 ro ===
+[09-27 20:08:57] lxtul-lxfan4-wta-fp01-s2 START at 893be0f Prereg + configs: (b) at seed 2, and an epivol lambd cfg=tul_slot_spandec_strict_lxfan4_wta_fp01_s2 steps=5000
+[09-28 00:06:16] lxtul-lxfan4-wta-fp01-s2 TRAIN exit=0 tok/s=2558 peak=21.09GB Final val_loss=4.4536  ppl=85.93  fan/mi
+[09-28 00:06:16] lxtul-lxfan4-wta-fp01-s2 TRIPWIRE HEALTHY last=4999 max=38.5@746
+[09-28 00:09:19] lxtul-lxfan4-wta-fp01-s2 SWEEP exit=0 lxtul-lxfan4-wta-fp01-s2 ce_tokens K1-K6: +0.0093 [+0.0087, +0.0100] over 480 rows
+[09-28 00:09:19] lxtul-lxfan4-wta-fp01-s2 GAP exit=0  ce_6_minus_ruler_ce6: +0.2375 [+0.2215, +0.2549]
+[09-28 00:12:52] lxtul-lxfan4-wta-fp01-s2 SCORE exit=1 
+[09-28 00:12:52] lxtul-lxfan4-wta-fp01-s2 PAIR exit=1 
+[09-28 00:14:20] lxtul-lxfan4-wta-fp01-s2 WORTH exit=0 lxtul-lxfan4-wta-fp01-s2 zero TOTAL +0.1969 lxtul-lxfan4-wta-fp01-s2 shuffle TOTAL +0.1767 
+[09-28 00:14:20] lxtul-lxfan4-wta-fp01-s2 DONE steps=5000
+[09-28 00:14:38] lxtul-lxfan4-wta-fp01-ev001 START at 893be0f Prereg + configs: (b) at seed 2, and an epivol lambd cfg=tul_slot_spandec_strict_lxfan4_wta_fp01_ev001 steps=3000
+[09-28 02:30:33] lxtul-lxfan4-wta-fp01-ev001 TRAIN exit=0 tok/s=2627 peak=21.09GB Final val_loss=4.5367  ppl=93.38  fan/mi
+[09-28 02:30:34] lxtul-lxfan4-wta-fp01-ev001 TRIPWIRE HEALTHY last=2999 max=27@2393
+[09-28 02:33:36] lxtul-lxfan4-wta-fp01-ev001 SWEEP exit=0 lxtul-lxfan4-wta-fp01-ev001 ce_tokens K1-K6: +0.0301 [+0.0288, +0.0313] over 480 rows
+[09-28 02:33:37] lxtul-lxfan4-wta-fp01-ev001 GAP exit=0  ce_6_minus_ruler_ce6: +0.4424 [+0.4253, +0.4609]
+[09-28 02:36:44] lxtul-lxfan4-wta-fp01-ev001 SCORE exit=1 
+[09-28 02:36:44] lxtul-lxfan4-wta-fp01-ev001 PAIR exit=1 
+[09-28 02:38:10] lxtul-lxfan4-wta-fp01-ev001 WORTH exit=0 lxtul-lxfan4-wta-fp01-ev001 zero TOTAL +0.1627 lxtul-lxfan4-wta-fp01-ev001 shuffle TOTAL +0.1456 
+[09-28 02:38:10] lxtul-lxfan4-wta-fp01-ev001 DONE steps=3000
+[09-28 02:38:12] lxtul-lxfan4-wta-fp01-ev005 START at 893be0f Prereg + configs: (b) at seed 2, and an epivol lambd cfg=tul_slot_spandec_strict_lxfan4_wta_fp01_ev005 steps=3000
+[09-28 04:53:51] lxtul-lxfan4-wta-fp01-ev005 TRAIN exit=0 tok/s=2627 peak=21.09GB Final val_loss=4.5345  ppl=93.18  fan/mi
+[09-28 04:53:51] lxtul-lxfan4-wta-fp01-ev005 TRIPWIRE HEALTHY last=2999 max=76.6@738
+[09-28 04:56:55] lxtul-lxfan4-wta-fp01-ev005 SWEEP exit=0 lxtul-lxfan4-wta-fp01-ev005 ce_tokens K1-K6: +0.0099 [+0.0090, +0.0107] over 480 rows
+[09-28 04:56:56] lxtul-lxfan4-wta-fp01-ev005 GAP exit=0  ce_6_minus_ruler_ce6: +0.4423 [+0.4255, +0.4604]
+[09-28 05:00:02] lxtul-lxfan4-wta-fp01-ev005 SCORE exit=1 
+[09-28 05:00:02] lxtul-lxfan4-wta-fp01-ev005 PAIR exit=1 
+[09-28 05:01:27] lxtul-lxfan4-wta-fp01-ev005 WORTH exit=0 lxtul-lxfan4-wta-fp01-ev005 zero TOTAL +0.1651 lxtul-lxfan4-wta-fp01-ev005 shuffle TOTAL +0.1393 
+[09-28 05:01:27] lxtul-lxfan4-wta-fp01-ev005 DONE steps=3000
+[09-28 05:01:29] lxtul-lxfan4-wta-fp01-ev011 START at 893be0f Prereg + configs: (b) at seed 2, and an epivol lambd cfg=tul_slot_spandec_strict_lxfan4_wta_fp01_ev011 steps=3000
+[09-28 07:17:17] lxtul-lxfan4-wta-fp01-ev011 TRAIN exit=0 tok/s=2634 peak=21.09GB Final val_loss=4.5394  ppl=93.63  fan/mi
+[09-28 07:17:17] lxtul-lxfan4-wta-fp01-ev011 TRIPWIRE HEALTHY last=2999 max=52.2@2409
+[09-28 07:20:22] lxtul-lxfan4-wta-fp01-ev011 SWEEP exit=0 lxtul-lxfan4-wta-fp01-ev011 ce_tokens K1-K6: +0.0167 [+0.0156, +0.0177] over 480 rows
+[09-28 07:20:23] lxtul-lxfan4-wta-fp01-ev011 GAP exit=0  ce_6_minus_ruler_ce6: +0.4499 [+0.4336, +0.4679]
+[09-28 07:23:31] lxtul-lxfan4-wta-fp01-ev011 SCORE exit=1 
+[09-28 07:23:31] lxtul-lxfan4-wta-fp01-ev011 PAIR exit=1 
+[09-28 07:24:56] lxtul-lxfan4-wta-fp01-ev011 WORTH exit=0 lxtul-lxfan4-wta-fp01-ev011 zero TOTAL +0.1483 lxtul-lxfan4-wta-fp01-ev011 shuffle TOTAL +0.1305 
+[09-28 07:24:56] lxtul-lxfan4-wta-fp01-ev011 DONE steps=3000
+[09-28 07:24:58] lxtul-lxfan4-wta-fp01-s2 START at 893be0f Prereg + configs: (b) at seed 2, and an epivol lambd cfg=tul_slot_spandec_strict_lxfan4_wta_fp01_s2 steps=3000
+[09-28 07:24:58] lxtul-lxfan4-wta-fp01-s2 step_3000 exists, skipping train
+[09-28 07:28:02] lxtul-lxfan4-wta-fp01-s2 SWEEP exit=0 lxtul-lxfan4-wta-fp01-s2 ce_tokens K1-K6: +0.0082 [+0.0076, +0.0088] over 480 rows
+[09-28 07:28:02] lxtul-lxfan4-wta-fp01-s2 GAP exit=0  ce_6_minus_ruler_ce6: +0.4627 [+0.4460, +0.4808]
+[09-28 07:31:09] lxtul-lxfan4-wta-fp01-s2 SCORE exit=1 
+[09-28 07:31:09] lxtul-lxfan4-wta-fp01-s2 PAIR exit=1 
+[09-28 07:32:34] lxtul-lxfan4-wta-fp01-s2 WORTH exit=0 lxtul-lxfan4-wta-fp01-s2 zero TOTAL +0.1559 lxtul-lxfan4-wta-fp01-s2 shuffle TOTAL +0.1360 
+[09-28 07:32:34] lxtul-lxfan4-wta-fp01-s2 DONE steps=3000
+[09-28 07:32:34] QUEUE_NEXT EMPTY, runner_steps exits

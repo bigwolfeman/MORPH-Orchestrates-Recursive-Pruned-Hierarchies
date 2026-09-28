@@ -1,0 +1,10 @@
+lxtul-lxfan4-wta-fp01-s2 tokens n=491520 blocks=481
+  ce_1_minus_ruler_ce6: +0.2467 [+0.2306, +0.2642]
+  ce_2_minus_ruler_ce6: +0.2409 [+0.2250, +0.2583]
+  ce_3_minus_ruler_ce6: +0.2383 [+0.2225, +0.2557]
+  ce_4_minus_ruler_ce6: +0.2376 [+0.2218, +0.2549]
+  ce_5_minus_ruler_ce6: +0.2374 [+0.2215, +0.2548]
+  ce_6_minus_ruler_ce6: +0.2375 [+0.2215, +0.2549]
+  arm_K1-K6: +0.0093 [+0.0088, +0.0100]
+  arm_K3-K6: +0.0009 [+0.0007, +0.0011]
+wrote /home/wolfe/morph-scratch/abc/lxtul-lxfan4-wta-fp01-s2/gap_vs_plain.json

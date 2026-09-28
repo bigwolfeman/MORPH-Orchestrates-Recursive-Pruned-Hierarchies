@@ -1,0 +1,10 @@
+ev001 tokens n=511089 blocks=500
+  ce_1_minus_ruler_ce6: +0.0098 [+0.0066, +0.0130]
+  ce_2_minus_ruler_ce6: -0.0154 [-0.0185, -0.0122]
+  ce_3_minus_ruler_ce6: -0.0197 [-0.0228, -0.0164]
+  ce_4_minus_ruler_ce6: -0.0205 [-0.0236, -0.0173]
+  ce_5_minus_ruler_ce6: -0.0205 [-0.0236, -0.0173]
+  ce_6_minus_ruler_ce6: -0.0203 [-0.0234, -0.0171]
+  arm_K1-K6: +0.0301 [+0.0289, +0.0314]
+  arm_K3-K6: +0.0006 [+0.0004, +0.0009]
+wrote /tmp/claude-1000/-mnt-BigAssDrive-00projects-00DeepNet-00-MORPH-Orchestrates-Recursive-Pruned-Hierarchies/f9558148-13bd-4ad7-9000-9456505c04f9/scratchpad/pair/ev001_vs_s2at3k.json
