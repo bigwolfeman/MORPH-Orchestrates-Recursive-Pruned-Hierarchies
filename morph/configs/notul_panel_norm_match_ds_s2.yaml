@@ -1,0 +1,13 @@
+# Per-depth persistent state, panel arm, seed 2: the second draw of
+# notul_panel_norm_match_ds.yaml, so K1-K6 can be read against the control's own seed
+# spread (acceptance criterion in the proposal note: "run the control at two seeds; the
+# LX-Fan family showed single draws cannot resolve K1-K6").
+defaults:
+  - notul_panel_norm_match_ds
+  - _self_
+
+training:
+  seed: 2
+
+wandb:
+  name: plain-panel-nm-depthstate-s2

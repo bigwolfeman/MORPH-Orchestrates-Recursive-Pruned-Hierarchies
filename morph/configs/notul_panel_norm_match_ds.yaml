@@ -1,0 +1,14 @@
+# Per-depth persistent state, panel arm: `plain-panel-norm-match` (seed 1) + the
+# per-depth read on (model.core_depth_state: true). Proposal + smallest falsifiable run:
+# .agents/notes/proposed/architecture/2026-09-29-per-depth-state-and-resonant-depth.md.
+# Everything else — recipe, ternary rule, seed — is byte-identical to
+# notul_panel_norm_match, so the pair isolates the per-depth read and nothing else.
+defaults:
+  - notul_panel_norm_match
+  - _self_
+
+model:
+  core_depth_state: true
+
+wandb:
+  name: plain-panel-nm-depthstate

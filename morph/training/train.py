@@ -629,6 +629,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         mtp_heads=int(getattr(m, "mtp_heads", 1)),
         injection_channels=str(getattr(m, "injection_channels", "ctx")),
         core_fixed_point_lambda=float(getattr(m, "core_fixed_point_lambda", 0.0)),
+        core_depth_state=bool(getattr(m, "core_depth_state", False)),
         core_gain_lambda=float(getattr(m, "core_gain_lambda", 0.0)),
         core_gain_target=float(getattr(m, "core_gain_target", 20.0)),
         core_gain_eps=float(getattr(m, "core_gain_eps", 0.02)),

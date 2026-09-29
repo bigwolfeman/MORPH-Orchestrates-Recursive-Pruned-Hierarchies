@@ -1,0 +1,12 @@
+# Control, seed 2: the second draw of notul_panel_norm_match_s1r.yaml, paired with
+# notul_panel_norm_match_ds_s2.yaml so the per-depth-state arm's K1-K6 is read against
+# the control's OWN seed spread, not a single draw.
+defaults:
+  - notul_panel_norm_match_s1r
+  - _self_
+
+training:
+  seed: 2
+
+wandb:
+  name: plain-panel-nm-ctrl-s2

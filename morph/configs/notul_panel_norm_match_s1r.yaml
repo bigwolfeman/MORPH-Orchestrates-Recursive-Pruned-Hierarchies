@@ -1,0 +1,10 @@
+# Control RERUN, seed 1: the existing plain-panel-norm-match checkpoint was trained on
+# an older commit; this reruns the exact same recipe (notul_panel_norm_match, seed 1) on
+# CURRENT code so the per-depth-state arms (notul_panel_norm_match_ds*) have a control
+# from the SAME tree, not a checkpoint that predates unrelated changes on master.
+defaults:
+  - notul_panel_norm_match
+  - _self_
+
+wandb:
+  name: plain-panel-nm-ctrl-s1r

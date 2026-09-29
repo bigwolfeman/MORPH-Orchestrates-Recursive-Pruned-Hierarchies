@@ -570,6 +570,20 @@ class MORPHConfig:
     # `n_core == 0` (the core loop is what FM1 removes) — both checked at construction.
     fm: "FMArmConfig | None" = None
 
+    # ── Per-depth persistent state (proposed 2026-09-29) ────────────────────────
+    # Core layer l on pass t+1 reads its OWN output from pass t through a gated,
+    # zero-init projection add at its input: x_l^{t+1} <- x_l^{t+1} + g_l * P_l(out_l^t).
+    # `P_l` is a zero-init [d,d] nn.Linear per core layer (so step 0 is exact regardless
+    # of g_l); `g_l` is a per-layer per-channel gate init to 1.0. Pass 1 reads nothing
+    # (no previous pass). False (default) builds NO parameters and `_core_region` runs
+    # the OLD loop, bit-identical. See .agents/notes/proposed/architecture/
+    # 2026-09-29-per-depth-state-and-resonant-depth.md. Plain path only (`_core_region`);
+    # `_tul_core` (the slot loop) does not read this knob. Refuses SCSE (the carrier is
+    # a deviation, not the layer's absolute output) and core_impl='parcae' (the core
+    # collapses to single-stream and back inside _apply_core_step every pass — not
+    # reasoned through for a per-layer carried state).
+    core_depth_state: bool = False
+
     # L1 core-gain governor: cap the per-iteration looped-core
     # amplification ‖h_new‖/‖h_a‖ (per sample) to this ratio τ. The HC residual is
     # norm-preserving (gain≈1 healthy) so this is IDENTITY in the healthy regime and only
@@ -3148,6 +3162,58 @@ class MORPHTransformer(nn.Module):
                   f"{_tx.prefix_k} cells x {cfg.hc_streams} streams -> {_n_x:,} params "
                   f"(bf16, never ternarised)", flush=True)
 
+        # ── Per-depth persistent state (model.core_depth_state) ────────────────────
+        # Built LAST (after SCSE / PassLoRA / xHC), for the same RNG-neutrality reason
+        # those are: `nn.Linear`'s default kaiming draw (discarded by the zero_ below)
+        # still consumes the global RNG stream, so placing this after every other
+        # parameter keeps a control model (core_depth_state off) byte-identical to a
+        # same-seed model built before this knob existed, and keeps a
+        # core_depth_state=True model's OWN earlier parameters byte-identical to its own
+        # off twin — only P_l / g_l differ, and P_l is zero-init, so step 0 is exact.
+        self._core_depth_state = bool(cfg.core_depth_state)
+        self.core_depth_proj: nn.ModuleList | None = None
+        self.core_depth_gate: nn.Parameter | None = None
+        if self._core_depth_state:
+            if self._core_is_parcae:
+                raise NotImplementedError(
+                    "model.core_depth_state with core_impl='parcae': the Parcae core "
+                    "collapses the carrier to single-stream and back inside "
+                    "_apply_core_step every pass; the per-depth read/capture has not "
+                    "been reasoned through for that path. Use core_impl='morph'.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "model.core_depth_state with model.scse_enabled: SCSE's carrier is "
+                    "the DEVIATION, not the layer's absolute output, and the per-depth "
+                    "read is defined on the absolute per-layer state. Not reasoned "
+                    "through for that path.")
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "model.core_depth_state with n_core=0: there is no core loop to "
+                    "carry a per-depth state across.")
+            if cfg.core_gain_lambda > 0.0:
+                raise NotImplementedError(
+                    "model.core_depth_state with model.core_gain_lambda > 0: the gain "
+                    "hinge (`_core_gain_penalty`) re-runs `_core_step` without the "
+                    "previous pass's per-depth state, so it would probe a different map "
+                    "than the one the loop trains. Thread ds_state through the hinge "
+                    "before combining them.")
+            self.core_depth_proj = nn.ModuleList(
+                [nn.Linear(d, d, bias=False) for _ in range(cfg.n_core)])
+            for _p in self.core_depth_proj:
+                nn.init.zeros_(_p.weight)
+                # Never ternarised: same rationale as the HC coefficient projection and
+                # the DiagonalInjection control matrices — a {-1,0,+1} projection cannot
+                # express a small per-depth read, and this one is zero-init besides.
+                _p._ternary_exclude = True
+            self.core_depth_gate = nn.Parameter(torch.ones(cfg.n_core, d))
+            _n_ds = (sum(p.numel() for p in self.core_depth_proj.parameters())
+                     + self.core_depth_gate.numel())
+            print(f"  PER-DEPTH STATE ON: {cfg.n_core} zero-init [{d},{d}] projections + "
+                  f"per-layer per-channel gates (init 1.0) -> {_n_ds:,} params "
+                  f"({_n_ds / 1e6:.2f}M), never ternarised, never pruned (plain "
+                  f"nn.Linear/Parameter). Bit-identical to off at step 0 (P_l zero-init).",
+                  flush=True)
+
         # Master kernel switch → drives the fused-Triton-vs-eager-reference
         # dispatch in the attention kernels (process-global flag). Set at build
         # so the choice is captured in the run; the fused-CE branch in forward()
@@ -3262,10 +3328,12 @@ class MORPHTransformer(nn.Module):
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
                          ret_state=None, iter_idx=0, inj_terms=None, source_free=False,
                          stage_cond=None, attn_kw=None, source_decay_only=False,
-                         xhc_valid=None, xhc_route=None):
+                         xhc_valid=None, xhc_route=None,
+                         ds_state_in=None, ds_capture=False):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
-        Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention).
+        Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention),
+        OR ``(h, new_ret_state, ds_stack)`` when ``ds_capture=True`` (see below).
 
         Lifted verbatim out of ``_forward_single``'s loop so the EXACT training-path core
         map ``f_θ`` is callable in isolation — for σ_max(J_core) probing and per-step
@@ -3296,6 +3364,21 @@ class MORPHTransformer(nn.Module):
         model without temporal augmentation — calls each block exactly as before.
         ``xhc_route`` (plan C, the slot-gain hinge only): the record/replay dict of the
         expanded residuals' stream choice (`XHCResidual.route`); ``None`` elsewhere.
+
+        ``ds_state_in`` (``model.core_depth_state``): ``[n_core, B, S, C]`` single-stream
+        per-CORE-LAYER output from THIS SAMPLE's PREVIOUS pass, or ``None`` (pass 1, or
+        the knob off — every pre-existing call site passes nothing, so the graph is
+        unchanged). When given, core layer i's input on THIS pass gets
+        ``core_depth_gate[i] * core_depth_proj[i](ds_state_in[i])`` broadcast-added
+        through :meth:`_apply_injection` — the same broadcast every other per-pass
+        additive term uses (a single-stream term entered on the HC stream axis),
+        applied LAST, right before that layer runs. ``ds_capture`` (bool, a trace-time
+        constant fixed by the call site — never toggled per-call within one model):
+        when True, every core layer's OWN post-layer output THIS pass is stream-reduced
+        (``mean(dim=2)`` under HC, the same reduction :meth:`_readout` uses) and stacked
+        as a THIRD return value ``[n_core, B, S, C]``, for the NEXT pass's
+        ``ds_state_in``. ``False`` (every pre-existing call site) returns the old
+        2-tuple, unchanged.
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
@@ -3331,6 +3414,7 @@ class MORPHTransformer(nn.Module):
         else:
             h_injected = self.injection(h_in, e_in)
         ret_cap = {} if self._core_has_retention else None
+        ds_out = [] if ds_capture else None
         for i, layer in enumerate(self.core):
             gi = np_ + i
             if not (source_free or source_decay_only):
@@ -3343,6 +3427,15 @@ class MORPHTransformer(nn.Module):
                 h_injected = self._apply_injection(h_injected, term)
             if stage_cond is not None:
                 h_injected = self.tul_stage_cond.modulate(h_injected, stage_cond, i)
+            # Per-depth persistent state (model.core_depth_state): the LAST additive
+            # perturbation before this layer runs — layer i reads its own output from
+            # the sample's previous pass. `ds_state_in` is None at pass 1 (no previous
+            # pass exists) and whenever the knob is off, so this traces out identically
+            # to the pre-existing graph in both cases.
+            if ds_state_in is not None:
+                _ds_term = (self.core_depth_gate[i]
+                            * self.core_depth_proj[i](ds_state_in[i])).to(h_injected.dtype)
+                h_injected = self._apply_injection(h_injected, _ds_term)
             # Retention carry only for the designated core layer(s); others get None.
             is_ret = ret_cap is not None and (i in self._retention_layers)
             rs_arg = ret_state if is_ret else None
@@ -3358,6 +3451,8 @@ class MORPHTransformer(nn.Module):
                                attn_kwargs=_akw, pass_idx=iter_idx,
                                **({} if xhc_valid is None else {"xhc_valid": xhc_valid}),
                                **({} if xhc_route is None else {"xhc_route": xhc_route}))
+            if ds_capture:
+                ds_out.append(h_injected.mean(dim=2) if self._is_hc else h_injected)
         new_ret = ret_cap.get("state") if ret_cap is not None else None
         if _parcae:
             # Broadcast the single-stream pass output back over the n streams. `.expand`
@@ -3367,6 +3462,8 @@ class MORPHTransformer(nn.Module):
             # them. On the slot loop the carrier is [B, 64, 4, C] — the copy is noise.
             h_injected = h_injected.unsqueeze(2).expand(
                 -1, -1, self._n_streams, -1).contiguous()
+        if ds_capture:
+            return h_injected, new_ret, torch.stack(ds_out, dim=0)
         return h_injected, new_ret
 
     # ── Static-region CUDA graphs (MORPH_STATIC_GRAPHS) ──────────────────────
@@ -3783,19 +3880,23 @@ class MORPHTransformer(nn.Module):
         d = v.to(hp.dtype).unsqueeze(0) * scale.view(-1, *([1] * (hp.dim() - 1)))
         try:
             _restore()
-            f0, _ = core_step(hp, e_d, inj_d, ret_state=rs_d, iter_idx=t, attn_kw=akw)
+            # `core_step` (the `_core_step` closure) always returns a 3-tuple
+            # (h, ret_state, ds_out) since model.core_depth_state's addition — the third
+            # element is None whenever the knob is off (every pre-existing caller of this
+            # probe), so the unpack below is unchanged in effect, just in arity.
+            f0, _, _ = core_step(hp, e_d, inj_d, ret_state=rs_d, iter_idx=t, attn_kw=akw)
             # Within-step power iterations (core_gain_power_iters): refine the direction at
             # THIS input, no grad (the reading, not the direction, carries the penalty's grad).
             for _ in range(int(self.cfg.core_gain_power_iters)):
                 _restore()
                 with torch.no_grad():
-                    fk, _ = core_step(hp + d, e_d, inj_d, ret_state=rs_d, iter_idx=t,
-                                      attn_kw=akw)
+                    fk, _, _ = core_step(hp + d, e_d, inj_d, ret_state=rs_d, iter_idx=t,
+                                         attn_kw=akw)
                     nv = (fk - f0).float().mean(0)
                     v = nv / (nv.norm() + 1e-6)
                     d = v.to(hp.dtype).unsqueeze(0) * scale.view(-1, *([1] * (hp.dim() - 1)))
             _restore()
-            f1, _ = core_step(hp + d, e_d, inj_d, ret_state=rs_d, iter_idx=t, attn_kw=akw)
+            f1, _, _ = core_step(hp + d, e_d, inj_d, ret_state=rs_d, iter_idx=t, attn_kw=akw)
         finally:
             _restore()
         diff = (f1 - f0).float()
@@ -4165,6 +4266,10 @@ class MORPHTransformer(nn.Module):
         # branch below traces out and the loop is bit-identical to the pre-LoopMTP tree.
         _lmtp = self._loopmtp_states
         _lm_states: list[Tensor] = []
+        # Per-depth persistent state (model.core_depth_state): a Python-level constant
+        # set at build, so with it off every branch below traces out and the loop is
+        # bit-identical to the pre-core_depth_state tree.
+        _ds = self._core_depth_state
         # ── Core loop ─────────────────────────────────────────────────
         # n_core == 0 → prelude output flows straight to the coda. The whole loop
         # machinery below (input_norm/h clone, depth sampling, x0 hoist, DiagonalInjection
@@ -4239,17 +4344,27 @@ class MORPHTransformer(nn.Module):
               )  # [n_core, B, S, C]
 
             def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0,
-                           attn_kw=None):
+                           attn_kw=None, ds_state=None):
                 # Thin closure → the bound `_apply_core_step` method (single source of truth so
                 # the σ_max probe / diagnostics exercise the EXACT training core map). Kept as a
                 # closure so `checkpoint(_core_step, ...)` and the eager/no_grad call sites below
                 # are unchanged; np_ (= cfg.n_prelude) is now recomputed inside the method.
                 # ids/x0_terms/bg are None here: the injection is precomputed (inj_terms) and
                 # threaded as a checkpoint input so the recompute reuses it.
+                #
+                # Always returns a 3-tuple (h, new_ret, ds_out): construction refuses
+                # core_depth_state + scse together, so `_ds` is True only in the
+                # `_scse is None` branch below, where `_apply_core_step` is asked to
+                # capture (`ds_capture=_ds`) and hands back the 3rd element directly.
+                # The SCSE branch and an `_ds=False` model both return `ds=None`, added
+                # here rather than by `_apply_core_step` so every OTHER caller of that
+                # method (5 call sites elsewhere in this file) keeps its old 2-tuple.
                 if _scse is None:
-                    return self._apply_core_step(h_in, e_in, None, None, None,
-                                                 ret_state=ret_state, iter_idx=iter_idx,
-                                                 inj_terms=inj_terms, attn_kw=attn_kw)
+                    out = self._apply_core_step(h_in, e_in, None, None, None,
+                                                ret_state=ret_state, iter_idx=iter_idx,
+                                                inj_terms=inj_terms, attn_kw=attn_kw,
+                                                ds_state_in=ds_state, ds_capture=_ds)
+                    return out if _ds else (out[0], out[1], None)
                 # ── SCSE, Eqs. 3-5 ──────────────────────────────────────────────────
                 # `h_in` IS Delta_t and `e_in` carries h* (used only when kappa > 0 builds
                 # the SC-Cond reference; SCSE proper ignores it). The signature is kept
@@ -4263,7 +4378,7 @@ class MORPHTransformer(nn.Module):
                     _rec, None, None, None, None,
                     ret_state=ret_state, iter_idx=iter_idx, inj_terms=None, source_free=True,
                     attn_kw=attn_kw)
-                return _scse.update(h_in, g_out, _rec), new_ret    # Eqs. 3-5
+                return _scse.update(h_in, g_out, _rec), new_ret, None    # Eqs. 3-5
 
             # ── Active-set shrinking ────────────────────────────────────────────
             # A sample is updated only while iteration t < its Poisson depth, then
@@ -4343,6 +4458,14 @@ class MORPHTransformer(nn.Module):
             else:
                 ret_state_s = None
 
+            # ── Per-depth persistent state carry (model.core_depth_state) ──────────
+            # ``[n_core, B, S, C]``, held in the SAME sorted/active-set order as h_s.
+            # None until pass 1's capture lands (pass 1 reads nothing — no previous
+            # pass exists); every sample has depth >= 1 (`_sample_depths` clamps to
+            # [1, max_depth]), so `active_counts[0] == h_s.shape[0]` always and the
+            # first assignment below needs no concat with a frozen suffix.
+            ds_state_s: Tensor | None = None
+
             _cc_meanmin = None  # MORPH_DIAG_CORECOS: min-over-iters of MEAN per-token cos(h_new,h_a)
             _cc_fracmax = None  # max-over-iters of FRACTION of tokens rotated >60° (cos<0.5)
             _cc_min = None      # min per-token cos (saturated order-stat; kept for reference)
@@ -4392,6 +4515,10 @@ class MORPHTransformer(nn.Module):
                         _inj_none if _scse is not None else inj_s[:, :n_active])
                 rs_a = ret_state_s[:n_active] if track_ret else None
                 akw = {k: v[:n_active] for k, v in tg_s.items()} or None
+                # Per-depth persistent state: pass 1 (t == 0) reads nothing — no previous
+                # pass exists for any sample, active or not. t >= 1 slices the SAME active
+                # prefix as h_a/e_s (per-sample, no cross-sample mixing → exact).
+                ds_a = ds_state_s[:, :n_active] if (_ds and t > 0) else None
                 # Jacobian probe capture — see the twin in `_tul_core`. None by default,
                 # so this branch traces out and the forward stays bit-identical.
                 if self._jac_capture is not None:
@@ -4413,15 +4540,16 @@ class MORPHTransformer(nn.Module):
 
                 if t < n_nograd:
                     with torch.no_grad():
-                        h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t,
-                                                   attn_kw=akw)
+                        h_new, rs_new, ds_new = _core_step(*args, ret_state=rs_a, iter_idx=t,
+                                                           attn_kw=akw, ds_state=ds_a)
                 elif do_ckpt:
-                    h_new, rs_new = checkpoint(_core_step, *args, ret_state=rs_a, iter_idx=t,
-                                               attn_kw=akw, use_reentrant=False)
+                    h_new, rs_new, ds_new = checkpoint(_core_step, *args, ret_state=rs_a,
+                                                       iter_idx=t, attn_kw=akw, ds_state=ds_a,
+                                                       use_reentrant=False)
                 else:
                     # eval, OR a grad-iter we chose not to checkpoint (activations retained).
-                    h_new, rs_new = _core_step(*args, ret_state=rs_a, iter_idx=t,
-                                               attn_kw=akw)
+                    h_new, rs_new, ds_new = _core_step(*args, ret_state=rs_a, iter_idx=t,
+                                                       attn_kw=akw, ds_state=ds_a)
 
                 # ── L1 core-gain governor (#276) ──────────────────────────────────────────
                 # Cap this iteration's per-sample looped-core amplification ‖h_new‖/‖h_a‖ ≤ τ.
@@ -4491,6 +4619,15 @@ class MORPHTransformer(nn.Module):
                 if track_ret and rs_new is not None:
                     ret_state_s = rs_new if n_active == ret_state_s.shape[0] else \
                         torch.cat([rs_new, ret_state_s[n_active:]], dim=0)
+                if _ds:
+                    # Batch axis is dim 1 here (dim 0 is n_core). `ds_state_s is None`
+                    # covers t == 0 (nothing to concat a frozen suffix onto yet); every
+                    # later t either replaces the whole active prefix (n_active unchanged
+                    # since the last update) or concats onto the still-frozen tail —
+                    # exactly the h_s / ret_state_s pattern, one axis over.
+                    ds_state_s = ds_new if (ds_state_s is None
+                                            or n_active == ds_state_s.shape[1]) else \
+                        torch.cat([ds_new, ds_state_s[:, n_active:]], dim=1)
 
             if _capture_traj:
                 self._traj_carriers = _traj  # [z_0 .. z_T], each [B, S, C]; read by the interp probe

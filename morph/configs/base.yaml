@@ -239,6 +239,11 @@ model:
   # REFUTED as a hold (E10c: 2 of 6 at lambda 1e-3, the reading leads the onset by 20-40
   # steps). Arm configs: notul_fp_wu0.yaml, notul_pgain2_wu0.yaml.
   core_fixed_point_lambda: 1.0
+  # Per-depth persistent state (proposed 2026-09-29): each core layer reads its own previous-pass
+  # output through a zero-init projection + per-channel gate. Plain looped core only
+  # (`_core_region`); refuses SCSE, core_impl parcae and core_gain_lambda > 0. Note:
+  # .agents/notes/proposed/architecture/2026-09-29-per-depth-state-and-resonant-depth.md
+  core_depth_state: false
   core_gain_lambda: 0.0
   core_gain_target: 20.0
   core_gain_eps: 0.02
