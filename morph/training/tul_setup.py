@@ -65,6 +65,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_k", "fan_mix", "fan_repel_lambda", "fan_repel_passes",
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
     "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
+    "fan_all_wta_winner", "fan_all_wta_grad_rollouts",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -375,6 +376,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_select_write=str(tc.get("fan_select_write", "oracle")),
         fan_select_write_anneal=int(tc.get("fan_select_write_anneal", 1500)),
         fan_all_wta_lambda=float(tc.get("fan_all_wta_lambda", 1.0)),
+        fan_all_wta_winner=str(tc.get("fan_all_wta_winner", "per_rollout")),
+        fan_all_wta_grad_rollouts=str(tc.get("fan_all_wta_grad_rollouts", "all")),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -635,6 +638,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_select_write": model_cfg.fan_select_write,
         "fan_select_write_anneal": model_cfg.fan_select_write_anneal,
         "fan_all_wta_lambda": model_cfg.fan_all_wta_lambda,
+        "fan_all_wta_winner": model_cfg.fan_all_wta_winner,
+        "fan_all_wta_grad_rollouts": model_cfg.fan_all_wta_grad_rollouts,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1192,8 +1197,20 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"exact per-span mixture over the K rollouts. The register pools the prelude "
               f"ONCE (base rows) and is tiled. "
               + (f"WTA over the cells ON (lambda {model_cfg.fan_all_wta_lambda}, eps "
-                 f"{model_cfg.fan_select_eps}): per (rollout, slot) winner, M no-grad coda "
-                 f"passes (one per stream, K-fold batch) + one grad pass. "
+                 f"{model_cfg.fan_select_eps}, winner={model_cfg.fan_all_wta_winner!r}, "
+                 f"grad_rollouts={model_cfg.fan_all_wta_grad_rollouts!r}): "
+                 + (f"per (rollout, slot) winner, M no-grad coda passes (one per stream, "
+                    f"K-fold batch) + one grad pass over all K*B0 rows. "
+                    if model_cfg.fan_all_wta_winner == "per_rollout" else
+                    f"ONE winner per slot shared by every rollout, ranked by the TRUE "
+                    f"mixture posterior from the model's OWN deployed coda pass (built "
+                    f"here, cached, reused below instead of recomputed); then M no-grad "
+                    f"coda passes (one per stream, BASE-row batch, a quarter the rows at "
+                    f"K={model_cfg.code_enum_k}) pick the stream, + one grad pass over "
+                    + (f"a BASE-row batch (each slot's own MAP rollout — a different "
+                       f"objective from the mean over K, not merely cheaper). "
+                       if model_cfg.fan_all_wta_grad_rollouts == "map" else
+                       f"all K*B0 rows (the mean over rollouts, unchanged). "))
                  if model_cfg.fan_all_wta_lambda > 0 else "No WTA term. ")
               + "No parallel head (refused). "
               "`fan/*_ce` oracle readings are per-span MIXTURES over the K rollouts; "

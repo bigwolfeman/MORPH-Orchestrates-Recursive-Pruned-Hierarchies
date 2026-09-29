@@ -141,9 +141,18 @@ class _Spy:
 # these fixtures and one CPU thread: (train loss, eval logit sum, eval loss, sum |grad|,
 # n grads). /home/wolfe/morph-scratch/lxfan/pin_head.py wrote them; pin_compare.py then
 # found every tensor `torch.equal` on the changed tree.
+#
+# "fan4" / "fan6" grad-sum moved 2026-09-29 ("onewinner-perf"): `_tul_fan_all`'s WTA CE
+# (`fan_all_wta_lambda=1.0` in `_fan_kw`) now runs through `accumulate_span_ce_fused`
+# (`fused_linear_label_logprob`, morph/model/fused_ce.py) instead of a per-row
+# `F.cross_entropy` loop -- same partition, same labels, a numerically DIFFERENT kernel.
+# The train/eval LOSS and the eval logit sum stayed bit-identical (indices 0, 1, 2 here);
+# only the gradient sum moved, by ~2.6e-9 relative -- the fused kernel's analytic backward
+# accumulates in a different order than `F.cross_entropy`'s autograd-generated one.
+# tests/test_tul_wta_fused_ce.py pins the tolerance this needed against the old path.
 HEAD_PINS = {
-    "fan4": (10.31538200378418, 1358.1454057991505, 5.132460117340088, 1436.3044085161928, 179),
-    "fan6": (10.335302352905273, 1519.400069154045, 5.132365703582764, 1426.90597463816, 179),
+    "fan4": (10.31538200378418, 1358.1454057991505, 5.132460117340088, 1436.3044122054762, 179),
+    "fan6": (10.335302352905273, 1519.400069154045, 5.132365703582764, 1426.9059611385153, 179),
     "lx": (9.606481552124023, -52828.743996977806, 9.570661544799805, 1201.495515583244, 190),
     "lx_live": (9.606481552124023, -52828.743996977806, 9.570661544799805,
                 1523.0509139084759, 190),

@@ -1340,6 +1340,38 @@ def accumulate_span_ce(xh: Tensor, w_head: Tensor, gid: Tensor, keep_tok: Tensor
     return out.view(B, n_groups)
 
 
+def accumulate_span_ce_fused(xh: Tensor, w_head: Tensor, gid: Tensor, keep_tok: Tensor,
+                             lab: Tensor, n_groups: int, chunk_size: int) -> Tensor:
+    """``[B, n_groups]`` SUMMED token CE per bag — the fused-kernel twin of
+    :func:`accumulate_span_ce` ("onewinner-perf", 2026-09-29). Computes the SAME quantity
+    through :func:`fused_linear_label_logprob` (``morph/model/fused_ce.py``, chunked,
+    never materialises ``[B, L, V]``) instead of a per-ROW ``xh[b] @ w_head.T`` +
+    ``F.cross_entropy`` Python loop, so it needs no :func:`pad_vocab_align8` caller-side
+    alignment (the fused kernel pads its own copy internally) and no ``vocab_size`` slice.
+
+    ``w_head`` must be the RAW (unpadded) head — ``self.embed.lm_weight()``, not a
+    caller's ``pad_vocab_align8`` output; the fused kernel's own ``_pad_vocab`` would
+    double-pad an already-padded matrix otherwise (harmless numerically, since the extra
+    rows are zero, but wasteful and a sign the caller passed the wrong tensor).
+
+    ``mask_token_id`` is left at its default (off, -1): :func:`accumulate_span_ce`'s
+    softmax partition never excluded the TUL slot id from the vocabulary (unlike
+    :meth:`MORPHTransformer._enum_mix_losses`'s masked mixture read), so leaving it off
+    here is what makes this call a numerical TWIN of the function it replaces, not a
+    different quantity. Behaviour-preserving by construction: same partition, same
+    labels, same span scatter — only the kernel that computes the per-token log-prob
+    changes (tests/test_tul_wta_fused_ce.py pins the tolerance this needs against the
+    slower path, on a tiny model, and reports why it is not bit-identical)."""
+    B, L, C = xh.shape
+    lab100 = torch.where(keep_tok, lab, lab.new_full((), -100))
+    lp = fused_linear_label_logprob(xh.reshape(-1, C), w_head, lab100.reshape(-1),
+                                    ignore_index=-100, chunk_size=chunk_size)
+    ce = (-lp).to(torch.float32)
+    out = torch.zeros(B * n_groups, device=xh.device, dtype=torch.float32)
+    out.index_add_(0, gid.reshape(-1), ce)
+    return out.view(B, n_groups)
+
+
 def repeat_along_batch(x, k: int):
     """Repeat a batch-axis-0 tensor (or a dict of them, recursively) ``k`` times.
 
@@ -1363,6 +1395,25 @@ def repeat_along_batch(x, k: int):
         return x.repeat(k, *([1] * (x.dim() - 1)))
     if isinstance(x, dict):
         return {kk: repeat_along_batch(vv, k) for kk, vv in x.items()}
+    return x
+
+
+def _batch_head(x, b0: int):
+    """The FIRST ``b0`` rows of a batch-axis-0 tensor (or a dict of them, recursively) —
+    the inverse slice of :func:`repeat_along_batch`. Every rollout-expanded input this
+    reads (``x0``, ``bigram_emb``, ``input_ids``, the TG attention kwargs,
+    ``ret_reset_mask``) is ``R`` IDENTICAL copies of the base rows concatenated
+    rollout-major (built by exactly one ``repeat_along_batch`` call upstream, never
+    touched per-rollout after), so rows ``0..b0-1`` ARE the base rows.  ``None`` passes
+    through, a nested ``dict`` is walked recursively — the same two escape hatches
+    ``repeat_along_batch`` takes, so the two stay inverses on every input either sees.
+    """
+    if x is None:
+        return None
+    if torch.is_tensor(x):
+        return x[:b0]
+    if isinstance(x, dict):
+        return {kk: _batch_head(vv, b0) for kk, vv in x.items()}
     return x
 
 
@@ -1591,6 +1642,27 @@ class MORPHTransformer(nn.Module):
     # ONLY way a test can recover that table, since it is a local of the method. None by
     # default, so the shipped graph never sees it.
     _fan_all_ce_capture: list | None = None
+
+    # `tul.fan_all_wta_winner="map"`'s test hook: attach a list and `_tul_fan_all`
+    # appends ``{"map_idx", "choice", "forced"}`` (all detached) once per train step,
+    # right after the MAP winner is picked and broadcast to every rollout — the only way
+    # a test can recover the per-BASE-ROW MAP rollout index and the shared winner table.
+    # None by default (every other model and `fan_all_wta_winner="per_rollout"` never
+    # touch it).
+    _fan_all_winner_capture: list | None = None
+
+    # `tul.fan_all_wta_winner="map"`'s pass-sharing cache ("onewinner-perf", 2026-09-29):
+    # `_tul_fan_all` computes the model's DEPLOYED mixture coda pass itself (to rank
+    # rollouts by the true posterior — see `tul.fan_all_wta_winner`'s doc) and stashes
+    # ``(xh, groups)`` here so `_forward_tul`'s own deployed-pass call, a few hundred
+    # lines later in the SAME forward, can reuse it instead of recomputing the identical
+    # pass. ALWAYS ``None`` outside the window between `_tul_fan_all` setting it and
+    # `_forward_tul` popping it a few lines later in the same call: `_tul_fan_all`
+    # asserts it is ``None`` before writing (an unpopped value would mean a PRIOR
+    # forward's coda output leaking into this one) and `_forward_tul` pops it (reads,
+    # then resets to ``None``) the one time it checks, on every branch, so it can never
+    # survive past the forward that set it.
+    _fan_all_deployed_cache: tuple | None = None
 
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
@@ -7858,6 +7930,23 @@ class MORPHTransformer(nn.Module):
         carrier before token dropout and cut the slot cells' own injections exactly as
         the shipped strict coda does (the select arm's rule).
 
+        ``tul.fan_all_wta_winner`` ("onewinner", 2026-09-29; read only at ``R > 1``):
+        ``"per_rollout"`` (default) is every line above, unchanged — each of the ``R``
+        rollouts picks its own per-slot winner from the FULL ``k``-pass, ``R*B0``-row
+        table, bit-identical to the tree before this key. ``"map"`` skips that table and
+        SHARES one winner per slot across every rollout instead, found in two cheaper
+        passes: ONE ranking pass (``R*B0`` rows, the MEAN-of-cells write ``state`` —
+        already built, no extra work) scores each rollout's span CE and takes the argmin
+        (the MAP rollout, the cheapest correct stand-in available here for "highest
+        per-span posterior weight" — the exact mixture posterior is a coda pass later in
+        the forward this method has not seen yet); then the ``k`` no-grad picking passes
+        run on a ``B0``-row batch (a QUARTER the rows of the table they replace, at the
+        arm's ``R = 4``) whose slot cells are drawn from EACH slot's own MAP rollout. Net:
+        the table's own row count drops from ``k`` passes of ``R*B0`` to ``k`` passes of
+        ``B0`` PLUS the one new ``R*B0`` ranking pass. The grad pass below is UNCHANGED
+        either way — same ``cells``, same weight, same eps — it only reads a different
+        ``choice``.
+
         EVAL, a plan ablation, or ``fan_all_wta_lambda == 0`` (LX-Fan): nothing extra and
         no pass; the oracle instrument after the coda reports ``stream_ce_k{i}`` on the
         same one-stream write.
@@ -7900,9 +7989,10 @@ class MORPHTransformer(nn.Module):
         keep = (slot_cell_inject_keep(layout, xn.dtype)
                 if (tc.coda_token_input == "embed" or self._tg_strict) else None)
         gid, keep_tok, lab, g_bins = span_ce_index(labels, layout)
+        # `w_head` RAW (unpadded): every CE below runs through `accumulate_span_ce_fused`
+        # ("onewinner-perf", 2026-09-29), whose kernel pads its own copy internally —
+        # `pad_vocab_align8` and a `vocab_size` slice are no longer needed in this method.
         w_head = self.embed.lm_weight()
-        vocab_size = int(w_head.shape[0])
-        w_head_pad = pad_vocab_align8(w_head)          # once per forward (perf: aligned GEMM)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]                # [B, S]
         ok = layout.slot_valid & (n_tok > 0)
         R = int(n_rollouts)
@@ -7913,111 +8003,283 @@ class MORPHTransformer(nn.Module):
         # rollout-shared dropout tiles a mask over the first 1/R of a pass's rows, so a
         # multi-stream group at R > 1 would tie the wrong rows' masks.
         groups_i = [list(range(k))] if R == 1 else [[i] for i in range(k)]
+        _winner_mode = str(tc.fan_all_wta_winner)
+        _grad_mode = str(tc.fan_all_wta_grad_rollouts)
+        _use_map = _winner_mode == "map" and R > 1
+        S_dim = int(layout.slot_valid.shape[1])
+        B0 = B // R if R > 0 else B
+        # ── tul.fan_all_wta_winner="map": the SHARED mixture pass ("onewinner-perf",
+        # 2026-09-29, superseding the 2026-09-29 "onewinner" proxy) ───────────────────
+        # Runs the model's own DEPLOYED coda pass (every stream 1:1 in its prefix cell —
+        # the SAME write `_forward_tul` builds right after this method returns) HERE,
+        # WITH GRAD, reproducing that pipeline field for field:
+        # prefix_project(cells=...) -> scatter_positions -> apply_token_dropout ->
+        # slot_cell_inject_keep-combine (already this method's own `keep`) ->
+        # _back_region(checkpoint_blocks=True) -> _enum_mix_losses. Two payoffs: (1) its
+        # exact per-span mixture posterior `S` (`_enum_mix_losses`'s `s_out["S"]`, the
+        # SAME tensor `enum_code_win{k}` reads) ranks rollouts by the TRUE posterior
+        # instead of the OLD proxy (a separate pass on the mean-of-cells write, which
+        # the coda never actually reads under `fan_mix="all"`); (2) its `(xh, groups)`
+        # are cached (`_fan_all_deployed_cache`) for `_forward_tul`'s OWN deployed-pass
+        # call, a few hundred lines later in the SAME forward, to reuse instead of
+        # recomputing the identical pass — one pass pays for both jobs. `tul.bcast` is
+        # refused together with this mode (`TULConfig.__post_init__`): bcast's unpack
+        # term reads `h_slots`, which does not exist yet at this point in the forward.
+        _mix_groups: dict | None = None
+        S_slots: Tensor | None = None
+        if _use_map:
+            assert self._fan_all_deployed_cache is None, (
+                "_tul_fan_all: _fan_all_deployed_cache was not consumed by the previous "
+                "forward that set it — refusing to build a second one on top of it.")
+            values_mix, pos_mix = self.tul.prefix_project(state, layout, L, cells=cells)
+            x_mix = scatter_positions(base, pos_mix, values_mix)
+            x_mix, keep_do = self.tul.apply_token_dropout(x_mix, layout, self.training,
+                                                           n_rep=R)
+            keep_mix = keep if keep_do is None else (
+                keep_do * keep if keep is not None else keep_do)
+            xh_mix = self._back_region(x_mix, x0, bigram_emb, input_ids,
+                                       inject_keep=keep_mix, attn_kwargs=coda_kw,
+                                       ret_reset_mask=tg_reset, checkpoint_blocks=True)
+            _s_out: dict = {}
+            _mix_groups = self._enum_mix_losses(xh_mix, labels, input_ids, layout, R,
+                                                want_groups=not self.training,
+                                                s_out=_s_out)
+            S_post = _s_out["S"]                                          # [R, n_groups]
+            if S_post.shape[1] != B0 * (layout.max_slots + 1):
+                raise RuntimeError(
+                    f"_tul_fan_all: S group count {S_post.shape[1]} != "
+                    f"B0*(max_slots+1) ({B0}*{layout.max_slots + 1}) — the offline "
+                    "group indexing assumption (span_ce_index's own) does not hold.")
+            S_slots = S_post.view(R, B0, layout.max_slots + 1)[:, :, 1:]  # [R,B0,S_dim]
+            self._fan_all_deployed_cache = (xh_mix, _mix_groups)
         with torch.no_grad():
             base_d = base.detach()
             cells_d = cells.detach()
-            per_stream: list[Tensor] = []
-            for grp in groups_i:
-                n = len(grp)
-                x_g = []
-                for i in grp:
-                    values, pos = self._tul_fan_stream_write(cells_d, i, layout, L)
-                    x_g.append(scatter_positions(base_d, pos, values))
-                # a2: ONE batched coda pass over the K written inputs stacked along the
-                # batch axis, instead of K sequential `_back_region` calls (perf: 971
-                # ms/step measured on this arm, `aten::mm` 27.9%/`cudaLaunchKernel` 476 ms
-                # self CPU — coda launch/kernel overhead dominates at this shape, so K
-                # forwards of batch B pay it K times where one forward of batch K*B pays
-                # it once). Under the code a pass is already the K-fold rollout batch, and
-                # stacking the M streams on top would be M*R*B rows of eager strict-coda
-                # attention in one go (the [rows, H, L, L] score tensor alone is 5 GB at
-                # 96 rows, L 1280), so each stream is its own pass. Every OTHER coda input
-                # is stream-INDEPENDENT (only the written cells differ across the streams),
-                # so it is repeated along the batch axis (`repeat_along_batch`) rather
-                # than recomputed — `x0`/`bigram_emb` carry no per-stream signal and
-                # `coda_kw`/`ret_reset_mask`/`inject_keep`/`input_ids` are one
-                # dict/mask/id-tensor built once per forward, upstream of the fan.
-                x_all = torch.cat(x_g, dim=0) if n > 1 else x_g[0]          # [n*B, L, ...]
-                del x_g
-                xh_all = self._back_region(
-                    x_all, repeat_along_batch(x0, n), repeat_along_batch(bigram_emb, n),
-                    repeat_along_batch(input_ids, n), inject_keep=repeat_along_batch(keep, n),
-                    attn_kwargs=repeat_along_batch(coda_kw, n),
-                    ret_reset_mask=repeat_along_batch(tg_reset, n))
-                del x_all
-                # Split back into the group's streams (row block j is stream grp[j], the
-                # order the inputs were concatenated in) — cheap CE bookkeeping against
-                # the ALREADY computed coda output, not a second coda pass.
-                per_stream += [accumulate_span_ce(xh_all[j * B:(j + 1) * B], w_head_pad,
-                                                  gid, keep_tok, lab, g_bins,
-                                                  vocab_size=vocab_size)[:, 1:]
-                               for j in range(n)]
-                del xh_all
-            ce = torch.stack(per_stream, dim=-1)                                # [B, S, K]
-            if self._fan_all_ce_capture is not None:
-                # Test hook (the `_trigger_capture` pattern): the ONLY way a test can
-                # recover the per-stream table the batched coda pass built, AND the
-                # exact inputs it was built from, to pin both against a sequential
-                # reference built from the same tensors with the model's own
-                # `_tul_fan_stream_write` / `_back_region` / `accumulate_span_ce`. None
-                # on every shipped path.
-                self._fan_all_ce_capture.append({
-                    "ce": ce.detach().clone(), "cells_d": cells_d, "base_d": base_d,
-                    "x0": x0.detach(), "bigram_emb": (None if bigram_emb is None
-                                                       else bigram_emb.detach()),
-                    "input_ids": input_ids.detach(), "keep": (None if keep is None
-                                                              else keep.detach()),
-                    "coda_kw": coda_kw, "tg_reset": tg_reset, "layout": layout, "L": L,
-                    "gid": gid, "keep_tok": keep_tok, "lab": lab, "g_bins": g_bins,
-                    "w_head": w_head.detach(),
-                })
-            choice, forced = select_winners(ce, ok, float(tc.fan_select_eps))
-            if bool(ok.any()):
-                denom = n_tok[ok].sum().clamp_min(1.0)
-                best, arg = ce.min(dim=-1)
-                # Detached 0-dim TENSORS, not `float(...)` — each `float()` on a CUDA
-                # tensor is a `cudaStreamSynchronize` mid-step (perf: 896 ms self-CPU
-                # `cudaStreamSynchronize` measured on this arm). `_tul_group_losses`
-                # wraps every `stats` entry into the loss `groups` dict as a tensor
-                # already (`groups["loss"].new_tensor`/`.to`), and train.py's logger is
-                # the one place that calls `float()` on these, on the steps it logs (the
-                # `_loop_carry_stats` / `_loop_mux` precedent).
-                stats["wta_oracle_ce"] = (best[ok].sum() / denom).detach()
-                stats["wta_single_ce"] = (ce[..., 0][ok].sum() / denom).detach()
-                stats["wta_pick0"] = (arg[ok] == 0).float().mean().detach()
-                stats["wta_forced"] = forced[ok].float().mean().detach()
-                for i in range(k):
-                    stats[f"wta_share_k{i}"] = (choice[ok] == i).float().mean().detach()
+            if _use_map:
+                # MAP rollout per slot, from the TRUE posterior above.
+                map_idx = S_slots.detach().argmax(dim=0)                  # [B0, S_dim]
+                # PICK (M no-grad passes, B0 rows each — a QUARTER of the K*B0-row
+                # table this mode replaces): slot s of the assembled row draws its
+                # cells from ITS OWN MAP rollout — legal under the strict coda's "a
+                # prefix cell sees ITSELF and nothing else" geometry
+                # (`tul_slot_spandec_strict.yaml`): swapping one cell's rollout can
+                # only ever change TOKENS strictly AFTER it, never another cell's own
+                # read, so this per-slot Frankenstein-of-rollouts row is a
+                # well-defined probe — exactly what the grad pass below already
+                # builds per FAN STREAM (`select_streams`), one axis over.
+                cells5 = cells_d.view(R, B0, *cells_d.shape[1:])
+                _b0i = torch.arange(B0, device=cells_d.device).view(B0, 1).expand(B0, S_dim)
+                _si = torch.arange(S_dim, device=cells_d.device).view(1, S_dim).expand(B0, S_dim)
+                cells_map = cells5[map_idx, _b0i, _si]                  # [B0, S, k, ...]
+                base0, x0_0, ids0 = base[:B0], x0[:B0], input_ids[:B0]
+                bigram0 = None if bigram_emb is None else bigram_emb[:B0]
+                keep0 = None if keep is None else keep[:B0]
+                coda_kw0 = _batch_head(coda_kw, B0)
+                tg_reset0 = _batch_head(tg_reset, B0)
+                layout0 = layout.head_rows(B0)
+                gid0, keep_tok0, lab0 = gid[:B0], keep_tok[:B0], lab[:B0]
+                per_stream_map: list[Tensor] = []
+                # `B0` is generally NOT a multiple of `R`, but `self.coda`'s dropout was
+                # swapped to `RolloutSharedDropout(n_rep=R)` for the whole model (built
+                # for the R*B0-row rollout-major passes everywhere else in this method).
+                # `bypass_rollout_sharing` makes it ordinary independent-per-row dropout
+                # for exactly these M no-grad passes — legal here because there is no
+                # backward/recompute inside this `torch.no_grad()` block for the mask
+                # decision to have to survive (morph/model/rollout_dropout.py).
+                from .rollout_dropout import bypass_rollout_sharing
+                with bypass_rollout_sharing(self.coda):
+                    for i in range(k):
+                        values_m, pos_m = self._tul_fan_stream_write(cells_map, i, layout0, L)
+                        x_i = scatter_positions(base0, pos_m, values_m)
+                        xh_i = self._back_region(x_i, x0_0, bigram0, ids0, inject_keep=keep0,
+                                                 attn_kwargs=coda_kw0, ret_reset_mask=tg_reset0)
+                        per_stream_map.append(
+                            accumulate_span_ce_fused(xh_i, w_head, gid0, keep_tok0, lab0,
+                                                     g_bins, chunk_size=self.cfg.ce_chunk_size
+                                                     )[:, 1:])
+                ce_map = torch.stack(per_stream_map, dim=-1)                   # [B0, S, k]
+                ok0 = ok[:B0]
+                choice0, forced0 = select_winners(ce_map, ok0, float(tc.fan_select_eps))
+                choice = choice0.repeat(R, 1)
+                forced = forced0.repeat(R, 1)
+                if self._fan_all_winner_capture is not None:
+                    self._fan_all_winner_capture.append({
+                        "map_idx": map_idx.detach().clone(),
+                        "choice": choice.detach().clone(),
+                        "forced": forced.detach().clone(),
+                        "ce_map": ce_map.detach().clone(),
+                        "cells_map": cells_map.detach().clone(),
+                        "S_slots": S_slots.detach().clone(),
+                    })
+                # Stats read from the B0-row PICK table, broadcast to every rollout for
+                # a shape match with `ok` (`[R*B0, S]`) — the "per_rollout" branch's
+                # readings of the SAME names, adapted: `wta_oracle_ce` / `wta_single_ce`
+                # / `wta_pick0` / `wta_share_k{i}` are the B0-row table's own (the M
+                # picking passes' table), not each rollout's independent one; there is
+                # no per-rollout table left to read them from.
+                if bool(ok.any()):
+                    denom = n_tok[ok].sum().clamp_min(1.0)
+                    best0, arg0 = ce_map.min(dim=-1)
+                    best, arg = best0.repeat(R, 1), arg0.repeat(R, 1)
+                    stats["wta_oracle_ce"] = (best[ok].sum() / denom).detach()
+                    stats["wta_single_ce"] = (
+                        ce_map[..., 0].repeat(R, 1)[ok].sum() / denom).detach()
+                    stats["wta_pick0"] = (arg[ok] == 0).float().mean().detach()
+                    stats["wta_forced"] = forced[ok].float().mean().detach()
+                    for i in range(k):
+                        stats[f"wta_share_k{i}"] = (choice[ok] == i).float().mean().detach()
+            else:
+                per_stream: list[Tensor] = []
+                for grp in groups_i:
+                    n = len(grp)
+                    x_g = []
+                    for i in grp:
+                        values, pos = self._tul_fan_stream_write(cells_d, i, layout, L)
+                        x_g.append(scatter_positions(base_d, pos, values))
+                    # a2: ONE batched coda pass over the K written inputs stacked along
+                    # the batch axis, instead of K sequential `_back_region` calls (perf:
+                    # 971 ms/step measured on this arm, `aten::mm` 27.9%/
+                    # `cudaLaunchKernel` 476 ms self CPU — coda launch/kernel overhead
+                    # dominates at this shape, so K forwards of batch B pay it K times
+                    # where one forward of batch K*B pays it once). Under the code a
+                    # pass is already the K-fold rollout batch, and stacking the M
+                    # streams on top would be M*R*B rows of eager strict-coda attention
+                    # in one go (the [rows, H, L, L] score tensor alone is 5 GB at 96
+                    # rows, L 1280), so each stream is its own pass. Every OTHER coda
+                    # input is stream-INDEPENDENT (only the written cells differ across
+                    # the streams), so it is repeated along the batch axis
+                    # (`repeat_along_batch`) rather than recomputed — `x0`/`bigram_emb`
+                    # carry no per-stream signal and
+                    # `coda_kw`/`ret_reset_mask`/`inject_keep`/`input_ids` are one
+                    # dict/mask/id-tensor built once per forward, upstream of the fan.
+                    x_all = torch.cat(x_g, dim=0) if n > 1 else x_g[0]      # [n*B, L, ...]
+                    del x_g
+                    xh_all = self._back_region(
+                        x_all, repeat_along_batch(x0, n), repeat_along_batch(bigram_emb, n),
+                        repeat_along_batch(input_ids, n),
+                        inject_keep=repeat_along_batch(keep, n),
+                        attn_kwargs=repeat_along_batch(coda_kw, n),
+                        ret_reset_mask=repeat_along_batch(tg_reset, n))
+                    del x_all
+                    # Split back into the group's streams (row block j is stream grp[j],
+                    # the order the inputs were concatenated in) — cheap CE bookkeeping
+                    # against the ALREADY computed coda output, not a second coda pass.
+                    # Fused kernel ("onewinner-perf", 2026-09-29): same partition
+                    # (mask_token_id off, matching the pre-fusion behavior — see
+                    # `accumulate_span_ce_fused`'s docstring), no per-row Python loop, no
+                    # `[L, V]` materialise-then-clone (`tests/test_tul_wta_fused_ce.py`
+                    # pins the tolerance against the eager path this replaces).
+                    per_stream += [accumulate_span_ce_fused(
+                                       xh_all[j * B:(j + 1) * B], w_head, gid, keep_tok,
+                                       lab, g_bins, chunk_size=self.cfg.ce_chunk_size
+                                   )[:, 1:]
+                                   for j in range(n)]
+                    del xh_all
+                ce = torch.stack(per_stream, dim=-1)                            # [B, S, K]
+                if self._fan_all_ce_capture is not None:
+                    # Test hook (the `_trigger_capture` pattern): the ONLY way a test
+                    # can recover the per-stream table the batched coda pass built, AND
+                    # the exact inputs it was built from, to pin both against a
+                    # sequential reference built from the same tensors with the model's
+                    # own `_tul_fan_stream_write` / `_back_region` / `accumulate_span_ce`.
+                    # None on every shipped path. NOT populated under "map" (there is no
+                    # per-stream table there — see the branch above).
+                    self._fan_all_ce_capture.append({
+                        "ce": ce.detach().clone(), "cells_d": cells_d, "base_d": base_d,
+                        "x0": x0.detach(), "bigram_emb": (None if bigram_emb is None
+                                                           else bigram_emb.detach()),
+                        "input_ids": input_ids.detach(), "keep": (None if keep is None
+                                                                  else keep.detach()),
+                        "coda_kw": coda_kw, "tg_reset": tg_reset, "layout": layout, "L": L,
+                        "gid": gid, "keep_tok": keep_tok, "lab": lab, "g_bins": g_bins,
+                        "w_head": w_head.detach(),
+                    })
+                choice, forced = select_winners(ce, ok, float(tc.fan_select_eps))
+                if self._fan_all_winner_capture is not None:
+                    self._fan_all_winner_capture.append({
+                        "map_idx": None, "choice": choice.detach().clone(),
+                        "forced": forced.detach().clone(), "ce_map": None,
+                        "cells_map": None, "S_slots": None,
+                    })
+                if bool(ok.any()):
+                    denom = n_tok[ok].sum().clamp_min(1.0)
+                    best, arg = ce.min(dim=-1)
+                    # Detached 0-dim TENSORS, not `float(...)` — each `float()` on a
+                    # CUDA tensor is a `cudaStreamSynchronize` mid-step (perf: 896 ms
+                    # self-CPU `cudaStreamSynchronize` measured on this arm).
+                    # `_tul_group_losses` wraps every `stats` entry into the loss
+                    # `groups` dict as a tensor already
+                    # (`groups["loss"].new_tensor`/`.to`), and train.py's logger is the
+                    # one place that calls `float()` on these, on the steps it logs (the
+                    # `_loop_carry_stats` / `_loop_mux` precedent).
+                    stats["wta_oracle_ce"] = (best[ok].sum() / denom).detach()
+                    stats["wta_single_ce"] = (ce[..., 0][ok].sum() / denom).detach()
+                    stats["wta_pick0"] = (arg[ok] == 0).float().mean().detach()
+                    stats["wta_forced"] = forced[ok].float().mean().detach()
+                    for i in range(k):
+                        stats[f"wta_share_k{i}"] = (choice[ok] == i).float().mean().detach()
         if not bool(ok.any()):
             return state, w, cells.sum() * 0.0
-        # The responsibility pass, WITH grad: the winner of every slot alone in its cell.
-        winner = select_streams(cells, choice)                                 # [B,S,*carrier,C]
-        idx = choice.view(B, choice.shape[1], 1, *([1] * (cells.dim() - 3))).expand(
-            B, choice.shape[1], 1, *cells.shape[3:])
-        blank = torch.zeros_like(cells).scatter(2, idx, winner.unsqueeze(2))
-        values, pos = self.tul.prefix_project(winner, layout, L, cells=blank)
-        x_w = scatter_positions(base, pos, values)
+        # ── the responsibility pass, WITH grad: the winner of every slot alone in its
+        # cell ────────────────────────────────────────────────────────────────────────
+        # `tul.fan_all_wta_grad_rollouts` (2026-09-29, "onewinner-perf"; read only under
+        # `fan_all_wta_winner="map"`): "all" (default) is every line from before this
+        # key, unchanged — the winner-alone term over all R*B0 rows, the mean over
+        # rollouts of a2's term. "map" runs this pass on a B0-row batch instead (each
+        # slot's WINNING stream, drawn from its own MAP rollout — the `cells_map` /
+        # `choice0` the picks above already built), ONE rollout's term per slot rather
+        # than the mean over R — a real objective change (a knob), not merely cheaper.
+        _grad_map = _use_map and _grad_mode == "map"
+        stats["wta_grad_map"] = cells.new_tensor(1.0 if _grad_map else 0.0)
+        if _grad_map:
+            g_cells, g_choice, g_layout, g_B = cells_map, choice0, layout0, B0
+            g_base, g_x0, g_ids = base0, x0_0, ids0
+            g_bigram, g_keep = bigram0, keep0
+            g_coda_kw, g_tg_reset = coda_kw0, tg_reset0
+            g_gid, g_keep_tok, g_lab, g_ok = gid0, keep_tok0, lab0, ok0
+        else:
+            g_cells, g_choice, g_layout, g_B = cells, choice, layout, B
+            g_base, g_x0, g_ids = base, x0, input_ids
+            g_bigram, g_keep = bigram_emb, keep
+            g_coda_kw, g_tg_reset = coda_kw, tg_reset
+            g_gid, g_keep_tok, g_lab, g_ok = gid, keep_tok, lab, ok
+        winner = select_streams(g_cells, g_choice)                       # [gB,S,*carrier,C]
+        idx = g_choice.view(g_B, g_choice.shape[1], 1, *([1] * (g_cells.dim() - 3))).expand(
+            g_B, g_choice.shape[1], 1, *g_cells.shape[3:])
+        blank = torch.zeros_like(g_cells).scatter(2, idx, winner.unsqueeze(2))
+        values, pos = self.tul.prefix_project(winner, g_layout, L, cells=blank)
+        x_w = scatter_positions(g_base, pos, values)
 
-        def _row_ce(xh_b: Tensor, w_h: Tensor, b: int) -> Tensor:
-            logits = (xh_b.to(w_h.dtype) @ w_h.t()).float()[:, :vocab_size]    # [L, V]
-            ce = F.cross_entropy(logits, lab[b], reduction="none") * keep_tok[b]
-            # `gid` indexes the FLAT [B * n_groups] table `accumulate_span_ce` fills: row
-            # b's scored positions carry the offset b * n_groups and its unscored ones
-            # sit at 0 (with an exactly-zero CE), so the local id is offset-free there.
-            local = torch.where(keep_tok[b], gid[b] - b * g_bins, torch.zeros_like(gid[b]))
-            return torch.zeros(g_bins, device=ce.device, dtype=ce.dtype).index_add(0, local, ce)
-
-        # Recomputed in backward (the core loop's own checkpoint rule), per coda BLOCK and
-        # per ROW of logits, so one block's activations or one row's [L, V] logits are
-        # ever live: the replay is the whole of the arm's memory cost over the select arm
-        # (Spark smoke 2026-09-20: 26.3 GB unchecked, 21.0 GB as one segment, against the
-        # select arm's 17.6), and the 5090 has no room for it beside the desktop.
-        xh_w = self._back_region(x_w, x0, bigram_emb, input_ids, inject_keep=keep,
-                                 attn_kwargs=coda_kw, ret_reset_mask=tg_reset,
-                                 checkpoint_blocks=True)
-        ce_w = torch.stack([checkpoint(_row_ce, xh_w[b], w_head_pad, b, use_reentrant=False)
-                            for b in range(B)], dim=0)[:, 1:]                   # [B, S]
-        wta = ce_w[ok].sum() / n_tok[ok].sum().clamp_min(1.0)
+        # `checkpoint_blocks=True` (the "all" / full R*B0-row batch): one coda BLOCK's
+        # activations live at a time, recomputed in backward — the arm's memory cost
+        # over the select arm at this row count (Spark smoke 2026-09-20: 26.3 GB
+        # unchecked, 21.0 GB as one segment against the select arm's 17.6). The fused CE
+        # below (`accumulate_span_ce_fused`) needs no PER-ROW checkpoint of its own — it
+        # chunks the flattened [B*L] axis internally and never materialises [B, L, V]
+        # (`fused_linear_label_logprob`'s own memory contract), so the manual per-row
+        # `_row_ce` + `checkpoint()` loop this replaced is gone entirely, not merely
+        # fused. `_grad_map` (B0 rows, a QUARTER of R*B0 at this arm's R = 4): no
+        # `checkpoint_blocks` — B0 rows is comfortably inside the un-checkpointed
+        # memory this arm already affords the M picking passes above at the same row
+        # count — and `bypass_rollout_sharing` (B0 is generally not a multiple of R,
+        # `RolloutSharedDropout`'s hard check otherwise raises here exactly as it does
+        # in the picks): legal WITHOUT `checkpoint_blocks` because there is then no
+        # backward recompute of this coda call for the bypass flag to have to survive
+        # past the `with` block's exit (see `bypass_rollout_sharing`'s own docstring —
+        # the one thing that makes it UNSAFE to combine with `checkpoint_blocks=True`).
+        if _grad_map:
+            from .rollout_dropout import bypass_rollout_sharing
+            with bypass_rollout_sharing(self.coda):
+                xh_w = self._back_region(x_w, g_x0, g_bigram, g_ids, inject_keep=g_keep,
+                                         attn_kwargs=g_coda_kw, ret_reset_mask=g_tg_reset)
+        else:
+            xh_w = self._back_region(x_w, g_x0, g_bigram, g_ids, inject_keep=g_keep,
+                                     attn_kwargs=g_coda_kw, ret_reset_mask=g_tg_reset,
+                                     checkpoint_blocks=True)
+        ce_w = accumulate_span_ce_fused(xh_w, w_head, g_gid, g_keep_tok, g_lab, g_bins,
+                                        chunk_size=self.cfg.ce_chunk_size)[:, 1:]  # [gB,S]
+        g_n_tok = n_tok[:B0] if _grad_map else n_tok
+        wta = ce_w[g_ok].sum() / g_n_tok[g_ok].sum().clamp_min(1.0)
         return state, w, wta
 
     def _tul_db1_precheck(self, what: str) -> None:
@@ -10337,10 +10599,15 @@ class MORPHTransformer(nn.Module):
                 "gk_w_entropy": w_ent}
 
     def _enum_mix_losses(self, xh: Tensor, labels: Tensor, input_ids: Tensor,
-                         layout: SlotLayout, K: int, want_groups: bool) -> dict:
+                         layout: SlotLayout, K: int, want_groups: bool,
+                         s_out: dict | None = None) -> dict:
         """The coda's token loss under ``tul.code_enum_k``: the EXACT per-span mixture over
         the ``K`` enumerated code rollouts, and at eval the ruler's metric breakdown read
         under the same mixture.
+
+        ``s_out`` (``None`` on every caller before 2026-09-29, bit-identical): an
+        optional dict this method writes its raw per-span mixture direction ``S`` into
+        (key ``"S"``, detached) — see the ``s_out is not None`` block below.
 
         ``xh`` ``[K*B, L, C]``, ``labels`` / ``input_ids`` / ``layout`` the rollout-major
         expanded batch. The scored positions and weights are the ruler's
@@ -10392,6 +10659,18 @@ class MORPHTransformer(nn.Module):
             out["loss"] = hard
             out["enum_hard_obj"] = hard.detach()
             out["enum_hard_weighted"] = (hard - loss).detach()
+        if s_out is not None:
+            # `S` ([K, n_groups], detached): the exact per-span mixture posterior
+            # DIRECTION this method's own loss is built from (`softmax_k S_k` — the same
+            # tensor `enum_code_win{k}` below reads with `.argmax(dim=0)`). Written into
+            # the CALLER's own dict, never into `out` (the `stats`-dict idiom this file
+            # already uses everywhere — `fan_stats`, `mux_stats`, ... — so every existing
+            # reader of this method's return value, and every other caller, sees zero
+            # change). Exposed here ("onewinner-perf", 2026-09-29) so `_tul_fan_all`'s
+            # "map" winner mode can rank rollouts by the TRUE posterior instead of a
+            # proxy, using the SAME coda pass this method already needed — see
+            # `tul.fan_all_wta_winner`'s doc in tul.py.
+            s_out["S"] = S.detach()
         with torch.no_grad():
             mix = loss.detach()
             ce_code = -(lp.detach() * w.unsqueeze(0)).sum(1) / n_w                 # [K]
@@ -11618,25 +11897,42 @@ class MORPHTransformer(nn.Module):
             groups = {"loss": code_target_loss.new_zeros(())}
             coda_positions = 0
         elif tc.coda_sees_slots and tc.coda_token_cut == 0:
-            # Under "iw" with K > 1 the coda runs on B*K rows, one block's activations
-            # alive at a time (`checkpoint_blocks`, recomputed in backward). False on every
-            # other forward: the loop in `_back_region` is then the one from before.
-            xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
-                                   attn_kwargs=_coda_kw, ret_reset_mask=tg_reset,
-                                   **({"checkpoint_blocks": True} if _iw_k > 1 else {}),
-                                   **_bcast_kw)
-            if self._code_enum_k:
-                # LXTUL-E: the exact per-span mixture over the K code rollouts, train and
-                # eval (labels None: the deploy read is built below, no loss).
-                groups = (self._enum_mix_losses(xh, labels, input_ids, layout, _iw_k,
-                                                want_groups=not self.training)
-                          if labels is not None else None)
-            elif _iw_k:
-                groups = self._gram_iw_losses(xh, labels, layout, _iw_k)
+            if self._fan_all_deployed_cache is not None:
+                # `tul.fan_all_wta_winner="map"` ("onewinner-perf", 2026-09-29):
+                # `_tul_fan_all` already built and cached this EXACT pass — same
+                # `x_coda` inputs (its own `prefix_project(cells=...)` write of the
+                # SAME `cells`), the same token-dropout draw, the same `coda_kw` — while
+                # ranking rollouts by the true posterior. Reusing it here means this
+                # arm's deployed pass is paid for ONCE, not twice; the `_enum_mix_losses`
+                # call it also cached ran with `want_groups=not self.training`, exactly
+                # what this branch would compute (`_tul_fan_all`'s map mode only ever
+                # runs at train — its own `if not self.training: return ... None` guard
+                # — so `self.training` reads the same here as it did there). Popped
+                # immediately (`_fan_all_deployed_cache`'s own docstring): a value left
+                # over past this point would mean a bug upstream, not a value to keep.
+                xh, groups = self._fan_all_deployed_cache
+                self._fan_all_deployed_cache = None
             else:
-                groups = (self._tul_group_losses(xh, labels, layout,
-                                                 want_groups=not self.training)
-                          if labels is not None else None)
+                # Under "iw" with K > 1 the coda runs on B*K rows, one block's activations
+                # alive at a time (`checkpoint_blocks`, recomputed in backward). False on
+                # every other forward: the loop in `_back_region` is then the one from
+                # before.
+                xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
+                                       attn_kwargs=_coda_kw, ret_reset_mask=tg_reset,
+                                       **({"checkpoint_blocks": True} if _iw_k > 1 else {}),
+                                       **_bcast_kw)
+                if self._code_enum_k:
+                    # LXTUL-E: the exact per-span mixture over the K code rollouts, train
+                    # and eval (labels None: the deploy read is built below, no loss).
+                    groups = (self._enum_mix_losses(xh, labels, input_ids, layout, _iw_k,
+                                                    want_groups=not self.training)
+                              if labels is not None else None)
+                elif _iw_k:
+                    groups = self._gram_iw_losses(xh, labels, layout, _iw_k)
+                else:
+                    groups = (self._tul_group_losses(xh, labels, layout,
+                                                     want_groups=not self.training)
+                              if labels is not None else None)
             coda_positions = L
         else:
             # Arm A4 (coda_sees_slots=False) and/or arm CW (coda_token_cut>0, spec

@@ -388,15 +388,23 @@ M = 4
 # e951498, pin_head.py (one CPU thread), dropout 0.1: (train loss, eval logit sum, eval
 # loss, sum |grad|, n grads). The dropout-0 rows of lxfan4 and a2's fan are in
 # tests/test_tul_lxfan.py / measured here as 'lxfan4@0.0' and 'fan4_wta@0.0'.
+# "a2" grad-sum moved 2026-09-29 ("onewinner-perf"): `_tul_fan_all`'s WTA CE now runs
+# through `accumulate_span_ce_fused` (fused_linear_label_logprob, morph/model/fused_ce.py)
+# instead of a per-row F.cross_entropy loop -- same partition, same labels, a numerically
+# DIFFERENT kernel. Train/eval loss and the eval logit sum stayed bit-identical (indices
+# 0, 1, 2); only the gradient sum moved, ~2.6e-9 relative -- the fused kernel's analytic
+# backward accumulates in a different order. tests/test_tul_wta_fused_ce.py pins the
+# tolerance this needed against the old path. "lxfan4" (wta_lambda=0, no WTA pass) is
+# untouched.
 FAN_PINS = {
     ("lxfan4", 0.0): (5.077616214752197, -64528.78620353341, 5.130616188049316,
                       710.712064732762, 180),
     ("lxfan4", 0.1): (5.025187015533447, -64528.78620353341, 5.130616188049316,
                       708.4147908984702, 180),
     ("a2", 0.0): (10.31538200378418, 1358.1454057991505, 5.132460117340088,
-                  1436.3044085161928, 179),
+                  1436.3044122054762, 179),
     ("a2", 0.1): (10.261831283569336, 1358.1454057991505, 5.132460117340088,
-                  1443.9956181086357, 179),
+                  1443.9956036514868, 179),
 }
 
 

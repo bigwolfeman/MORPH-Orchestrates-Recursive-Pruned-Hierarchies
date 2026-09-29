@@ -351,6 +351,51 @@ class TULConfig:
     # collapsed its cells to rank 1.24 of 4; this arm differs from it by the term.
     # 0 builds no term and runs no coda pass (LX-Fan runs at 0; > 0 is refused under the code).
     fan_all_wta_lambda: float = 1.0      # weight of the winner-alone span CE (fan_mix=all)
+    # `fan_all_wta_winner` (2026-09-29, "onewinner"; restructured 2026-09-29 "onewinner-
+    # perf" — see `fan_all_wta_grad_rollouts` below): WHICH winner-picking table the WTA
+    # term's no-grad passes build, under `tul.code_enum_k > 1` only. "per_rollout" (the
+    # default, the tree from before this key): each of the K rollouts picks its own
+    # per-slot winner independently — the M no-grad passes run on the FULL K-fold rollout
+    # batch (`_tul_fan_all(n_rollouts=K)`'s existing table, M passes of K*B0 rows).
+    # "map": every rollout of a slot SHARES one winner, picked from the slot's MAP
+    # rollout — now the TRUE one: `_enum_mix_losses`'s own exact per-span mixture
+    # posterior `S` (`softmax_k S_k`, the SAME quantity `enum_code_win{k}` reads), not a
+    # proxy. This is affordable with NO extra pass because `_tul_fan_all` now COMPUTES
+    # that mixture pass itself (the write-all 1:1 coda call every model needs anyway, the
+    # one `_forward_tul` would otherwise build again right after this method returns) and
+    # hands the result back through `_fan_all_deployed_cache` for `_forward_tul` to reuse
+    # instead of recomputing — one pass serves both jobs. The M PICKING passes then run
+    # on a B0-row batch (one row per BASE sample, each slot's cells drawn from ITS OWN
+    # MAP rollout — legal because a strict coda's prefix cell "sees ITSELF and nothing
+    # else" (`tul_slot_spandec_strict.yaml`'s geometry note): swapping one cell's rollout
+    # can only ever change TOKENS strictly after it, never another cell's own read, so a
+    # per-slot Frankenstein-of-rollouts row is a well-defined probe, and it is exactly
+    # what the responsibility (grad) pass already builds per FAN STREAM). The picked
+    # winner is then broadcast to every rollout of that slot for the grad pass, whose row
+    # count `fan_all_wta_grad_rollouts` governs separately. NET (grad_rollouts="all", the
+    # default): the arm's total no-grad+grad coda row count drops from `(M+2)*K*B0` to
+    # `K*B0 + M*B0 + K*B0` — at K = M = 4, B0 rows per row-unit, that is 24 -> 12
+    # row-units, exactly half, counting the shared mixture pass, the picks and the grad
+    # pass and no longer counting the model's separate deployed pass at all (there is
+    # none left to count — it IS the mixture pass above). Refused outside `fan_mix='all'`
+    # with `fan_all_wta_lambda > 0`, `code_enum_k >= 2` and `bcast=False` — there must be
+    # both a table to share and more than one rollout to share it across, and the shared
+    # mixture pass is built before `h_slots` exists, so it cannot also carry `bcast`'s
+    # unpack term (which reads `h_slots`).
+    fan_all_wta_winner: str = "per_rollout"   # "per_rollout" | "map" (fan_mix='all' code)
+    # `fan_all_wta_grad_rollouts` (2026-09-29, "onewinner-perf"): read only under
+    # `fan_all_wta_winner="map"`. "all" (default, bit-identical to the tree before this
+    # key): the responsibility (grad) pass charges the winner-alone span CE on all K*B0
+    # rows — the mean over rollouts of a2's term, unchanged. "map": the grad pass runs on
+    # a B0-row batch instead (assembled exactly like the picks: each slot's winning
+    # stream, drawn from its own MAP rollout) — ONE rollout's term per slot, not the mean
+    # over K. This is NOT the same objective as "all" (a real knob, not a perf-only
+    # switch): the mean over K rollouts gives every rollout's winner a vote every step;
+    # "map" gives only the MAP rollout's a vote, so a rollout that is never anyone's MAP
+    # sees no grad-pass signal on the steps it holds that rank. Drops the grad pass from
+    # K*B0 rows to B0 rows: with it, the arm's total goes 24 -> 9 row-units at K = M = 4
+    # (mixture 4 + picks 4 + grad 1).
+    fan_all_wta_grad_rollouts: str = "all"   # "all" | "map" (fan_all_wta_winner="map" only)
     fan_repel_mode: str = "cos"          # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
@@ -2205,6 +2250,38 @@ class TULConfig:
                 f"tul.fan_mix='all' needs tul.prefix_k={self.fan_k} (= fan_k): every "
                 f"stream is written into ITS prefix cell through W_prefix[i], the "
                 f"register's 1:1 route. Got prefix_k={self.prefix_k}.")
+        if self.fan_all_wta_winner not in ("per_rollout", "map"):
+            raise ValueError(
+                f"tul.fan_all_wta_winner must be 'per_rollout' or 'map', got "
+                f"{self.fan_all_wta_winner!r}")
+        if self.fan_all_wta_winner == "map":
+            if not (self.fan_mix == "all" and self.fan_all_wta_lambda > 0.0):
+                raise ValueError(
+                    "tul.fan_all_wta_winner='map' needs tul.fan_mix='all' and "
+                    f"tul.fan_all_wta_lambda > 0 (got fan_mix={self.fan_mix!r}, "
+                    f"fan_all_wta_lambda={self.fan_all_wta_lambda}): with no WTA term "
+                    "there is no winner table to share across rollouts.")
+            if self.code_enum_k < 2:
+                raise ValueError(
+                    f"tul.fan_all_wta_winner='map' needs tul.code_enum_k >= 2 (got "
+                    f"{self.code_enum_k}): with one rollout there is nothing to pick a "
+                    "MAP rollout among — 'per_rollout' and 'map' select the same table.")
+            if self.bcast:
+                raise ValueError(
+                    "tul.fan_all_wta_winner='map' has no defined interaction with "
+                    "tul.bcast: the shared mixture pass this mode builds runs BEFORE "
+                    "h_slots exists (it IS the pass h_slots is later read from), so it "
+                    "cannot also carry bcast's unpack term, which reads h_slots. Not "
+                    "run by any arm that needs both.")
+        if self.fan_all_wta_grad_rollouts not in ("all", "map"):
+            raise ValueError(
+                "tul.fan_all_wta_grad_rollouts must be 'all' or 'map', got "
+                f"{self.fan_all_wta_grad_rollouts!r}")
+        if self.fan_all_wta_grad_rollouts == "map" and self.fan_all_wta_winner != "map":
+            raise ValueError(
+                "tul.fan_all_wta_grad_rollouts='map' needs tul.fan_all_wta_winner='map' "
+                f"(got {self.fan_all_wta_winner!r}): the grad pass can only run on each "
+                "slot's MAP rollout if a MAP rollout was picked.")
         if self.fan_repel_passes < 1:
             raise ValueError(
                 f"tul.fan_repel_passes must be >= 1, got {self.fan_repel_passes}")

@@ -1,0 +1,12 @@
+# Arm "lxtul-lxfan4-wta-fp01-mapwin-s3": `tul_slot_spandec_strict_lxfan4_wta_fp01_mapwin`
+# at seed 3. Composes it and changes training.seed and the run name only — the seed-band
+# partner of the (b)/ev01 3000-step bands (`..._ev01`, `..._ev01_s3`, (b)'s own `_s2`).
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01_mapwin
+  - _self_
+
+training:
+  seed: 3
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-mapwin-s3

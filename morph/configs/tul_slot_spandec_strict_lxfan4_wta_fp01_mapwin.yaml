@@ -1,0 +1,42 @@
+# Arm "lxtul-lxfan4-wta-fp01-mapwin" ("onewinner", 2026-09-29): (b)
+# `tul_slot_spandec_strict_lxfan4_wta_fp01` with the WTA winner SHARED across the K = 4
+# code rollouts instead of picked independently by each one. Composes (b) and changes:
+#
+#   tul.fan_all_wta_winner  per_rollout -> map
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000
+#
+# WHY THE KEY. (b)'s winner-take-all table runs M = 4 no-grad coda passes PER STREAM on
+# the FULL K*B0-row rollout batch, to pick each (rollout, slot)'s own winner independently
+# — 16 no-grad "B0-row units" of coda cost, two thirds of the arm's ~3.4x slowdown against
+# the plain loop. `fan_all_wta_winner: map` picks ONE winner per slot from the slot's MAP
+# rollout alone (the rollout whose best-stream span CE is lowest under ONE ranking pass,
+# K*B0 rows, the mean-of-cells write — not literally free, but the cheapest correct signal
+# available where the winner is picked) and runs the M picking passes on a B0-row batch
+# instead of K*B0 — a QUARTER the picking table's own rows, without touching the grad
+# term, its weight or eps. NET: the arm's total no-grad+grad coda row count drops from
+# (M+2)*K*B0 to 3*K*B0 + M*B0 (the ranking pass, the picking table, the grad pass and
+# the model's own deployed coda pass) — at K=M=4 that is 48 -> 32 row-units, a THIRD
+# less, not the picking table's own quarter. See `tul.fan_all_wta_winner`'s doc in
+# morph/model/tul.py and morph/model/transformer.py::_tul_fan_all.
+#
+# WHY 3000 STEPS AND THE LR PIN: identical audit to `..._ev001` (read it) — (b) resolves
+# `lr == min_lr`, so the cosine term is bit-exact zero past warmup regardless of the
+# denominator; `lr_decay_steps: 5000` is pinned anyway, belt-and-suspenders. Every other
+# schedule (AdEMAMix horizon, TST, prune/carve/route, activate_at, eval/ckpt cadence)
+# resolves the same way at 3000 as at 5000 on (b), by the same audit.
+#
+# Note: .agents/notes/proposed/architecture/2026-09-29-onewinner-shared-map-rollout.md
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01
+  - _self_
+
+tul:
+  fan_all_wta_winner: map
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-mapwin
