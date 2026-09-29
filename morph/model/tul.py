@@ -382,7 +382,35 @@ class TULConfig:
     # both a table to share and more than one rollout to share it across, and the shared
     # mixture pass is built before `h_slots` exists, so it cannot also carry `bcast`'s
     # unpack term (which reads `h_slots`).
-    fan_all_wta_winner: str = "per_rollout"   # "per_rollout" | "map" (fan_mix='all' code)
+    # `fan_all_wta_winner="latent"` (2026-09-29, "latent-wta"): NO coda pass at all —
+    # replaces "per_rollout"'s M no-grad passes with a SCORE in latent space against a
+    # target built from the TRUE next span. Offline probe (lab/divergence/
+    # latent_wta_probe.py; .agents/notes/proposed/architecture/2026-09-29-latent-wta.md)
+    # on the lxtul-lxfan4-wta-fp01 checkpoints measured ONE target
+    # (`morph.model.transformer.latent_wta_target`, a mean-pool of the true next span,
+    # shared with the probe) scored THREE ways: raw cosine, raw L2, and an InfoNCE
+    # own-target log-probability against every other valid slot's target in the batch
+    # (`morph.model.transformer.latent_wta_infonce_score`). This mode scores with
+    # InfoNCE; `fan_all_wta_latent_temp` is its temperature.
+    #
+    # FOOT GUN: EVERY candidate agreed with the coda's own winner at CHANCE (0.19-0.28
+    # against 0.25 at M = 4). At chance this mode is a random-winner WTA with extra
+    # steps; run it as that control or behind a scorer that has beaten the random pick
+    # in the probe. The probe's first regret table counted each span's regret n_tok
+    # times (fixed 2026-09-29); the corrected regrets, with the random-pick floor beside
+    # them, are in the note. Do not rank the scoring rules from any older number. Works at any `code_enum_k`
+    # (each (rollout, slot) is scored independently, unlike "map", which needs >= 2
+    # rollouts to share a winner across). See :meth:`MORPHTransformer._tul_fan_all` for
+    # the target/score build, the no-grad/no-write guards and the winner-share-entropy
+    # instrument (collapse guard).
+    fan_all_wta_winner: str = "per_rollout"   # "per_rollout" | "map" | "latent" (fan_mix='all')
+    # `fan_all_wta_latent_temp` (2026-09-29, "latent-wta"): read only under
+    # `fan_all_wta_winner="latent"` — the InfoNCE temperature `latent_wta_infonce_score`
+    # divides its cosine similarities by, before the softmax over in-batch negatives.
+    # Matches `lab/divergence/latent_wta_probe.py --temp`'s default (0.1, the value the
+    # probe's own regret numbers were measured at); changing it live is UNMEASURED —
+    # nothing has probed this arm's sensitivity to temperature.
+    fan_all_wta_latent_temp: float = 0.1
     # `fan_all_wta_grad_rollouts` (2026-09-29, "onewinner-perf"): read only under
     # `fan_all_wta_winner="map"`. "all" (default, bit-identical to the tree before this
     # key): the responsibility (grad) pass charges the winner-alone span CE on all K*B0
@@ -1070,6 +1098,107 @@ class TULConfig:
     # belief state whose successor the next span determines. 0 = off: nothing is built.
     nextlat_weight: float = 0.0
     nextlat_beta: float = 1.0
+    # ── LX EFFICIENT-EXPLORATION KNOBS (2026-09-29; morph/model/tul_explore.py) ───────
+    # Five default-OFF research knobs on top of `code_enum_k`'s K rollouts, built for
+    # LATER experiments (nothing here is queued or trained by this change). Every knob
+    # below is bit-identical to the tree before it at its own default. The pure tensor
+    # math and small modules live in `tul_explore.py`, deliberately kept OUT of
+    # transformer.py's hot `_tul_fan_all` neighbourhood (three other agents were editing
+    # that method's WTA winner-pick the same day this was built).
+    # Note: .agents/notes/proposed/architecture/2026-09-29-lx-efficient-exploration-knobs.md
+    #
+    # KNOB 2 (Block Transformer 2406.02657, Prefix Grouper 2506.05433, LTM 2502.01567):
+    # late fusion in the coda — investigated, NOT implemented. 0 (off) is the only legal
+    # value; the constructor RAISES on anything else. Why: under `tg_geometry="strict"` a
+    # token query's path is provably rollout-invariant in the coda's early layers once
+    # prefix-cell reach is masked to 0 there (RoPE/CoPE cancel for same-position
+    # self-attention, and a strict-geometry cell carries zero injection — both checked
+    # against this tree's actual masks before writing this note), so a SHARED early-layer
+    # pass on the token positions is architecturally sound. But the compute saving the
+    # knob exists to deliver needs the slot-cell positions gathered into their own
+    # compact per-rollout batch, and that gather's safety against the coda's GLA/
+    # retention branch's cross-position state (mentioned in this repo's own architecture
+    # doc) was not verified in the session that built this — the CLAUDE.md's own warning
+    # about shape-dependent silent degeneracy applies directly. Running the shared pass
+    # on the FULL sequence shape instead (no gather) is safe but saves nothing on the
+    # cell side, so it would ship a knob whose claimed benefit does not exist. Stopped
+    # here rather than shipping either.
+    coda_fuse_layer: int = 0
+    # KNOB 3 (rMCL arXiv 2311.01052, LatentRM arXiv 2510.07745, LTO arXiv 2509.26314): a
+    # tiny linear head (`tul_explore.TULHypScoreHead`) reads each rollout's DETACHED slot
+    # exit latent and is trained (KL, `tul_explore.score_head_kl_loss`) to predict the LX
+    # mixture's own DETACHED posterior direction — training cost ~0, no gradient into the
+    # loop. The eval and generation read stays the exact K-way Bayes read. What a cheap
+    # read picked by the head WOULD cost is reported, not deployed:
+    # `hyp_read_top1_gap` / `hyp_read_top2_gap` against the floor `hyp_read_rand1_gap`
+    # and the hindsight ceiling `hyp_read_best1_gap` (`tul_explore.score_head_read_gaps`).
+    # A head that cannot beat the floor does not earn a deployed read. `False` builds
+    # nothing. Needs `code_enum_k > 1` (there is nothing to score with one rollout).
+    hyp_score_head: bool = False
+    # KNOB 4 (CALM arXiv 2510.27688, CPC arXiv 1807.03748): a SET loss over the K
+    # rollouts' hypothesis latents against the next span's DETACHED, prelude-pooled
+    # target (the exact `next_span_pool(readout(x.detach()), layout)` construction
+    # `TULRowContrast` already uses — NOT the loop's own next-slot exit state, which is
+    # `tul.nextlat_weight`'s target and is on record as COLLAPSING, project memory
+    # "Latent prediction on the slot exit collapses"). "energy" is the strictly-proper
+    # energy score (`tul_explore.latent_energy_score`); "infonce" is in-batch-negative
+    # InfoNCE (`tul_explore.latent_infonce`). Neither is minimized by every hypothesis
+    # collapsing onto the target's mean (see each function's own docstring for the
+    # non-collapse argument) — the MSE-style-target collapse this knob is built to avoid
+    # is the JEPA Paradox (arXiv 2607.23531) and this project's own NextLat finding.
+    # "none" (default) builds nothing; `latent_set_weight` is refused unless
+    # `latent_set_loss != "none"`, and vice versa. Needs `code_enum_k > 1`.
+    latent_set_loss: str = "none"
+    latent_set_weight: float = 0.0
+    # KNOB 5 (Kool et al. 2020 arXiv 2002.06043 SWOR; LTC arXiv 2608.01593): run the
+    # coda on only `enum_decode_k` of the `code_enum_k` rollouts, sampled uniformly
+    # WITHOUT replacement (`tul_explore.swor_uniform`), gathered by whole ROW-BLOCKS
+    # (`tul_explore.gather_rows` — provably inert to every position-dependent mechanism
+    # in the coda, since it only removes whole rows, never touches what happens within
+    # one; this is why knob 5 was judged safe to build where knob 2's within-row gather
+    # was not). 0 (default) = off, every rollout runs, bit-identical.
+    #
+    # FOOT GUN: THIS CHANGES THE OBJECTIVE, NOT ONLY ITS COST. The k-way mixture over a
+    # uniform sample is the IWAE-k bound on the K-way mixture: unbiased in the mean
+    # domain, but its log is biased LOW, so the training loss reads HIGH, and the bias
+    # grows as k falls. Worse, the bound's credit for rollouts that DIFFER shrinks with
+    # k: at k = 1 the loss is the average single-rollout CE, which pays nothing for a
+    # rollout that explains a span the others miss. That is the opposite of what the LX
+    # mixture exists to reward. Read `enum_width_gain` on such a run against its k = K
+    # twin before trusting anything else from it. `train/loss` is the k-way number;
+    # eval always reads all K (`test_eval_never_uses_enum_decode_k`).
+    #
+    # A SCORE-WEIGHTED draw (the knob-3 head picking which k rollouts run) is REFUSED:
+    # the k-way mean over a head-biased sample has no importance correction, so it would
+    # train on the rollouts the head already likes. A correct estimator needs the
+    # Gumbel-top-k inclusion probabilities (Kool et al. 2020's Rao-Blackwellized form),
+    # which is not built. Must be `<= code_enum_k`; needs `code_enum_k > 1`.
+    enum_decode_k: int = 0
+    # KNOB 6 (Superposed Decoding arXiv 2405.18400, Learning to Plan Long-Term arXiv
+    # 2409.00070, ParScale arXiv 2505.10475).
+    #
+    # READ BEFORE TURNING THIS ON. MIXTURE NON-CLOSURE (Latent-GRPO arXiv 2604.27998):
+    # a merge of K valid hypotheses is not guaranteed to itself be a state anything
+    # downstream can read correctly — there is no guarantee the space these hypotheses
+    # live in is closed under any mixture. MORPH'S OWN FAILED PRECEDENTS: the soft
+    # (mean-mixed) LX fans lost 0.030 nats to the WTA fan and detonated 3 of 4 draws
+    # (lab/experiments/failures/2026-09-27-lx-soft-fan-retry.md), and the fan with four
+    # copies of one cell failed to close the gap distinct cells closed
+    # (docs/slot-cells-distinct-vs-blurred.md, arm a1). A blurred mean of hypotheses has
+    # lost every time it was measured here. `tul_explore.hyp_merge_mean` IS that naive
+    # mean, kept so `hyp_merge_probe_stats` can re-measure whether the naive merge is
+    # still that bad ON THIS ARM'S OWN GEOMETRY rather than assume the earlier numbers
+    # transfer.
+    #
+    # "none" (default): nothing built, bit-identical. "probe": computes and logs
+    # `tul_explore.hyp_merge_probe_stats` on the naive mean merge — READ-ONLY, every
+    # input detached, no gradient path anywhere. "learned": builds
+    # `tul_explore.TULHypMergeGate`, a real trainable convex-combination pool; whether it
+    # enters any loss is `hyp_merge_weight` alone (default 0.0 — built and readable via
+    # the probe stats, but not trained, until a future experiment turns the weight up).
+    # Needs `code_enum_k > 1`.
+    hyp_merge: str = "none"
+    hyp_merge_weight: float = 0.0
     # ── EXPANDED HYPER-CONNECTIONS IN THE SLOT LOOP (xHC, plan C, 2026-09-26) ──────────
     # xhc_streams N > 0: the core blocks' residuals become `XHCResidual`
     # (morph/model/tul_xhc.py; Zhang et al., arXiv 2607.14530) on an N-stream carrier that
@@ -2115,6 +2244,88 @@ class TULConfig:
             raise ValueError(
                 f"tul.coda_logit_l2 must be >= 0, got {self.coda_logit_l2}")
 
+        # ── LX EFFICIENT-EXPLORATION KNOBS (2026-09-29) ─────────────────────────────
+        # Also checked FIRST, unconditionally, for the same reason as `coda_logit_l2`
+        # above (this method's own early-return precedent) — moved here after
+        # `test_config_reach_and_refusals` in test_tul_explore_wiring.py caught every
+        # refusal below silently not firing when placed at the tail, exactly the trap
+        # this file's own comment warns about.
+        if self.coda_fuse_layer != 0:
+            raise NotImplementedError(
+                "tul.coda_fuse_layer: late fusion in the coda was investigated and NOT "
+                "implemented — see this field's own comment above and "
+                ".agents/notes/proposed/architecture/2026-09-29-lx-efficient-exploration-"
+                "knobs.md for why. 0 is the only legal value.")
+        if self.hyp_score_head and self.code_enum_k < 2:
+            raise ValueError(
+                "tul.hyp_score_head needs tul.code_enum_k >= 2 — there is nothing to "
+                "score a single rollout against.")
+        if self.hyp_score_head and self.fan_k > 1:
+            raise NotImplementedError(
+                "tul.hyp_score_head with tul.fan_k: wired at the PLAIN LX exit seam only, "
+                "kept clear of the fan/WTA machinery on purpose (see tul.enum_decode_k's "
+                "matching refusal for why). Not specified for the fan arm.")
+        if self.latent_set_loss not in ("none", "energy", "infonce"):
+            raise ValueError(
+                f"tul.latent_set_loss must be 'none', 'energy' or 'infonce', got "
+                f"{self.latent_set_loss!r}")
+        if (self.latent_set_loss == "none") != (self.latent_set_weight == 0.0):
+            raise ValueError(
+                "tul.latent_set_loss and tul.latent_set_weight must be set together: "
+                f"got latent_set_loss={self.latent_set_loss!r}, "
+                f"latent_set_weight={self.latent_set_weight}")
+        if self.latent_set_loss != "none" and self.code_enum_k < 2:
+            raise ValueError(
+                "tul.latent_set_loss needs tul.code_enum_k >= 2 — a set loss over one "
+                "hypothesis is not a set.")
+        if self.latent_set_loss != "none" and self.fan_k > 1:
+            raise NotImplementedError(
+                "tul.latent_set_loss with tul.fan_k: wired at the PLAIN LX exit seam "
+                "only, kept clear of the fan/WTA machinery on purpose (see "
+                "tul.enum_decode_k's matching refusal for why). Not specified for the "
+                "fan arm.")
+        if self.enum_decode_k != 0:
+            if self.code_enum_k < 2:
+                raise ValueError(
+                    "tul.enum_decode_k needs tul.code_enum_k >= 2 — there is nothing to "
+                    "subsample from one rollout.")
+            if not (1 <= self.enum_decode_k <= self.code_enum_k):
+                raise ValueError(
+                    f"tul.enum_decode_k={self.enum_decode_k} must be in "
+                    f"[1, tul.code_enum_k={self.code_enum_k}] (0 = off)")
+            if self.hyp_score_head:
+                raise NotImplementedError(
+                    "tul.enum_decode_k with tul.hyp_score_head: a head-weighted draw of "
+                    "the k rollouts has no importance correction in this tree, so the "
+                    "k-way loss would train on the rollouts the head already prefers. "
+                    "Use a uniform draw (hyp_score_head false); see the field comment.")
+            if self.fan_k > 1:
+                raise NotImplementedError(
+                    "tul.enum_decode_k with tul.fan_k: the row-gather this knob uses is "
+                    "wired at the PLAIN LX coda call only, kept clear of "
+                    "`_tul_fan_all`'s WTA winner-pick machinery on purpose (a different "
+                    "team of changes touches that method the same day this was built). "
+                    "Not specified for the fan arm, so this raises.")
+        if self.hyp_merge not in ("none", "probe", "learned"):
+            raise ValueError(
+                f"tul.hyp_merge must be 'none', 'probe' or 'learned', got "
+                f"{self.hyp_merge!r}")
+        if self.hyp_merge != "none" and self.code_enum_k < 2:
+            raise ValueError(
+                "tul.hyp_merge needs tul.code_enum_k >= 2 — nothing to merge from one "
+                "rollout.")
+        if self.hyp_merge != "none" and self.fan_k > 1:
+            raise NotImplementedError(
+                "tul.hyp_merge with tul.fan_k: wired at the PLAIN LX exit seam only, "
+                "kept clear of the fan/WTA machinery on purpose (see "
+                "tul.enum_decode_k's matching refusal for why). Not specified for the "
+                "fan arm.")
+        if self.hyp_merge_weight != 0.0 and self.hyp_merge != "learned":
+            raise ValueError(
+                f"tul.hyp_merge_weight={self.hyp_merge_weight} is nonzero but "
+                f"tul.hyp_merge={self.hyp_merge!r} — only 'learned' has anything trainable "
+                f"for a nonzero weight to reach ('probe' is read-only by design).")
+
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
         if self.loop_carry not in LOOP_CARRY_MODES:
             raise ValueError(
@@ -2250,17 +2461,19 @@ class TULConfig:
                 f"tul.fan_mix='all' needs tul.prefix_k={self.fan_k} (= fan_k): every "
                 f"stream is written into ITS prefix cell through W_prefix[i], the "
                 f"register's 1:1 route. Got prefix_k={self.prefix_k}.")
-        if self.fan_all_wta_winner not in ("per_rollout", "map"):
+        if self.fan_all_wta_winner not in ("per_rollout", "map", "latent"):
             raise ValueError(
-                f"tul.fan_all_wta_winner must be 'per_rollout' or 'map', got "
+                f"tul.fan_all_wta_winner must be 'per_rollout', 'map' or 'latent', got "
                 f"{self.fan_all_wta_winner!r}")
-        if self.fan_all_wta_winner == "map":
+        if self.fan_all_wta_winner in ("map", "latent"):
             if not (self.fan_mix == "all" and self.fan_all_wta_lambda > 0.0):
                 raise ValueError(
-                    "tul.fan_all_wta_winner='map' needs tul.fan_mix='all' and "
-                    f"tul.fan_all_wta_lambda > 0 (got fan_mix={self.fan_mix!r}, "
+                    f"tul.fan_all_wta_winner={self.fan_all_wta_winner!r} needs "
+                    f"tul.fan_mix='all' and tul.fan_all_wta_lambda > 0 (got "
+                    f"fan_mix={self.fan_mix!r}, "
                     f"fan_all_wta_lambda={self.fan_all_wta_lambda}): with no WTA term "
-                    "there is no winner table to share across rollouts.")
+                    "there is no winner to pick.")
+        if self.fan_all_wta_winner == "map":
             if self.code_enum_k < 2:
                 raise ValueError(
                     f"tul.fan_all_wta_winner='map' needs tul.code_enum_k >= 2 (got "
@@ -2282,6 +2495,19 @@ class TULConfig:
                 "tul.fan_all_wta_grad_rollouts='map' needs tul.fan_all_wta_winner='map' "
                 f"(got {self.fan_all_wta_winner!r}): the grad pass can only run on each "
                 "slot's MAP rollout if a MAP rollout was picked.")
+        if self.fan_all_wta_winner == "latent" and self.fan_all_wta_latent_temp <= 0.0:
+            raise ValueError(
+                "tul.fan_all_wta_winner='latent' needs tul.fan_all_wta_latent_temp > 0 "
+                f"(got {self.fan_all_wta_latent_temp}): it is a softmax temperature "
+                "(latent_wta_infonce_score divides by it before the softmax over "
+                "in-batch negatives) — zero or negative is undefined.")
+        if self.fan_all_wta_winner != "latent" and self.fan_all_wta_latent_temp != 0.1:
+            raise ValueError(
+                "tul.fan_all_wta_latent_temp is read only under "
+                f"tul.fan_all_wta_winner='latent' (got "
+                f"fan_all_wta_winner={self.fan_all_wta_winner!r}, "
+                f"fan_all_wta_latent_temp={self.fan_all_wta_latent_temp}) — a value set "
+                "here silently does nothing under any other winner mode.")
         if self.fan_repel_passes < 1:
             raise ValueError(
                 f"tul.fan_repel_passes must be >= 1, got {self.fan_repel_passes}")

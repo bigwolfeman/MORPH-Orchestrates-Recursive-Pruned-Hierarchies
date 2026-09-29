@@ -172,7 +172,11 @@ def evaluate(
                           # hard objective's excess over the mixture NLL. Train-only (the
                           # eval forward is the mixture), listed so a train-mode val
                           # forward still reports the MODEL's CE.
-                          "enum_hard_weighted"):
+                          "enum_hard_weighted",
+                          # LX efficient-exploration knobs (morph/model/tul_explore.py,
+                          # 2026-09-29): the set loss (knob 4) and the score-head KL /
+                          # learned merge (knobs 3 / 6), so val loss stays the MODEL's CE.
+                          "explore_set_weighted", "explore_extra_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -251,6 +255,12 @@ def evaluate(
             for _nk in [k for k in out if str(k).startswith("nextlat")]:
                 if torch.is_tensor(out[_nk]):
                     acc.setdefault(f"val/{_nk}", []).append(float(out[_nk]))
+            # LX efficient-exploration knobs (tul_explore.py): `explore_*` (the set
+            # loss and its spread) and `hyp_*` (the score head's KL, its read gaps against
+            # the exact mixture, the merge probe). A scan, like `par_*`.
+            for _xk in [k for k in out if str(k).startswith(("explore_", "hyp_"))]:
+                if torch.is_tensor(out[_xk]):
+                    acc.setdefault(f"val/{_xk}", []).append(float(out[_xk]))
             # ── LXTUL's fan (tul.fan_k), accumulated over the val batches ─────────
             # The ORACLE family is eval-only and has no train-side twin, so it keeps the
             # `fan/` namespace the arm is read in. The two readings the TRAIN step also
@@ -3765,6 +3775,8 @@ def main(cfg: DictConfig) -> None:
                         "par_weighted",   # tul.spandec_parallel (LXTUL-E)
                         "nextlat_weighted",   # span-level NextLat, 2026-09-25
                         "enum_hard_weighted",  # LX hard credit: objective - mixture NLL
+                        "explore_set_weighted",    # tul.latent_set_loss (knob 4)
+                        "explore_extra_weighted",  # tul.hyp_score_head / hyp_merge (3, 6)
                         "coda_logit_l2_weighted"):  # tul.coda_logit_l2 (spectral
                                                      # decoupling, 2026-09-23): folded
                                                      # into the fused CE kernel
@@ -4018,6 +4030,10 @@ def main(cfg: DictConfig) -> None:
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("carry_") and out[_k] is not None:
                         log[f"carry/{_k[6:]}"] = float(out[_k].detach())
+                # LX efficient-exploration knobs (tul_explore.py): `explore_*` and `hyp_*`.
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith(("explore_", "hyp_")) and torch.is_tensor(out[_k]):
+                        log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.oracle_z's honesty instrument: the ORACLE's own decoder loss at each
                 # of its T steps. A variable number of keys, so it is a scan and not a
                 # tuple — if these do not fall, the trajectory is not a descent and the

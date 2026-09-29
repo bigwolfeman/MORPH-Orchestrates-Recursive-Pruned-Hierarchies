@@ -1,0 +1,51 @@
+# Arm "lxtul-lxfan4-wta-fp01-latwta" (latent-WTA, 2026-09-29): (b)
+# `tul_slot_spandec_strict_lxfan4_wta_fp01` with the WTA winner picked by a LATENT-space
+# distance against the true next span, NO coda pick pass at all. Composes (b) and changes:
+#
+#   tul.fan_all_wta_winner  per_rollout -> latent
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000
+#   training.seed           (unset, 1) -> 1
+#
+# WHY THE KEY. (b)'s winner-take-all table runs M = 4 no-grad coda passes PER STREAM on
+# the FULL K*B0-row rollout batch to pick each (rollout, slot)'s own winner independently
+# -- two thirds of the arm's ~3.4x slowdown against the plain loop (profiled: 24 coda
+# units/step, 16 of them these no-grad picks; lab/theory/efficient-latent-exploration-
+# lit-2026-09-29.md). `fan_all_wta_winner: latent` removes those M passes entirely: each
+# (rollout, slot)'s winner is scored against `latent_wta_target`'s mean-pool of the TRUE
+# next span's own prelude states -- already computed upstream of `_tul_fan_all`, no coda
+# read, no new network. An offline probe (lab/divergence/latent_wta_probe.py) compared
+# THREE scoring rules against that same target on lxtul-lxfan4-wta-fp01's own checkpoints
+# (96 rows, ~19.9k slot instances each). DO NOT QUEUE AS A SPEED WIN: every rule agreed
+# with the coda's own winner at CHANCE (0.19-0.28 against 0.25), so this arm may be a
+# random-winner WTA. Its first regret table was inflated by a units bug (fixed
+# 2026-09-29); the corrected table and the random-pick floor are in
+# `.agents/notes/proposed/architecture/2026-09-29-latent-wta.md`. `fan_all_wta_latent_temp`
+# below is that InfoNCE temperature, matching the probe's own `--temp` default. The grad
+# pass (the winner-alone span CE, weight 1.0, eps 0.05) is UNCHANGED: same rows, same
+# weight, same eps, it only reads a different `choice`.
+#
+# WHY 3000 STEPS AND THE LR PIN: identical audit to `..._ev001` / `..._mapwin` (read
+# either) -- (b) resolves `lr == min_lr`, so the cosine term is bit-exact zero past
+# warmup regardless of the denominator; `lr_decay_steps: 5000` is pinned anyway,
+# belt-and-suspenders. Every other schedule (AdEMAMix horizon, TST, prune/carve/route,
+# activate_at, eval/ckpt cadence) resolves the same way at 3000 as at 5000 on (b), by the
+# same audit. `seed: 1` matches `..._ev01`, the matched CONTROL for this arm (same steps,
+# same lr pin, `fan_all_wta_winner: per_rollout`) -- the two differ by exactly one key.
+#
+# Note: .agents/notes/proposed/architecture/2026-09-29-latent-wta.md
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01
+  - _self_
+
+tul:
+  fan_all_wta_winner: latent
+  fan_all_wta_latent_temp: 0.1   # matches the probe's --temp default; explicit, not implicit
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+  seed: 1
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-latwta

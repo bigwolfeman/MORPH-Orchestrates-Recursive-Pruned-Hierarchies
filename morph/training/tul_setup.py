@@ -65,7 +65,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_k", "fan_mix", "fan_repel_lambda", "fan_repel_passes",
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
     "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
-    "fan_all_wta_winner", "fan_all_wta_grad_rollouts",
+    "fan_all_wta_winner", "fan_all_wta_grad_rollouts", "fan_all_wta_latent_temp",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -111,6 +111,10 @@ KNOWN_TUL_KEYS = frozenset({
     "slot_source_once",
     # span-level NextLat (arXiv 2511.05963, 2026-09-25)
     "nextlat_weight", "nextlat_beta",
+    # LX efficient-exploration knobs (2026-09-29): morph/model/tul_explore.py
+    "coda_fuse_layer", "hyp_score_head",
+    "latent_set_loss", "latent_set_weight", "enum_decode_k",
+    "hyp_merge", "hyp_merge_weight",
     # expanded hyper-connections in the slot loop (xHC, plan C, 2026-09-26)
     "xhc_streams", "xhc_active", "xhc_fixed", "xhc_temporal_kernels",
     "reread", "reread_heads", "reread_scope", "span_cap", "stp_lambda",
@@ -345,6 +349,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         slot_source_once=bool(tc.get("slot_source_once", False)),
         nextlat_weight=float(tc.get("nextlat_weight", 0.0)),
         nextlat_beta=float(tc.get("nextlat_beta", 1.0)),
+        coda_fuse_layer=int(tc.get("coda_fuse_layer", 0)),
+        hyp_score_head=bool(tc.get("hyp_score_head", False)),
+        latent_set_loss=str(tc.get("latent_set_loss", "none")),
+        latent_set_weight=float(tc.get("latent_set_weight", 0.0)),
+        enum_decode_k=int(tc.get("enum_decode_k", 0)),
+        hyp_merge=str(tc.get("hyp_merge", "none")),
+        hyp_merge_weight=float(tc.get("hyp_merge_weight", 0.0)),
         xhc_streams=int(tc.get("xhc_streams", 0)),
         xhc_active=int(tc.get("xhc_active", 4)),
         xhc_fixed=int(tc.get("xhc_fixed", 2)),
@@ -378,6 +389,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_all_wta_lambda=float(tc.get("fan_all_wta_lambda", 1.0)),
         fan_all_wta_winner=str(tc.get("fan_all_wta_winner", "per_rollout")),
         fan_all_wta_grad_rollouts=str(tc.get("fan_all_wta_grad_rollouts", "all")),
+        fan_all_wta_latent_temp=float(tc.get("fan_all_wta_latent_temp", 0.1)),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -606,6 +618,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "slot_source_once": model_cfg.slot_source_once,
         "nextlat_weight": model_cfg.nextlat_weight,
         "nextlat_beta": model_cfg.nextlat_beta,
+        "coda_fuse_layer": model_cfg.coda_fuse_layer,
+        "hyp_score_head": model_cfg.hyp_score_head,
+        "latent_set_loss": model_cfg.latent_set_loss,
+        "latent_set_weight": model_cfg.latent_set_weight,
+        "enum_decode_k": model_cfg.enum_decode_k,
+        "hyp_merge": model_cfg.hyp_merge,
+        "hyp_merge_weight": model_cfg.hyp_merge_weight,
         "xhc_streams": model_cfg.xhc_streams,
         "xhc_active": model_cfg.xhc_active,
         "xhc_fixed": model_cfg.xhc_fixed,
@@ -640,6 +659,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_all_wta_lambda": model_cfg.fan_all_wta_lambda,
         "fan_all_wta_winner": model_cfg.fan_all_wta_winner,
         "fan_all_wta_grad_rollouts": model_cfg.fan_all_wta_grad_rollouts,
+        "fan_all_wta_latent_temp": model_cfg.fan_all_wta_latent_temp,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1043,7 +1063,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  f"and go through the ordinary SINGLE-SOURCE prefix_project, NOT the "
                  f"register's 1:1 cell write - so this arm's coda width is the strict "
                  f"ruler's and the 2026-09-13 width confound is closed by construction. ")
-              + 
+              +
               f"(3) the ORACLE: at every val the coda is re-run once per stream and "
               f"`fan/oracle_ce` is the per-span minimum. READ `fan/oracle_ce` AGAINST "
               f"`fan/single_ce` FIRST - if the gap is inside a width control's own CE "
@@ -1202,6 +1222,11 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  + (f"per (rollout, slot) winner, M no-grad coda passes (one per stream, "
                     f"K-fold batch) + one grad pass over all K*B0 rows. "
                     if model_cfg.fan_all_wta_winner == "per_rollout" else
+                    f"per (rollout, slot) winner picked by an InfoNCE score (temp="
+                    f"{model_cfg.fan_all_wta_latent_temp}) against the true next span "
+                    f"(lab/divergence/latent_wta_probe.py), NO coda pick passes at all; "
+                    f"+ one grad pass over all K*B0 rows. "
+                    if model_cfg.fan_all_wta_winner == "latent" else
                     f"ONE winner per slot shared by every rollout, ranked by the TRUE "
                     f"mixture posterior from the model's OWN deployed coda pass (built "
                     f"here, cached, reused below instead of recomputed); then M no-grad "

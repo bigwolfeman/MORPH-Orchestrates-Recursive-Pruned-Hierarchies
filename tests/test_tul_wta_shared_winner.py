@@ -398,8 +398,11 @@ def test_grad_rollouts_map_reaches_the_model_through_hydra(monkeypatch):
 
 
 def test_bad_value_raises():
+    # 2026-09-29 (latent-WTA build): a third valid value ("latent") was added, so the
+    # message text this regex pins moved from "'per_rollout' or 'map'" to "'per_rollout',
+    # 'map' or 'latent'" -- see tests/test_tul_latent_wta.py for that mode's own tests.
     import pytest
-    with pytest.raises(ValueError, match="per_rollout' or 'map'"):
+    with pytest.raises(ValueError, match="per_rollout', 'map' or 'latent'"):
         _tul(**_wta_kw(fan_all_wta_winner="mcl"))
 
 

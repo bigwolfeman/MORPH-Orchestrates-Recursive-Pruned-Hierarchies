@@ -1,0 +1,37 @@
+# Arm "lxtul-e4probe-fp01-hypmerge" (LX efficient-exploration KNOB 6, 2026-09-29):
+# `tul_slot_spandec_strict_e4probe_fp01` with the learned hypothesis merge
+# (`tul.hyp_merge`, Superposed-Decoding / LPLT / ParScale-style) built and trained at a
+# small weight. Composes it and changes:
+#
+#   tul.hyp_merge            none -> learned
+#   tul.hyp_merge_weight     0.0 -> 0.1
+#   training.steps           5000 -> 3000
+#   training.lr_decay_steps  (unset) -> 5000
+#
+# READ BEFORE QUEUEING A LONGER RUN OF THIS ARM. Mixture non-closure (Latent-GRPO arXiv
+# 2604.27998) says a merge of K hypotheses is not guaranteed to be a state anything
+# downstream reads correctly, and this tree's own blurred means lost: the soft (mean-mixed) LX fans (0.030 nats behind the WTA fan, 3 of 4 draws detonated,
+# lab/experiments/failures/2026-09-27-lx-soft-fan-retry.md) and the four-copies fan
+# (arm a1 of docs/slot-cells-distinct-vs-blurred.md, which did not close the gap that
+# distinct cells closed).
+# `tul/hyp_merge_beats_best_single` is the number to check FIRST: near 0 means the
+# learned merge adds nothing the best single rollout did not already have.
+#
+# WHY 3000 STEPS AND THE LR PIN: identical audit to the WTA arm's `..._ev01` (read it).
+#
+# NOT QUEUED. Scaffolding only — see
+# .agents/notes/proposed/architecture/2026-09-29-lx-efficient-exploration-knobs.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  hyp_merge: learned
+  hyp_merge_weight: 0.1
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-e4probe-fp01-hypmerge

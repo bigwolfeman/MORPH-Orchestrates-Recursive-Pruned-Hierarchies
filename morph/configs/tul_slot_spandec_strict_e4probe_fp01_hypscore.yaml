@@ -1,0 +1,37 @@
+# Arm "lxtul-e4probe-fp01-hypscore" (LX efficient-exploration KNOB 3, 2026-09-29):
+# `tul_slot_spandec_strict_e4probe_fp01` with the hypothesis score head
+# (`tul.hyp_score_head`, rMCL/LatentRM/LTO-style) built and trained. Composes it and
+# changes:
+#
+#   tul.hyp_score_head      false -> true
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000
+#
+# WHY THE KEY. A tiny linear head (`morph/model/tul_explore.py::TULHypScoreHead`) reads
+# each of the K=4 rollouts' DETACHED slot exit latent and is trained (KL,
+# `score_head_kl_loss`) to predict the LX mixture's own DETACHED posterior direction —
+# training cost ~0, no gradient into the loop, the codes or the front. The eval read
+# stays the exact K-way Bayes read. The arm is read on `val/hyp_read_top1_gap` (the CE a
+# head-picked single rollout would cost over the exact mixture) against
+# `val/hyp_read_rand1_gap` (a random pick) and `val/hyp_read_best1_gap` (the hindsight
+# pick): top1 well under rand1 means a cheap read is worth building.
+#
+# WHY 3000 STEPS AND THE LR PIN: identical audit to the WTA arm's `..._ev01` (read it) —
+# `training.lr_decay_steps: 5000` is pinned so the cosine schedule resolves the same way
+# at 3000 steps as it would at the parent's 5000, belt-and-suspenders.
+#
+# NOT QUEUED. Scaffolding only — see
+# .agents/notes/proposed/architecture/2026-09-29-lx-efficient-exploration-knobs.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  hyp_score_head: true
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-e4probe-fp01-hypscore

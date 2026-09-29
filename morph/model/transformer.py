@@ -49,10 +49,15 @@ from .tul import (TULCenterExit, TULConfig, TULGate, TULGateConfig, TULGradPass,
                   cw2_retain_mask, gather_positions, gather_valid, mux_span_targets,
                   scatter_positions,
                   window_drop_mask)
+from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_merge_mean,
+                          hyp_merge_probe_stats, latent_energy_score, latent_hyp_spread,
+                          latent_infonce, score_head_kl_loss, score_head_read_gaps,
+                          swor_uniform)
+from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
-from .tul_fan import (FanReservoir, TULFanMix, fan_epi_term, fan_repel_term, fan_stream_rank,
-                      fan_vol_term, select_gate_loss, select_streams, select_winners,
-                      fan_stream_stats, plan_streams)
+from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_repel_term,
+                      fan_stream_rank, fan_vol_term, select_gate_loss, select_streams,
+                      select_winners, fan_stream_stats, plan_streams)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
@@ -1425,6 +1430,110 @@ def span_token_counts(gid: Tensor, keep_tok: Tensor, n_groups: int) -> Tensor:
     return out.view(B, n_groups)
 
 
+def latent_wta_target(base: Tensor, gid: Tensor, keep_tok: Tensor, g_bins: int) -> Tensor:
+    """``tul.fan_all_wta_winner="latent"``'s TARGET: mean-pool ``base`` (the coda's own
+    prelude carrier, whatever ``coda_token_input`` gave ``_tul_fan_all`` -- ``[B, L, C]``
+    on a plain carrier, ``[B, L, n, C]`` on a Hyper-Connection one, ``n`` the residual
+    stream count) per span bin -> ``[B, S, C]``, using the SAME ``gid``/``keep_tok``/
+    ``g_bins`` the coda's own span-CE table is built from (:func:`span_ce_index`), so
+    bin ``s`` here is exactly the TRUE next span :meth:`MORPHTransformer._tul_fan_all`
+    scores cell picks against — bin 0 (before the first slot) is dropped, matching that
+    table's convention. An HC carrier's stream axis is reduced by its MEAN first — the
+    same "state of this position" convention ``tul_fan._cell_readout``, ``_readout`` and
+    ``TULSlots.unpack`` already use for the cell axis, applied here to the token axis.
+
+    ONE home: :func:`lab.divergence.latent_wta_probe.candidate_b_pool` (Part 1 of the
+    latent-WTA build, ``lab/divergence/latent_wta_probe.py``) computes the IDENTICAL
+    target on a checkpoint; this is that function, ported in-tree so the shipped mode and
+    the probe that picked it can never drift apart.
+
+    THIS IS NOT THE SCORE. The probe measured three candidate SCORING rules against this
+    same target: raw cosine (this pooled vector vs each cell — the probe's candidate (b)),
+    raw L2, and an InfoNCE own-target log-probability against every other valid slot's
+    target in the local batch as negatives (candidate (c)); ``fan_all_wta_winner=
+    "latent"`` scores with :func:`latent_wta_infonce_score`. Every candidate agreed with
+    the coda's own winner at CHANCE (0.19-0.28 against 0.25) on both
+    `lxtul-lxfan4-wta-fp01` checkpoints. The probe's first regret table counted each
+    span's regret n_tok times (fixed 2026-09-29); read the corrected regrets, beside the
+    random-pick floor, in `.agents/notes/proposed/architecture/2026-09-29-latent-wta.md`
+    before ranking the rules or trusting this mode over a random winner. (A fourth
+    candidate, nearest to the NEXT slot's own pre-loop seed, read lowest of all on the
+    immature step-3000 checkpoint but worst-tier on the mature step-5000 one — the
+    register's own known early rank collapse, not a robust signal; see
+    ``.agents/notes/proposed/architecture/2026-09-29-latent-wta.md``.)
+
+    NEVER call this with anything that is not already ``.detach()``d: the caller
+    (``_tul_fan_all``) computes this target ONLY to feed a scoring function that picks an
+    argmax index, inside ``torch.no_grad()``, and it must never reach the coda or the loop
+    (the true-span content would otherwise be a teacher-forcing bypass, not a selection
+    signal).
+    """
+    if base.dim() < 3:
+        raise ValueError(
+            f"latent_wta_target wants base [B,L,C] or [B,L,n,C], got {tuple(base.shape)}")
+    while base.dim() > 3:
+        base = base.mean(dim=-2)
+    B, L, C = base.shape
+    flat_gid = gid.reshape(-1)
+    w = keep_tok.reshape(-1, 1).to(base.dtype)
+    sums = torch.zeros(B * g_bins, C, device=base.device, dtype=base.dtype)
+    sums.index_add_(0, flat_gid, base.reshape(-1, C) * w)
+    counts = torch.zeros(B * g_bins, device=base.device, dtype=base.dtype)
+    counts.index_add_(0, flat_gid, keep_tok.reshape(-1).to(base.dtype))
+    pooled = (sums / counts.clamp_min(1e-9).unsqueeze(-1)).view(B, g_bins, C)
+    return pooled[:, 1:]                                              # [B, S, C]
+
+
+def latent_wta_infonce_score(cells: Tensor, target: Tensor, ok: Tensor, temp: float
+                             ) -> Tensor:
+    """``tul.fan_all_wta_winner="latent"``'s per-cell SCORE table: cell (b,s,m)'s InfoNCE
+    own-target log-probability against every OTHER valid ``(b,s)`` slot's
+    :func:`latent_wta_target` vector as an in-batch negative — the lowest-regret of the
+    three scoring rules the probe measured (see :func:`latent_wta_target`'s docstring for
+    the numbers). ``cells`` ``[B,S,M,C]`` (already ``_cell_readout``-collapsed),
+    ``target`` ``[B,S,C]``, ``ok`` ``[B,S]`` bool (which slots are scored at all —
+    ``layout.slot_valid & (n_tok > 0)``). Returns ``[B,S,M]``, ``0.0`` at unmasked
+    ``(b,s)`` (the caller's ``select_winners(..., ok, ...)`` never reads those).
+
+    ONE home: :func:`lab.divergence.latent_wta_probe.candidate_c_pick` calls this exact
+    function (vectorised here; the probe's own version was a per-row Python loop kept for
+    that script's clarity, not reused for speed) — the probe that measured this rule's
+    regret and the mode that ships it can never drift apart.
+
+    The in-batch negative pool is every valid slot in THIS local (rollout-expanded) batch,
+    including — for a code-enum arm with ``code_enum_k > 1`` — the SAME physical row's
+    other rollout copies, which carry an identical target (the front runs once; see
+    module docstring "TUL — TWO FORWARDS, ONE TREE"). A duplicate target elsewhere in the
+    negative pool does not hand a cell an easier match at its OWN (row, slot) position —
+    the objective is "this cell's own target, ranked against everything else," not
+    row/rollout identity — so this was not filtered out; the probe measured the SAME
+    (rollout-expanded) batch structure, and the numbers above are faithful to what ships.
+
+    Detached in (``cells``/``target`` must already be ``.detach()``d — the caller's
+    ``torch.no_grad()`` covers this whole block), detached out.
+    """
+    B, S, M, C = cells.shape
+    flat_ok = ok.reshape(-1)
+    idx = flat_ok.nonzero(as_tuple=True)[0]
+    score = cells.new_zeros((B * S, M))
+    n = idx.numel()
+    if n < 2:
+        # No negatives to discriminate against (an under-filled probe batch, or a tiny
+        # test fixture) — every cell scores 0, so `select_winners`' eps/forced random-
+        # winner path (never a silent always-pick-0) decides. `select_winners` requires
+        # `eps > 0` for exactly this degenerate-batch reason.
+        return score.view(B, S, M)
+    tgt = F.normalize(target.reshape(B * S, C)[idx].float(), dim=-1)          # [n, C]
+    cflat = F.normalize(cells.reshape(B * S, M, C).float(), dim=-1)           # [B*S, M, C]
+    cvalid = cflat[idx]                                                       # [n, M, C]
+    sims = torch.einsum("nmc,kc->nmk", cvalid, tgt) / temp                    # [n, M, n]
+    logp = F.log_softmax(sims, dim=-1)                                        # over negs
+    ar = torch.arange(n, device=cells.device)
+    own = logp[ar, :, ar]                                                     # [n, M]
+    score[idx] = own.to(score.dtype)
+    return score.view(B, S, M)
+
+
 def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0,
                        lineage: bool = False, history_streams: int = 0) -> tuple[Tensor, Tensor]:
     """The Thought Register's CELL relation, in one place (``tul.slot_cells``).
@@ -1643,12 +1752,16 @@ class MORPHTransformer(nn.Module):
     # default, so the shipped graph never sees it.
     _fan_all_ce_capture: list | None = None
 
-    # `tul.fan_all_wta_winner="map"`'s test hook: attach a list and `_tul_fan_all`
-    # appends ``{"map_idx", "choice", "forced"}`` (all detached) once per train step,
-    # right after the MAP winner is picked and broadcast to every rollout — the only way
-    # a test can recover the per-BASE-ROW MAP rollout index and the shared winner table.
-    # None by default (every other model and `fan_all_wta_winner="per_rollout"` never
-    # touch it).
+    # `tul.fan_all_wta_winner="map"`/`"latent"`'s test hook: attach a list and
+    # `_tul_fan_all` appends ``{"map_idx", "choice", "forced", "ce_map", "cells_map",
+    # "S_slots"}`` (all detached) once per train step, right after the winner is picked
+    # — the only way a test can recover the per-BASE-ROW MAP rollout index and the
+    # shared winner table (``"map"``), or the chosen index and the InfoNCE score table
+    # (``"latent"``, extra keys ``"latent_cos"`` [diagnostic only, not scored on]/
+    # ``"latent_score"`` [the InfoNCE table `choice` was actually picked from]/
+    # ``"latent_cells_d"``/``"latent_cells_score"``/``"latent_target"``/``"latent_ok"``,
+    # the other five ``None``). None by default (every other model and
+    # `fan_all_wta_winner="per_rollout"` never touch it).
     _fan_all_winner_capture: list | None = None
 
     # `tul.fan_all_wta_winner="map"`'s pass-sharing cache ("onewinner-perf", 2026-09-29):
@@ -2381,6 +2494,19 @@ class MORPHTransformer(nn.Module):
         if cfg.tul is not None and cfg.tul.nextlat_weight > 0.0:
             self.tul_nextlat = SpanTransition(d)
             self._nextlat_J = int(cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap)
+
+        # ── LX efficient-exploration knobs 3 / 6 (2026-09-29; morph/model/tul_explore.py)
+        # Built RNG-neutral (each module snapshots/restores the global RNG stream on its
+        # own, the TULRowContrast precedent), so an arm with these off stays byte-
+        # identical to its parent at the same seed. See TULConfig's own field comments
+        # (`hyp_score_head`, `hyp_merge`) for what each module does; the loss folding
+        # lives in `_tul_explore_pre_coda` / `_tul_explore_post_coda` below.
+        self.tul_hyp_score_head: TULHypScoreHead | None = None
+        if cfg.tul is not None and cfg.tul.hyp_score_head:
+            self.tul_hyp_score_head = TULHypScoreHead(d)
+        self.tul_hyp_merge_gate: TULHypMergeGate | None = None
+        if cfg.tul is not None and cfg.tul.hyp_merge == "learned":
+            self.tul_hyp_merge_gate = TULHypMergeGate(d)
 
         # ── Parallel span decoding from the coda (TULConfig.coda_span_heads) ──────
         # J offset heads on the coda's FINAL state at each slot's emitting position. The
@@ -7947,6 +8073,21 @@ class MORPHTransformer(nn.Module):
         either way — same ``cells``, same weight, same eps — it only reads a different
         ``choice``.
 
+        ``"latent"`` (2026-09-29 latent-WTA build; read at any ``R``, including ``R=1``,
+        unlike ``"map"``): NO coda pass at all. Every (rollout, slot) picks its own
+        winner — the ``"per_rollout"`` indexing, not ``"map"``'s shared one — by an
+        InfoNCE score in LATENT space against :func:`latent_wta_target`, a target built from
+        the TRUE next span's own prelude states (already computed upstream of this
+        method; no new network, no coda read). Chosen by an offline probe
+        (``lab/divergence/latent_wta_probe.py``) that measured REGRET (nats/token of the
+        latent pick vs the coda's own argmin), not agreement, against two other cheap
+        targets on the ``lxtul-lxfan4-wta-fp01`` checkpoints — see that function's
+        docstring. The grad pass below is UNCHANGED (same ``cells``, same weight, same
+        eps, the ``"per_rollout"`` row count) — it only reads a different ``choice``.
+        `wta_oracle_ce` / `wta_single_ce` / `wta_pick0` are UNSET under this mode (no CE
+        table is ever built to read them from); `wta_latent_entropy` (the winner-share
+        entropy over the ``k`` cells) is the collapse instrument in their place.
+
         EVAL, a plan ablation, or ``fan_all_wta_lambda == 0`` (LX-Fan): nothing extra and
         no pass; the oracle instrument after the coda reports ``stream_ce_k{i}`` on the
         same one-stream write.
@@ -8006,6 +8147,7 @@ class MORPHTransformer(nn.Module):
         _winner_mode = str(tc.fan_all_wta_winner)
         _grad_mode = str(tc.fan_all_wta_grad_rollouts)
         _use_map = _winner_mode == "map" and R > 1
+        _use_latent = _winner_mode == "latent"
         S_dim = int(layout.slot_valid.shape[1])
         B0 = B // R if R > 0 else B
         # ── tul.fan_all_wta_winner="map": the SHARED mixture pass ("onewinner-perf",
@@ -8086,7 +8228,6 @@ class MORPHTransformer(nn.Module):
                 # for exactly these M no-grad passes — legal here because there is no
                 # backward/recompute inside this `torch.no_grad()` block for the mask
                 # decision to have to survive (morph/model/rollout_dropout.py).
-                from .rollout_dropout import bypass_rollout_sharing
                 with bypass_rollout_sharing(self.coda):
                     for i in range(k):
                         values_m, pos_m = self._tul_fan_stream_write(cells_map, i, layout0, L)
@@ -8128,6 +8269,104 @@ class MORPHTransformer(nn.Module):
                     stats["wta_forced"] = forced[ok].float().mean().detach()
                     for i in range(k):
                         stats[f"wta_share_k{i}"] = (choice[ok] == i).float().mean().detach()
+            elif _use_latent:
+                # ── tul.fan_all_wta_winner="latent" (2026-09-29 latent-WTA build) ──────
+                # NO coda pass at all — replaces the M no-grad picking passes of
+                # "per_rollout" (and "map"'s shared mixture + picks) with an InfoNCE score
+                # in LATENT space against a target built from the TRUE next span. Decided
+                # by the offline probe (lab/divergence/latent_wta_probe.py) on
+                # lxtul-lxfan4-wta-fp01's own checkpoints: THREE scoring rules against the
+                # SAME target (`latent_wta_target`, mean-pool of the true next span's own
+                # prelude states) were compared; this mode scores with
+                # :func:`latent_wta_infonce_score`. FOOT GUN: all of them agreed with the
+                # coda's winner at CHANCE, so this may be a random-winner WTA. Read the
+                # corrected regret table (random-pick floor beside it) in
+                # `.agents/notes/proposed/architecture/2026-09-29-latent-wta.md`.
+                #
+                # THE TARGET NEVER REACHES THE CODA OR THE LOOP. It is built here ONLY to
+                # pick an index below, entirely inside this method's `torch.no_grad()`
+                # (shared with "map"/"per_rollout"), from ALREADY-detached `base_d`/
+                # `cells_d` — no gradient reaches this block, and `choice` (an integer
+                # index) is the only thing that leaves it, feeding a `.gather`/`.scatter`
+                # the way every other mode's `choice` already does. Using the true span to
+                # choose AMONG the model's own cells, and never to become one, is the
+                # teacher-forcing-bypass guard this tree already names
+                # (`teacher-forcing-is-a-bypass`, `fitted-z-used-the-answer`).
+                #
+                # DETACHED, on purpose: if the prelude could shrink the distance by making
+                # the target easy to match, the pick would degenerate exactly as a live-
+                # front encoder did elsewhere on this tree
+                # (`frozen-encoder-on-live-front-is-not-a-fixed-target`) — `base_d` and
+                # `cells_d` are both already `.detach()`d above.
+                #
+                # DROPOUT (Shen et al. 2019's "compute responsibilities without dropout"):
+                # `base`/`cells` carry whatever ONE dropout mask this forward's prelude
+                # and loop already drew, shared by the target AND by every one of the M
+                # candidates compared against it — not a fresh draw per candidate. Shen's
+                # finding is about noise INSIDE an M-way comparison across SEPARATE
+                # forward passes, which is exactly what "per_rollout"/"map"'s M no-grad
+                # coda passes are; this mode runs no such passes, so there is no per-
+                # candidate dropout draw to decorrelate. Re-running the prelude a second
+                # time, dropout-free, to strip even the ONE shared draw would be a second
+                # front pass and was NOT done — named here as unverified, not hidden.
+                target = latent_wta_target(base_d, gid, keep_tok, g_bins)      # [B, S, C]
+                # `_cell_readout` (the SAME "state of this cell" reduction
+                # `TULFanMix.logits` scores the gate with) collapses an HC carrier's
+                # extra stream axis for SCORING ONLY -- `cells_d` itself (raw, every
+                # axis kept) is what the grad pass below still writes through
+                # `select_streams`/`prefix_project`; this local copy never replaces it.
+                cells_score = _cell_readout(cells_d)                             # [B,S,k,C]
+                # Raw cosine kept as a DIAGNOSTIC ONLY (logged, never scored on) — it is
+                # the losing scoring rule; comparing it to the InfoNCE pick below is the
+                # cheapest live check that the two rules keep disagreeing about as much as
+                # the probe measured (`agree` ≈ 0.19-0.28, chance 0.25).
+                cos = F.cosine_similarity(cells_score, target.unsqueeze(2), dim=-1)  # [B,S,k]
+                # `latent_wta_infonce_score` returns log-probabilities (higher = better),
+                # so it needs NEGATING for `select_winners`' ARGMIN convention — same
+                # eps/forced random-winner logic every other mode uses (`fan_select_eps`),
+                # not a second hand-rolled copy.
+                infonce = latent_wta_infonce_score(cells_score, target, ok,
+                                                   float(tc.fan_all_wta_latent_temp))
+                choice, forced = select_winners(-infonce, ok, float(tc.fan_select_eps))
+                if self._fan_all_winner_capture is not None:
+                    self._fan_all_winner_capture.append({
+                        "map_idx": None, "choice": choice.detach().clone(),
+                        "forced": forced.detach().clone(), "ce_map": None,
+                        "cells_map": None, "S_slots": None,
+                        "latent_cos": cos.detach().clone(),
+                        "latent_score": infonce.detach().clone(),
+                        # Test-only (`tests/test_tul_latent_wta.py`): the RAW candidate
+                        # cells (every axis kept, what the grad pass's WRITE reads), so a
+                        # test can prove they are unaffected by the TARGET (a perturbed
+                        # target may only move `choice`, never these) -- and the
+                        # readout-collapsed cells actually SCORED, to reproduce `cos`/
+                        # `infonce`.
+                        "latent_cells_d": cells_d.detach().clone(),
+                        "latent_cells_score": cells_score.detach().clone(),
+                        "latent_target": target.detach().clone(),
+                        # Test-only: the EXACT mask `latent_wta_infonce_score` and
+                        # `select_winners` were called with (`layout.slot_valid &
+                        # (n_tok > 0)`) — a test reconstructing this from `layout` alone
+                        # and forgetting the `n_tok > 0` term would score a different (and
+                        # wrong) in-batch negative pool than the model actually used.
+                        "latent_ok": ok.detach().clone(),
+                    })
+                # No coda pass ran under this mode, so there is no CE table to read
+                # `wta_oracle_ce` / `wta_single_ce` / `wta_pick0` from — those three stay
+                # UNSET here (present under "per_rollout"/"map", absent under "latent";
+                # a reader that needs them under every mode must build its own table).
+                if bool(ok.any()):
+                    stats["wta_forced"] = forced[ok].float().mean().detach()
+                    _shares = []
+                    for i in range(k):
+                        _p = (choice[ok] == i).float().mean().detach()
+                        stats[f"wta_share_k{i}"] = _p
+                        _shares.append(_p)
+                    # Collapse guard (JEPA-paradox / centroid-collapse risk named in the
+                    # lit report): the winner-share ENTROPY over the M cells, in nats —
+                    # ln(k) is uniform (no collapse), 0 is every slot picking one cell.
+                    _p_stack = torch.stack(_shares).clamp_min(1e-12)
+                    stats["wta_latent_entropy"] = -(_p_stack * _p_stack.log()).sum().detach()
             else:
                 per_stream: list[Tensor] = []
                 for grp in groups_i:
@@ -8268,7 +8507,6 @@ class MORPHTransformer(nn.Module):
         # past the `with` block's exit (see `bypass_rollout_sharing`'s own docstring —
         # the one thing that makes it UNSAFE to combine with `checkpoint_blocks=True`).
         if _grad_map:
-            from .rollout_dropout import bypass_rollout_sharing
             with bypass_rollout_sharing(self.coda):
                 xh_w = self._back_region(x_w, g_x0, g_bigram, g_ids, inject_keep=g_keep,
                                          attn_kwargs=g_coda_kw, ret_reset_mask=g_tg_reset)
@@ -10436,6 +10674,125 @@ class MORPHTransformer(nn.Module):
             stats["row_contrast_n_anchors"] = float(ok.sum())
         return loss
 
+    def _tul_explore_pre_coda(self, h_slots: Tensor, x: Tensor, layout: SlotLayout,
+                              n_rollouts: int, stats: dict
+                              ) -> tuple[Tensor | None, Tensor | None, Tensor | None,
+                                        Tensor | None]:
+        """LX efficient-exploration knobs 4 (set loss) and the shared hypothesis/target
+        build knobs 3 and 6 read later (``morph/model/tul_explore.py``). Read at the SAME
+        seam as the MUX / span decoder / C2 (``_tul_row_contrast_loss``, right beside this
+        method's own caller): the loop's exit state, before the gate's budget, before
+        ``detach_z`` and before the eval-only plan ablation.
+
+        ``hyp`` ``[R, B0*S, C]`` -- every rollout's readout of every (row, slot) item,
+        flattened; ``target`` / ``valid`` -- the SAME ``next_span_pool`` construction
+        :meth:`_tul_row_contrast_loss` already uses (the next span's DETACHED, pooled
+        prelude states — never the loop's own future state, which is
+        ``tul.nextlat_weight``'s target and is on record as collapsing).
+
+        Returns ``(set_loss | None, hyp_detached | None, target_detached | None,
+        valid | None)``. The last three are ``None`` unless a LATER knob (3 or 6) will
+        need them, so a run with only knob 4 on pays no extra ``.detach()``/clone."""
+        tc = self.cfg.tul
+        R = max(int(n_rollouts), 1)
+        B0 = h_slots.shape[0] // R
+        lay0 = layout.head_rows(B0) if R > 1 else layout
+        z = self._readout(h_slots)                                       # [R*B0, S, C]
+        pool, ok = next_span_pool(self._readout(x.detach()), lay0)        # [B0, S, C/-]
+        C = z.shape[-1]
+        S_dim = z.shape[1]
+        if pool.shape[1] != S_dim:
+            raise RuntimeError(
+                f"_tul_explore_pre_coda: hyp slot axis {S_dim} != target slot axis "
+                f"{pool.shape[1]} — the flat (row, slot) indexing knob 3's post-coda "
+                f"half assumes has drifted from this method's own construction.")
+        hyp = z.view(R, B0, S_dim, C).reshape(R, B0 * S_dim, C)
+        target = pool.reshape(B0 * S_dim, C)
+        valid = ok.reshape(B0 * S_dim)
+
+        set_loss = None
+        if tc.latent_set_loss != "none":
+            tgt_d = target.detach()
+            if tc.latent_set_loss == "energy":
+                set_loss = latent_energy_score(hyp, tgt_d, valid)
+            else:
+                set_loss = latent_infonce(hyp, tgt_d, valid, tau=0.1)
+            stats["explore_set_spread"] = latent_hyp_spread(hyp, valid)
+
+        hyp_detached = target_detached = valid_out = None
+        if tc.hyp_score_head or tc.hyp_merge != "none":
+            hyp_detached = hyp.detach()
+            target_detached = target.detach()
+            valid_out = valid
+        return set_loss, hyp_detached, target_detached, valid_out
+
+    def _tul_explore_post_coda(self, hyp_detached: Tensor | None,
+                               target_detached: Tensor | None, valid: Tensor | None,
+                               s_out: dict, B0: int, max_slots: int,
+                               stats: dict) -> Tensor | None:
+        """The POST-CODA half of the LX efficient-exploration knobs: knob 3 (score head)
+        and knob 6 (merge). Called once ``_enum_mix_losses``'s exact per-span mixture
+        direction ``S`` exists (``s_out["S"]``, with ``s_out["scored"]`` and
+        ``s_out["n_w"]``) — knob 3's target and its read-gap instrument.
+
+        ``S`` is ``[R, B0*(max_slots+1)]`` (``_enum_mix_losses``'s own group
+        indexing: group 0 of each row is the dump bin, group g the SPAN g). Slot i's
+        item in ``hyp_detached`` (built by :meth:`_tul_explore_pre_coda`, indexed by
+        SLOT) predicts span i+1, i.e. group i+1 — so this method re-indexes ``s_target``
+        by dropping each row's dump-bin column before comparing, rather than assuming
+        the two group orders already agree (they do not: one is group-indexed, the
+        other slot-indexed, off by the dump bin).
+
+        Returns the additional weighted loss term to add to ``groups["loss"]``, or
+        ``None`` if neither knob is on."""
+        tc = self.cfg.tul
+        if hyp_detached is None:
+            return None
+        R, N, C = hyp_detached.shape
+        extra = hyp_detached.new_zeros(())
+        added = False
+
+        if tc.hyp_score_head:
+            head = self.tul_hyp_score_head
+            assert head is not None
+            scores = head(hyp_detached)                                   # [R, N]
+            s_target = s_out.get("S")
+            if s_target is not None:
+                s_g = s_target.view(R, B0, max_slots + 1)[:, :, 1:].reshape(R, N)
+                score_loss = score_head_kl_loss(scores, s_g.detach(), valid)
+                stats["hyp_score_kl"] = score_loss.detach()
+                extra = extra + score_loss
+                added = True
+                # What a read of only the head's top-1 / top-2 rollouts would cost
+                # against the exact K-way read, beside the random-pick floor and the
+                # hindsight ceiling (`tul_explore.score_head_read_gaps`). Same group
+                # re-indexing as `s_g`: slot i's item is span group i+1.
+                sc_g = s_out["scored"].view(B0, max_slots + 1)[:, 1:].reshape(N)
+                for _gk, _gv in score_head_read_gaps(scores.detach(), s_g, sc_g,
+                                                     s_out["n_w"]).items():
+                    stats[f"hyp_{_gk}"] = _gv
+            stats["hyp_score_mean"] = scores.detach().mean()
+
+        if tc.hyp_merge != "none":
+            merged_mean = hyp_merge_mean(hyp_detached)
+            probe = hyp_merge_probe_stats(hyp_detached, target_detached, valid, merged_mean)
+            for k, v in probe.items():
+                stats[f"hyp_{k}"] = hyp_detached.new_tensor(v)
+            if tc.hyp_merge == "learned":
+                gate = self.tul_hyp_merge_gate
+                assert gate is not None
+                merged_live = gate(hyp_detached)
+                merge_dist = (merged_live - target_detached).norm(dim=-1)
+                vf = valid.to(merge_dist.dtype)
+                n = vf.sum().clamp_min(1.0)
+                merge_loss = (merge_dist * vf).sum() / n
+                stats["hyp_merge_learned_dist"] = merge_loss.detach()
+                if tc.hyp_merge_weight > 0.0:
+                    extra = extra + tc.hyp_merge_weight * merge_loss
+                    added = True
+
+        return extra if added else None
+
     def _tul_sigreg_loss(self, h_slots: Tensor, layout: SlotLayout) -> Tensor:
         """SIGReg over the VALID slot states (LeJEPA; see morph/model/sigreg.py).
 
@@ -10671,6 +11028,11 @@ class MORPHTransformer(nn.Module):
             # proxy, using the SAME coda pass this method already needed — see
             # `tul.fan_all_wta_winner`'s doc in tul.py.
             s_out["S"] = S.detach()
+            # `scored` ([n_groups] bool) and `n_w` (the loss's token-weight total): what
+            # `tul_explore.score_head_read_gaps` needs to price a cheap read in the SAME
+            # nats-per-token units as `enum_ce_mix` (knob 3's instrument, 2026-09-29).
+            s_out["scored"] = scored.detach()
+            s_out["n_w"] = n_w.detach()
         with torch.no_grad():
             mix = loss.detach()
             ce_code = -(lp.detach() * w.unsqueeze(0)).sum(1) / n_w                 # [K]
@@ -11120,6 +11482,14 @@ class MORPHTransformer(nn.Module):
         fan_wta_loss = None             # tul.fan_mix="all": the winner-alone span CE (train)
         fan_stats: dict[str, float] = {}
         _fan_cells = None
+        # LX efficient-exploration knobs 3/4/6 (2026-09-29). Bound here for the same
+        # reason as `fan_repel_loss` above: the fold sits AFTER the branch dispatch, and
+        # only the plain slot-loop branch (`_reg_cells is None`) can produce them (every
+        # one of these knobs is refused with `tul.fan_k`). `None` / `{}` on every other
+        # path is the signal the fold below branches on.
+        explore_stats: dict = {}
+        _explore_set_loss = None
+        _explore_hyp = _explore_target = _explore_valid = None
         # LXTUL-E's parallel span head (tul.spandec_parallel). Bound here for the fan's
         # reason: only the slot-loop branch computes it, next to the span decoder, and the
         # fold after the dispatch RAISES if a model that built the head reaches it with no
@@ -11691,6 +12061,20 @@ class MORPHTransformer(nn.Module):
                 # write-all fan (the code refuses the bare register and the mixing fans).
                 self._enum_exit_stats(h_slots if _reg_cells is None else _reg_cells,
                                       layout, _iw_k, enum_stats)
+            # ── LX efficient-exploration knobs (2026-09-29; morph/model/tul_explore.py)
+            # KNOBS 3/4/6 pre-coda half. Read at the SAME seam as C2 just below (the
+            # loop's exit state, before the gate's budget / detach_z / plan ablation).
+            # `_reg_cells is None` guard is redundant with TULConfig's own
+            # `tul.fan_k`-vs-these-knobs refusal (these knobs are scoped to the PLAIN LX
+            # arm only, kept clear of the fan/WTA machinery on purpose) — kept here too
+            # so a future relaxation of that refusal does not silently start reading the
+            # register's mean instead of raising.
+            if (self._code_enum_k and _reg_cells is None
+                    and (tc.latent_set_loss != "none" or tc.hyp_score_head
+                        or tc.hyp_merge != "none")):
+                (_explore_set_loss, _explore_hyp, _explore_target,
+                _explore_valid) = self._tul_explore_pre_coda(
+                    h_slots, x, layout, _iw_k, explore_stats)
             # ── C2: the within-row contrastive term (tul.row_contrast_lambda) ──
             # Read at the SAME seam as the MUX and the span decoder: the loop's exit
             # state, before the gate's budget, before `detach_z` and before the eval-only
@@ -11913,20 +12297,118 @@ class MORPHTransformer(nn.Module):
                 xh, groups = self._fan_all_deployed_cache
                 self._fan_all_deployed_cache = None
             else:
+                # KNOB 5 (tul.enum_decode_k, 2026-09-29): run the coda on only k of the K
+                # code rollouts, gathered by whole ROW-BLOCKS (`tul_explore.gather_rows`
+                # — inert to every position-dependent mechanism in the coda, since it only
+                # removes whole rows; see that function's own docstring). TRAINING ONLY —
+                # eval / generation always reads every rollout (an eval read must never
+                # approximate the mixture it is being scored against). TULConfig already
+                # refuses this combined with `tul.fan_k`, so `_iw_k_used` below is the
+                # PLAIN LX rollout count, never the fan/WTA one.
+                _iw_k_used = _iw_k
+                _decode_sample = None
+                _layout_dec = None
+                if (self._code_enum_k and tc.enum_decode_k and self.training
+                        and labels is not None):
+                    _k = int(tc.enum_decode_k)
+                    _B0_dec = x_coda.shape[0] // _iw_k
+                    # Uniform draw, ONE set of k rollouts for the whole batch (the
+                    # row-block gather keeps whole rollouts). TULConfig refuses a
+                    # head-weighted draw: see `enum_decode_k`'s foot-gun comment.
+                    _decode_sample = swor_uniform(_iw_k, _k)
+                    x_coda = gather_rows(x_coda, _decode_sample, _B0_dec)
+                    x0 = gather_rows(x0, _decode_sample, _B0_dec)
+                    bigram_emb = gather_rows(bigram_emb, _decode_sample, _B0_dec)
+                    input_ids = gather_rows(input_ids, _decode_sample, _B0_dec)
+                    keep = gather_rows(keep, _decode_sample, _B0_dec)
+                    _coda_kw = gather_rows(_coda_kw, _decode_sample, _B0_dec)
+                    tg_reset = gather_rows(tg_reset, _decode_sample, _B0_dec)
+                    labels = gather_rows(labels, _decode_sample, _B0_dec)
+                    # `_tul_half_weights` (called inside `_enum_mix_losses`) reads
+                    # `layout.slot_index` / `.bag_id` at their OWN native row count
+                    # matched against `labels`'s — passing the untouched K*B0-row
+                    # layout against a k*B0-row `labels` raises a shape mismatch there.
+                    # A LOCAL `_layout_dec`, used for the `_enum_mix_losses` call ONLY
+                    # (never reassigning the outer `layout`): `layout` is read by many
+                    # OTHER computations later in this forward (`_tul_layer_passes`
+                    # against the un-gathered `depths`, the eval metrics, ...) that all
+                    # assume the FULL K*B0-row shape — reassigning it broke
+                    # `_tul_layer_passes` (`depths` vs `layout.slot_valid` row mismatch)
+                    # the first time this was tried; caught by
+                    # ``test_enum_decode_k_does_not_touch_layer_passes`` in
+                    # tests/test_tul_explore_wiring.py.
+                    _layout_dec = SlotLayout(
+                        slot_mask=gather_rows(layout.slot_mask, _decode_sample, _B0_dec),
+                        bag_id=gather_rows(layout.bag_id, _decode_sample, _B0_dec),
+                        slot_index=gather_rows(layout.slot_index, _decode_sample, _B0_dec),
+                        slot_valid=gather_rows(layout.slot_valid, _decode_sample, _B0_dec),
+                        prefix_k=layout.prefix_k, stats=layout.stats,
+                        span_len=gather_rows(layout.span_len, _decode_sample, _B0_dec),
+                        len_supervised=gather_rows(layout.len_supervised, _decode_sample,
+                                                   _B0_dec))
+                    _iw_k_used = _k
                 # Under "iw" with K > 1 the coda runs on B*K rows, one block's activations
                 # alive at a time (`checkpoint_blocks`, recomputed in backward). False on
                 # every other forward: the loop in `_back_region` is then the one from
                 # before.
-                xh = self._back_region(x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
-                                       attn_kwargs=_coda_kw, ret_reset_mask=tg_reset,
-                                       **({"checkpoint_blocks": True} if _iw_k > 1 else {}),
-                                       **_bcast_kw)
+                #
+                # KNOB 5 (`_decode_sample is not None`): the coda's `RolloutSharedDropout`
+                # modules are built with `n_rep = tul.code_enum_k` FIXED at construction
+                # (`rollout_dropout.py`), but this call's batch now holds `k` rollout-major
+                # copies, not `K` — a plain call raises `rows % n_rep` there whenever
+                # `k * B0` is not a multiple of `K` (found by
+                # ``test_enum_decode_k_survives_real_dropout_on_a_non_multiple_batch`` in
+                # tests/test_tul_explore_wiring.py, the SAME class of gap the "onewinner"
+                # WTA "map" mode hit on its own B0-row picking passes). Fixed the SAME way:
+                # `bypass_rollout_sharing` falls back to ordinary independent-per-row
+                # dropout for this call. UNLIKE that precedent's no-grad picking passes,
+                # this IS a live, gradient-bearing call, so `checkpoint_blocks` is forced
+                # OFF here specifically — a checkpointed block's backward RECOMPUTE runs
+                # later, inside `.backward()`, after this context manager has already
+                # exited, which would silently replay the dropout on the SHARED-mask branch
+                # instead of the bypass branch the forward actually took (a real gradient
+                # mismatch, not merely a slower path). The gathered batch is already only
+                # `k` (not `K`) rollouts, so the memory this would have saved is smaller
+                # than what knob 5 already cut by sampling.
+                if _decode_sample is not None:
+                    _explore_ctx = bypass_rollout_sharing(self.coda)
+                else:
+                    _explore_ctx = nullcontext()
+                with _explore_ctx:
+                    xh = self._back_region(
+                        x_coda, x0, bigram_emb, input_ids, inject_keep=keep,
+                        attn_kwargs=_coda_kw, ret_reset_mask=tg_reset,
+                        **({"checkpoint_blocks": True}
+                           if _iw_k_used > 1 and _decode_sample is None else {}),
+                        **_bcast_kw)
                 if self._code_enum_k:
-                    # LXTUL-E: the exact per-span mixture over the K code rollouts, train
-                    # and eval (labels None: the deploy read is built below, no loss).
-                    groups = (self._enum_mix_losses(xh, labels, input_ids, layout, _iw_k,
-                                                    want_groups=not self.training)
+                    # LXTUL-E: the exact per-span mixture over the K code rollouts (or the
+                    # k sampled ones under KNOB 5 — tul_explore.py's KNOB 5 module-header
+                    # comment is why a plain k-way call here, with no extra reweighting,
+                    # is already the right estimate for a UNIFORM draw).
+                    # Train and eval (labels None: the deploy read is built below, no loss).
+                    _explore_s_out: dict = {}
+                    groups = (self._enum_mix_losses(
+                        xh, labels, input_ids,
+                        layout if _layout_dec is None else _layout_dec, _iw_k_used,
+                        want_groups=not self.training,
+                        **({"s_out": _explore_s_out} if tc.hyp_score_head else {}))
                               if labels is not None else None)
+                    if groups is not None:
+                        # KNOBS 3/6 post-coda half. `_decode_sample` (knob 5) is not
+                        # combined with these in any configuration TULConfig currently
+                        # builds without also refusing knob 5 with fan_k — but knob 3/6
+                        # were built and tested against the UN-sampled (full K) case only;
+                        # skip them under a knob-5 draw rather than silently score a
+                        # sampled S against the pre-coda half's full-K hypotheses.
+                        _extra = (self._tul_explore_post_coda(
+                            _explore_hyp, _explore_target, _explore_valid,
+                            _explore_s_out, _B_base, layout.max_slots,
+                            explore_stats)
+                                 if _decode_sample is None else None)
+                        if _extra is not None:
+                            groups = dict(groups)
+                            groups["explore_extra"] = _extra
                 elif _iw_k:
                     groups = self._gram_iw_losses(xh, labels, layout, _iw_k)
                 else:
@@ -12125,6 +12607,28 @@ class MORPHTransformer(nn.Module):
             # tul.code_enum_k: the exit separation between the K rollouts (detached).
             groups = dict(groups)
             groups.update(enum_stats)
+        if explore_stats and groups is not None:
+            groups = dict(groups)
+            groups.update(explore_stats)
+        if _explore_set_loss is not None and groups is not None:
+            # KNOB 4 (tul.latent_set_loss). Same `*_weighted` contract as every other
+            # auxiliary term here: train.py subtracts `explore_set_weighted` so
+            # train/loss and the val loss stay the MODEL's CE.
+            groups = dict(groups)
+            groups["explore_set"] = _explore_set_loss.detach()
+            _esw = tc.latent_set_weight * _explore_set_loss
+            groups["explore_set_weighted"] = _esw.detach()
+            groups["loss"] = groups["loss"] + _esw
+        if groups is not None and groups.get("explore_extra") is not None:
+            # KNOBS 3 (score head KL) / 6 (learned merge, only if tul.hyp_merge_weight >
+            # 0). Both already folded at their own fixed/config weight inside
+            # `_tul_explore_post_coda`; this just adds the ALREADY-WEIGHTED sum into the
+            # total and exposes it under the same `*_weighted` naming so train.py can
+            # subtract it and keep train/loss on the model's CE.
+            groups = dict(groups)
+            _eew = groups.pop("explore_extra")
+            groups["explore_extra_weighted"] = _eew.detach()
+            groups["loss"] = groups["loss"] + _eew
         if code_target_loss is not None and groups is not None:
             # The code target (tul.code_target). Same contract as `spandec_weighted`: the
             # WEIGHTED term is exposed so train.py subtracts it and keeps train/loss and

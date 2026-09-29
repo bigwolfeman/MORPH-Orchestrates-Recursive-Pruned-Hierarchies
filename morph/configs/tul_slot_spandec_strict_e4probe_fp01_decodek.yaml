@@ -1,0 +1,35 @@
+# Arm "lxtul-e4probe-fp01-decodek" (LX efficient-exploration KNOB 5, 2026-09-29):
+# `tul_slot_spandec_strict_e4probe_fp01` with the coda run on only 2 of the K=4 code
+# rollouts (`tul.enum_decode_k`, Kool et al. 2020 SWOR / LTC-style). Composes it and
+# changes:
+#
+#   tul.enum_decode_k       0 -> 2
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000
+#
+# WHY THE KEY. UNIFORM sampling without replacement (`hyp_score_head` stays off on this
+# arm, so the draw is uniform, not score-weighted): the ordinary 2-way mixture over the
+# sampled rollouts is already the unbiased-in-the-mean-domain estimate of the true 4-way
+# mixture (see `morph/model/tul_explore.py`'s KNOB 5 header for the SRSWOR argument and
+# its disclosed Jensen-inequality log-domain caveat). TRAINING ONLY — eval always reads
+# every rollout. Cost: the coda's row-block gather cuts the expanded-batch coda pass
+# from K*B0 to k*B0 rows (see `test_enum_decode_k_uniform_runs_only_k_rollouts_...` in
+# tests/test_tul_explore_wiring.py for the row-count proof against a `_back_region` spy).
+#
+# WHY 3000 STEPS AND THE LR PIN: identical audit to the WTA arm's `..._ev01` (read it).
+#
+# NOT QUEUED. Scaffolding only — see
+# .agents/notes/proposed/architecture/2026-09-29-lx-efficient-exploration-knobs.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  enum_decode_k: 2
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-e4probe-fp01-decodek

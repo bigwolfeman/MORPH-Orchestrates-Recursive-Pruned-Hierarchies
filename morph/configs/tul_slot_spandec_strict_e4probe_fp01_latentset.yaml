@@ -1,0 +1,39 @@
+# Arm "lxtul-e4probe-fp01-latentset" (LX efficient-exploration KNOB 4, 2026-09-29):
+# `tul_slot_spandec_strict_e4probe_fp01` with the latent SET loss
+# (`tul.latent_set_loss`, CALM/CPC-style energy score) over the K=4 rollouts'
+# hypothesis latents. Composes it and changes:
+#
+#   tul.latent_set_loss     none -> energy
+#   tul.latent_set_weight   0.0 -> 0.1
+#   training.steps          5000 -> 3000
+#   training.lr_decay_steps (unset) -> 5000
+#
+# WHY THE KEY. The strictly-proper energy score
+# (`morph/model/tul_explore.py::latent_energy_score`) grades the K rollouts' readout
+# latents against the next span's DETACHED, prelude-pooled target — the SAME
+# `next_span_pool` construction `tul.row_contrast_lambda` already uses, NOT the loop's
+# own next-slot exit state (`tul.nextlat_weight`'s target, on record as collapsing).
+# UNLIKE knob 3, this term is LIVE on the hypothesis side and reaches the loop's codes.
+# 0.1 is an UNTUNED starting weight, chosen only to be small enough not to dominate the
+# token CE on a first run; `explore_set_spread` (the mean pairwise hypothesis distance)
+# is logged specifically to catch a collapse this design is meant to resist (see the
+# field's own TULConfig comment for the JEPA-Paradox / MORPH-NextLat citations).
+#
+# WHY 3000 STEPS AND THE LR PIN: identical audit to the WTA arm's `..._ev01` (read it).
+#
+# NOT QUEUED. Scaffolding only — see
+# .agents/notes/proposed/architecture/2026-09-29-lx-efficient-exploration-knobs.md
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  latent_set_loss: energy
+  latent_set_weight: 0.1
+
+training:
+  steps: 3000
+  lr_decay_steps: 5000
+
+wandb:
+  name: lxtul-e4probe-fp01-latentset
