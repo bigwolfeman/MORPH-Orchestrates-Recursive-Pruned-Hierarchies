@@ -1,0 +1,16 @@
+# Arm "lxtul-lxfan4-wta-fp01-mapgrad": `..._mapwin` (one WTA winner per slot, picked under the
+# slot's MAP rollout from the exact mixture posterior) PLUS `tul.fan_all_wta_grad_rollouts: map`:
+# the winner-alone span CE is charged on the MAP rollout only (B0 rows), not averaged over all
+# K rollouts. That is an OBJECTIVE change, the one of the two that buys the backward saving
+# (ev01 profile, 2026-09-29: 1.85 -> 1.55 s GPU per step; c2d77a3 note
+# .agents/notes/proposed/architecture/2026-09-29-onewinner-perf-fused-ce-shared-posterior-grad-map.md).
+# 3000 steps with the ev01 pins; control band: ev01 at seeds 1-3 (per_rollout).
+defaults:
+  - tul_slot_spandec_strict_lxfan4_wta_fp01_mapwin
+  - _self_
+
+tul:
+  fan_all_wta_grad_rollouts: map
+
+wandb:
+  name: lxtul-lxfan4-wta-fp01-mapgrad
