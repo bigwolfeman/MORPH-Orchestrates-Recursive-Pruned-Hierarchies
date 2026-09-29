@@ -111,6 +111,9 @@ KNOWN_TUL_KEYS = frozenset({
     "slot_source_once",
     # span-level NextLat (arXiv 2511.05963, 2026-09-25)
     "nextlat_weight", "nextlat_beta",
+    # arm B, the code policy (2026-09-29): morph/model/tul_code_policy.py
+    "code_policy_k", "code_policy_ratio", "code_policy_lambda", "code_policy_entropy",
+    "code_policy_value_lambda", "code_policy_eval",
     # LX efficient-exploration knobs (2026-09-29): morph/model/tul_explore.py
     "coda_fuse_layer", "hyp_score_head",
     "latent_set_loss", "latent_set_weight", "enum_decode_k",
@@ -349,6 +352,12 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         slot_source_once=bool(tc.get("slot_source_once", False)),
         nextlat_weight=float(tc.get("nextlat_weight", 0.0)),
         nextlat_beta=float(tc.get("nextlat_beta", 1.0)),
+        code_policy_k=int(tc.get("code_policy_k", 0)),
+        code_policy_ratio=float(tc.get("code_policy_ratio", 0.1)),
+        code_policy_lambda=float(tc.get("code_policy_lambda", 1.0)),
+        code_policy_entropy=float(tc.get("code_policy_entropy", 0.01)),
+        code_policy_value_lambda=float(tc.get("code_policy_value_lambda", 1.0)),
+        code_policy_eval=str(tc.get("code_policy_eval", "argmax")),
         coda_fuse_layer=int(tc.get("coda_fuse_layer", 0)),
         hyp_score_head=bool(tc.get("hyp_score_head", False)),
         latent_set_loss=str(tc.get("latent_set_loss", "none")),
@@ -618,6 +627,12 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "slot_source_once": model_cfg.slot_source_once,
         "nextlat_weight": model_cfg.nextlat_weight,
         "nextlat_beta": model_cfg.nextlat_beta,
+        "code_policy_k": model_cfg.code_policy_k,
+        "code_policy_ratio": model_cfg.code_policy_ratio,
+        "code_policy_lambda": model_cfg.code_policy_lambda,
+        "code_policy_entropy": model_cfg.code_policy_entropy,
+        "code_policy_value_lambda": model_cfg.code_policy_value_lambda,
+        "code_policy_eval": model_cfg.code_policy_eval,
         "coda_fuse_layer": model_cfg.coda_fuse_layer,
         "hyp_score_head": model_cfg.hyp_score_head,
         "latent_set_loss": model_cfg.latent_set_loss,
@@ -1199,6 +1214,20 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"over the K rollouts. A label-free forward returns the per-span sequential "
               f"Bayes read. Read `tul/enum_width_gain_best`, `tul/enum_w_entropy`, "
               f"`tul/enum_exit_sep` (morph/model/tul_code_enum.py)", flush=True)
+    if model_cfg.code_policy_k > 1:
+        print(f"  CODE POLICY ON (arm B): C={model_cfg.code_policy_k} LX codes, ONE rollout, "
+              f"one code PER SLOT re-added at the end of EVERY slot-loop pass, h <- f(h) + "
+              f"{model_cfg.code_policy_ratio} * rms(f(h)).detach() * u_c. A linear policy "
+              f"head on the slot's DETACHED loop-entry state picks c: SAMPLED at train "
+              f"(global RNG), {model_cfg.code_policy_eval.upper()} at eval. REINFORCE on "
+              f"r = -mean token CE of the span the slot feeds, baseline = leave-one-out "
+              f"batch mean + value head; lambda={model_cfg.code_policy_lambda}, "
+              f"entropy={model_cfg.code_policy_entropy}, "
+              f"value_lambda={model_cfg.code_policy_value_lambda}, folded as "
+              f"`code_policy_weighted` (train only). The coda runs ONCE. Read "
+              f"`val/code_policy_vs_random` FIRST (val-only extra pass: CE with random "
+              f"codes minus CE with the policy's argmax), then `tul/code_policy_entropy` and "
+              f"`tul/code_policy_share_k*` (morph/model/tul_code_policy.py)", flush=True)
     if model_cfg.code_enum_k > 1 and model_cfg.code_enum_credit == "hard":
         _ke, _eh = model_cfg.code_enum_k, model_cfg.code_enum_hard_eps
         print(f"  LX HARD CREDIT ON: the TRAINING token loss is sum_k c_k CE_k(span), c = "

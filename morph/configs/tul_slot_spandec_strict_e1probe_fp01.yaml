@@ -1,0 +1,33 @@
+# Arm "lxtul-e1probe-fp01": the K = 1 CONTROL for LX fp01 and for the code policy (arm B).
+# Composes `tul_slot_spandec_strict_e4probe_fp01` (the LX K = 4 arm the ledger calls
+# "fp01") and changes ONE key plus the run name:
+#
+#   tul.code_enum_k  4 -> 1   (1 is the OFF value of this key: no code, no rollout batch)
+#
+# So this is fp01's recipe with ONE rollout and no code: the map guard of e4probe_map (row
+# target 0.98, tail hinge 100 @ 1.1), the fixed-point term at 0.1, the parallel head as a
+# detached PROBE (`spandec_parallel_detach: true`, K = 1 readers: the head reads the one
+# exit state), 5000 steps from scratch.
+#
+# WHAT ELSE DEPENDS ON K (checked 2026-09-29, tests/test_tul_code_policy.py pins the
+# composed diff): nothing in the config. In the MODEL, K = 1 turns off the rollout-major
+# batch expansion, the shared core/coda dropout (`rollout_dropout.py`), the per-block coda
+# checkpoint and the exact per-span mixture (the coda's loss is the ordinary weighted CE);
+# the parallel head reads one exit state instead of K under the mixture. That is the
+# control LX needs: the same recipe at one rollout.
+#
+# WHAT TO READ: `val/loss` and the forced-depth K-curve (lab/divergence/core_depth_sweep.py)
+# against `lxtul-e4probe-fp01` (LX's width gain at matched steps) and against
+# `lxtul-e1probe-fp01-policy4` (arm B). tok/s: this arm pays one coda per row.
+#
+# FOOT GUNS: `code_enum_ratio` may not be set here (refused at K = 1). The K = 4 parent's
+# `enum_*` readings do not exist on this arm.
+defaults:
+  - tul_slot_spandec_strict_e4probe_fp01
+  - _self_
+
+tul:
+  code_enum_k: 1
+
+wandb:
+  name: lxtul-e1probe-fp01

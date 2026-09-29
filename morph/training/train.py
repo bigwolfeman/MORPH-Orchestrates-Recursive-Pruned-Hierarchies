@@ -176,7 +176,12 @@ def evaluate(
                           # LX efficient-exploration knobs (morph/model/tul_explore.py,
                           # 2026-09-29): the set loss (knob 4) and the score-head KL /
                           # learned merge (knobs 3 / 6), so val loss stays the MODEL's CE.
-                          "explore_set_weighted", "explore_extra_weighted"):
+                          "explore_set_weighted", "explore_extra_weighted",
+                          # arm B, the code policy (tul.code_policy_k, 2026-09-29): the
+                          # REINFORCE + entropy + baseline objective. Folded at train
+                          # only; listed so a train-mode val forward still reports the
+                          # MODEL's CE.
+                          "code_policy_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -261,6 +266,35 @@ def evaluate(
             for _xk in [k for k in out if str(k).startswith(("explore_", "hyp_"))]:
                 if torch.is_tensor(out[_xk]):
                     acc.setdefault(f"val/{_xk}", []).append(float(out[_xk]))
+            # arm B, the code policy (tul.code_policy_k): the policy's readings on held-out
+            # rows (`code_policy_entropy`, `_share_k{i}`, `_reward_mean`, `_value_mse`,
+            # `_adv_mean`, `_agree`). A scan, like `nextlat*`.
+            for _ck in [k for k in out if str(k).startswith("code_policy")]:
+                if torch.is_tensor(out[_ck]):
+                    acc.setdefault(f"val/{_ck}", []).append(float(out[_ck]))
+            if getattr(_m, "tul_code_policy", None) is not None:
+                # THE DECISIVE READING, a VAL-ONLY EXTRA PASS (never at train): the same
+                # rows with a uniformly RANDOM code per slot (the policy's private
+                # generator; eval depth and eval dropout are deterministic, so the two
+                # passes differ in the codes alone). `val/code_policy_vs_random` = token CE
+                # (random codes) - token CE (the policy's ARGMAX codes), nats per token.
+                # Positive: the choice matters. About 0: the policy picks noise. Under the
+                # SAME autocast as the main val row, so precision is not a difference.
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    _ce_rand = float(_m.tul_forward_ablated(
+                        x, y, layout, code_policy_pick="random")["ce_tokens"])
+                if str(getattr(_tul_cfg, "code_policy_eval", "argmax")) == "argmax":
+                    _ce_arg = ce_tok
+                else:
+                    # `code_policy_eval: sample` — the main val row above read SAMPLED
+                    # codes, so the argmax needs its own pass, and the gap between the two
+                    # is the train/deploy reading that mode exists for.
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        _ce_arg = float(_m.tul_forward_ablated(
+                            x, y, layout, code_policy_pick="argmax")["ce_tokens"])
+                    acc.setdefault("val/code_policy_sample_minus_argmax", []).append(
+                        ce_tok - _ce_arg)
+                acc.setdefault("val/code_policy_vs_random", []).append(_ce_rand - _ce_arg)
             # ── LXTUL's fan (tul.fan_k), accumulated over the val batches ─────────
             # The ORACLE family is eval-only and has no train-side twin, so it keeps the
             # `fan/` namespace the arm is read in. The two readings the TRAIN step also
@@ -3777,6 +3811,7 @@ def main(cfg: DictConfig) -> None:
                         "enum_hard_weighted",  # LX hard credit: objective - mixture NLL
                         "explore_set_weighted",    # tul.latent_set_loss (knob 4)
                         "explore_extra_weighted",  # tul.hyp_score_head / hyp_merge (3, 6)
+                        "code_policy_weighted",    # arm B, tul.code_policy_k (2026-09-29)
                         "coda_logit_l2_weighted"):  # tul.coda_logit_l2 (spectral
                                                      # decoupling, 2026-09-23): folded
                                                      # into the fused CE kernel
@@ -3999,6 +4034,14 @@ def main(cfg: DictConfig) -> None:
                 # the parallel head, `nextlat_draft_ce` / `_true_ce` / `_draft_gap`.
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("nextlat") and torch.is_tensor(out[_k]):
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # arm B, the code policy (tul.code_policy_k): `code_policy_weighted`, the raw
+                # REINFORCE term `code_policy_pg`, `_entropy` (normalised by log C),
+                # `_share_k{i}`, `_adv_mean` / `_adv_std`, `_value_mse`, `_reward_mean`,
+                # `_agree` (sampled == argmax) and `_n_slots`. Detached tensors (no sync
+                # in the forward).
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("code_policy") and torch.is_tensor(out[_k]):
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_enum_k (LXTUL-E Stage 1): `enum_ce_mix` (it IS train/loss's CE
                 # part), `enum_ce_code{k}`, `enum_width_gain[_best]`, `enum_w_entropy`,

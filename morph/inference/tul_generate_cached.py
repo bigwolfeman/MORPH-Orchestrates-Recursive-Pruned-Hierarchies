@@ -76,6 +76,9 @@ _MUST_BE_NONE = (
     "tul_fan", "tul_gate", "tul_grad_pass", "tul_gram", "tul_carry", "tul_loop_denoise",
     "tul_pass_gate", "tul_reread", "tul_chain", "tul_register", "tul_code_vq", "tul_vq",
     "mtp",
+    # arm B (tul.code_policy_k, 2026-09-29): a per-slot policy choice inside ONE rollout;
+    # the loop caches here hold one code per rollout, never a per-slot pick.
+    "tul_code_policy",
 )
 
 

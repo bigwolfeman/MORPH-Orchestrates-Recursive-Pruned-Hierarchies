@@ -1,0 +1,48 @@
+# Arm "lxtul-e1probe-fp01-policy4" (arm B, 2026-09-29): explore ACROSS training steps, not
+# across width. Composes the K = 1 control `tul_slot_spandec_strict_e1probe_fp01` and
+# changes ONE key plus the run name:
+#
+#   tul.code_policy_k  0 -> 4
+#
+# WHAT IT IS (morph/model/tul_code_policy.py; the placement in `_tul_core`, search
+# "tul.code_policy_k"). LX's codes (4 learned simplex directions, the same rule
+# h <- f(h) + 0.1 * rms(f(h)).detach() * u_c at the end of EVERY slot-loop pass) but ONE
+# rollout: a linear policy head on the slot's DETACHED loop-entry state (the prelude's
+# output at the slot, before pass 1) picks one code PER SLOT; the coda runs ONCE. The
+# choice is trained by REINFORCE: reward = minus the mean token CE of the span the slot's
+# cell feeds, baseline = leave-one-out batch mean + a value head, entropy bonus 0.01, all
+# folded as `code_policy_weighted` (train only, subtracted from train/loss and val/loss).
+# The codes and the loop learn from the ordinary token CE. Train SAMPLES, eval takes the
+# ARGMAX. Cost: about 1x the control (one extra forward-only head pass per step for the
+# reward; one extra val pass for the instrument below).
+#
+# WHAT TO READ, IN ORDER:
+#   1. `val/code_policy_vs_random` (VAL-ONLY extra pass): token CE with a uniformly random
+#      code per slot minus token CE with the policy's argmax, nats/token. > 0: the choice
+#      matters. ~ 0: the policy is picking noise and the arm is the control plus a code.
+#   2. the forced-depth K-curve and `val/loss` against BOTH controls: `lxtul-e1probe-fp01`
+#      (K = 1, no code) and `lxtul-e4probe-fp01` (LX K = 4, the ensemble), at 5000 steps.
+#   3. `tul/code_policy_entropy` (normalised by log 4) and `tul/code_policy_share_k{0..3}`.
+#
+# FOOT GUNS:
+#   * REWARD COUPLING: under the strict geometry later spans read earlier slots' cells,
+#     so a slot's code also moves later spans' CE, which its per-span reward does not
+#     credit.
+#   * POLICY COLLAPSE to one code: entropy -> 0 and one share -> 1. Then the arm is the
+#     control plus one fixed code.
+#   * TRAIN SAMPLES vs EVAL ARGMAX is a train/deploy gap. `tul.code_policy_eval: sample`
+#     measures it (`val/code_policy_sample_minus_argmax`).
+#   * The policy chooses from the PRELUDE's summary only (before any pass).
+#   * REINFORCE variance: hundreds of slots per batch, one sample each.
+#   * The train-side sample moves the GLOBAL RNG stream: this arm's later random draws are
+#     not its control's.
+# Note: .agents/notes/proposed/architecture/2026-09-29-code-policy-one-rollout.md
+defaults:
+  - tul_slot_spandec_strict_e1probe_fp01
+  - _self_
+
+tul:
+  code_policy_k: 4
+
+wandb:
+  name: lxtul-e1probe-fp01-policy4

@@ -1098,6 +1098,30 @@ class TULConfig:
     # belief state whose successor the next span determines. 0 = off: nothing is built.
     nextlat_weight: float = 0.0
     nextlat_beta: float = 1.0
+    # ── THE CODE POLICY: ONE ROLLOUT, EXPLORE ACROSS STEPS (arm B, 2026-09-29) ───────
+    # code_policy_k = C > 1: LX's codes (C learned simplex directions, the SAME
+    # `TULCodeEnum` basis and the SAME per-pass rule `h <- f(h) + code_policy_ratio *
+    # rms(f(h)).detach() * u_c`) but ONE rollout: a linear POLICY head reads each slot's
+    # loop-ENTRY state (the prelude's output at the slot, after `input_norm`, DETACHED) and
+    # picks one code PER SLOT; the coda runs once. The choice is trained by REINFORCE with
+    # the span's own mean token CE as the reward (slot s is read by span s+1) and a
+    # learned baseline; the codes u_c and the loop still learn from the ordinary token CE.
+    # Train samples from the policy (the GLOBAL RNG stream moves); eval reads
+    # `code_policy_eval` ("argmax" | "sample", the latter to measure the train/deploy gap).
+    # The losses fold as ONE key, `code_policy_weighted`, at TRAIN only:
+    #   code_policy_lambda       * mean_s -(A_s * log pi(c_s))          (A_s detached)
+    #   - code_policy_entropy    * mean_s H(pi_s)
+    #   + code_policy_value_lambda * mean_s (v_s - (r_s - rbar_{-s}))^2
+    # the baseline being b_s = rbar_{-s} + v_s (leave-one-out batch mean + the value head;
+    # morph/model/tul_code_policy.py says why the head predicts the residual). 0 = off:
+    # nothing is built, no RNG is drawn, the forward is the one from before the key.
+    # Note: .agents/notes/proposed/architecture/2026-09-29-code-policy-one-rollout.md
+    code_policy_k: int = 0
+    code_policy_ratio: float = 0.1
+    code_policy_lambda: float = 1.0
+    code_policy_entropy: float = 0.01
+    code_policy_value_lambda: float = 1.0
+    code_policy_eval: str = "argmax"
     # ── LX EFFICIENT-EXPLORATION KNOBS (2026-09-29; morph/model/tul_explore.py) ───────
     # Five default-OFF research knobs on top of `code_enum_k`'s K rollouts, built for
     # LATER experiments (nothing here is queued or trained by this change). Every knob
@@ -2235,6 +2259,10 @@ class TULConfig:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
         # and not about a rule of the refused mode it never meant to run.
         self._check_gram()
+        # The code policy (arm B, 2026-09-29): checked HERE, near the top and
+        # unconditionally. An earlier builder's refusals at the tail of this method never
+        # fired (`test_tul_explore_wiring.py` caught it), so a new knob's rules go first.
+        self._check_code_policy()
         # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
         # Checked FIRST, unconditionally: every other block below this point guards an
         # OFF-by-default feature with its own early `return` (see `tul.vq_codes` at the
@@ -4013,6 +4041,92 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.code_enum_k > 1 with {why}.")
+
+    def _check_code_policy(self) -> None:
+        """``tul.code_policy_k`` (arm B, morph/model/tul_code_policy.py). The policy picks
+        one code per SLOT inside `_tul_core`'s ONE rollout, and its reward is the coda's
+        token CE of the span that slot's single cell feeds. Every refusal names a path
+        where the code has no per-slot pass to ride on, where a second choice or a second
+        rollout axis sits beside it, or where the reward's span/cell pairing is not the
+        one the arm was built and tested on."""
+        k = int(self.code_policy_k)
+        if k < 0 or k == 1:
+            raise ValueError(
+                f"tul.code_policy_k must be 0 (off) or >= 2, got {k}: one code is no "
+                f"choice, so a policy over it would train nothing and still cost a head "
+                f"pass per step.")
+        if self.code_policy_eval not in ("argmax", "sample"):
+            raise ValueError(f"tul.code_policy_eval must be 'argmax' or 'sample', got "
+                             f"{self.code_policy_eval!r}")
+        if k == 0:
+            if (self.code_policy_ratio != 0.1 or self.code_policy_lambda != 1.0
+                    or self.code_policy_entropy != 0.01
+                    or self.code_policy_value_lambda != 1.0
+                    or self.code_policy_eval != "argmax"):
+                raise ValueError(
+                    "tul.code_policy_ratio / _lambda / _entropy / _value_lambda / _eval "
+                    "set with tul.code_policy_k=0: no policy is built, so the knob(s) "
+                    "would be silently ignored.")
+            return
+        if not self.code_policy_ratio > 0.0:
+            raise ValueError(
+                f"tul.code_policy_ratio must be > 0 (at 0 every code is the same zero "
+                f"term and the choice changes nothing), got {self.code_policy_ratio}")
+        if not self.code_policy_lambda > 0.0:
+            raise ValueError(
+                f"tul.code_policy_lambda must be > 0 (at 0 the policy head is built, "
+                f"samples every step and is never trained), got {self.code_policy_lambda}")
+        if self.code_policy_entropy < 0.0:
+            raise ValueError(f"tul.code_policy_entropy must be >= 0, got "
+                             f"{self.code_policy_entropy}")
+        if not self.code_policy_value_lambda > 0.0:
+            raise ValueError(
+                f"tul.code_policy_value_lambda must be > 0 (at 0 the baseline's head never "
+                f"learns and the advantage is the raw reward minus the batch mean), got "
+                f"{self.code_policy_value_lambda}")
+        _refused = [
+            (self.code_enum_k > 1,
+             f"tul.code_enum_k={self.code_enum_k}: LX's K parallel rollouts ARE the "
+             f"alternative this arm replaces; a policy inside a K-fold rollout batch "
+             f"would be two exploration axes at once"),
+            (self.fan_k > 0, "tul.fan_k > 0: M cells per slot, and the reward pairs ONE "
+             "cell with ONE span"),
+            (self.slot_cells > 1, "tul.slot_cells > 1 (the Thought Register): M cells "
+             "per slot, not one state per choice"),
+            (self.xhc_streams > 0, "tul.xhc_streams > 0: the expanded carrier's code term "
+             "was not built or tested under a per-slot choice"),
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop): no per-slot pass to add a code to"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens (the token path): the loop runs `_core_region`"),
+            (self.code, "tul.code: no slot loop runs"),
+            (self.code_target, "tul.code_target: the cells are a regressed projection"),
+            (self.loop_denoise, "tul.loop_denoise: every pass enters at a noised code"),
+            (self.gram, "tul.gram: a Gaussian step is a second, sampled choice"),
+            (self.core_stage_cond != "none",
+             f"tul.core_stage_cond={self.core_stage_cond!r}: the db1 step and the Euler "
+             f"ladder bypass `_tul_core`"),
+            (self.vq_codes > 0, "tul.vq_codes: the write is a dequantised code"),
+            (self.prefix_source != "exit",
+             f"tul.prefix_source={self.prefix_source!r}: the write is per-pass cells"),
+            (self.pass_readout != "last",
+             f"tul.pass_readout={self.pass_readout!r}: the write is a mixture of passes"),
+            (not (self.coda_sees_slots and self.coda_token_cut == 0),
+             "a gathered coda (coda_sees_slots=false or coda_token_cut > 0): the reward "
+             "reads the full-axis coda state"),
+            (self.spandec_parallel_k > 1,
+             "tul.spandec_parallel_k > 1: a code table at the head INPUT is a second code"),
+            (self.gate is not None,
+             "tul.gate: the budget and halting paths were not built"),
+            (self.grad_pass or self.grad_pass_energy != "own_mux",
+             "tul.grad_pass / grad_pass_energy: the energies replay the coda"),
+            (self.core_token_aux, "tul.core_token_aux: a second coda pass"),
+            (self.db_loop, "tul.db_loop: the carry is detached per pass, so the codes "
+             "would learn from one application only"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.code_policy_k > 0 with {why}.")
 
     def _check_nextlat(self) -> None:
         """``tul.nextlat_weight`` (span-level NextLat). The transition reads ONE exit state

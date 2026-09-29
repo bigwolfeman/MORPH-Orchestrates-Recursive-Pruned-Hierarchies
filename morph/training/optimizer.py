@@ -54,6 +54,9 @@ _NO_DECAY_KEYWORDS = (
     # a Gram-Schmidt function of it, invariant to its scale, so decay would only shrink
     # its norm and raise its effective step size.
     "tul_code_enum.basis",
+    # arm B's codes (tul.code_policy_k, morph/model/tul_code_policy.py): the SAME
+    # `TULCodeEnum` basis under the policy module, for the same reason.
+    "tul_code_policy.codes.basis",
 )
 
 

@@ -64,6 +64,7 @@ from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
 from .tul_nextlat import SpanTransition, nextlat_pairs, span_token_embeddings
 from .tul_code_enum import TULCodeEnum
+from .tul_code_policy import TULCodePolicy, policy_objective, span_mean_ce
 from .rollout_mixture import (evidence_labels, hard_credit_span_sum, log_mean_exp,
                               mixture_label_nll, mixture_logprobs, sequential_log_weights,
                               span_segment_start)
@@ -3036,6 +3037,36 @@ class MORPHTransformer(nn.Module):
                                              float(cfg.tul.code_enum_ratio))
             if cfg.tul.code_enum_credit == "hard":
                 self._enum_hard_eps = float(cfg.tul.code_enum_hard_eps)
+        # ── arm B: the code policy (tul.code_policy_k; tul_code_policy.py) ──────────
+        # LX's codes, ONE rollout, one code PER SLOT chosen by a policy head on the slot's
+        # detached loop-entry state and trained by REINFORCE on the span's own CE. `None`
+        # on every other model, a build-time constant, so every `if` on it below traces
+        # out. RNG-neutral build (the codes' private generator, the heads in a forked
+        # stream), so every other weight equals the same-seed model without the key.
+        # `_code_policy_step` is the entry-time choice `_tul_core` records and
+        # `_forward_tul` consumes and CLEARS after the coda (the `_loop_denoise` contract:
+        # it holds the policy logits' graph).
+        self.tul_code_policy: TULCodePolicy | None = None
+        self._code_policy_step: dict | None = None
+        if cfg.tul is not None and int(cfg.tul.code_policy_k) > 1:
+            if cfg.n_core == 0:
+                raise ValueError(
+                    "tul.code_policy_k > 1 needs a core loop (model.n_core > 0): the code "
+                    "is re-added at the end of every pass, and there are no passes.")
+            if cfg.scse_enabled:
+                raise NotImplementedError(
+                    "tul.code_policy_k > 1 under SCSE: the loop carries the DEVIATION, so "
+                    "`rms(f(h))` would size the code by the deviation, not the slot state.")
+            if cfg.fm is not None:
+                raise NotImplementedError(
+                    "tul.code_policy_k > 1 with an FM planner (cfg.fm): the planner "
+                    "replaces `_tul_core`.")
+            if int(cfg.mtp_heads) > 1:
+                raise NotImplementedError(
+                    "tul.code_policy_k > 1 with model.mtp_heads > 1: the MTP heads' CE is "
+                    "a second token loss the per-span reward does not read.")
+            self.tul_code_policy = TULCodePolicy(d, int(cfg.tul.code_policy_k),
+                                                 float(cfg.tul.code_policy_ratio))
         # The K rollouts must differ in their Gaussian steps (GK) or their codes (LXTUL-E)
         # ALONE: the core and the coda run on the expanded batch, so their dropout draws ONE
         # mask per base row (morph/model/rollout_dropout.py). The prelude runs once on the
@@ -5193,13 +5224,84 @@ class MORPHTransformer(nn.Module):
             self._loop_cot_bind[int(t)] = (scale < 1.0).float().mean()
         return g * scale.view(-1, *([1] * (g.dim() - 1))).to(g.dtype)
 
+    def _code_policy_choose(self, e: Tensor, layout: SlotLayout,
+                            pick: str | None) -> Tensor:
+        """``[B, S]`` int64: the code each slot re-adds (``tul.code_policy_k``, arm B).
+
+        Reads the loop-entry state ``e`` ``[B, S, (n,) C]`` through
+        :meth:`TULCodePolicy.features` (detached, stream mean, unit norm). TRAIN: one
+        sample per slot from the policy, drawn with ``torch.rand`` on the GLOBAL stream (so
+        the arm's later random draws differ from its control's; a ``pick`` is refused).
+        EVAL: ``pick`` or ``tul.code_policy_eval`` — ``argmax``; ``sample`` or ``random``
+        from the policy's PRIVATE generator (an eval pass moves no global stream). Pads get
+        code 0 (their term is 0 anyway: ``term_per_slot`` masks by ``slot_valid``).
+
+        Records ``logits`` / ``value`` (graph to the heads only), ``codes`` and ``valid`` on
+        ``self._code_policy_step`` for ``_forward_tul`` to score after the coda."""
+        pol = self.tul_code_policy
+        valid = layout.slot_valid
+        logits, value = pol.heads(pol.features(e))
+        if self.training:
+            if pick is not None:
+                raise ValueError(
+                    f"code_policy_pick={pick!r} is EVAL-ONLY: training samples from the "
+                    f"policy, which is what REINFORCE is the gradient of.")
+            codes = pol.sample(logits, torch.rand(valid.shape, device=logits.device))
+        else:
+            mode = pick if pick is not None else self.cfg.tul.code_policy_eval
+            if mode == "argmax":
+                codes = logits.argmax(dim=-1)
+            elif mode == "sample":
+                codes = pol.sample(logits, pol.eval_uniform(valid.shape, logits.device))
+            elif mode == "random":
+                codes = pol.random_codes(valid.shape, logits.device)
+            else:
+                raise ValueError(f"code_policy_pick must be 'argmax', 'sample' or 'random', "
+                                 f"got {mode!r}")
+        codes = codes.masked_fill(~valid, 0)
+        self._code_policy_step = {"logits": logits, "value": value, "codes": codes,
+                                  "valid": valid}
+        return codes
+
+    def _code_policy_loss(self, step: dict, xh: Tensor, labels: Tensor,
+                          layout: SlotLayout) -> tuple[Tensor, dict]:
+        """The code policy's weighted objective and readings from the ONE coda pass.
+
+        The reward of slot s is minus the MEAN per-token CE of bag s+1 (the span its cell
+        feeds; :func:`span_ce_index`'s pairing, the one the fan oracle and the scorer
+        read), computed under ``no_grad`` from the DETACHED coda state through the fused
+        per-row log-prob with the slot id masked from the partition — the per-token CE the
+        trained loss sums. :func:`morph.model.tul_code_policy.policy_objective` does the
+        rest. The extra cost is one forward-only head pass over the batch."""
+        tc = self.cfg.tul
+        B, L, C = xh.shape
+        gid, keep_tok, lab, G = span_ce_index(labels, layout)
+        with torch.no_grad():
+            lab100 = torch.where(keep_tok, lab, lab.new_full((), -100))
+            lp = fused_linear_label_logprob(
+                xh.detach().reshape(-1, C), self.embed.lm_weight().detach(),
+                lab100.reshape(-1), ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
+                mask_token_id=tc.slot_id)
+            mean_ce, has = span_mean_ce((-lp).float().view(B, L), gid, keep_tok, G)
+        mask = step["valid"] & has
+        return policy_objective(step["logits"], step["value"], step["codes"], -mean_ce,
+                                mask, float(tc.code_policy_lambda),
+                                float(tc.code_policy_entropy),
+                                float(tc.code_policy_value_lambda))
+
     def _tul_core(self, x: Tensor, x0: Tensor, bigram_emb, layout: SlotLayout,
                   halt: bool = False, input_ids: Tensor | None = None,
                   slot_depths: Tensor | None = None,
                   code_x0: Tensor | None = None, code_ok: Tensor | None = None,
                   gram_mode: str | None = None, gram_seed: int | None = None,
-                  iw_rollouts: int = 1):
+                  iw_rollouts: int = 1, code_policy_pick: str | None = None):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
+
+        ``code_policy_pick`` (``tul.code_policy_k`` ONLY, EVAL ONLY): how the policy picks
+        each slot's code for THIS forward — ``"argmax"``, ``"sample"`` or ``"random"``
+        (uniform, the val-only ``code_policy_vs_random`` pass). ``None`` reads
+        ``tul.code_policy_eval`` at eval and samples at train. See
+        :meth:`_code_policy_choose`.
 
         ``iw_rollouts`` (``tul.gram_objective="iw"`` ONLY): ``x`` is the BASE batch
         ``[B, L, …]`` and every other argument (``x0``, ``bigram_emb``, ``layout``,
@@ -5346,6 +5448,17 @@ class MORPHTransformer(nn.Module):
                 _reg_term = self.tul_register(
                     xn.mean(dim=2) if self._is_hc else xn, _layout_slots)
             e = e + (_reg_term.unsqueeze(2) if self._is_hc else _reg_term).to(e.dtype)
+        # ── tul.code_policy_k (arm B): ONE code per slot, chosen at the loop ENTRY ─────
+        # The policy reads `e` — the prelude's output at the slot after `input_norm`, the
+        # tensor `core_init` turns into the first carrier — DETACHED, so its REINFORCE
+        # gradient never reaches the prelude or the loop. The choice is recorded on
+        # `self._code_policy_step` (consumed and cleared by `_forward_tul` after the coda)
+        # and re-added at the end of every pass below, at the LX code's line.
+        _pol_codes: Tensor | None = None
+        if self.tul_code_policy is not None:
+            _pol_codes = self._code_policy_choose(e, layout, code_policy_pick)
+        elif code_policy_pick is not None:
+            raise ValueError("code_policy_pick needs a model built with tul.code_policy_k.")
 
         # ── n_core == 0: NO LOOP AT ALL (arm GL1, the gist baseline) ─────────
         # .agents/notes/proposed/architecture/2026-08-29-gist-loop.md. The slot state IS
@@ -6463,6 +6576,14 @@ class MORPHTransformer(nn.Module):
             if _enum is not None and not (_src_once and t >= 1):
                 h_new = self._apply_injection(
                     h_new, _enum.term(h_new, layout.slot_valid, iw_rollouts))
+            # ── tul.code_policy_k (arm B): the SAME rule at the SAME line, per SLOT ──
+            # Slot s re-adds u_{c_s}, the code its policy picked at the entry; every reason
+            # given for the LX placement above holds unchanged. `code_enum_k > 1` is refused
+            # with the policy, so at most one of the two terms is ever added.
+            if _pol_codes is not None and not (_src_once and t >= 1):
+                h_new = self._apply_injection(
+                    h_new, self.tul_code_policy.codes.term_per_slot(
+                        h_new, layout.slot_valid, _pol_codes))
             if self._slot_pass_hook is not None:
                 # EVAL-ONLY instrument seam (see the class attribute). None: no-op.
                 h_new = self._slot_pass_hook(t, h, h_new, layout)
@@ -11220,8 +11341,13 @@ class MORPHTransformer(nn.Module):
                      code_given_mask: Tensor | None = None,
                      coda_state_only: bool = False,
                      gram_mode: str | None = None,
-                     gram_sample_seed: int | None = None) -> dict:
+                     gram_sample_seed: int | None = None,
+                     code_policy_pick: str | None = None) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis.
+
+        ``code_policy_pick`` (``tul.code_policy_k``, EVAL ONLY): the policy's pick for
+        this forward (``"argmax"`` | ``"sample"`` | ``"random"``); ``None`` is the model's
+        own rule. See :meth:`_code_policy_choose`.
 
         ``gram_mode`` / ``gram_sample_seed`` (``tul.gram``, EVAL ONLY): the LXTUL-G noise
         — ``None``/``"prior"`` a seeded prior sample, ``"post"`` a posterior sample (an
@@ -11260,6 +11386,10 @@ class MORPHTransformer(nn.Module):
         # tul.gram's stashes: reset at the head of EVERY forward (the `_loop_denoise` rule).
         self._gram_train = None
         self._gram_eval = None
+        # tul.code_policy_k's entry-time choice: the same rule.
+        self._code_policy_step = None
+        if code_policy_pick is not None and self.tul_code_policy is None:
+            raise ValueError("code_policy_pick needs a model built with tul.code_policy_k.")
         if self.tul_gram is None and (gram_mode is not None or gram_sample_seed is not None):
             raise ValueError(
                 "gram_mode / gram_sample_seed need a model built with tul.gram=true.")
@@ -11680,6 +11810,8 @@ class MORPHTransformer(nn.Module):
                             if self.tul_gram is not None else {})
                 if _iw_k > 1:
                     _gram_kw["iw_rollouts"] = _iw_k
+                if code_policy_pick is not None:
+                    _gram_kw["code_policy_pick"] = code_policy_pick
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
                     x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids,
                     slot_depths=slot_depths, code_x0=_ct_z, code_ok=_ct_ok, **_gram_kw)
@@ -12603,6 +12735,25 @@ class MORPHTransformer(nn.Module):
             _nlw = self.cfg.tul.nextlat_weight * nextlat_loss
             groups["nextlat_weighted"] = _nlw.detach()
             groups["loss"] = groups["loss"] + _nlw
+        # ── tul.code_policy_k (arm B): score the entry-time choice on the ONE coda pass ──
+        # Consumed and CLEARED here on every forward (it holds the policy logits' graph;
+        # the `_loop_denoise` contract). With labels, the readings are reported at train
+        # AND eval; the objective is folded at TRAIN only, as `code_policy_weighted`, which
+        # train.py subtracts so train/loss and the val loss stay the MODEL's CE.
+        _cp_step = self._code_policy_step
+        self._code_policy_step = None
+        if self.tul_code_policy is not None and groups is not None:
+            if _cp_step is None:
+                raise RuntimeError(
+                    "tul.code_policy_k built the policy but this forward path never "
+                    "recorded a choice (it is made in `_tul_core`). Refusing to return a "
+                    "loss without the policy's term: the arm would read as its control.")
+            _cp_loss, _cp_stats = self._code_policy_loss(_cp_step, xh, labels, layout)
+            groups = dict(groups)
+            groups.update(_cp_stats)
+            if self.training:
+                groups["code_policy_weighted"] = _cp_loss.detach()
+                groups["loss"] = groups["loss"] + _cp_loss
         if enum_stats and groups is not None:
             # tul.code_enum_k: the exit separation between the K rollouts (detached).
             groups = dict(groups)
@@ -13318,8 +13469,14 @@ class MORPHTransformer(nn.Module):
                             code_steps: int | None = None,
                             code_seed: int | None = None,
                             gram_mode: str | None = None,
-                            gram_sample_seed: int | None = None) -> dict:
+                            gram_sample_seed: int | None = None,
+                            code_policy_pick: str | None = None) -> dict:
         """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
+
+        ``code_policy_pick`` (``tul.code_policy_k`` only): the policy's pick for this
+        forward — ``"argmax"``, ``"sample"`` or ``"random"`` (a uniformly random code per
+        slot from a private generator: train.py's val-only ``code_policy_vs_random`` pass).
+        ``None`` is the model's own ``tul.code_policy_eval``.
 
         ``gram_mode`` / ``gram_sample_seed``: the LXTUL-G noise (``tul.gram`` only), passed
         through to :meth:`forward`'s; ``None`` is the seeded prior sample.
@@ -13373,7 +13530,12 @@ class MORPHTransformer(nn.Module):
                                         _code_mode=code_mode, _code_steps=code_steps,
                                         _code_seed=code_seed,
                                         _gram_mode=gram_mode,
-                                        _gram_sample_seed=gram_sample_seed)
+                                        _gram_sample_seed=gram_sample_seed,
+                                        _code_policy_pick=code_policy_pick)
+        if code_policy_pick is not None:
+            raise NotImplementedError(
+                "code_policy_pick with plan_mode='wrong_seed': two interventions on one "
+                "slot at once; the reading would not say which moved the CE.")
         if self.tul_code_enc is not None:
             raise NotImplementedError(
                 "plan_mode='wrong_seed' on a code model: the seed feeds the thinker, not the "
@@ -14039,7 +14201,8 @@ class MORPHTransformer(nn.Module):
                         _code_given_mask: Tensor | None = None,
                         _coda_state_only: bool = False,
                         _gram_mode: str | None = None,
-                        _gram_sample_seed: int | None = None) -> dict:
+                        _gram_sample_seed: int | None = None,
+                        _code_policy_pick: str | None = None) -> dict:
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "
@@ -14062,7 +14225,12 @@ class MORPHTransformer(nn.Module):
                                      code_given_mask=_code_given_mask,
                                      coda_state_only=_coda_state_only,
                                      gram_mode=_gram_mode,
-                                     gram_sample_seed=_gram_sample_seed)
+                                     gram_sample_seed=_gram_sample_seed,
+                                     code_policy_pick=_code_policy_pick)
+        if _code_policy_pick is not None:
+            raise ValueError(
+                "code_policy_pick requires slot_layout: the code policy lives in the slot "
+                "loop.")
         if _gram_mode is not None or _gram_sample_seed is not None:
             raise ValueError(
                 "gram_mode / gram_sample_seed require slot_layout: the LXTUL-G step lives "

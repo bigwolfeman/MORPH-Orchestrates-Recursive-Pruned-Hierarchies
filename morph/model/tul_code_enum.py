@@ -109,7 +109,25 @@ class TULCodeEnum(nn.Module):
         B = h.shape[0]
         if B % self.k:
             raise RuntimeError(f"batch {B} is not a multiple of code_enum_k {self.k}")
-        rms = h.detach().float().flatten(2).pow(2).mean(-1).sqrt()          # [B, S]
         u = self.directions().repeat_interleave(B // self.k, dim=0)        # [B, C]
-        t = (self.ratio * rms * valid.float()).unsqueeze(-1) * u.unsqueeze(1)
+        t = self._size(h, valid).unsqueeze(-1) * u.unsqueeze(1)
         return t.to(h.dtype)
+
+    def term_per_slot(self, h: Tensor, valid: Tensor, codes: Tensor) -> Tensor:
+        """``[B, S, C]`` the SAME term with the code chosen PER SLOT (``tul.code_policy_k``,
+        arm B, morph/model/tul_code_policy.py): slot ``(b, s)`` gets
+        ``r * rms(h[b, s]).detach() * u[codes[b, s]]``, pads 0. ``codes`` ``[B, S]`` int64
+        in ``[0, K)``. With ``codes[b, :] == b // (B / K)`` it equals :meth:`term` bit for
+        bit (one rule, two indexings; pinned in tests/test_tul_code_policy.py)."""
+        if codes.shape != valid.shape:
+            raise ValueError(f"codes {tuple(codes.shape)} must match valid "
+                             f"{tuple(valid.shape)}")
+        u = self.directions()[codes]                                        # [B, S, C]
+        t = self._size(h, valid).unsqueeze(-1) * u
+        return t.to(h.dtype)
+
+    def _size(self, h: Tensor, valid: Tensor) -> Tensor:
+        """``[B, S]`` fp32 ``r * rms(h).detach()`` per slot over the streams and channels,
+        0 on pads: the ONE home of the code's size, for both indexings."""
+        rms = h.detach().float().flatten(2).pow(2).mean(-1).sqrt()          # [B, S]
+        return self.ratio * rms * valid.float()
