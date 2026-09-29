@@ -2,15 +2,31 @@
 
 Status: proposed
 
-> **Correction, 2026-09-29 (orchestrator review).** The regret table below is WRONG in
-> scale and possibly in rank. The CE table the probe reads is a per-span SUM, and
-> `regret_and_agreement` multiplied it by the span's token count again, so every span's
-> regret was counted n_tok times (about one span length too large). Batches were also
-> pooled by slot count, not tokens. Both are fixed in `lab/divergence/latent_wta_probe.py`,
-> which now also reports the expected regret of a RANDOM cell, the floor any scorer must
-> beat. The agreement column was not affected: every candidate agreed with the coda's
-> winner at chance (0.21-0.28 against 0.25). Until the corrected table replaces this one,
-> treat `fan_all_wta_winner: latent` as a random-winner WTA, not a speed win.
+> **Correction and verdict, 2026-09-29 (orchestrator review).** The regret table further
+> down is WRONG: the probe multiplied a per-span SUMMED CE by the span's token count again
+> (each span counted n_tok times) and pooled batches by slot count. Fixed in
+> `lab/divergence/latent_wta_probe.py` (cbc4530), which also reports the expected regret of
+> a RANDOM cell. Rerun 18:05 CDT, same checkpoints, 96 rows, batch 6, seed 0, temp 0.1
+> (`/home/wolfe/morph-scratch/latwta/probe_lxfan4_wta_v2.json`). Nats per token;
+> "vs random" = random regret minus the rule's regret, positive = better than random:
+>
+> | rule | b5k agree | b5k regret | b5k vs random | ev01_3k agree | ev01_3k regret | ev01_3k vs random |
+> |---|---|---|---|---|---|---|
+> | a_cos | 0.232 | 0.1458 | -0.0076 | 0.278 | 0.1192 | +0.0158 |
+> | a_l2 | 0.208 | 0.1525 | -0.0143 | 0.237 | 0.1433 | -0.0084 |
+> | b_cos | 0.240 | 0.1470 | -0.0088 | 0.249 | 0.1353 | -0.0003 |
+> | b_l2 | 0.210 | 0.1502 | -0.0120 | 0.240 | 0.1444 | -0.0095 |
+> | c_infonce (shipped) | 0.246 | 0.1425 | -0.0043 | 0.258 | 0.1301 | +0.0049 |
+> | random cell | 0.25 | 0.1382 | 0 | 0.25 | 0.1349 | 0 |
+>
+> **Verdict: no zero-shot latent score beats a random cell.** On the mature checkpoint every
+> rule, the shipped InfoNCE one included, is worse than random; the one clear positive
+> (a_cos, +0.0158 at step 3000) flips to -0.0076 at step 5000. `fan_all_wta_winner:
+> latent` is therefore a random-winner WTA with extra steps. Do not queue it as a speed
+> path. It stays in the tree default off; removing it is Wolfe's call. The cheap-grader
+> question moves to a grader TRAINED on the true span (arm A, `fan_all_wta_grader: head`,
+> note `2026-09-29-fan-head-graded-wta.md`). No standard error was computed; differences
+> under ~0.01 are not read as effects.
 
 ## Problem
 
