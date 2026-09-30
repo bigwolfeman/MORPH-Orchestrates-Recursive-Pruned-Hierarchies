@@ -416,6 +416,7 @@ def generate_tul_graphed(
     emit_source: str = "slot",
     use_graphs: bool = True,
     decoder: TulGraphDecoder | None = None,
+    top_p: float = 0.0,
 ):
     """``generate_tul`` / ``generate_tul_cached`` with every decode event one CUDA graph
     replay. Same arguments and returns ``(token_ids, builder)``. Pass a live ``decoder``
@@ -452,7 +453,7 @@ def generate_tul_graphed(
         for step in range(max_new_tokens):
             use_cell = builder.slot_mask[-1] and emit_source == "slot"
             logits = dec.cell_logits_out if use_cell else dec.logits_out
-            nxt = sample_next(logits, temperature, top_k, gen)
+            nxt = sample_next(logits, temperature, top_k, gen, top_p)
             emitted.append(nxt)
             if step + 1 < max_new_tokens:
                 _feed(nxt)

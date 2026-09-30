@@ -607,9 +607,10 @@ def generate_tul_cached(
     device=None,
     emit_source: str = "slot",
     return_logits: bool = False,
+    top_p: float = 0.0,
 ):
     """``generate_tul`` with the KV cache: same arguments (no ``halt``: the gate is
-    refused), same sampling step, same returned ``(token_ids, builder)``. With
+    refused; ``top_p`` is the eager generator's nucleus knob, default off), same sampling step, same returned ``(token_ids, builder)``. With
     ``return_logits`` a third value, the ``[V]`` log-prob row each step sampled from."""
     if emit_source not in ("slot", "token"):
         raise ValueError(f"emit_source must be 'slot' or 'token', got {emit_source!r}")
@@ -650,7 +651,7 @@ def generate_tul_cached(
                           else dec.logits)
                 if return_logits:
                     rows.append(logits.detach().clone())
-                nxt = sample_next(logits, temperature, top_k, gen)
+                nxt = sample_next(logits, temperature, top_k, gen, top_p)
                 emitted.append(nxt)
                 if step + 1 < max_new_tokens:
                     _feed(nxt)

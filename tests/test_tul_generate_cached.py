@@ -76,9 +76,9 @@ def _record(monkeypatch, module) -> list[torch.Tensor]:
     rows: list[torch.Tensor] = []
     real = module.sample_next
 
-    def _spy(logits, temperature, top_k, generator):
+    def _spy(logits, temperature, top_k, generator, top_p=0.0):
         rows.append(logits.detach().float().clone())
-        return real(logits, temperature, top_k, generator)
+        return real(logits, temperature, top_k, generator, top_p)
 
     monkeypatch.setattr(module, "sample_next", _spy)
     return rows
