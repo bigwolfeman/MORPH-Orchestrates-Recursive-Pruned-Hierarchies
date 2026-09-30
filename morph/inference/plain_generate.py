@@ -32,8 +32,12 @@ def generate_plain(
     top_k: int = 0,
     seed: int | None = None,
     device=None,
+    top_p: float = 0.0,
 ) -> list[int]:
-    """Generate `max_new_tokens` tokens with no slot layout. Returns the NEW tokens."""
+    """Generate `max_new_tokens` tokens with no slot layout. Returns the NEW tokens.
+
+    ``top_p`` (nucleus, default 0.0 = off) is threaded straight to `sample_next`.
+    """
     was_training = model.training
     model.eval()
     device = device or next(model.parameters()).device
@@ -53,7 +57,7 @@ def generate_plain(
             ids = torch.tensor(row, dtype=torch.long, device=device)[None]
             res = model(ids)
             logits = res["logits"] if isinstance(res, dict) else res
-            nxt = sample_next(logits[0, -1], temperature, top_k, gen)
+            nxt = sample_next(logits[0, -1], temperature, top_k, gen, top_p)
             emitted.append(nxt)
             row.append(nxt)
     finally:
@@ -72,6 +76,7 @@ def generate_plain_batch(
     seeds: list[int] | None = None,
     device=None,
     pad_id: int = 0,
+    top_p: float = 0.0,
 ) -> list[list[int]]:
     """`generate_plain` for B rows at once. Returns one list of NEW tokens per row.
 
@@ -117,7 +122,7 @@ def generate_plain_batch(
             logits = res["logits"] if isinstance(res, dict) else res
             last = logits[rows, cur - 1]                     # [B, V], each row's own tail
             for i in range(B):
-                nxt = sample_next(last[i], temperature, top_k, gens[i])
+                nxt = sample_next(last[i], temperature, top_k, gens[i], top_p)
                 ids[i, cur[i]] = nxt
                 emitted[i].append(nxt)
             cur += 1

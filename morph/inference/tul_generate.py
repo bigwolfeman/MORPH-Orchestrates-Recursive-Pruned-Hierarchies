@@ -130,6 +130,7 @@ def generate_tul(
     device=None,
     halt: bool = False,
     emit_source: str = "slot",
+    top_p: float = 0.0,
 ) -> tuple[list[int], TulRowBuilder]:
     """Generate ``max_new_tokens`` TOKENS (slots are inserted by the rule, not counted).
 
@@ -148,6 +149,8 @@ def generate_tul(
         (lab/divergence/emit_space_probe.py — emit-position space mass 0.47–0.58 vs
         0.81 at the token position on the GL arms).
     Slot insertion, layouts, and every other part of the procedure are identical.
+
+    ``top_p`` (nucleus, default 0.0 = off) is threaded straight to `sample_next`.
     """
     if emit_source not in ("slot", "token"):
         raise ValueError(f"emit_source must be 'slot' or 'token', got {emit_source!r}")
@@ -223,7 +226,7 @@ def generate_tul(
                 # the coda was conditioned on for these positions.
                 builder.budget = int(res["gate_k"][0, builder.n_slots - 1])
             # ONE sampling step for both generators — see morph/inference/sampling.py.
-            nxt = sample_next(logits, temperature, top_k, gen)
+            nxt = sample_next(logits, temperature, top_k, gen, top_p)
             emitted.append(nxt)
             if builder.append(nxt):
                 code_cache, code_cache_slot = None, -1      # a boundary fired: new open span
@@ -247,6 +250,7 @@ def generate_tul_batch(
     halt: bool = False,
     pad_id: int = 0,
     emit_source: str = "slot",
+    top_p: float = 0.0,
 ) -> tuple[list[list[int]], list[TulRowBuilder]]:
     """`generate_tul` for B rows at once. Returns (new tokens per row, builders).
 
@@ -325,7 +329,7 @@ def generate_tul_batch(
             for i, b in enumerate(builders):
                 if "gate_k" in res and b.n_slots > 0:
                     b.budget = int(res["gate_k"][i, b.n_slots - 1])
-                nxt = sample_next(last[i], temperature, top_k, gens[i])
+                nxt = sample_next(last[i], temperature, top_k, gens[i], top_p)
                 emitted[i].append(nxt)
                 b.append(nxt)
     finally:

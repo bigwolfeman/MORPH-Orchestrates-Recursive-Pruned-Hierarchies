@@ -81,19 +81,56 @@ def test_temperature_widens_the_draw():
     assert len(hot) > 5, f"t=2.0 produced only {len(hot)} distinct tokens"
 
 
+# ── nucleus (top_p) sampling ─────────────────────────────────────────────────────────
+def test_top_p_default_is_off_and_matches_no_top_p_call():
+    z = torch.randn(V, generator=torch.Generator().manual_seed(9))
+    a = [sample_next(z, 1.0, 0, torch.Generator().manual_seed(i)) for i in range(40)]
+    b = [sample_next(z, 1.0, 0, torch.Generator().manual_seed(i), 0.0) for i in range(40)]
+    assert a == b, "top_p=0.0 must be byte-identical to omitting it"
+
+
+def test_top_p_never_returns_a_token_outside_the_nucleus():
+    # Two tokens carry almost all the mass; top_p=0.5 must restrict the draw to the
+    # smallest set whose cumulative probability is >= 0.5 — here, the single top token.
+    z = torch.full((V,), -10.0)
+    z[3] = 5.0
+    z[4] = 4.0
+    g = torch.Generator().manual_seed(0)
+    got = {sample_next(z, 1.0, 0, g, 0.5) for _ in range(50)}
+    assert got == {3}, f"top_p=0.5 on a peaked distribution leaked {got}"
+
+
+def test_top_p_keeps_at_least_the_top_token_even_at_tiny_p():
+    z = _logits(7, gap=6.0)
+    g = torch.Generator().manual_seed(0)
+    got = {sample_next(z, 1.0, 0, g, 1e-6) for _ in range(20)}
+    assert got == {7}, "the top token's own cumulative-before-it is 0 <= any top_p > 0"
+
+
+def test_top_p_widens_the_draw_relative_to_greedy_nucleus():
+    # A flatter distribution: top_p=0.95 should admit more than one token, unlike 0.05.
+    z = torch.randn(V, generator=torch.Generator().manual_seed(1)) * 0.3
+    narrow = {sample_next(z, 1.0, 0, torch.Generator().manual_seed(i), 0.05)
+              for i in range(80)}
+    wide = {sample_next(z, 1.0, 0, torch.Generator().manual_seed(i), 0.95)
+            for i in range(80)}
+    assert len(wide) > len(narrow), f"wide={len(wide)} narrow={len(narrow)}"
+
+
 # ── both generators go through it ───────────────────────────────────────────────────
 def test_plain_generator_uses_the_shared_sampler(monkeypatch):
     seen = []
 
-    def spy(logits, temperature, top_k, generator):
-        seen.append((float(temperature), int(top_k)))
+    def spy(logits, temperature, top_k, generator, top_p=0.0):
+        seen.append((float(temperature), int(top_k), float(top_p)))
         return 3
 
     monkeypatch.setattr("morph.inference.plain_generate.sample_next", spy)
     out = generate_plain(_StubModel(_logits(7)), [1, 2], max_new_tokens=5,
-                         temperature=0.8, top_k=50, seed=0, device=torch.device("cpu"))
+                         temperature=0.8, top_k=50, seed=0, device=torch.device("cpu"),
+                         top_p=0.9)
     assert out == [3] * 5
-    assert seen == [(0.8, 50)] * 5
+    assert seen == [(0.8, 50, 0.9)] * 5
 
 
 def test_tul_generator_uses_the_shared_sampler(monkeypatch):
@@ -102,8 +139,8 @@ def test_tul_generator_uses_the_shared_sampler(monkeypatch):
 
     seen = []
 
-    def spy(logits, temperature, top_k, generator):
-        seen.append((float(temperature), int(top_k)))
+    def spy(logits, temperature, top_k, generator, top_p=0.0):
+        seen.append((float(temperature), int(top_k), float(top_p)))
         return 3
 
     monkeypatch.setattr("morph.inference.tul_generate.sample_next", spy)
@@ -113,9 +150,9 @@ def test_tul_generator_uses_the_shared_sampler(monkeypatch):
     spec = TulLayoutSpec(seq_len=64, prefix_k=2, max_slots=8, slot_id=4)
     out, _b = generate_tul(_StubModel(_logits(7)), [1, 2], rule, spec,
                            max_new_tokens=5, temperature=0.8, top_k=50, seed=0,
-                           device=torch.device("cpu"))
+                           device=torch.device("cpu"), top_p=0.9)
     assert out == [3] * 5
-    assert seen == [(0.8, 50)] * 5
+    assert seen == [(0.8, 50, 0.9)] * 5
 
 
 def test_plain_generator_recomputes_the_whole_row_every_step():
