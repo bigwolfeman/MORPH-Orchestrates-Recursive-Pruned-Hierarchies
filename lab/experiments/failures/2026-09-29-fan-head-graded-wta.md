@@ -1,6 +1,6 @@
 # Planned: can the write-all fan keep a2's quality without the coda-graded WTA passes?
 
-Status: planned
+Status: failure
 
 Date: 2026-09-29 23:53 CDT (frozen before either run trained).
 Code: 7a1c181 (`tul.fan_all_wta_grader`, arm A; note
@@ -78,3 +78,51 @@ not worse than a2 by more than 0.0137 AND tok/s >= 1.1x a2 (8562).
   `test_tul_lx_credit.py` do; both pass on this machine (1.5 s on one niced core, logged in
   chain.log). Configs compose and reach MORPHConfig (grader, lambda, spandec_parallel asserted).
 - Guard: a copy of `policy_guard.sh` with this pair's tags (sustained tripwire, kill by PID).
+
+## Results
+
+Runs 2026-09-30 01:59 to 04:59, seed 1, 5000 steps, both at 10babd4. No CPU test load on this
+machine during either run. tok/s is the mean of the trainer's 24 logged points at step >= 200;
+a2 and plain are computed the same way from their run logs.
+
+| arm | tok/s | vs plain | K1-K6 | gap to plain 5k | minus a2 (paired, 511089 tok) | val loss |
+| --- | --- | --- | --- | --- | --- | --- |
+| a2 (coda-graded WTA) | 7784 | 0.78x | +0.0057 | +0.218 | 0 | 4.4365 |
+| nowta | 9797 (9529-10001) | 0.98x | +0.0042 [+0.0037, +0.0047] | +0.2543 [+0.2395, +0.2710] | +0.0357 [+0.0331, +0.0382] | 4.4658 |
+| hwta (head-graded WTA) | 7021 (6911-7149) | 0.70x | +0.0045 [+0.0040, +0.0049] | +0.2670 [+0.2523, +0.2839] | +0.0489 [+0.0465, +0.0513] | 4.4800 |
+| plain (nm ctrl s1r) | 9988 | 1x | - | 0 | - | - |
+
+hwta val at 5000: `fan/head_coda_agree` 0.2664 (chance 0.25); `fan/head_pick_regret` 0.0985
+vs `fan/rand_pick_regret` 0.1089; winner shares 0.28 / 0.23 / 0.29 / 0.20;
+`head_wta_dropped` 0. Oracle vs single cell: hwta 4.4956 vs 4.5517, nowta 4.4999 vs 4.6247.
+Both tripwires HEALTHY. The runner's stage-2 SCORE and PAIR steps exit 1 on fan arms, as they
+do on a2; the a2 comparison is `paired_vs_ruler.py`.
+
+| prediction | reading | held |
+| --- | --- | --- |
+| P-1 no detonation | both healthy | yes |
+| P-2 nowta >= plain's 9988 tok/s | 9797 (0.98x) | NO |
+| P-3 hwta < 9000 tok/s | 7021 | yes |
+| P-4 nowta worse than a2 by > 0.0137 | +0.0357 | yes |
+| P-5 hwta within 0.0137 of a2 | +0.0489 (the 40 % "worse" branch) | NO |
+| P-6 head_coda_agree > 0.35 | 0.266 | NO |
+| P-7 head regret < 0.5x random regret | 0.90x | NO |
+| P-8 max winner share < 0.7 | 0.29 | yes |
+| P-9 K1-K6 within 0.007 of a2 | 0.0015 / 0.0012 apart | yes |
+
+## Verdict
+
+Failure for both arms. nowta, Wolfe's "explore everything at once, the coda picks" arm, runs
+at plain's speed (0.98x) but gives back 0.036 of a2's gain: the coda-graded WTA passes are
+what make the four cells worth reading. hwta is worse on both axes: SLOWER than a2 (the
+head's M x tokens x vocabulary GEMM plus its checkpoint recompute costs more than the coda
+passes it replaces) and 0.013 worse than nowta. Its head picks the coda's best cell at
+chance and with regret near a random pick, so the head grader grades nothing the coda uses,
+and its gradient hurts.
+
+## Updated hypothesis
+
+The WTA signal that helps must come from the reader that uses the cells (the coda); a
+separate committed reader is gamed. What is left to price is the coda grader's cost, not a
+cheaper substitute: a2's WTA buys 0.036 nats for 0.78x vs 0.98x throughput. Levers that keep
+the coda as the grader: grade on a sample of slots or rows per step, or grade every N steps.

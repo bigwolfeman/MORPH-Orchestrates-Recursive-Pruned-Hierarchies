@@ -1,6 +1,6 @@
 # Planned: can ONE sampled code per slot (REINFORCE) replace LX's four code rollouts?
 
-Status: planned
+Status: failure
 
 Date: 2026-09-29 18:31 CDT (frozen before either run trained).
 Code: c5e9e36 (`tul.code_policy_k`; note
@@ -62,3 +62,50 @@ the one-rollout control as a cost result: P-3.
   the stage-2 scorer and pair read against fp01. tok/s from the trainer log.
 - No CPU test suites run on this machine while either arm trains (mapwin's tok/s dipped 20 %
   under CPU load, `failures/2026-09-29-wta-map-speed-quality.md`).
+
+## Results
+
+Runs 2026-09-29 23:49 to 2026-09-30 01:59, seed 1, 5000 steps, both at 1679914. No CPU test
+suite ran on this machine during either run (one 1.5 s, one-core pin test at 00:00, logged).
+tok/s is the mean of the trainer's 24 logged points at step >= 200.
+
+| arm | tok/s | K1-K6 | gap to plain 5k | val loss |
+| --- | --- | --- | --- | --- |
+| control (K=1) | 11574 (10795-12228) | +0.0047 [+0.0043, +0.0051] | +0.2830 [+0.2678, +0.3000] | 4.4389 |
+| policy4 | 10919 (10511-11274) | +0.0038 [+0.0034, +0.0042] | +0.2777 [+0.2626, +0.2947] | 4.4397 |
+| plain (nm ctrl s1r) | 9988 | - | 0 | - |
+| parent e4probe_fp01 (K=4) | ~5600 (siblings) | +0.0126 | +0.265 | - |
+
+policy4 minus control, paired on the same 501106 tokens: -0.0050 [-0.0075, -0.0024].
+policy4 val at 5000: `code_policy_vs_random` -0.0003, entropy 0.999 nats (max ln 4 = 1.386),
+argmax shares 0.06 / 0.10 / 0.71 / 0.14, advantage std 1.09 nats against mean 0.03.
+Tripwire: control HEALTHY (max 83); policy4 one recovered excursion 1.94e4 at step 2082.
+
+| prediction | reading | held |
+| --- | --- | --- |
+| P-1 no detonation | one recovered one-step excursion | yes |
+| P-2 control worse than parent by 0.010-0.045 | +0.018 | yes |
+| P-3 control >= 9000 tok/s | 11574 | yes |
+| P-4 policy4 within 10 % of control | 0.94x | yes |
+| P-5 vs_random > +0.002 | -0.0003 | NO |
+| P-6 entropy > 0.5 | 0.999 | yes |
+| P-7 not worse than control by > 0.0137 | -0.0050 (better, under the bar) | yes |
+| P-8 K1-K6 within 0.007 | 0.0009 apart | yes |
+
+## Verdict
+
+Failure for arm B: P-5 failed, so the per-slot choice carries nothing (the argmax code reads
+the same CE as a random one). The -0.0050 paired edge over the control is under the 0.0137
+seed bar and cannot come from the choice. REINFORCE's advantage noise (std 1.09 nats per span)
+is 36x its mean, as the hypothesis said.
+
+Success for the control as a cost result (P-3): the one-rollout strict slot loop runs at
+1.16x plain's tok/s, the first slot-loop arm faster than plain in wall clock. It pays for it
+with LX's ensemble gain: its gap to plain is 0.018 worse than the K=4 parent.
+
+## Updated hypothesis
+
+The code axis has nothing per-slot to choose: codes that measured as span-blind stay
+span-blind when a policy picks them. The cost of LX was the ensemble, and the ensemble is
+worth ~0.018 nats at 5k. Drop the code axis; the one-rollout loop is the cost base
+(11.6k tok/s) that further exploration must be priced against.
