@@ -185,7 +185,11 @@ def evaluate(
                           # tul.fan_all_wta_grader="head" (2026-09-29): the head-graded
                           # relaxed-WTA term is built at eval too (the coda grader's is
                           # train-only), so val loss must subtract it to stay the CE.
-                          "fan_head_wta_weighted"):
+                          "fan_head_wta_weighted",
+                          # tul.fan_opf (arm F, 2026-09-30): the OPF objective and
+                          # tul.fan_route="latent" (arm T): the teacher's router CE + g's
+                          # MSE. Both are built at eval too (labels present).
+                          "opf_weighted", "rlat_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -307,13 +311,19 @@ def evaluate(
             # `head_wta*` (tul.fan_all_wta_grader="head") is built at train AND eval, so it
             # goes to `val/fan_head_wta_*`; the head-vs-coda readings (`head_coda_agree`,
             # `head_pick_regret`, `rand_pick_regret`) are eval-only and stay in `fan/`.
-            _fan_train_side = ("mix_entropy", "mix_w_max", "repel_terms")
+            # The fan's OPF / router arms (2026-09-30): `opf_*`, `route_*`, `rlat_*` and
+            # `teacher_router_agree` are built at train AND eval, so they go to `val/fan_*`;
+            # the router-vs-coda readings (`router_coda_agree`, `router_pick_regret`,
+            # `rand_pick_regret`, `teacher_coda_agree`) are eval-only and stay in `fan/`.
+            _fan_train_side = ("mix_entropy", "mix_w_max", "repel_terms",
+                               "teacher_router_agree")
             for _fk in [k for k in out if str(k).startswith("fan_")]:
                 if out[_fk] is None:
                     continue
                 _name = str(_fk)[4:]
                 _dest = (f"val/fan_{_name}"
-                         if _name.startswith(("stream_cos_t", "epi_t", "vol_t", "head_wta"))
+                         if _name.startswith(("stream_cos_t", "epi_t", "vol_t", "head_wta",
+                                              "opf_", "route_", "rlat_"))
                          or _name in _fan_train_side
                          else f"fan/{_name}")
                 acc.setdefault(_dest, []).append(float(out[_fk]))
@@ -746,6 +756,14 @@ def save_checkpoint(
         # a resume must keep THIS reference: re-snapshotting the live weights mid-run
         # would move the target, which is the failure the mechanism exists to prevent.
         ckpt["code_ref"] = _ref
+    _fan_tgt = _mm.tul_fan_target_state() if hasattr(_mm, "tul_fan_target_state") else None
+    if _fan_tgt is not None:
+        # tul.fan_opf / tul.fan_route="latent" (2026-09-30): the EMA target twin of the
+        # prelude. Its OWN key for the `code_ref` reason (not a registered submodule); a
+        # resume loads it back (`tul_fan_target_sync`) so the EMA state continues instead
+        # of jumping to the live weights. The router's balance bias is a model buffer and
+        # rides in `model`.
+        ckpt["fan_target"] = _fan_tgt
     if getattr(_mm, "tul", None) is not None:
         # Audit trail, not a reconstruction flag: the TUL parameters are built from the
         # config at model-build time (never mid-run), so load_state_dict already has a
@@ -1090,12 +1108,18 @@ def read_code_ref_state(path: str):
     `init_from` seed) has no such key, and that is the SNAPSHOT case, not an error. Read
     with ``mmap`` so a 2 GB file is not paged in twice on a resume.
     """
+    return read_checkpoint_side_state(path, "code_ref")
+
+
+def read_checkpoint_side_state(path: str, key: str):
+    """A checkpoint's top-level ``key`` (a state carried beside ``model``: ``code_ref``,
+    ``fan_target``), or ``None`` when the checkpoint carries none — the snapshot case
+    for a checkpoint written before that key existed. Read with ``mmap``."""
     try:
         ck = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
     except Exception:                              # older serialisation: no mmap support
         ck = torch.load(path, map_location="cpu", weights_only=False)
-    st = ck.get("code_ref") if isinstance(ck, dict) else None
-    return st
+    return ck.get(key) if isinstance(ck, dict) else None
 
 
 def load_weights_only(path: str, model: nn.Module, device: torch.device,
@@ -2320,6 +2344,20 @@ def main(cfg: DictConfig) -> None:
     attn_proj_quant_manifest = _qm["attn_proj_quant"]
     fp8_manifest = _qm["fp8"]
 
+    # ── tul.fan_opf / tul.fan_route="latent" (2026-09-30): the EMA target twin ─────────
+    # Built HERE: AFTER quantisation, so the twin's prelude carries the same ternary
+    # parametrisation as the live one (a target computed by a different function would be
+    # a different target), and BEFORE torch.compile, so the twin's blocks stay eager and
+    # the compiled live MLPs are not copied. The compile warmup below then runs with a
+    # twin in place. After the weights load, `tul_fan_target_sync` re-syncs it (resume: the
+    # checkpoint's EMA state; otherwise the loaded live weights). No-op on other models.
+    if model.tul_fan_target_build():
+        _nt = sum(p.numel() for p in model.__dict__["_fan_target"].parameters())
+        print(f"  [fan-target] EMA prelude twin built: {_nt/1e6:.1f}M parameters (the "
+              f"prelude blocks + their x0/value-embedding projections; the lookup tables "
+              f"are shared), frozen, eval mode, momentum "
+              f"m={model.cfg.tul.fan_target_ema}", flush=True)
+
     # Phase-1 onset probe: arm the model-side half (the looped-core state collector in
     # TULTransformer._tul_core). Set before the first forward. Left unset — the default —
     # _tul_core takes the identical code path it always has.
@@ -2855,6 +2893,20 @@ def main(cfg: DictConfig) -> None:
               f"0 trainable, eval mode; every code target and every grade is measured "
               f"against it", flush=True)
 
+    # ── tul.fan_opf / tul.fan_route="latent": re-sync the EMA target twin ──────────────
+    # The twin was built right after quantisation, from the weights at that moment. The
+    # weights may have loaded since (init_from / resume): a resume loads the checkpoint's
+    # own EMA state STRICTLY (re-snapshotting would jump the target to the live weights);
+    # anything else copies the loaded live prelude into it.
+    if _mdl0.__dict__.get("_fan_target") is not None:
+        _ft_state = None
+        if resume_path and os.path.isfile(resume_path):
+            _ft_state = read_checkpoint_side_state(resume_path, "fan_target")
+            if _ft_state is None:
+                print("  [fan-target] the resume checkpoint carries NO EMA twin: "
+                      "snapshotting the loaded weights instead", flush=True)
+        print(f"  [fan-target] EMA twin {_mdl0.tul_fan_target_sync(_ft_state)}", flush=True)
+
     # ── tul.code_target_ema (LCTUL-J Stage 1) ─────────────────────────────────────────
     # Resolved ONCE, outside the training loop: whether and at what momentum the frozen
     # twin above moves toward the live model after every optimizer step.
@@ -3058,6 +3110,10 @@ def main(cfg: DictConfig) -> None:
     # other stochastic decision relative to a p=0 run at the same seed.
     _ntp_rng = _random.Random(int(getattr(tr, "seed", 0)) * 7919 + 13)
     _ntp_steps = 0
+    # tul.fan_route (2026-09-30): the compile warmup ran train-mode forwards with grad on,
+    # and the router counted their winners. Drop those counts so the first balance step
+    # reads only the first real step's load. A no-op without a router.
+    _mdl0.tul_fan_reset_route_load()
 
     # ── Optimizer step closure (resolved once, no per-step isinstance) ───
     def _step_optimizer():
@@ -3717,6 +3773,12 @@ def main(cfg: DictConfig) -> None:
             # module (`_mdl0`), never `model` — the twin's own parameters live there.
             if _code_ema_m > 0.0:
                 _mdl0.tul_code_ref_ema_update(_code_ema_m)
+            # The fan's OPF / router arms (2026-09-30): the EMA target twin follows the
+            # weights this step produced, P is QR-retracted onto the orthonormal matrices,
+            # the router's balance bias moves from this step's load. Same placement rule as
+            # the code_ref EMA (after every other post-step constraint, on `_mdl0`). A
+            # no-op method on every other model.
+            _mdl0.tul_fan_after_step()
 
         # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
         # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and
@@ -3804,6 +3866,8 @@ def main(cfg: DictConfig) -> None:
                         "fan_select_gate_weighted",  # LXTUL tul.fan_mix=select, 2026-09-20
                         "fan_wta_weighted",        # LXTUL tul.fan_mix=all, 2026-09-20
                         "fan_head_wta_weighted",   # tul.fan_all_wta_grader=head, 2026-09-29
+                        "opf_weighted",            # tul.fan_opf (arm F), 2026-09-30
+                        "rlat_weighted",           # tul.fan_route=latent (arm T), 2026-09-30
                         "critic_weighted",   # arc E10 / 2026-09-12
                         "horizon_weighted",  # LoopMTP horizon alignment, 2026-09-14
                         "code_fm_weighted",   # TUL-Code flow term (the val side already

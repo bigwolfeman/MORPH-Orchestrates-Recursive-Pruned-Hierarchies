@@ -67,6 +67,9 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
     "fan_all_wta_winner", "fan_all_wta_grad_rollouts", "fan_all_wta_latent_temp",
     "fan_all_wta_grader",
+    "fan_opf", "fan_opf_lambda_pred", "fan_opf_lambda_fac", "fan_opf_lambda_enc",
+    "fan_opf_gamma_fac", "fan_opf_gamma_enc", "fan_opf_pred_hidden", "fan_target_ema",
+    "fan_route", "fan_route_rank", "fan_route_bias_u", "fan_rlat_lambda",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -401,6 +404,18 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_all_wta_grad_rollouts=str(tc.get("fan_all_wta_grad_rollouts", "all")),
         fan_all_wta_latent_temp=float(tc.get("fan_all_wta_latent_temp", 0.1)),
         fan_all_wta_grader=str(tc.get("fan_all_wta_grader", "coda")),
+        fan_opf=bool(tc.get("fan_opf", False)),
+        fan_opf_lambda_pred=float(tc.get("fan_opf_lambda_pred", 1.0)),
+        fan_opf_lambda_fac=float(tc.get("fan_opf_lambda_fac", 0.05)),
+        fan_opf_lambda_enc=float(tc.get("fan_opf_lambda_enc", 0.02)),
+        fan_opf_gamma_fac=float(tc.get("fan_opf_gamma_fac", 0.1)),
+        fan_opf_gamma_enc=float(tc.get("fan_opf_gamma_enc", 0.1)),
+        fan_opf_pred_hidden=int(tc.get("fan_opf_pred_hidden", 0)),
+        fan_target_ema=float(tc.get("fan_target_ema", 0.996)),
+        fan_route=str(tc.get("fan_route", "none")),
+        fan_route_rank=int(tc.get("fan_route_rank", 64)),
+        fan_route_bias_u=float(tc.get("fan_route_bias_u", 1e-3)),
+        fan_rlat_lambda=float(tc.get("fan_rlat_lambda", 1.0)),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -678,6 +693,18 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_all_wta_grad_rollouts": model_cfg.fan_all_wta_grad_rollouts,
         "fan_all_wta_latent_temp": model_cfg.fan_all_wta_latent_temp,
         "fan_all_wta_grader": model_cfg.fan_all_wta_grader,
+        "fan_opf": model_cfg.fan_opf,
+        "fan_opf_lambda_pred": model_cfg.fan_opf_lambda_pred,
+        "fan_opf_lambda_fac": model_cfg.fan_opf_lambda_fac,
+        "fan_opf_lambda_enc": model_cfg.fan_opf_lambda_enc,
+        "fan_opf_gamma_fac": model_cfg.fan_opf_gamma_fac,
+        "fan_opf_gamma_enc": model_cfg.fan_opf_gamma_enc,
+        "fan_opf_pred_hidden": model_cfg.fan_opf_pred_hidden,
+        "fan_target_ema": model_cfg.fan_target_ema,
+        "fan_route": model_cfg.fan_route,
+        "fan_route_rank": model_cfg.fan_route_rank,
+        "fan_route_bias_u": model_cfg.fan_route_bias_u,
+        "fan_rlat_lambda": model_cfg.fan_rlat_lambda,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1030,6 +1057,26 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                     "the winner-alone span CE, the responsibility term) "
                     if model_cfg.fan_all_wta_lambda > 0.0 else
                     "wta_lambda 0: NO responsibility term and NO extra coda pass) ")
+                 + (f"OPF (arm F): each cell k predicts factor k of the EMA-prelude code of "
+                    f"the next span (orthonormal P, QR-retracted every step; lambda_pred="
+                    f"{model_cfg.fan_opf_lambda_pred} lambda_fac={model_cfg.fan_opf_lambda_fac}"
+                    f" lambda_enc={model_cfg.fan_opf_lambda_enc} gamma_fac="
+                    f"{model_cfg.fan_opf_gamma_fac} gamma_enc={model_cfg.fan_opf_gamma_enc}, "
+                    f"EMA m={model_cfg.fan_target_ema}); the gradient reaches the cells "
+                    f"beside the coda's CE. Read fan/opf_r2_k*, fan/opf_target_rank "
+                    f"(collapse), fan/opf_enc_std_min, fan/opf_orth_err "
+                    if model_cfg.fan_opf else "")
+                 + (f"ROUTER '{model_cfg.fan_route}' (rank {model_cfg.fan_route_rank}, balance "
+                    f"bias u={model_cfg.fan_route_bias_u}): the coda reads ONLY the router's "
+                    f"pick, "
+                    + ("scaled by its gate p (the coda's CE trains the router) "
+                       if model_cfg.fan_route == "reader" else
+                       f"hard, trained by a latent teacher (argmin of g(cell) to the "
+                       f"EMA-prelude target, weight {model_cfg.fan_rlat_lambda}, EMA m="
+                       f"{model_cfg.fan_target_ema}) ")
+                    + "- read fan/router_coda_agree (chance 1/K) and fan/router_pick_regret "
+                      "vs fan/rand_pick_regret at val "
+                    if model_cfg.fan_route != "none" else "")
                  if model_cfg.fan_mix == "all" else "")
               + ("TRIGGER EVERY PASS (the per-stream trigger W_o(pooled)+P_cell, the "
                  "SAME tensor the seed adds once, is added to the cell carrier at the "

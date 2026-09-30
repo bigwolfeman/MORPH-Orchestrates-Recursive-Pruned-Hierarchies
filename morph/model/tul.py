@@ -455,7 +455,56 @@ class TULConfig:
     # `spandec_parallel_weight`, a non-default winner mode and `fan_history_streams`.
     # Note .agents/notes/proposed/architecture/2026-09-29-fan-head-graded-wta.md
     fan_all_wta_grader: str = "coda"          # "coda" | "head" (fan_mix='all')
-    fan_repel_mode: str = "cos"          # "cos" (pairwise cosine) | "epi" (epiplexity of the
+    # ── three one-factor arms on nowta (2026-09-30; morph/model/tul_fan_route.py) ──
+    # All three sit on the write-all fan with NO WTA term (`fan_mix='all'`,
+    # `fan_all_wta_lambda: 0`), exclude each other, and are refused with `code_enum_k > 1`
+    # and `bcast` (`_check_fan_opf_route`, called near the top of `__post_init__`).
+    # Note .agents/notes/proposed/architecture/2026-09-30-fan-opf-and-routers.md
+    #
+    # `fan_opf` (arm F): Orthogonal Predictive Factorization (JEPA-Anything 2609.20800).
+    # The target of slot s is the EMA prelude's output mean-pooled over span s+1's token
+    # positions (`span_ce_index`'s bin s+1), LayerNormed without affine. An orthonormal
+    # projector P (QR-retracted after every optimizer step) splits it into M factors of
+    # d/M; a predictor q_k reads cell k's exit state WITH grad and regresses factor k
+    # (L_pred, Eq. 6), jointly with the coda's token CE. L_fac hinges the batch std of
+    # every projected target coordinate at `fan_opf_gamma_fac`; L_enc hinges the batch
+    # std of every coordinate of the ONLINE prelude's pooled span states (the tensor whose
+    # EMA is the target) at `fan_opf_gamma_enc`. Folded as `opf_weighted` =
+    # lambda_pred L_pred + lambda_fac L_fac + lambda_enc L_enc (paper Table 10's
+    # 0.05 / 0.02; no L_orth: under the QR retraction P is orthonormal, the term is 0).
+    # Built at train AND eval when labels are present; label-free forwards build nothing
+    # and read all M cells exactly as nowta does, so there is no train/deploy gap.
+    fan_opf: bool = False
+    fan_opf_lambda_pred: float = 1.0
+    fan_opf_lambda_fac: float = 0.05
+    fan_opf_lambda_enc: float = 0.02
+    fan_opf_gamma_fac: float = 0.1
+    fan_opf_gamma_enc: float = 0.1
+    fan_opf_pred_hidden: int = 0            # q_k's hidden width; 0 = d_model
+    # `fan_target_ema` (arms F and T): the EMA momentum m of the target twin,
+    # theta_twin <- m theta_twin + (1 - m) theta_live after every optimizer step. The
+    # paper does not state m (Eq. 2 only bounds it, 0 <= m < 1); 0.996 is I-JEPA's /
+    # BYOL's start value, UNMEASURED here.
+    fan_target_ema: float = 0.996
+    # `fan_route` (arms R and T): a top-1 router over the M cells of each slot. The coda
+    # reads ONLY the winner (the losers' SOURCE cells are written as zero, so their prefix
+    # cells are exactly zero — no E_pass is built under nowta's `prefix_source: exit` — and
+    # carry nothing of the loser); the losers stay
+    # visible to later slots' LOOP (the loop reads cells, the prefix write feeds only the
+    # coda). "none" (default) builds nothing. "reader" (arm R): winner scaled by its gate
+    # p_winner = softmax(score)[winner] (Switch Transformer), so the coda's token CE
+    # trains the router through p_winner and credits the winning cell alone. "latent"
+    # (arm T): the read is HARD (no p); the router is trained by cross-entropy onto a
+    # latent TEACHER's pick (argmin_i ||g(sg(cell_i)) - sg(z)||^2, z = arm F's target),
+    # router inputs detached, folded as `rlat_weighted` = fan_rlat_lambda * (router CE +
+    # g's MSE). Selection is argmax(score + b) with b a per-cell load-balance BIAS (a
+    # buffer, DeepSeek-V3: b_i += fan_route_bias_u * sign(mean_load - load_i) after every
+    # optimizer step); the bias never enters p. Same selection at train and eval.
+    fan_route: str = "none"                 # "none" | "reader" | "latent"
+    fan_route_rank: int = 64
+    fan_route_bias_u: float = 1e-3
+    fan_rlat_lambda: float = 1.0
+    fan_repel_mode: str = "cos"        # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
     fan_epi_features: int = 64           # reservoir width F (epi only)
@@ -2390,6 +2439,8 @@ class TULConfig:
         # LX-knob reason above: later blocks of this method return early for
         # off-by-default features, and a refusal placed after one of them never fires.
         self._check_fan_head_grader()
+        # ── the fan's OPF / router arms (2026-09-30) — same rule, same place ─────
+        self._check_fan_opf_route()
 
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
         if self.loop_carry not in LOOP_CARRY_MODES:
@@ -3957,6 +4008,70 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.fan_all_wta_grader='head' with {why}.")
+
+    def _check_fan_opf_route(self) -> None:
+        """``tul.fan_opf`` / ``tul.fan_route`` (arms F, R, T; 2026-09-30). Values first,
+        then every knob that is set while its arm is off (a silent no-op otherwise), then
+        the compositions: each arm is ONE factor away from nowta, so each is refused with
+        the other arms, a WTA term, the code rollouts, a non-'all' fan and ``bcast``."""
+        if self.fan_route not in ("none", "reader", "latent"):
+            raise ValueError(
+                f"tul.fan_route must be 'none', 'reader' or 'latent', got {self.fan_route!r}")
+        if not 0.0 <= self.fan_target_ema < 1.0:
+            raise ValueError(
+                f"tul.fan_target_ema must be in [0, 1) (paper Eq. 2), got {self.fan_target_ema}")
+        for name in ("fan_opf_lambda_pred", "fan_opf_lambda_fac", "fan_opf_lambda_enc",
+                     "fan_opf_gamma_fac", "fan_opf_gamma_enc", "fan_route_bias_u",
+                     "fan_rlat_lambda"):
+            if not getattr(self, name) >= 0.0:
+                raise ValueError(f"tul.{name} must be >= 0, got {getattr(self, name)}")
+        if self.fan_opf_pred_hidden < 0:
+            raise ValueError(
+                f"tul.fan_opf_pred_hidden must be >= 0 (0 = d_model), got "
+                f"{self.fan_opf_pred_hidden}")
+        if self.fan_route_rank < 1:
+            raise ValueError(f"tul.fan_route_rank must be >= 1, got {self.fan_route_rank}")
+        _defaults = TULConfig.__dataclass_fields__
+        _opf_keys = ("fan_opf_lambda_pred", "fan_opf_lambda_fac", "fan_opf_lambda_enc",
+                     "fan_opf_gamma_fac", "fan_opf_gamma_enc", "fan_opf_pred_hidden")
+        _unread = []
+        if not self.fan_opf:
+            _unread += [k for k in _opf_keys if getattr(self, k) != _defaults[k].default]
+        if not (self.fan_opf or self.fan_route == "latent"):
+            _unread += [k for k in ("fan_target_ema",)
+                        if getattr(self, k) != _defaults[k].default]
+        if self.fan_route == "none":
+            _unread += [k for k in ("fan_route_rank", "fan_route_bias_u")
+                        if getattr(self, k) != _defaults[k].default]
+        if self.fan_route != "latent" and self.fan_rlat_lambda != 1.0:
+            _unread.append("fan_rlat_lambda")
+        if _unread:
+            raise ValueError(
+                f"tul.{', tul.'.join(_unread)} set without the arm that reads it "
+                f"(fan_opf={self.fan_opf}, fan_route={self.fan_route!r}): a silent no-op.")
+        if not self.fan_opf and self.fan_route == "none":
+            return
+        _arm = "fan_opf=true" if self.fan_opf else f"fan_route={self.fan_route!r}"
+        _refused = [
+            (self.fan_opf and self.fan_route != "none",
+             f"fan_route={self.fan_route!r}: the arms exclude each other (each is one "
+             f"factor away from nowta)"),
+            (self.fan_k < 2 or self.fan_mix != "all",
+             f"fan_k={self.fan_k}, fan_mix={self.fan_mix!r}: the arms act on the M cells "
+             f"of the write-all fan (fan_k >= 2, fan_mix='all')"),
+            (self.fan_all_wta_lambda > 0.0,
+             f"fan_all_wta_lambda={self.fan_all_wta_lambda}: the arms sit on nowta (no WTA "
+             f"term); a WTA term beside them is a second factor"),
+            (self.code_enum_k > 1,
+             f"code_enum_k={self.code_enum_k}: the K rollouts are a second width axis the "
+             f"target, the router and the load bias were not built for"),
+            (self.bcast,
+             "bcast=true: the unpack reads the MEAN of the written cells, which under a "
+             "router is a scaled winner; not defined for these arms"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.{_arm} with {why}.")
 
     def _check_spandec_parallel(self) -> None:
         """``tul.spandec_parallel`` — LXTUL-E's committed product reader

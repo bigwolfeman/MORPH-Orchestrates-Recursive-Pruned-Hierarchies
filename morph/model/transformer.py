@@ -58,6 +58,8 @@ from .tul_carry import TULLoopCarry
 from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_repel_term,
                       fan_stream_rank, fan_vol_term, select_gate_loss, select_streams,
                       select_winners, fan_stream_stats, plan_streams)
+from .tul_fan_route import (FanOPF, FanRouter, FanTargetFront, FanTeacherMap, opf_terms,
+                            participation_ratio, pooled_span_states)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
@@ -2718,6 +2720,41 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_epi: FanReservoir | None = None
         if self.tul_fan is not None and cfg.tul.fan_repel_mode in ("epi", "epivol"):
             self.tul_fan_epi = FanReservoir(d, cfg.tul.fan_epi_features, seed=0)
+        # ── the fan's OPF / router arms (2026-09-30; morph/model/tul_fan_route.py) ──
+        # `tul.fan_opf` (arm F), `tul.fan_route` "reader" (arm R) / "latent" (arm T). All
+        # default off: nothing is built, the three attributes stay None and every branch on
+        # them in the forward is a Python-level constant that traces out, so nowta and every
+        # other model run the graph from before the keys. Every module is built in a forked
+        # RNG stream with its own seed, so the base weights of an arm equal the same-seed
+        # nowta model's. TULConfig refuses the arms outside the write-all fan with no WTA
+        # term, so `tul_fan.mode == "all"` whenever one is built.
+        # The EMA target twin (arms F and T) is NOT built here: the trainer builds it with
+        # `tul_fan_target_build()` AFTER quantisation (so it carries the same ternary
+        # parametrisation) and BEFORE torch.compile. `_fan_target` stays None until then and
+        # a labelled forward that needs it RAISES.
+        self.tul_fan_opf: FanOPF | None = None
+        self.tul_fan_router: FanRouter | None = None
+        self.tul_fan_teacher: FanTeacherMap | None = None
+        self._fan_target_needed: bool = bool(
+            cfg.tul is not None and (cfg.tul.fan_opf or cfg.tul.fan_route == "latent"))
+        self.__dict__["_fan_target"] = None
+        if cfg.tul is not None and cfg.tul.fan_opf:
+            if self.tul_fan is None or self.tul_fan.mode != "all":
+                raise RuntimeError("tul.fan_opf built without the write-all fan; TULConfig "
+                                   "should have refused this configuration.")
+            if d % int(cfg.tul.fan_k) != 0:
+                raise ValueError(
+                    f"tul.fan_opf needs fan_k={cfg.tul.fan_k} to divide d_model={d}: the "
+                    f"projector splits the d-dim target into fan_k factors of d/fan_k "
+                    f"(the paper's K r = d).")
+            self.tul_fan_opf = FanOPF(d, int(cfg.tul.fan_k), int(cfg.tul.fan_opf_pred_hidden))
+        if cfg.tul is not None and cfg.tul.fan_route != "none":
+            if self.tul_fan is None or self.tul_fan.mode != "all":
+                raise RuntimeError("tul.fan_route built without the write-all fan; "
+                                   "TULConfig should have refused this configuration.")
+            self.tul_fan_router = FanRouter(d, int(cfg.tul.fan_k), int(cfg.tul.fan_route_rank))
+            if cfg.tul.fan_route == "latent":
+                self.tul_fan_teacher = FanTeacherMap(d)
 
         # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
         # K codes per span instead of one continuous vector, lifted into the K prefix
@@ -3955,7 +3992,8 @@ class MORPHTransformer(nn.Module):
     def _front_tail(self, x: Tensor, input_ids: Tensor, bigram_emb,
                     ve_bagged, attn_kwargs: dict | None = None,
                     ret_reset_mask: Tensor | None = None,
-                    attn_kwargs_at: dict[int, dict] | None = None) -> tuple[Tensor, Tensor]:
+                    attn_kwargs_at: dict[int, dict] | None = None,
+                    twin: FanTargetFront | None = None) -> tuple[Tensor, Tensor]:
         """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0).
 
         ``attn_kwargs`` / ``ret_reset_mask`` (docs/tul-tg-spec.md §§1-4): the SAME
@@ -3967,7 +4005,14 @@ class MORPHTransformer(nn.Module):
         dict}`` — a prelude block whose GLOBAL index (== its local index ``i`` here) is
         a key gets THAT dict instead of ``attn_kwargs``. ``None`` on every other path →
         the loop below is exactly the one above, bit-identical.
+
+        ``twin`` (the fan's EMA target, ``tul.fan_opf`` / ``tul.fan_route: latent``): run
+        the TWIN's prelude blocks and x0 injections instead of the live ones, on the same
+        inputs and the same masks. ``None`` on every other call → the live modules, the
+        loop above unchanged.
         """
+        _prelude = self.prelude if twin is None else twin.prelude
+        _x0_injects = self.x0_injects if twin is None else twin.x0_injects
         B, T = x.shape[0], x.shape[1]
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
 
@@ -3981,9 +4026,9 @@ class MORPHTransformer(nn.Module):
                 x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
 
         # ── Prelude ───────────────────────────────────────────────────
-        for i, layer in enumerate(self.prelude):
+        for i, layer in enumerate(_prelude):
             term = self._build_injection_term(
-                i, self.x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype,
+                i, _x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype,
                 ve_bagged=ve_bagged,
             )
             x = self._apply_injection(x, term)
@@ -5148,7 +5193,8 @@ class MORPHTransformer(nn.Module):
 
     def _tul_front(self, input_ids: Tensor, layout: SlotLayout,
                    attn_kwargs: dict | None = None,
-                   ret_reset_mask: Tensor | None = None):
+                   ret_reset_mask: Tensor | None = None,
+                   twin: FanTargetFront | None = None):
         """Embed + slot inputs + prelude over ALL positions (spec §3.2).
 
         The slot's input embedding is ``E_slot + mean_j embed(t_j)`` over its span's
@@ -5159,21 +5205,30 @@ class MORPHTransformer(nn.Module):
 
         ``attn_kwargs`` / ``ret_reset_mask``: passed straight through to
         :meth:`_front_tail` (docs/tul-tg-spec.md §§1-4).
+
+        ``twin`` (``tul.fan_opf`` / ``tul.fan_route: latent``; the caller holds
+        ``no_grad``): the fan's EMA TARGET front — the twin's prelude blocks, x0 and
+        value-embedding projections over the LIVE lookup tables, and NO embedding dropout
+        (the target is deterministic; this call draws no RNG, so the live forward's stream
+        is the one it would be without the target). ``None`` — every other call — is the
+        body above, unchanged.
         """
         tok_emb = self.tul.slot_input(self.embed(input_ids), layout, add_e_slot=True)
-        x = self.embed_drop(tok_emb)
+        x = self.embed_drop(tok_emb) if twin is None else tok_emb
         _bg = self.embed.get_bigram(input_ids)
         bigram_emb = (self.tul.slot_input(_bg, layout, add_e_slot=False)
                       if _bg is not None else None)
         n_ve = len(self._ve_layer_map)
+        _ve_proj = self.value_embeds if twin is None else twin.value_embeds
         ve_bagged = ([
             self.tul.slot_input(
-                self.value_embeds[k].precompute(self.value_embed_tables[k](input_ids)),
+                _ve_proj[k].precompute(self.value_embed_tables[k](input_ids)),
                 layout, add_e_slot=False)
             for k in range(n_ve)
         ] if n_ve > 0 else None)
         x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged,
-                                 attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask)
+                                 attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask,
+                                 **({"twin": twin} if twin is not None else {}))
         return x, x0, bigram_emb
 
     def _sample_slot_depths(self, layout: SlotLayout, device) -> Tensor:
@@ -7958,7 +8013,8 @@ class MORPHTransformer(nn.Module):
                         bigram_emb, input_ids: Tensor, labels: Tensor,
                         layout: SlotLayout, L: int, keep, coda_kw, tg_reset,
                         stats: dict, n_rollouts: int = 1,
-                        head_table: tuple | None = None) -> None:
+                        head_table: tuple | None = None,
+                        route: dict | None = None) -> None:
         """LXTUL's ORACLE-OVER-STREAM (``tul.fan_k``) — the arm's falsifier, eval only.
 
         PLR Figure 4 and Parallel-TTS's coverage@N, in the units MORPH is scored in. For
@@ -8003,6 +8059,15 @@ class MORPHTransformer(nn.Module):
         different slot set or a different token count than this table (the "identical
         span" contract of :func:`fan_head_wta_targets`).
 
+        ``route`` (``tul.fan_route``, arms R / T; the dict :meth:`_tul_fan_route`
+        returns): the table's row ``i`` is then the ROUTER's write with the winner forced
+        to ``i`` (cell ``i`` scaled by its gate ``p_i`` under "reader", unscaled under
+        "latent"), so it is the coda's CE had the router picked ``i``. On the same scored
+        slots: ``fan/router_coda_agree`` (the router's pick — the one the coda read, bias
+        included — IS the table's argmin; chance ``1/K``), ``fan/router_pick_regret`` and
+        ``fan/rand_pick_regret`` (nats per token, the head grader's units above), and
+        under "latent" ``fan/teacher_coda_agree`` (the teacher's pick is the argmin).
+
         COST: K extra ``_back_region`` passes per eval batch, no backward, ``no_grad``,
         and compiled code is left out of it (``torch.compiler.disable``) because the
         loop's trip count is ``K`` and the logit matmul is per row. Never called on a
@@ -8016,8 +8081,12 @@ class MORPHTransformer(nn.Module):
         w_head_pad = pad_vocab_align8(w_head)          # once per call (perf: aligned GEMM)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]        # [B, S]
         per_stream = []
+        if (self.tul_fan_router is not None) != (route is not None):
+            raise RuntimeError("_tul_fan_oracle: a router model must hand in its route "
+                               "(and no other model may).")
+        _rscale = {} if route is None else {"route_scale": route["scale"]}
         for i in range(k):
-            values, pos = self._tul_fan_stream_write(cells, i, layout, L)
+            values, pos = self._tul_fan_stream_write(cells, i, layout, L, **_rscale)
             x_i = scatter_positions(base, pos, values)
             xh_i = self._back_region(x_i, x0, bigram_emb, input_ids, inject_keep=keep,
                                      attn_kwargs=coda_kw, ret_reset_mask=tg_reset)
@@ -8060,6 +8129,15 @@ class MORPHTransformer(nn.Module):
                 _picked = ce.gather(-1, h_arg.unsqueeze(-1)).squeeze(-1)
                 stats["head_pick_regret"] = float((_picked - best)[ok].sum() / denom)
                 stats["rand_pick_regret"] = float((ce.mean(dim=-1) - best)[ok].sum() / denom)
+        if route is not None and bool(ok.any()):
+            _rw = route["winner"]
+            stats["router_coda_agree"] = float((_rw[ok] == arg[ok]).float().mean())
+            _picked = ce.gather(-1, _rw.unsqueeze(-1)).squeeze(-1)
+            stats["router_pick_regret"] = float((_picked - best)[ok].sum() / denom)
+            stats["rand_pick_regret"] = float((ce.mean(dim=-1) - best)[ok].sum() / denom)
+            if route.get("teacher") is not None:
+                stats["teacher_coda_agree"] = float(
+                    (route["teacher"][ok] == arg[ok]).float().mean())
         stats["oracle_ce"] = float(best[ok].sum() / denom)
         stats["single_ce"] = float(ce[..., 0][ok].sum() / denom)
         stats["mixed_ce"] = float(mixed[ok].sum() / denom)
@@ -8227,7 +8305,8 @@ class MORPHTransformer(nn.Module):
         written = torch.where(use_gate, gate_pick, choice)
         return written, p_gate, use_gate
 
-    def _tul_fan_stream_write(self, cells: Tensor, i: int, layout: SlotLayout, L: int
+    def _tul_fan_stream_write(self, cells: Tensor, i: int, layout: SlotLayout, L: int,
+                              route_scale: Tensor | None = None
                               ) -> tuple[Tensor, Tensor]:
         """Stream ``i`` ALONE, written the way THIS fan writes: the ONE home of the
         per-stream write the oracle instrument, the select table and the WTA term share.
@@ -8239,7 +8318,23 @@ class MORPHTransformer(nn.Module):
         ``W_prefix[i]`` with the other ``K-1`` cells BLANK (zeros, which after the
         projection carry ``E_pass`` only — the same blank the plan ablation writes): the
         deployed geometry with the losers removed, not a different geometry.
+
+        Under a ROUTER (``tul.fan_route``, arms R / T) "stream i alone" is the router's own
+        write with the winner FORCED to ``i`` (:meth:`_fan_route_cells`, the one home of
+        that write): cell ``i`` scaled by its gate ``route_scale[..., i]`` under "reader"
+        (``route_scale`` = the router's ``p``, required there), unscaled under "latent"
+        (``route_scale`` None) — which is the blank write above, element for element.
         """
+        if self.tul_fan_router is not None:
+            if (self.cfg.tul.fan_route == "reader") != (route_scale is not None):
+                raise RuntimeError(
+                    "_tul_fan_stream_write under tul.fan_route: 'reader' writes the forced "
+                    "cell scaled by its gate and needs route_scale = p; 'latent' writes it "
+                    "unscaled and takes none.")
+            forced = torch.full(cells.shape[:2], int(i), dtype=torch.long,
+                                device=cells.device)
+            src = self._fan_route_cells(cells, {"winner": forced, "scale": route_scale})
+            return self.tul.prefix_project(src[:, :, i], layout, L, cells=src)
         if self.tul_fan is not None and self.tul_fan.mode == "all":
             blank = torch.zeros_like(cells)
             blank[:, :, i] = cells[:, :, i]
@@ -8831,6 +8926,234 @@ class MORPHTransformer(nn.Module):
         table = nd.new_zeros(B, S, M)
         table[sup] = nd.t()
         return loss, (table, sup, ntok_bs, n_drop)
+
+    # ── the fan's OPF / router arms (2026-09-30; morph/model/tul_fan_route.py) ─────────
+
+    def _tul_fan_target(self, input_ids: Tensor, labels: Tensor, layout: SlotLayout,
+                        front_kw: dict | None, front_reset: Tensor | None,
+                        x_online: Tensor) -> dict:
+        """The EMA-prelude target of every slot (arms F and T) and the online twin of it.
+
+        Returns ``{"z", "ok", "zo"}``: ``z`` ``[B, S, C]`` fp32, no graph — the TWIN
+        front's output (:class:`FanTargetFront`, the same row, the same strict prelude
+        masks ``front_kw`` / ``front_reset`` the live front ran under) mean-pooled over
+        slot ``s``'s NEXT span's token positions (``span_ce_index``'s bin ``s + 1``) and
+        LayerNormed without affine; ``ok`` ``[B, S]`` — the slot is real AND its next span
+        has a scored token (the coda table's own rule); ``zo`` (arm F only, else None) —
+        the SAME pooling of the LIVE front's output ``x_online``, with grad: the tensor
+        whose EMA the target is, where ``L_enc``'s collapse guard sits.
+
+        WHAT THE TARGET CAN SEE. Under ``tg_geometry: strict`` the prelude is same-span
+        only, so ``z[s]`` is a function of span ``s + 1``'s tokens and nothing else
+        (``tests/test_tul_fan_opf.py`` perturbs every other span and reads it unchanged).
+        It is ONLY a target: nothing built from it is written into the loop or the coda.
+        ``labels`` enter only as the scored-position mask (``labels >= 0``: pads out).
+        """
+        twin = self.__dict__.get("_fan_target")
+        if twin is None:
+            raise RuntimeError(
+                "tul.fan_opf / tul.fan_route='latent': the EMA target twin was never built. "
+                "Call model.tul_fan_target_build() after quantisation (the trainer does, "
+                "before torch.compile) and before any labelled forward.")
+        gid, keep_tok, _lab, g_bins = span_ce_index(labels, layout)
+        with torch.no_grad():
+            xt, _, _ = self._tul_front(input_ids, layout, attn_kwargs=front_kw,
+                                       ret_reset_mask=front_reset, twin=twin)
+            z = pooled_span_states(xt, gid, keep_tok, g_bins)
+        n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]
+        ok = layout.slot_valid & (n_tok > 0)
+        zo = (pooled_span_states(x_online, gid, keep_tok, g_bins)
+              if self.tul_fan_opf is not None else None)
+        return {"z": z, "ok": ok, "zo": zo}
+
+    def _tul_fan_opf(self, cells: Tensor, tgt: dict, stats: dict) -> Tensor:
+        """Arm F's objective ``lambda_pred L_pred + lambda_fac L_fac + lambda_enc L_enc``
+        (paper Eq. 10 without ``L_orth``, which is 0 under the QR retraction).
+
+        ``cells`` ``[B, S, M, (n,) C]`` — the loop's exit cells WITH grad (the same tensor
+        the coda's prefix cells are written from). Cell ``k`` (HC stream mean) predicts
+        factor ``k`` of ``z``: the cells receive this gradient jointly with the coda's
+        token CE. ``P`` gets ``L_pred``'s and ``L_fac``'s gradient through the projected
+        target (the stop-gradient is on ``z``, the twin's output). Readings go to
+        ``stats`` as detached tensors (no host sync)."""
+        tc = self.cfg.tul
+        opf = self.tul_fan_opf
+        cr = _cell_readout(cells)                                          # [B, S, M, C]
+        B, S, M, C = cr.shape
+        w = tgt["ok"].reshape(B * S)
+        q = opf.predict(cr.reshape(B * S, M, C))                           # [N, K, r]
+        zf = opf.factors(tgt["z"].reshape(B * S, C))
+        l_pred, l_fac, l_enc, st = opf_terms(
+            q, zf, tgt["zo"].reshape(B * S, C), w, float(tc.fan_opf_gamma_fac),
+            float(tc.fan_opf_gamma_enc))
+        loss = (float(tc.fan_opf_lambda_pred) * l_pred + float(tc.fan_opf_lambda_fac) * l_fac
+                + float(tc.fan_opf_lambda_enc) * l_enc)
+        stats["opf_pred"] = l_pred.detach()
+        stats["opf_fac"] = l_fac.detach()
+        stats["opf_enc"] = l_enc.detach()
+        stats["opf_target_rank"] = participation_ratio(tgt["z"].reshape(B * S, C), w)
+        stats["opf_orth_err"] = opf.orth_err()
+        stats["opf_n_slots"] = w.float().sum()
+        stats.update(st)
+        return loss
+
+    def _tul_fan_route(self, cells: Tensor, xn: Tensor, layout: SlotLayout,
+                       tgt: dict | None, stats: dict) -> dict:
+        """Arms R / T: pick ONE cell per slot. Returns the route
+        ``{"winner" [B, S] int64, "scale" [B, S, M] | None, "teacher" [B, S] | None,
+        "loss" Tensor | None}``; :meth:`_fan_route_cells` turns it into the write.
+
+        The router scores each cell (HC stream mean) against the slot's loop INPUT ``ctx``
+        — ``xn`` (the normed prelude output ``_tul_core`` returns) at the slot's first
+        prefix position, DETACHED (see :class:`FanRouter`). Winner
+        ``argmax(score + bias)``; ``p = softmax(score)``; the same at train and eval.
+
+        "reader" (R): the cells enter the scorer WITH grad and ``scale = p``, so the
+        coda's CE reaches the router and every cell's score through ``p_winner``.
+        "latent" (T): the scorer reads the cells DETACHED and ``scale`` is None (a hard
+        read), so the coda's CE reaches neither the router nor any cell through it. With a
+        target (labels present), ``g`` maps each detached cell into target space, the
+        teacher picks ``argmin_i ||g(sg(cell_i)) - z||^2`` under no_grad, and the loss is
+        ``fan_rlat_lambda * (CE(softmax(score), teacher) + MSE(g))`` over the ``ok``
+        slots — its gradient reaches the router and ``g`` and nothing else.
+
+        The winner counts of the valid slots are accumulated for the post-step balance
+        update only in a training forward with grad enabled (an eval or warmup forward
+        run under no_grad moves nothing)."""
+        tc = self.cfg.tul
+        router = self.tul_fan_router
+        latent = tc.fan_route == "latent"
+        cr = _cell_readout(cells)                                          # [B, S, M, C]
+        B, S, M, C = cr.shape
+        ctx = gather_valid(xn, layout.slot_index, layout.slot_valid)
+        while ctx.dim() > 3:
+            ctx = ctx.mean(dim=-2)
+        ctx = ctx.detach()
+        scores = router.scores(cr.detach() if latent else cr, ctx)          # [B, S, M]
+        winner, p = router.select(scores)
+        valid = layout.slot_valid
+        if self.training and torch.is_grad_enabled():
+            router.record_load(winner, valid)
+        vf = valid.float()
+        nv = vf.sum().clamp_min(1.0)
+        oh = F.one_hot(winner, M).float()
+        load = (oh * vf.unsqueeze(-1)).sum(dim=(0, 1)) / nv
+        pd = p.detach()
+        ent = -(pd * pd.clamp_min(1e-12).log()).sum(dim=-1)
+        stats["route_entropy"] = (ent * vf).sum() / nv
+        stats["route_p_win"] = (pd.gather(-1, winner.unsqueeze(-1)).squeeze(-1) * vf).sum() / nv
+        for i in range(M):
+            stats[f"route_load_k{i}"] = load[i]
+            stats[f"route_bias_k{i}"] = router.bias[i].detach().float()
+        route = {"winner": winner, "scale": None if latent else p, "teacher": None,
+                 "loss": None}
+        if latent and tgt is not None:
+            okf = tgt["ok"].float()
+            n = okf.sum().clamp_min(1.0)
+            gz = self.tul_fan_teacher(cr.detach())                          # [B, S, M, C]
+            mse = (gz - tgt["z"].unsqueeze(2)).square().mean(dim=-1)        # [B, S, M]
+            g_mse = (mse.mean(dim=-1) * okf).sum() / n
+            teacher = mse.detach().argmin(dim=-1)                           # [B, S]
+            ce = F.cross_entropy(scores.reshape(B * S, M), teacher.reshape(B * S),
+                                 reduction="none").view(B, S)
+            r_ce = (ce * okf).sum() / n
+            route["teacher"] = teacher
+            route["loss"] = float(tc.fan_rlat_lambda) * (r_ce + g_mse)
+            stats["rlat_ce"] = r_ce.detach()
+            stats["rlat_g_mse"] = g_mse.detach()
+            stats["teacher_router_agree"] = ((winner == teacher).float() * okf).sum() / n
+            toh = F.one_hot(teacher, M).float()
+            tshare = (toh * okf.unsqueeze(-1)).sum(dim=(0, 1)) / n
+            for i in range(M):
+                stats[f"rlat_teacher_share_k{i}"] = tshare[i]
+        return route
+
+    @staticmethod
+    def _fan_route_cells(cells: Tensor, route: dict) -> Tensor:
+        """The ONE home of a router arm's write: ``[B, S, M, (n,) C]`` cells ->
+        the same shape with every LOSER cell exactly zero and the winner kept, scaled by
+        ``route["scale"][..., winner]`` (arm R's gate) when a scale is given.
+
+        The result goes through the ordinary 1:1 ``prefix_project(cells=...)``, so a
+        loser's prefix cell is ``W_prefix[i] 0`` plus ``E_pass[i]`` if that embedding is
+        built — the same blank ``_tul_fan_stream_write`` and the plan ablation write. On
+        these arms it is NOT built (nowta's ``prefix_source: exit``), so a loser's prefix
+        cell is EXACTLY zero (``tests/test_tul_fan_router.py``). Were ``E_pass`` built, it
+        would be a per-cell-INDEX constant: the only per-slot fact the blank pattern can
+        reveal is WHICH index won, which the winner's own ``W_prefix[winner]`` projection
+        reveals anyway. The loser's value is
+        multiplied by an exact 0, so the coda's gradient to it is exactly 0 through this
+        write (a loser still gets gradient through the router score under "reader", and
+        through the span decoder, which reads the MEAN of the raw cells as on nowta)."""
+        oh = F.one_hot(route["winner"], int(cells.shape[2])).to(cells.dtype)   # [B, S, M]
+        if route["scale"] is not None:
+            oh = oh * route["scale"].to(cells.dtype)
+        return cells * oh.view(*oh.shape, *([1] * (cells.dim() - 3)))
+
+    # ── the EMA target twin's lifecycle (trainer hooks) ──────────────────────────────
+
+    def tul_fan_target_build(self) -> bool:
+        """Deep-copy the live prelude into the EMA target twin (arms F and T). Returns
+        False (and builds nothing) on every other model.
+
+        The trainer calls this ONCE, right AFTER quantisation (the twin must carry the
+        same ternary parametrisation as the live prelude, or the target would be computed
+        by a different function) and BEFORE torch.compile (so the twin's blocks run eager
+        and the compiled live MLPs are not duplicated). After the weights load
+        (``init_from`` / resume) it calls :meth:`tul_fan_target_sync`."""
+        if not self._fan_target_needed:
+            return False
+        self.__dict__["_fan_target"] = None
+        np_ = int(self.cfg.n_prelude)
+        self.__dict__["_fan_target"] = FanTargetFront(
+            self.prelude, list(self.x0_injects)[:np_], self.value_embeds)
+        return True
+
+    def tul_fan_target_sync(self, state: dict | None = None) -> str:
+        """After the weights load: load the checkpoint's own twin ``state`` STRICTLY (a
+        resume keeps its EMA; re-snapshotting would jump the target), or, without one,
+        copy the live prelude into the twin. Returns ``"resume"`` or ``"snapshot"``."""
+        twin = self.__dict__.get("_fan_target")
+        if twin is None:
+            raise RuntimeError("tul_fan_target_sync before tul_fan_target_build.")
+        if state is not None:
+            twin.load_state_dict(state, strict=True)
+            return "resume"
+        twin.sync_from_(self, int(self.cfg.n_prelude))
+        return "snapshot"
+
+    def tul_fan_target_state(self) -> dict | None:
+        """The twin's ``state_dict`` for the checkpoint (key ``fan_target``), or None."""
+        twin = self.__dict__.get("_fan_target")
+        return None if twin is None else twin.state_dict()
+
+    def tul_fan_after_step(self) -> None:
+        """The fan arms' post-optimizer-step updates, in this order: the EMA twin moves
+        toward the weights the step produced (F, T; momentum ``fan_target_ema``), ``P`` is
+        QR-retracted onto the orthonormal matrices (F), the router's balance bias moves by
+        ``fan_route_bias_u`` from the step's accumulated load (R, T). A no-op on every
+        other model. The trainer calls it once per optimizer step, after every other
+        post-step constraint, on the UN-compiled module."""
+        tc = self.cfg.tul
+        if tc is None:
+            return
+        if self._fan_target_needed:
+            twin = self.__dict__.get("_fan_target")
+            if twin is None:
+                raise RuntimeError("tul_fan_after_step: the EMA target twin was never "
+                                   "built (tul_fan_target_build).")
+            twin.ema_update_(self, int(self.cfg.n_prelude), float(tc.fan_target_ema))
+        if self.tul_fan_opf is not None:
+            self.tul_fan_opf.retract_()
+        if self.tul_fan_router is not None:
+            self.tul_fan_router.balance_step_(float(tc.fan_route_bias_u))
+
+    def tul_fan_reset_route_load(self) -> None:
+        """Drop the router's accumulated winner counts. The trainer calls it once before
+        the training loop, so the compile-warmup forwards (train mode, grad on) do not
+        vote in the first balance step. A no-op without a router."""
+        if self.tul_fan_router is not None:
+            self.tul_fan_router.pending.zero_()
 
     def _tul_db1_precheck(self, what: str) -> None:
         """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
@@ -11720,6 +12043,17 @@ class MORPHTransformer(nn.Module):
         x, x0, bigram_emb = self._tul_front(input_ids, layout,
                                             attn_kwargs=_front_kw,
                                             ret_reset_mask=_front_reset)
+        # ── the fan's EMA-prelude target (tul.fan_opf / tul.fan_route: latent) ─────────
+        # Built HERE, on the base batch right after the live front, because the twin runs
+        # the SAME front on the SAME row under the SAME strict masks. Labelled forwards in
+        # `plan_mode == "normal"` only: it is a training target (and a val instrument), and
+        # a label-free forward of these arms is nowta's forward. `_fan_target_needed` is a
+        # build-time bool, so every other model traces the line out. (`code_enum_k > 1`,
+        # which would expand the batch below, is refused with these arms.)
+        _fan_tgt = None
+        if self._fan_target_needed and labels is not None and plan_mode == "normal":
+            _fan_tgt = self._tul_fan_target(input_ids, labels, layout, _front_kw,
+                                            _front_reset, x)
 
         # ── tul.gram_objective="iw" (LXTUL-GK): K prior rollouts per row ─────────────
         # The front above ran ONCE on the base batch. From here the batch is expanded
@@ -11805,6 +12139,10 @@ class MORPHTransformer(nn.Module):
         # labels present) and the head's per-cell NLL table the val oracle reads.
         fan_head_wta_loss = None
         _fan_head_table = None
+        # tul.fan_opf (arm F): the OPF objective; tul.fan_route (arms R / T): the route
+        # (winner, gate, teacher, arm T's loss) the write and the val oracle read.
+        fan_opf_loss = None
+        _fan_route = None
         fan_stats: dict[str, float] = {}
         _fan_cells = None
         # LX efficient-exploration knobs 3/4/6 (2026-09-29). Bound here for the same
@@ -12104,6 +12442,19 @@ class MORPHTransformer(nn.Module):
                                 and plan_mode == "normal"):
                             fan_head_wta_loss, _fan_head_table = self._tul_fan_head_wta(
                                 _reg_cells, labels, layout, fan_stats)
+                        # Arm F (tul.fan_opf): each cell predicts its factor of the
+                        # EMA-prelude code of the next span, WITH grad into the cells.
+                        # The target is only a target: nothing built from it reaches
+                        # the coda's input or the loop.
+                        if self.tul_fan_opf is not None and _fan_tgt is not None:
+                            fan_opf_loss = self._tul_fan_opf(_reg_cells, _fan_tgt,
+                                                             fan_stats)
+                        # Arms R / T (tul.fan_route): pick ONE cell per slot; the write
+                        # below reads only the pick (`_fan_route_cells`). Every forward,
+                        # labelled or not: the pick IS the model's read.
+                        if self.tul_fan_router is not None:
+                            _fan_route = self._tul_fan_route(_reg_cells, xn, layout,
+                                                             _fan_tgt, fan_stats)
                     else:
                         h_slots, _fan_w = self.tul_fan(_reg_cells)
                     # Detached 0-dim TENSORS, not `float(...)` (perf: no host sync on the
@@ -12506,7 +12857,14 @@ class MORPHTransformer(nn.Module):
                 # — the strict ruler's write, at the ruler's prefix width. The register's
                 # 1:1 write would reintroduce exactly the 4x-wider readout that made its
                 # own 0.022 nat win unreadable.
-                _cells = self._tul_plan_ablate(_reg_cells, layout, plan_mode)
+                #
+                # Arms R / T (tul.fan_route): the stack is the ROUTED one — the winner
+                # (scaled by its gate under "reader"), every loser exactly zero — so the
+                # coda reads the pick alone, through the same 1:1 write. The ablation
+                # then acts on the routed stack (a shuffle moves the pick with its slot).
+                _src = (_reg_cells if _fan_route is None
+                        else self._fan_route_cells(_reg_cells, _fan_route))
+                _cells = self._tul_plan_ablate(_src, layout, plan_mode)
                 h_slots = _cells.mean(dim=2)
             elif _vq_cells is not None:
                 # The K lifted codes go 1:1 into the K prefix cells. The ablation runs on
@@ -13110,7 +13468,34 @@ class MORPHTransformer(nn.Module):
                                  layout, L, keep, _coda_kw, tg_reset, fan_stats,
                                  **({"n_rollouts": _iw_k} if self._code_enum_k else {}),
                                  **({"head_table": _fan_head_table}
-                                    if _fan_head_table is not None else {}))
+                                    if _fan_head_table is not None else {}),
+                                 **({"route": _fan_route} if _fan_route is not None else {}))
+        if fan_opf_loss is not None and groups is not None:
+            # tul.fan_opf (arm F): folded like `fan_head_wta_weighted` — the WEIGHTED term
+            # is exposed so train.py subtracts `opf_weighted` at train AND val and
+            # train/loss and val loss stay the MODEL's CE. Its readings (`opf_*`) are in
+            # `fan_stats`. Built at train and eval (labels present, plan_mode normal).
+            groups = dict(groups)
+            groups["opf_weighted"] = fan_opf_loss.detach()
+            groups["loss"] = groups["loss"] + fan_opf_loss
+        elif (self.tul_fan_opf is not None and groups is not None and labels is not None
+              and plan_mode == "normal"):
+            raise RuntimeError(
+                "tul.fan_opf but this forward never computed the OPF term (it is wired at "
+                "the write-all fan seam of the slot-loop branch only). Refusing to return "
+                "a loss without it.")
+        if _fan_route is not None and _fan_route["loss"] is not None and groups is not None:
+            # tul.fan_route="latent" (arm T): the teacher's router CE + g's MSE, same
+            # contract (`rlat_weighted` subtracted at train and val). Its gradient reaches
+            # the router and g only (their inputs are detached).
+            groups = dict(groups)
+            groups["rlat_weighted"] = _fan_route["loss"].detach()
+            groups["loss"] = groups["loss"] + _fan_route["loss"]
+        elif (self.tul_fan_teacher is not None and groups is not None and labels is not None
+              and plan_mode == "normal"):
+            raise RuntimeError(
+                "tul.fan_route='latent' but this forward never computed the teacher term. "
+                "Refusing to return a loss without it.")
         if fan_repel_loss is not None and groups is not None:
             # Same contract as `row_contrast_weighted` / `spandec_weighted`: the WEIGHTED
             # term is exposed so train.py subtracts it and train/loss stays the MODEL's

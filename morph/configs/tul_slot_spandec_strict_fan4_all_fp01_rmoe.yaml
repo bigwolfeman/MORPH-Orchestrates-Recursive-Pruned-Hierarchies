@@ -1,0 +1,35 @@
+# Arm R "slot-spandec-strict-fan4-all-fp01-rmoe" (2026-09-30): nowta + a READER-trained
+# top-1 router, MoE style. Composes nowta (`tul_slot_spandec_strict_fan4_all_fp01_nowta`)
+# and changes ONE key plus the run name:
+#
+#   tul.fan_route   none -> reader
+#
+# A lightning-indexer scorer (rank tul.fan_route_rank 64) scores each cell against the
+# slot's loop input; winner = argmax(score + b), b a per-cell load-balance bias (DeepSeek-V3,
+# b_i += 1e-3 * sign(mean_load - load_i) after every optimizer step; selection only). The
+# coda reads ONLY the winner, scaled by p_winner = softmax(score)[winner] (Switch
+# Transformer): the losers' source cells are written as zero (their prefix cells are
+# exactly zero: prefix_source exit builds no E_pass). The coda's token CE trains the router through
+# p_winner and credits the winning cell alone. The losers stay visible to later slots'
+# LOOP. Same selection at train and eval. The span decoder still reads the MEAN of the raw
+# cells, as on nowta (so a loser still gets the span decoder's gradient).
+#
+# WHAT TO READ:
+#   * val/ce_tokens against nowta (reads all four cells) and against arm T (same read,
+#     latent-trained router).
+#   * fan/router_coda_agree (chance 0.25) and fan/router_pick_regret vs
+#     fan/rand_pick_regret (nats/token): does the reader's gradient teach the router the
+#     coda's own preference?
+#   * fan/route_load_k*, fan/route_bias_k* (a bias that runs away is a router that
+#     collapses to one cell), fan/route_entropy, fan/route_p_win (the write's scale: 0.25
+#     at a uniform router shrinks the written cell 4x).
+# Note: .agents/notes/proposed/architecture/2026-09-30-fan-opf-and-routers.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_nowta
+  - _self_
+
+tul:
+  fan_route: reader
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-rmoe

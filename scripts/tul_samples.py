@@ -131,6 +131,21 @@ def load_ckpt(cfg, path, device, tul_cfg):
         _nref = sum(p.numel() for p in model.code_ref.parameters())
         print(f"    [code_ref] frozen VAE-stage twin {how}: {_nref/1e6:.1f}M parameters; "
               f"every code target and every grade is measured against it")
+    # tul.fan_opf / tul.fan_route="latent" (2026-09-30): the EMA prelude twin is not a
+    # registered submodule either; it rides the `fan_target` key. A labelled forward of
+    # those arms computes its target with the twin and RAISES without one, so it is built
+    # here (after `build_model_with_quant`, i.e. after quantisation, the trainer's order)
+    # and loaded strictly from the checkpoint. A checkpoint without the key is refused
+    # for the code_ref reason: a target re-snapshotted from the live weights is not the
+    # target the run trained against.
+    if model.tul_fan_target_build():
+        ft_state = ck.get("fan_target") if isinstance(ck, dict) else None
+        if ft_state is None:
+            print(f"LOAD_FAIL {path}: tul.fan_opf / tul.fan_route='latent' is ON but this "
+                  f"checkpoint carries no `fan_target` key (the EMA prelude twin).")
+            sys.exit(1)
+        ft_state = {k.replace("_orig_mod.", ""): v for k, v in ft_state.items()}
+        print(f"    [fan-target] EMA prelude twin {model.tul_fan_target_sync(ft_state)}")
     return model.eval(), int(ck.get("step", -1))
 
 

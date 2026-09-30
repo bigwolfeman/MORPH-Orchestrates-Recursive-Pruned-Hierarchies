@@ -1,0 +1,31 @@
+# Arm T "slot-spandec-strict-fan4-all-fp01-rlat" (2026-09-30): nowta + the same top-1
+# router and read as arm R, trained by a LATENT TEACHER instead of the reader. Composes nowta
+# (`tul_slot_spandec_strict_fan4_all_fp01_nowta`) and changes ONE key plus the run name:
+#
+#   tul.fan_route   none -> latent
+#
+# Target z: arm F's (EMA-prelude code of the next span, momentum tul.fan_target_ema 0.996).
+# A map g (LayerNorm -> Linear d->d) reads each cell DETACHED and is trained by MSE onto z;
+# the teacher picks argmin_i ||g(sg(cell_i)) - z||^2 under no_grad; the router (inputs
+# detached) is trained by cross-entropy onto that pick. Folded as rlat_weighted =
+# tul.fan_rlat_lambda (1.0) * (router CE + g MSE); none of it reaches the cells. The coda
+# reads the ROUTER's pick HARD (no p: the reader's CE does not train this router), at train
+# and eval, with arm R's load-balance bias. The cells get winner-only credit from the coda.
+#
+# WHAT TO READ:
+#   * val/ce_tokens against nowta and arm R.
+#   * fan/teacher_coda_agree (chance 0.25): is the latent teacher's pick the coda's best?
+#     The latent-WTA probe (2026-09-29) read chance for every latent scorer it tried.
+#   * val/fan_teacher_router_agree (the router fits the teacher), fan/router_coda_agree,
+#     fan/router_pick_regret vs fan/rand_pick_regret.
+#   * fan/rlat_teacher_share_k* (a teacher that always names one cell is a collapsed g).
+# Note: .agents/notes/proposed/architecture/2026-09-30-fan-opf-and-routers.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_nowta
+  - _self_
+
+tul:
+  fan_route: latent
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-rlat

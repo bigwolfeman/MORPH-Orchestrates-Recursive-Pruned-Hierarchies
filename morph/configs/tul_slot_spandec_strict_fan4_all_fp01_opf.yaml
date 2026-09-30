@@ -1,0 +1,37 @@
+# Arm F "slot-spandec-strict-fan4-all-fp01-opf" (2026-09-30): nowta + Orthogonal Predictive
+# Factorization on the cells (JEPA-Anything, arXiv 2609.20800, Eqs. 2-10). Composes nowta
+# (`tul_slot_spandec_strict_fan4_all_fp01_nowta`: write-all fan, M=4 cells each written 1:1
+# into its prefix cell, NO WTA term, epivol 0.1, fixed-point term 0.1) and changes ONE key
+# plus the run name:
+#
+#   tul.fan_opf   false -> true
+#
+# The target of slot s is the EMA twin of the PRELUDE (momentum tul.fan_target_ema 0.996,
+# the default; the paper does not state m) run on the same row under the same strict masks,
+# mean-pooled over span s+1's token positions (span_ce_index's bin s+1), LayerNormed without
+# affine. An orthonormal projector P (QR-retracted after every optimizer step, so no L_orth)
+# splits it into 4 factors of d/4 = 256; cell k's exit state predicts factor k through its
+# own MLP q_k WITH grad into the loop, jointly with the coda's token CE. Weights at their
+# defaults: lambda_pred 1.0, lambda_fac 0.05, lambda_enc 0.02 (paper Table 10), gamma_fac
+# and gamma_enc 0.1. The coda's read is nowta's (all four cells, one pass): no train/deploy
+# gap, and a label-free forward is nowta's forward.
+#
+# WHAT TO READ (pairs with nowta's 5k run):
+#   * val/ce_tokens against nowta (0.036 nats behind a2 at 5k): does a per-cell job buy CE?
+#   * fan/opf_r2_k{0..3} (val: val/fan_opf_r2_k*): 0 = predicts the batch mean, 1 perfect.
+#     Near-0 R^2 with a falling L_pred is the target collapsing, not the cells learning.
+#   * fan/opf_target_rank (participation ratio of the target batch; LCTUL-J's collapse
+#     read 77 -> 40) and fan/opf_enc_std_min (L_enc's guard on the ONLINE prelude).
+#   * fan/opf_orth_err ~1e-6 (the retraction runs), fan/oracle_gap vs nowta's (do the cells
+#     specialise?), and tok/s against nowta (the twin's no-grad prelude pass).
+# FOOT GUN: the twin is NOT in `model`; it rides the checkpoint's `fan_target` key.
+# Note: .agents/notes/proposed/architecture/2026-09-30-fan-opf-and-routers.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_nowta
+  - _self_
+
+tul:
+  fan_opf: true
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-opf
