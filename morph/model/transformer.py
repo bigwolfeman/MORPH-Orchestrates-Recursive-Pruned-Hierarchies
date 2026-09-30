@@ -1294,6 +1294,57 @@ def span_ce_index(labels: Tensor, layout: SlotLayout):
     return gid, keep_tok, lab, G
 
 
+def fan_head_wta_targets(labels: Tensor, layout: SlotLayout, max_tokens: int
+                         ) -> tuple[Tensor, Tensor, Tensor]:
+    """``tul.fan_all_wta_grader="head"``: the head grader's target, per slot, laid out for
+    :class:`~morph.model.tul_spandec_parallel.ParallelSpanHead` — ``(ids [B, S, J] int64,
+    valid [B, S, J] bool, n_drop 0-dim int64)``.
+
+    THE SAME TOKENS THE CODA'S WTA TABLE SCORES, built from :func:`span_ce_index`'s own
+    bins so the two cannot drift. The coda grader's table charges slot ``s`` with the
+    summed CE of every scored position in bin ``s + 1`` (``[:, 1:]``), where a scored
+    position is a real TOKEN with a label (``keep_tok``) and its CE is of its LABEL. So
+    this target is the LABELS at bin ``s + 1``'s positions, in position order, valid
+    where the slot is real — for span ``s + 1`` that is its tokens 2..n plus the first
+    token of span ``s + 2`` (the boundary token's label). It is NOT
+    :func:`~morph.model.tul_spandec.span_slots` on ``input_ids`` (the parallel head's own
+    target): that is one token earlier, charges ``t_1`` of span ``s + 1`` (which the coda
+    scores at span ``s``'s boundary token, a position that cannot read slot ``s``'s
+    cells), and drops the dump bin that the table scores for the last slot of a row the
+    packer ended at ``max_slots``.
+
+    Slot ``s`` is supervised (``valid.any(-1)``) exactly when the coda table's ``ok`` is
+    true for it (``slot_valid & n_tok > 0``), and ``valid.sum(-1)`` is the table's own
+    per-slot token count. ``n_drop`` counts scored positions at offset ``>= J`` (or a
+    negative offset, which the packer cannot produce); the config refuses a head J below
+    the span cap, so it is 0 on every legal model. The val oracle checks both equalities
+    on every batch and RAISES on a mismatch (``_tul_fan_oracle``); training does not
+    check (it would cost a host sync per step).
+
+    THE TARGET IS ONLY A TARGET. Nothing built from it is ever written into the coda's
+    input or the loop's: the head reads the cells and is scored against these ids.
+    """
+    gid, keep_tok, lab, G = span_ce_index(labels, layout)
+    B, L = labels.shape
+    S = G - 1
+    J = int(max_tokens)
+    bag = layout.bag_id.clamp(0, S)                    # span_ce_index's bin of a position
+    slot = (bag - 1).clamp(min=0)                      # bin k is slot k-1's next span
+    scored = keep_tok & (bag >= 1) & torch.gather(layout.slot_valid, 1, slot)
+    start = torch.gather(layout.slot_index, 1, slot) + layout.prefix_k
+    j = torch.arange(L, device=labels.device).view(1, L) - start
+    keep = scored & (j >= 0) & (j < J)
+    n_drop = (scored & ~keep).sum()
+    # (slot, offset) is unique per kept position, so a plain `scatter_` (no atomics); the
+    # dump column S*J takes every other position and is sliced away.
+    flat = torch.where(keep, slot * J + j.clamp(0, J - 1), torch.full_like(slot, S * J))
+    ids = lab.new_zeros(B, S * J + 1)
+    ids.scatter_(1, flat, lab)
+    ok = torch.zeros(B, S * J + 1, dtype=torch.bool, device=labels.device)
+    ok.scatter_(1, flat, keep)
+    return ids[:, :S * J].reshape(B, S, J), ok[:, :S * J].reshape(B, S, J), n_drop
+
+
 def pad_vocab_align8(w_head: Tensor) -> Tensor:
     """Zero-row-pad a ``[V, d]`` weight's vocab axis to the next multiple of 8.
 
@@ -2637,6 +2688,17 @@ class MORPHTransformer(nn.Module):
         # branch on it is Python-level and traces out at the default 0.
         self._fan_history_streams: int = int(
             cfg.tul.fan_history_streams) if cfg.tul is not None else 0
+        # `tul.fan_all_wta_grader == "head"` — a BUILD-TIME constant, same rule: the
+        # forward's branches on it are Python-level and trace out at the default "coda".
+        # TULConfig refuses "head" without the write-all fan and the live parallel head,
+        # so both exist whenever this is True (asserted below, after the head is built).
+        self._fan_head_grader: bool = bool(
+            cfg.tul is not None and cfg.tul.fan_all_wta_grader == "head")
+        if self._fan_head_grader and (self.tul_fan is None or self.tul_fan.mode != "all"
+                                      or self.tul_spandec_par is None):
+            raise RuntimeError(
+                "tul.fan_all_wta_grader='head' built without the write-all fan or the "
+                "parallel span head; TULConfig should have refused this configuration.")
         if self._fan_seed_noise > 0.0 and cfg.core_state_init != "prelude":
             # The one refusal this knob needs. SCSE is NOT checked here and that is
             # deliberate: a fan forces `slot_cells == fan_k >= 2`, and the register above
@@ -7895,7 +7957,8 @@ class MORPHTransformer(nn.Module):
     def _tul_fan_oracle(self, cells: Tensor, xh: Tensor, base: Tensor, x0: Tensor,
                         bigram_emb, input_ids: Tensor, labels: Tensor,
                         layout: SlotLayout, L: int, keep, coda_kw, tg_reset,
-                        stats: dict, n_rollouts: int = 1) -> None:
+                        stats: dict, n_rollouts: int = 1,
+                        head_table: tuple | None = None) -> None:
         """LXTUL's ORACLE-OVER-STREAM (``tul.fan_k``) — the arm's falsifier, eval only.
 
         PLR Figure 4 and Parallel-TTS's coverage@N, in the units MORPH is scored in. For
@@ -7926,6 +7989,19 @@ class MORPHTransformer(nn.Module):
         the per-span mixture ``-log mean_k exp(-CE_k(span))`` over the rollouts, on the
         BASE rows. The oracle's minimum is then over streams of mixtures. ``1`` — every
         other model — reads the rows as they are.
+
+        ``head_table`` (``tul.fan_all_wta_grader="head"`` only; the 4-tuple
+        :meth:`_tul_fan_head_wta` returns): the head grader priced against this table, on
+        the same scored slots. ``fan/head_coda_agree`` = the fraction of scored slots
+        whose head argmin cell IS this table's argmin (chance ``1/K``);
+        ``fan/head_pick_regret`` = (the coda's span CE of the head's pick minus the coda's
+        best) summed over the slots and divided ONCE by their token count, nats per
+        token; ``fan/rand_pick_regret`` = the same for a uniformly random cell (the mean
+        over cells minus the best), the floor a grader that knows nothing reaches. The
+        table holds SUMMED span CEs, so neither regret is multiplied by a token count
+        again (the ``latent_wta_probe.py`` units bug). RAISES if the head scored a
+        different slot set or a different token count than this table (the "identical
+        span" contract of :func:`fan_head_wta_targets`).
 
         COST: K extra ``_back_region`` passes per eval batch, no backward, ``no_grad``,
         and compiled code is left out of it (``torch.compiler.disable``) because the
@@ -7965,6 +8041,25 @@ class MORPHTransformer(nn.Module):
         ok = layout.slot_valid & (n_tok > 0)
         denom = n_tok[ok].sum().clamp_min(1.0)
         best, arg = ce.min(dim=-1)
+        if head_table is not None:
+            if n_rollouts != 1:
+                raise RuntimeError("head_table under code rollouts (refused in TULConfig)")
+            h_nll, h_sup, h_ntok, h_drop = head_table
+            _expect = torch.where(layout.slot_valid, n_tok, torch.zeros_like(n_tok))
+            if (int(h_drop) != 0 or not torch.equal(h_sup, ok)
+                    or not torch.equal(h_ntok.to(_expect.dtype), _expect)):
+                raise RuntimeError(
+                    "fan head grader: the head scored a different slot set or token count "
+                    f"than the coda's span-CE table (dropped {int(h_drop)}, slots "
+                    f"{int(h_sup.sum())} vs {int(ok.sum())}, tokens "
+                    f"{float(h_ntok.sum())} vs {float(_expect.sum())}): the two graders "
+                    "would not rank the cells on the same tokens.")
+            if bool(ok.any()):
+                h_arg = h_nll.argmin(dim=-1)                                   # [B, S]
+                stats["head_coda_agree"] = float((h_arg[ok] == arg[ok]).float().mean())
+                _picked = ce.gather(-1, h_arg.unsqueeze(-1)).squeeze(-1)
+                stats["head_pick_regret"] = float((_picked - best)[ok].sum() / denom)
+                stats["rand_pick_regret"] = float((ce.mean(dim=-1) - best)[ok].sum() / denom)
         stats["oracle_ce"] = float(best[ok].sum() / denom)
         stats["single_ce"] = float(ce[..., 0][ok].sum() / denom)
         stats["mixed_ce"] = float(mixed[ok].sum() / denom)
@@ -8240,8 +8335,11 @@ class MORPHTransformer(nn.Module):
         state, w = self.tul_fan(cells)                                       # mean, uniform
         # `fan_all_wta_lambda: 0` (LX-Fan) builds NO term and runs NO pass: the K no-grad
         # coda passes exist only to pick the winner the term charges. A build-time float.
+        # `tul.fan_all_wta_grader: head` runs none of them either: the parallel head
+        # grades the cells instead (`_tul_fan_head_wta`, called by `_forward_tul`), so
+        # this method is the plain write-all read there (a build-time bool).
         if (not self.training or labels is None or plan_mode != "normal"
-                or tc.fan_all_wta_lambda == 0.0):
+                or tc.fan_all_wta_lambda == 0.0 or self._fan_head_grader):
             return state, w, None
         if tc.coda_token_input == "embed":
             base = x0.unsqueeze(2).expand_as(xn) if self._is_hc else x0
@@ -8640,6 +8738,99 @@ class MORPHTransformer(nn.Module):
         g_n_tok = n_tok[:B0] if _grad_map else n_tok
         wta = ce_w[g_ok].sum() / g_n_tok[g_ok].sum().clamp_min(1.0)
         return state, w, wta
+
+    def _tul_fan_head_wta(self, cells: Tensor, labels: Tensor, layout: SlotLayout,
+                          stats: dict) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor, Tensor]]:
+        """``tul.fan_all_wta_grader="head"``: the write-all fan's WTA term, GRADED BY THE
+        PARALLEL SPAN HEAD instead of by M extra coda passes (arm hwta, 2026-09-29).
+
+        Returns ``(loss, table)``. ``loss`` is the relaxed-WTA term (unweighted; the caller
+        multiplies by ``fan_all_wta_lambda``). ``table`` is ``(nll [B, S, M], sup [B, S],
+        n_tok [B, S], n_drop)``, all DETACHED: the head's summed NLL of each cell's span,
+        which slots were scored, their token counts and the dropped-token count. The val
+        oracle reads it to price the head's pick against the coda's
+        (``fan/head_coda_agree``, ``fan/head_pick_regret``).
+
+        WHAT THE HEAD READS. Cell ``i`` ALONE: ``_readout(cells[:, :, i])`` — the same
+        readout (HC stream mean -> ``lm_mixer`` -> ``final_norm``) every reader of
+        ``h_slots`` goes through, applied to the cell the coda's prefix cell ``i`` is
+        written from (``prefix_project(cells=...)`` projects exactly ``cells[:, :, i]``
+        through ``W_prefix[i]``). Never the mean of the cells. The ``M`` cells ride the
+        head's reader axis (``rollout_logp``'s ``R``): the head's blocks run each
+        (reader, slot) row on its own, so NLL_i is a function of cell ``i`` alone
+        (``tests/test_tul_fan_head_wta.py`` perturbs cell ``j`` and reads NLL_i unchanged).
+
+        WHAT IT IS SCORED ON. :func:`fan_head_wta_targets`: the labels the coda's WTA
+        table scores for slot ``s`` (``span_ce_index``'s bin ``s + 1``), so the two
+        graders rank the cells on the identical tokens. THE TRUE NEXT SPAN IS ONLY A
+        TARGET HERE: its ids go to the head's vocabulary GEMM as labels and nowhere else.
+        Nothing derived from them is written into the coda's input or the loop's state;
+        the coda's pass (in ``_forward_tul``) never sees this method's output except the
+        scalar loss.
+
+        THE TERM. Per scored slot, relaxed winner-takes-all over the ``M`` cells: weight
+        ``1 - eps`` on the head's argmin cell and ``eps / (M - 1)`` on each other
+        (``eps = fan_select_eps``; the weights are a stop-grad function of the NLLs), summed
+        over the slots and divided by their token count — the coda term's normalisation
+        (its winner-alone span CE over the scored slots / their tokens). The gradient
+        reaches the head AND the cells (the loop, the register, ``lm_mixer`` and
+        ``final_norm``); the tied table is detached (the head's own rule).
+
+        FOOT GUNS, stated where they bite:
+        * The head is TRAINING-ONLY and absent at deploy. There is no train/deploy
+          mismatch for the READ: the coda reads all M cells in its one ordinary pass at
+          train exactly as at deploy; the grader only decides which cell is charged.
+        * The head can be GAMED: the cells can learn to be easy for a small committed
+          reader rather than useful to the coda. ``fan/head_coda_agree`` (val, chance
+          1/M) and ``fan/head_pick_regret`` against ``fan/rand_pick_regret`` are the
+          instruments: a gamed grader drifts to chance agreement and random-pick regret.
+        * A committed product reader is capped at the product of the span's marginals
+          (``product_reader_le``, tul_spandec_parallel.py); it ranks cells on what that
+          reader can see, which is not guaranteed to be what the coda uses.
+
+        COST: one head pass over ``M`` readers (checkpointed at train, the Stage-1 K = 4
+        precedent) and no coda pass. Under ``torch.compile`` this method is traced with
+        the rest of the forward; the boolean-mask gathers inside ``token_logp`` sync once.
+        """
+        tc = self.cfg.tul
+        head = self.tul_spandec_par
+        B, S, M = int(cells.shape[0]), int(cells.shape[1]), int(cells.shape[2])
+        z = self._readout(cells.reshape(B, S * M, *cells.shape[3:])).view(B, S, M, -1)
+        ids, valid, n_drop = fan_head_wta_targets(labels, layout, head.max_tokens)
+        sup_bs = valid.any(dim=-1)                                          # [B, S]
+        ntok_bs = valid.sum(dim=-1)                                         # [B, S]
+        stats["head_wta_dropped"] = n_drop.detach().float()
+        if not bool(sup_bs.any()):
+            # No slot of the batch has a scored next span: a zero term still on the graph
+            # (the coda grader's `cells.sum() * 0.0` precedent), and an empty table.
+            empty = z.new_zeros(B, S, M).float()
+            return z.sum() * 0.0, (empty, sup_bs, ntok_bs, n_drop)
+        zr = z.permute(2, 0, 1, 3)                                          # [M, B, S, C]
+        w = self.embed.lm_weight().detach()
+        _kw = dict(chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id)
+        if self.training:
+            logp_slot, n_tok, sup = checkpoint(head.rollout_logp, zr, ids, valid, w,
+                                               use_reentrant=False, **_kw)
+        else:
+            logp_slot, n_tok, sup = head.rollout_logp(zr, ids, valid, w, **_kw)
+        nll = -logp_slot                                                   # [M, N] fp32
+        eps = float(tc.fan_select_eps)
+        with torch.no_grad():
+            win = nll.argmin(dim=0)                                         # [N]
+            wts = torch.full_like(nll, eps / (M - 1))
+            wts.scatter_(0, win.unsqueeze(0), 1.0 - eps)
+        n = n_tok.clamp_min(1.0)
+        loss = (wts * nll).sum() / n
+        nd = nll.detach()
+        stats["head_wta_ce"] = loss.detach()
+        stats["head_wta_winner_nll"] = nd.gather(0, win.unsqueeze(0)).sum() / n
+        stats["head_wta_mean_nll"] = nd.mean(dim=0).sum() / n
+        stats["head_wta_n_tokens"] = n_tok.detach()
+        for i in range(M):
+            stats[f"head_wta_share_k{i}"] = (win == i).float().mean()
+        table = nd.new_zeros(B, S, M)
+        table[sup] = nd.t()
+        return loss, (table, sup, ntok_bs, n_drop)
 
     def _tul_db1_precheck(self, what: str) -> None:
         """Shared guards for :meth:`_tul_core_db1` and :meth:`_tul_core_db1_ladder`.
@@ -11610,6 +11801,10 @@ class MORPHTransformer(nn.Module):
         fan_repel_loss = None
         fan_select_loss = None          # tul.fan_mix="select": the gate's winner CE (train)
         fan_wta_loss = None             # tul.fan_mix="all": the winner-alone span CE (train)
+        # tul.fan_all_wta_grader="head": the head-graded relaxed-WTA term (train AND eval,
+        # labels present) and the head's per-cell NLL table the val oracle reads.
+        fan_head_wta_loss = None
+        _fan_head_table = None
         fan_stats: dict[str, float] = {}
         _fan_cells = None
         # LX efficient-exploration knobs 3/4/6 (2026-09-29). Bound here for the same
@@ -11899,6 +12094,16 @@ class MORPHTransformer(nn.Module):
                             _reg_cells, xn, x0, bigram_emb, input_ids, labels, layout, L,
                             tg_attn_kwargs, tg_reset, plan_mode, fan_stats,
                             **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
+                        # tul.fan_all_wta_grader="head" (arm hwta): `_tul_fan_all` ran
+                        # no coda pass above; the parallel head grades each cell ALONE
+                        # against the true next span's labels. That span is the head's
+                        # TARGET only — nothing built from it reaches the coda's input
+                        # below or the loop. Train AND eval (the val oracle prices the
+                        # head's pick against the coda's with the returned table).
+                        if (self._fan_head_grader and labels is not None
+                                and plan_mode == "normal"):
+                            fan_head_wta_loss, _fan_head_table = self._tul_fan_head_wta(
+                                _reg_cells, labels, layout, fan_stats)
                     else:
                         h_slots, _fan_w = self.tul_fan(_reg_cells)
                     # Detached 0-dim TENSORS, not `float(...)` (perf: no host sync on the
@@ -12175,7 +12380,10 @@ class MORPHTransformer(nn.Module):
             # passed ONLY there (the `n_rep` precedent), so every other forward calls the
             # method with the arguments it always had and instruments that wrap it keep
             # working.
-            if self.tul_spandec_par is not None:
+            # Under `tul.fan_all_wta_grader: head` the head is the fan's GRADER and its
+            # only term is the WTA term above; its own mixture term would read the MEAN
+            # of the cells, which the coda never reads, so it is not run.
+            if self.tul_spandec_par is not None and not self._fan_head_grader:
                 par_loss = self._tul_spandec_par_loss(
                     h_slots, input_ids, layout, stats=par_stats,
                     **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
@@ -12704,7 +12912,8 @@ class MORPHTransformer(nn.Module):
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
-        if self.tul_spandec_par is not None and groups is not None:
+        if (self.tul_spandec_par is not None and not self._fan_head_grader
+                and groups is not None):
             # LXTUL-E's parallel span head. Same contract as `spandec_weighted`: the
             # WEIGHTED term is exposed so train.py subtracts it and train/loss and the val
             # loss stay the MODEL's CE. `par_*` stats are detached tensors (no host sync).
@@ -12899,7 +13108,9 @@ class MORPHTransformer(nn.Module):
                 and plan_mode == "normal"):
             self._tul_fan_oracle(_fan_cells, xh, base, x0, bigram_emb, input_ids, labels,
                                  layout, L, keep, _coda_kw, tg_reset, fan_stats,
-                                 **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
+                                 **({"n_rollouts": _iw_k} if self._code_enum_k else {}),
+                                 **({"head_table": _fan_head_table}
+                                    if _fan_head_table is not None else {}))
         if fan_repel_loss is not None and groups is not None:
             # Same contract as `row_contrast_weighted` / `spandec_weighted`: the WEIGHTED
             # term is exposed so train.py subtracts it and train/loss stays the MODEL's
@@ -12935,6 +13146,21 @@ class MORPHTransformer(nn.Module):
             _ww = tc.fan_all_wta_lambda * fan_wta_loss
             groups["fan_wta_weighted"] = _ww.detach()
             groups["loss"] = groups["loss"] + _ww
+        if self._fan_head_grader and groups is not None and plan_mode == "normal":
+            # tul.fan_all_wta_grader="head": the head-graded relaxed-WTA term, folded like
+            # `fan_wta_weighted` (train.py subtracts `fan_head_wta_weighted` at train AND at
+            # val, so train/loss and val loss stay the MODEL's CE). Its readings
+            # (`fan_head_wta_ce`, `_share_k{i}`, `_winner_nll`, `_mean_nll`) are already in
+            # `fan_stats`. Built at train AND eval, unlike the coda grader's term.
+            if fan_head_wta_loss is None:
+                raise RuntimeError(
+                    "tul.fan_all_wta_grader='head' but this forward path never computed "
+                    "the head-graded WTA term (it is wired at the write-all fan seam of "
+                    "the slot-loop branch only). Refusing to return a loss without it.")
+            groups = dict(groups)
+            _hw = tc.fan_all_wta_lambda * fan_head_wta_loss
+            groups["fan_head_wta_weighted"] = _hw.detach()
+            groups["loss"] = groups["loss"] + _hw
         _gr = self._gram_train
         # Consumed here and CLEARED here (the `_core_aux` contract): the stash holds a
         # graph tensor.
@@ -14116,8 +14342,11 @@ class MORPHTransformer(nn.Module):
             # at J positions, once per code. `slot_valid` counts one slot per row that has
             # no complete next span, so this is an upper bound by at most
             # `target_offset` slots per row, never an under-report.
+            # Under `tul.fan_all_wta_grader: head` the head reads each of the fan's M cells
+            # (M readers per slot) and never the mean.
             _hp = self.tul_spandec_par
-            passes = passes + (len(_hp.blocks) * _hp.n_codes * _hp.max_tokens
+            _readers = _hp.n_codes * (int(self.cfg.tul.fan_k) if self._fan_head_grader else 1)
+            passes = passes + (len(_hp.blocks) * _readers * _hp.max_tokens
                                * layout.slot_valid.sum())
         # `self.coda_span` adds NO block pass: each head is one RMSNorm and one [d, d]
         # matmul on [B, S, d] (3.2 GFLOP at the panel shape, against a ~50 TFLOP step). Its

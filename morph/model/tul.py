@@ -424,6 +424,37 @@ class TULConfig:
     # K*B0 rows to B0 rows: with it, the arm's total goes 24 -> 9 row-units at K = M = 4
     # (mixture 4 + picks 4 + grad 1).
     fan_all_wta_grad_rollouts: str = "all"   # "all" | "map" (fan_all_wta_winner="map" only)
+    # `fan_all_wta_grader` (2026-09-29, "head-graded WTA", arm hwta): WHO grades the cells
+    # for the write-all fan's winner-takes-all term. "coda" (default, bit-identical to the
+    # tree before this key): `_tul_fan_all` as above — M no-grad coda passes (cell i alone
+    # in its prefix cell) pick each slot's winner by span CE, and ONE more coda pass WITH
+    # grad charges the winner-alone span CE. "head": NONE of those coda passes run. The
+    # parallel span head (`tul.spandec_parallel`, morph/model/tul_spandec_parallel.py)
+    # reads each cell ALONE — `_readout(cell i)`, the state the coda's prefix cell i is
+    # written from, never the mean of the cells — and gives NLL_i, its summed NLL of the
+    # SAME tokens the coda's WTA table scores for the slot (`fan_head_wta_targets`: the
+    # labels at span s+1's token positions, `span_ce_index`'s own bins). The term is the
+    # RELAXED WTA over the cells, (1-eps) on the head's argmin cell and eps/(M-1) on each
+    # other (eps = `fan_select_eps`), summed over the scored slots and divided by their
+    # token count (the coda term's normalisation), times `fan_all_wta_lambda`; its
+    # gradient reaches the head AND the cells. The coda is untouched: it reads every cell
+    # in its one ordinary pass and trains on the ordinary token CE. The head's ONLY term is
+    # this one: the parallel head's own term on the MEAN of the cells is not run under
+    # "head" (it would grade an object the coda never reads, the reason the fan refuses the
+    # head otherwise).
+    # NOTE the coda grader applies eps as a RANDOM winner (hard; expected weights
+    # 1-eps+eps/M and eps/M); the head grader uses the deterministic relaxation (relaxed
+    # WTA, Rupprecht et al. 2017) because all M NLLs already exist with grad. The weights
+    # differ in the third decimal (0.9625 vs 0.95 at eps 0.05, M 4); named, not hidden.
+    # TRAINING-ONLY: at deploy there is no grader and no target, and the coda reads all
+    # the cells exactly as at train, so there is no train/deploy mismatch in the READ.
+    # Refused (`_check_fan_head_grader`, called near the top of `__post_init__`): outside
+    # `fan_mix='all'`, at `fan_all_wta_lambda == 0`, with `code_enum_k > 1`, without
+    # `spandec_parallel`, with `spandec_parallel_detach`, with a head code table, a span
+    # cap, a target offset != 1, a head J below the span cap, a non-default
+    # `spandec_parallel_weight`, a non-default winner mode and `fan_history_streams`.
+    # Note .agents/notes/proposed/architecture/2026-09-29-fan-head-graded-wta.md
+    fan_all_wta_grader: str = "coda"          # "coda" | "head" (fan_mix='all')
     fan_repel_mode: str = "cos"          # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
@@ -2354,6 +2385,12 @@ class TULConfig:
                 f"tul.hyp_merge={self.hyp_merge!r} — only 'learned' has anything trainable "
                 f"for a nonzero weight to reach ('probe' is read-only by design).")
 
+        # ── tul.fan_all_wta_grader (head-graded WTA, 2026-09-29) ───────────────────
+        # Checked HERE, near the top and unconditionally, for the `coda_logit_l2` /
+        # LX-knob reason above: later blocks of this method return early for
+        # off-by-default features, and a refusal placed after one of them never fires.
+        self._check_fan_head_grader()
+
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
         if self.loop_carry not in LOOP_CARRY_MODES:
             raise ValueError(
@@ -3859,6 +3896,68 @@ class TULConfig:
                 "passes are independent — a cut prefix would silently drop those passes' "
                 "own per-pass terms rather than truncating a chain.")
 
+    def _check_fan_head_grader(self) -> None:
+        """``tul.fan_all_wta_grader`` — who grades the write-all fan's cells for the WTA
+        term. ``"coda"`` (the default) needs nothing. ``"head"`` is refused wherever the
+        head could not grade the SAME cells on the SAME tokens the coda grader would, or
+        where its gradient could not reach the cells. Every refusal names why."""
+        if self.fan_all_wta_grader not in ("coda", "head"):
+            raise ValueError(
+                f"tul.fan_all_wta_grader must be 'coda' or 'head', got "
+                f"{self.fan_all_wta_grader!r}")
+        if self.fan_all_wta_grader == "coda":
+            return
+        _j = self.spandec_max_tokens or self.bound_span_cap
+        _refused = [
+            (self.fan_k < 2 or self.fan_mix != "all",
+             f"fan_k={self.fan_k}, fan_mix={self.fan_mix!r}: the head grades the cells "
+             f"of the write-all fan (fan_k >= 2, fan_mix='all'); any other fan has no "
+             f"per-cell WTA term to grade"),
+            (self.fan_all_wta_lambda == 0.0,
+             "fan_all_wta_lambda=0: there is no WTA term, so there is nothing to grade "
+             "(that is the no-WTA control, which needs no head)"),
+            (self.code_enum_k > 1,
+             f"code_enum_k={self.code_enum_k}: one factor only. The head grader is "
+             f"measured against a2 (no code rollouts); a head reading K x M rollout cells "
+             f"is a second axis"),
+            (not self.spandec_parallel,
+             "spandec_parallel=false: the grader IS the parallel span head, so it must "
+             "be built"),
+            (self.spandec_parallel_detach,
+             "spandec_parallel_detach=true: the WTA gradient must reach the cells (the "
+             "loop). A detached head would train only itself and the arm would have no "
+             "responsibility term at all"),
+            (self.spandec_parallel_k != 1,
+             f"spandec_parallel_k={self.spandec_parallel_k}: a head code table would put "
+             f"K head codes under each cell, a mixture inside the grade"),
+            (self.spandec_parallel_span_cap != 0,
+             f"spandec_parallel_span_cap={self.spandec_parallel_span_cap}: the grader "
+             f"must score the SAME tokens the coda's WTA table scores, the whole span"),
+            (self.spandec_target_offset != 1,
+             f"spandec_target_offset={self.spandec_target_offset}: the coda's WTA table "
+             f"scores the NEXT span (bag s+1); the head must grade that span"),
+            (_j < self.bound_span_cap,
+             f"head J={_j} < span cap {self.bound_span_cap}: the head would drop a long "
+             f"span's tail tokens that the coda's table scores"),
+            (self.spandec_parallel_weight != 1.0,
+             f"spandec_parallel_weight={self.spandec_parallel_weight}: under the head "
+             f"grader the head's ONLY term is the WTA term (weight fan_all_wta_lambda); "
+             f"the head's own mixture term is not run, so this weight would be silently "
+             f"ignored"),
+            (self.fan_all_wta_winner != "per_rollout",
+             f"fan_all_wta_winner={self.fan_all_wta_winner!r}: the winner modes choose "
+             f"how the CODA's pick table is built; the head grader builds no coda table"),
+            (self.fan_all_wta_grad_rollouts != "all",
+             f"fan_all_wta_grad_rollouts={self.fan_all_wta_grad_rollouts!r}: there is no "
+             f"coda grad pass under the head grader"),
+            (self.fan_history_streams != 0,
+             f"fan_history_streams={self.fan_history_streams}: not composed with the head "
+             f"grader and not measured; build it when an arm needs it"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.fan_all_wta_grader='head' with {why}.")
+
     def _check_spandec_parallel(self) -> None:
         """``tul.spandec_parallel`` — LXTUL-E's committed product reader
         (morph/model/tul_spandec_parallel.py). It grades the span decoder's target at the
@@ -3919,7 +4018,10 @@ class TULConfig:
             # head's input `h_slots` is the MEAN of the M cells, while the coda reads each
             # cell 1:1, so the head would grade an object no reader consumes. Reading the
             # M cells is a new head, not a flag. Note 2026-09-26-lx-fan.md.
-            (self.fan_k > 0,
+            # LIFTED for `fan_all_wta_grader: head` ONLY (2026-09-29): there the head reads
+            # each cell ALONE (never the mean) as the WTA grader, and its mean-of-cells
+            # term is not run (`_check_fan_head_grader` carries that arm's refusals).
+            (self.fan_k > 0 and self.fan_all_wta_grader != "head",
              "tul.fan_k: under the write-all fan the head's input is the MEAN of the M "
              "cells, which the coda never reads (LX-Fan drops the head)"),
         ]

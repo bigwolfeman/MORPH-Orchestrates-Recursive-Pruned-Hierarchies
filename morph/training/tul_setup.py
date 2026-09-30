@@ -66,6 +66,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_repel_mode", "fan_epi_features", "fan_epi_ridge", "fan_epi_eta",
     "fan_select_eps", "fan_select_gate_lambda", "fan_all_wta_lambda",
     "fan_all_wta_winner", "fan_all_wta_grad_rollouts", "fan_all_wta_latent_temp",
+    "fan_all_wta_grader",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -399,6 +400,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_all_wta_winner=str(tc.get("fan_all_wta_winner", "per_rollout")),
         fan_all_wta_grad_rollouts=str(tc.get("fan_all_wta_grad_rollouts", "all")),
         fan_all_wta_latent_temp=float(tc.get("fan_all_wta_latent_temp", 0.1)),
+        fan_all_wta_grader=str(tc.get("fan_all_wta_grader", "coda")),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -675,6 +677,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_all_wta_winner": model_cfg.fan_all_wta_winner,
         "fan_all_wta_grad_rollouts": model_cfg.fan_all_wta_grad_rollouts,
         "fan_all_wta_latent_temp": model_cfg.fan_all_wta_latent_temp,
+        "fan_all_wta_grader": model_cfg.fan_all_wta_grader,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1013,9 +1016,18 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  f"(no mixture, no gate: every stream is written into ITS prefix cell "
                  f"through W_prefix[i], the register's 1:1 route, and the coda reads all "
                  f"K; "
-                 + ("at train K no-grad passes with stream i alone in its cell pick each "
-                    "slot's winner and one more pass with grad charges the winner-alone "
-                    "span CE, the responsibility term) "
+                 + ("WTA grader='head': NO extra coda pass; the parallel span head reads "
+                    "each cell ALONE and grades it by its NLL of the true next span (the "
+                    "coda table's own tokens), and the relaxed WTA over the cells ((1-eps) "
+                    "on the head's argmin, eps/(M-1) on each other) trains the head and "
+                    "the cells; the coda reads all cells in its one ordinary pass. Read "
+                    "fan/head_coda_agree (chance 1/K) and fan/head_pick_regret vs "
+                    "fan/rand_pick_regret at val) "
+                    if model_cfg.fan_all_wta_lambda > 0.0
+                    and model_cfg.fan_all_wta_grader == "head" else
+                    "WTA grader='coda': at train K no-grad passes with stream i alone in "
+                    "its cell pick each slot's winner and one more pass with grad charges "
+                    "the winner-alone span CE, the responsibility term) "
                     if model_cfg.fan_all_wta_lambda > 0.0 else
                     "wta_lambda 0: NO responsibility term and NO extra coda pass) ")
                  if model_cfg.fan_mix == "all" else "")
@@ -1194,6 +1206,13 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         _cap = model_cfg.spandec_parallel_span_cap
         _span = (f"the FIRST {_cap} tokens of span s+{model_cfg.spandec_target_offset}"
                  if _cap else f"span s+{model_cfg.spandec_target_offset}")
+        if model_cfg.fan_all_wta_grader == "head":
+            _readers = (f"the fan's M={model_cfg.fan_k} cells, EACH READ ALONE, as the "
+                        f"write-all fan's WTA GRADER (its only term is the relaxed WTA, "
+                        f"weight fan_all_wta_lambda={model_cfg.fan_all_wta_lambda}; its "
+                        f"mean-of-cells term is NOT run; target = the labels the coda's "
+                        f"WTA table scores)")
+            _span = "each cell's next span (the coda table's labels)"
         print(f"  TUL PARALLEL SPAN HEAD ON (LXTUL-E): {_readers}, "
               f"weight={model_cfg.spandec_parallel_weight}, "
               f"{'BESIDE' if model_cfg.spandec else 'INSTEAD OF'} the teacher-forced span "

@@ -1,0 +1,70 @@
+# Arm "slot-spandec-strict-fan4-all-fp01-hwta" (2026-09-29): a2 with a HEAD-GRADED WTA.
+# "Explore everything at once and let the coda learn to pick a winner, with a CHEAP
+# grader" (Wolfe). Composes a2 (`tul_slot_spandec_strict_fan4_all_fp01`: write-all fan,
+# M=4 cells each written 1:1 into its prefix cell, the coda's attention selects per
+# token, WTA lambda 1.0 at eps 0.05, epivol 0.1, fixed-point term 0.1) and changes WHO
+# GRADES THE CELLS for the WTA term:
+#
+#   tul.fan_all_wta_grader   coda -> head
+#   tul.spandec_parallel     false -> true   (the grader IS the parallel span head)
+#   tul.spandec_parallel_detach false        (the default, stated: the WTA gradient must
+#                                             reach the cells; detach=true is REFUSED)
+#   wandb.name
+#
+# a2 grades with the CODA: M=4 no-grad coda passes (cell i alone) pick each slot's
+# winner by span CE, then ONE more coda pass WITH grad charges the winner-alone span CE.
+# This arm runs NONE of those passes. The parallel span head (2 blocks, J=32, the span
+# decoder's geometry, training-only) reads each cell ALONE and scores it by its NLL of
+# the SAME tokens the coda's table scores (the labels of span s+1's positions); the term
+# is the relaxed WTA over the cells, (1-eps) on the head's argmin and eps/(M-1) on each
+# other, weight fan_all_wta_lambda 1.0, and its gradient reaches the head AND the cells.
+# The coda still reads all four cells in its one ordinary pass and trains on the token CE.
+#
+# THE SPAN-DECODER DECISION. a2 already has `tul.spandec: true` (the teacher-forced span
+# decoder, weight 1.0, grading the MEAN of the four cells). It is KEPT, unchanged: this
+# arm changes the grader and nothing else, so the parallel head sits BESIDE the
+# teacher-forced decoder (the e1 chain's `spandec: false` would also remove a2's decoder
+# target, a second factor). The parallel head's OWN mixture term on the mean of the
+# cells is NOT run under the head grader (it would grade an object the coda never reads),
+# so the head's only training signal is the WTA term.
+#
+# WHAT ELSE DIFFERS FROM a2 (named, not hidden):
+#   * the eps rule: a2 applies eps as a RANDOM winner (hard; expected weight on the
+#     argmin 1-eps+eps/M = 0.9625); this arm uses the deterministic relaxation (0.95 on
+#     the argmin, 0.0167 on each other cell);
+#   * the head's grading tokens are exactly a2's table's, but its ranking is a committed
+#     product reader's, not the coda's;
+#   * RNG: a2's train step draws dropout masks for its M+1 extra coda passes and the eps
+#     draw; this arm draws neither, so the two are not RNG-aligned after step 0.
+#
+# WHAT TO READ (pairs with a2's existing 5k run, same seed, data, steps):
+#   * val/ce_tokens (and val loss) against a2's 4.4365 at 5k, and tok/s against a2's 7783
+#     (plain 9355-10089). The arm exists if it keeps a2's CE at a cheaper step.
+#   * fan/head_coda_agree (val; chance 0.25 at M=4): does the head pick the coda's cell?
+#   * fan/head_pick_regret vs fan/rand_pick_regret (val, nats/token): the head's pick
+#     against the coda's best, beside a uniformly random pick. A grader at the random
+#     floor is not grading.
+#   * fan/head_wta_share_k{i} (train) and val/fan_head_wta_share_k{i}: a collapse to one
+#     cell reads as one share near 1.
+#   * fan/oracle_ce vs fan/single_ce (val): do the cells still specialize?
+#
+# FOOT GUNS:
+#   * The head can be GAMED: the cells can learn to be easy for a 2-block committed reader
+#     instead of useful to the coda. head_coda_agree falling toward 0.25 and
+#     head_pick_regret rising to rand_pick_regret is that failure.
+#   * The head is TRAINING-ONLY. At deploy there is no grader; the coda reads all cells
+#     exactly as at train, so there is no train/deploy mismatch in the READ.
+#   * fan/head_wta_dropped must read 0 (the config refuses a head J below the span cap);
+#     the val oracle RAISES if the head and the coda scored different tokens.
+# Note: .agents/notes/proposed/architecture/2026-09-29-fan-head-graded-wta.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01
+  - _self_
+
+tul:
+  spandec_parallel: true
+  spandec_parallel_detach: false
+  fan_all_wta_grader: head
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-hwta

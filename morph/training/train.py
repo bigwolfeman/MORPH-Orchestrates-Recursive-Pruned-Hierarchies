@@ -181,7 +181,11 @@ def evaluate(
                           # REINFORCE + entropy + baseline objective. Folded at train
                           # only; listed so a train-mode val forward still reports the
                           # MODEL's CE.
-                          "code_policy_weighted"):
+                          "code_policy_weighted",
+                          # tul.fan_all_wta_grader="head" (2026-09-29): the head-graded
+                          # relaxed-WTA term is built at eval too (the coda grader's is
+                          # train-only), so val loss must subtract it to stay the CE.
+                          "fan_head_wta_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -300,13 +304,17 @@ def evaluate(
             # `fan/` namespace the arm is read in. The two readings the TRAIN step also
             # emits (`stream_cos_t{t}`, `mix_entropy`) go to `val/fan_*` instead, so the
             # two writers never contend for one wandb series at the same step.
+            # `head_wta*` (tul.fan_all_wta_grader="head") is built at train AND eval, so it
+            # goes to `val/fan_head_wta_*`; the head-vs-coda readings (`head_coda_agree`,
+            # `head_pick_regret`, `rand_pick_regret`) are eval-only and stay in `fan/`.
             _fan_train_side = ("mix_entropy", "mix_w_max", "repel_terms")
             for _fk in [k for k in out if str(k).startswith("fan_")]:
                 if out[_fk] is None:
                     continue
                 _name = str(_fk)[4:]
                 _dest = (f"val/fan_{_name}"
-                         if _name.startswith(("stream_cos_t", "epi_t", "vol_t")) or _name in _fan_train_side
+                         if _name.startswith(("stream_cos_t", "epi_t", "vol_t", "head_wta"))
+                         or _name in _fan_train_side
                          else f"fan/{_name}")
                 acc.setdefault(_dest, []).append(float(out[_fk]))
             if "ce_tokens_no_slots" in out:
@@ -3795,6 +3803,7 @@ def main(cfg: DictConfig) -> None:
                         "fan_repel_weighted",      # LXTUL tul.fan_repel_lambda, 2026-09-19
                         "fan_select_gate_weighted",  # LXTUL tul.fan_mix=select, 2026-09-20
                         "fan_wta_weighted",        # LXTUL tul.fan_mix=all, 2026-09-20
+                        "fan_head_wta_weighted",   # tul.fan_all_wta_grader=head, 2026-09-29
                         "critic_weighted",   # arc E10 / 2026-09-12
                         "horizon_weighted",  # LoopMTP horizon alignment, 2026-09-14
                         "code_fm_weighted",   # TUL-Code flow term (the val side already

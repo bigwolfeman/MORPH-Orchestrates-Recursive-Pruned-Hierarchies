@@ -1,0 +1,35 @@
+# Arm "slot-spandec-strict-fan4-all-fp01-nowta" (2026-09-29): a2 with NO WTA term.
+# Composes a2 (`tul_slot_spandec_strict_fan4_all_fp01`: write-all fan, M=4 cells each
+# written 1:1 into its prefix cell, the coda's attention selects per token, epivol 0.1,
+# fixed-point term 0.1) and changes ONE key plus the run name:
+#
+#   tul.fan_all_wta_lambda   1.0 -> 0.0
+#
+# At lambda 0 `_tul_fan_all` builds no term and runs NO extra coda pass: the coda reads
+# all four cells in its one ordinary pass and nothing charges any cell alone. This is the
+# "the coda learns to pick with no specialization pressure" control for the head-graded
+# arm (`tul_slot_spandec_strict_fan4_all_fp01_hwta`), and the COST FLOOR of the write-all
+# fan: whatever the WTA costs in tok/s against a2 is read off this arm.
+#
+# `tul.fan_select_eps` stays at its default 0.05 (a2 inherits the default): TULConfig
+# refuses a NON-default eps at lambda 0, because the eps is read only by the WTA winner
+# draw. The epivol diversity term (fan_repel_lambda 0.1) is unchanged and still charged.
+#
+# WHAT TO READ (pairs with a2's 5k run: 4.4365 val, 7783 tok/s):
+#   * val/ce_tokens against a2 and against hwta: does the WTA pressure buy CE at all?
+#   * fan/oracle_ce vs fan/single_ce and fan/stream_ce_k{i}: without WTA the cells are
+#     expected to blur into a committee (the Thought Register read rank 1.24 of 4 with no
+#     term). A small oracle gap here and a large one on a2 is the WTA's measured effect.
+#   * tok/s: the write-all fan's price with no grader at all.
+# FOOT GUN: fan/wta_* keys do not exist on this arm (no term, no table); do not read a
+# missing series as zero.
+# Note: .agents/notes/proposed/architecture/2026-09-29-fan-head-graded-wta.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01
+  - _self_
+
+tul:
+  fan_all_wta_lambda: 0.0
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-nowta
