@@ -1,5 +1,9 @@
 # CLAUDE.md — MORPH
 
+> **Name arms by what they do.** In docs, notes, filings and messages, call an experiment arm
+> by a 1–4 word description ("ungraded fan", "factor fan"), never by a letter or code (A, B,
+> a2, nowta). Config names belong only in code and commands.
+
 ## Overview
 
 **MORPH** — Orchestrates Recursive Pruned Hierarchies
