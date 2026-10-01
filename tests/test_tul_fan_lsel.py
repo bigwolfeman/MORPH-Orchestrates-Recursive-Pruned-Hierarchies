@@ -55,7 +55,7 @@ from test_tul_lxfan import _build, _fan_kw, _Spy
 NEW_KEY_DEFAULTS = dict(
     fan_loop_select="off", fan_lsel_lambda=10.0, fan_lsel_eps=0.05,
     fan_lsel_enc_lambda=0.2, fan_lsel_enc_gamma=0.1, fan_lsel_router_lambda=1.0,
-    fan_lsel_router_rank=64, fan_lsel_hidden=0, fan_lsel_train_follow="teacher")
+    fan_lsel_router_rank=64, fan_lsel_hidden=0, fan_lsel_train_follow="teacher", fan_lsel_read="winner")
 
 # Measured 2026-09-30 on the UNMODIFIED tree at 213b585 (`git archive 213b585`, before
 # any `fan_lsel_*` key existed) with these fixtures and one CPU thread, by
@@ -495,6 +495,93 @@ def test_router_followed_configs_change_one_key_and_reach_the_model(
     assert tdiff == {"fan_lsel_train_follow"}, sorted(tdiff)
     assert mc.tul.fan_lsel_train_follow == "router"
     assert rt.manifest.get("fan_lsel_train_follow") == "router"
+
+
+def test_read_all_writes_every_final_candidate_and_the_oracle_runs_unrouted():
+    """`fan_lsel_read: all`: the write is the ungraded fan's (all M cells 1:1, no routed
+    zeros), the selection still resets the loop, the exit loss is still charged, and the
+    val oracle runs as the write-all fan's (no route)."""
+    _ids0, inp, lab, layout = _batch(M)
+    m = _lsel("detached", fan_lsel_train_follow="router", fan_lsel_read="all")
+    seen = {}
+    orig = m.tul.prefix_project
+
+    def _pp(h_slots, layout_, l_total, cells=None):
+        seen["cells"] = None if cells is None else cells.detach().clone()
+        return orig(h_slots, layout_, l_total, cells=cells)
+    m.tul.prefix_project = _pp
+    cap = _cap(m)
+    m.train()
+    torch.manual_seed(5)
+    out = m(inp, labels=lab, slot_layout=layout)
+    c = seen["cells"]
+    valid = layout.slot_valid
+    assert c is not None and c.shape[2] == M
+    # every cell of every valid slot is live (no routed zeros) ...
+    nz = c.flatten(3).abs().sum(dim=-1) > 0                       # [B, S, M]
+    assert bool(nz[valid].all())
+    # ... and they are the loop's final candidates, which differ from each other
+    assert any(not torch.allclose(c[b, s, 0], c[b, s, 1]) for b, s in valid.nonzero().tolist())
+    assert cap and float(out["fan_lsel_weighted"]) > 0
+    # eval: the val oracle runs unrouted and reports
+    m.eval()
+    with torch.no_grad():
+        o = m(inp, labels=lab, slot_layout=layout)
+    assert "fan_oracle_ce" in o and torch.isfinite(o["fan_oracle_ce"])
+    # the winner read zeroes the losers (the contrast that makes the test meaningful)
+    w = _lsel("detached", fan_lsel_train_follow="router")
+    w.load_state_dict(m.state_dict())
+    w.tul_fan_target_build()
+    seen.clear()
+    orig_w = w.tul.prefix_project
+
+    def _ppw(h_slots, layout_, l_total, cells=None):
+        seen["cells"] = cells.detach().clone()
+        return orig_w(h_slots, layout_, l_total, cells=cells)
+    w.tul.prefix_project = _ppw
+    w.train()
+    torch.manual_seed(5)
+    w(inp, labels=lab, slot_layout=layout)
+    nzw = seen["cells"].flatten(3).abs().sum(dim=-1) > 0
+    assert bool((nzw[valid].sum(dim=-1) == 1).all())
+
+
+def test_read_key_refusals():
+    with pytest.raises(ValueError, match="fan_lsel_read"):
+        _lsel(fan_lsel_read="mean")
+    with pytest.raises(ValueError, match="silent no-op"):
+        _build(**_nowta_kw(fan_lsel_read="all"))
+
+
+@pytest.mark.parametrize("name,key,val,wb", [
+    ("tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1", "fan_lsel_lambda", 1.0,
+     "slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1"),
+    ("tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_all", "fan_lsel_read", "all",
+     "slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all"),
+])
+def test_det_rf_children_change_one_key_and_reach_the_model(name, key, val, wb, monkeypatch):
+    import dataclasses
+
+    from omegaconf import OmegaConf
+    from test_slot_gain_tail import _leaves, _MISSING
+    from test_tul_strict_geometry import _runtime
+
+    from morph.training.train import build_morph_config
+
+    parent = "tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf"
+    cfg, rt = _runtime(name, monkeypatch)
+    pcfg, prt = _runtime(parent, monkeypatch)
+    c = _leaves(OmegaConf.to_container(cfg, resolve=True))
+    p = _leaves(OmegaConf.to_container(pcfg, resolve=True))
+    diff = {k for k in c.keys() | p.keys() if c.get(k, _MISSING) != p.get(k, _MISSING)}
+    assert diff == {f"tul.{key}", "wandb.name"}, sorted(diff)
+    assert c["wandb.name"] == wb
+    mc = build_morph_config(cfg, tul=rt.model_cfg)
+    pmc = build_morph_config(pcfg, tul=prt.model_cfg)
+    tdiff = {f.name for f in dataclasses.fields(mc.tul)
+             if getattr(mc.tul, f.name) != getattr(pmc.tul, f.name)}
+    assert tdiff == {key}, sorted(tdiff)
+    assert getattr(mc.tul, key) == val and rt.manifest.get(key) == val
 
 
 def test_the_coda_reads_the_final_winner_alone():

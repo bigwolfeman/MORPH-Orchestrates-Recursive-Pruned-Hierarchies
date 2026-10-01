@@ -1,0 +1,19 @@
+# The router-followed latent-selected loop, detached, with the latent loss at weight 1
+# (2026-10-01). Composes `tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf` and changes ONE
+# key plus the run name:
+#
+#   tul.fan_lsel_lambda   10.0 -> 1.0
+#
+# Why: the parent's latent R^2 sat at 0 (-0.004 at val) while its CE trailed the ungraded
+# fan by 0.157 on the ledger's 480 rows; the 10x factor fan paid the same kind of tax
+# (gap +0.262 -> +0.385, R^2 0.04). If the weight-10 term is the cost, weight 1 recovers
+# the CE and keeps the loop's contribution (parent K1-K6 +0.0095).
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf
+  - _self_
+
+tul:
+  fan_lsel_lambda: 1.0
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1

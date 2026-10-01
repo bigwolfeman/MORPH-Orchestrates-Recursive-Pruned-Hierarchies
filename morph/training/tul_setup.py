@@ -72,7 +72,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_route", "fan_route_rank", "fan_route_bias_u", "fan_rlat_lambda",
     "fan_loop_select", "fan_lsel_lambda", "fan_lsel_eps", "fan_lsel_enc_lambda",
     "fan_lsel_enc_gamma", "fan_lsel_router_lambda", "fan_lsel_router_rank",
-    "fan_lsel_hidden", "fan_lsel_train_follow",
+    "fan_lsel_hidden", "fan_lsel_train_follow", "fan_lsel_read",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -428,6 +428,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_lsel_router_rank=int(tc.get("fan_lsel_router_rank", 64)),
         fan_lsel_hidden=int(tc.get("fan_lsel_hidden", 0)),
         fan_lsel_train_follow=str(tc.get("fan_lsel_train_follow", "teacher")),
+        fan_lsel_read=str(tc.get("fan_lsel_read", "winner")),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -726,6 +727,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_lsel_router_rank": model_cfg.fan_lsel_router_rank,
         "fan_lsel_hidden": model_cfg.fan_lsel_hidden,
         "fan_lsel_train_follow": model_cfg.fan_lsel_train_follow,
+        "fan_lsel_read": model_cfg.fan_lsel_read,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1108,7 +1110,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                     f"the exit (relaxed WTA eps={model_cfg.fan_lsel_eps}, weight "
                     f"{model_cfg.fan_lsel_lambda}, WITH grad into the loop; online floor "
                     f"{model_cfg.fan_lsel_enc_lambda} @ {model_cfg.fan_lsel_enc_gamma}); "
-                    f"the coda reads the final winner alone"
+                    f"the coda reads "
+                    + ("the final winner alone" if model_cfg.fan_lsel_read == "winner"
+                       else "ALL M final candidates (the write-all fan's write)")
                     + (" DETACHED (no token CE reaches the loop) "
                        if model_cfg.fan_loop_select == "detached" else
                        " (the coda's CE reaches the loop through the winner) ")

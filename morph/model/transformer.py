@@ -2774,6 +2774,9 @@ class MORPHTransformer(nn.Module):
         # trainer (`_fan_target_needed` above). The selection itself runs INSIDE
         # `_tul_core`, after every pass (`_lsel_begin / _lsel_pass / _lsel_finish`).
         self._lsel_mode: str = "off" if cfg.tul is None else str(cfg.tul.fan_loop_select)
+        # `tul.fan_lsel_read: all`: the coda reads every final candidate (no routed write).
+        self._lsel_read_all: bool = (self._lsel_mode != "off"
+                                     and str(cfg.tul.fan_lsel_read) == "all")
         self.tul_fan_lsel_head: FanLatentHead | None = None
         self.tul_fan_lsel_router: FanRouter | None = None
         self._lsel_out: dict | None = None
@@ -8148,7 +8151,8 @@ class MORPHTransformer(nn.Module):
         w_head_pad = pad_vocab_align8(w_head)          # once per call (perf: aligned GEMM)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]        # [B, S]
         per_stream = []
-        if ((self.tul_fan_router is not None or self._lsel_mode != "off")
+        if ((self.tul_fan_router is not None
+             or (self._lsel_mode != "off" and not self._lsel_read_all))
                 != (route is not None)):
             raise RuntimeError("_tul_fan_oracle: a router model must hand in its route "
                                "(and no other model may).")
@@ -12736,8 +12740,11 @@ class MORPHTransformer(nn.Module):
                                 raise RuntimeError(
                                     "tul.fan_loop_select: `_tul_core` left no exit stash "
                                     "(`_lsel_out`); the selection did not run.")
-                            _fan_route = {"winner": _lo["winner"], "scale": None,
-                                          "teacher": _lo["teacher"], "loss": None}
+                            # `fan_lsel_read: all`: no routed write, the coda reads all M
+                            # final candidates 1:1 (the ungraded fan's write and oracle).
+                            _fan_route = (None if self._lsel_read_all else
+                                          {"winner": _lo["winner"], "scale": None,
+                                           "teacher": _lo["teacher"], "loss": None})
                             fan_lsel_loss = _lo["loss"]
                             fan_stats.update(_lo["stats"])
                     else:

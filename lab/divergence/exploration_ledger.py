@@ -119,7 +119,8 @@ def arm_kind(model) -> str:
         raise SystemExit("exploration ledger: code rollouts (tul.code_enum_k > 1) are not "
                          "supported; the four-rollout ensemble has no per-cell pick.")
     if getattr(model, "_lsel_mode", "off") != "off":
-        return "lsel"
+        # `tul.fan_lsel_read: all`: the loop selects, the coda reads every candidate
+        return "lsel_all" if getattr(model, "_lsel_read_all", False) else "lsel"
     if getattr(model, "tul_fan_router", None) is not None:
         return str(model.cfg.tul.fan_route)
     fan = getattr(model, "tul_fan", None)
@@ -277,15 +278,19 @@ def reading_plan(kind: str, m: int, passes: int) -> list[tuple[str, dict]]:
     optional ``follow``. ``passes`` = T, the latent-selected loop's eval pass count."""
     plan: list[tuple[str, dict]] = [("shipped", {"make": lambda g: {}, "keep_oracle": True})]
     last = passes - 1
-    if kind == "lsel":
-        plan.append(("random_exit", {"make": lambda g: {"select_fn": (
-            lambda t, w: _rand_cells(w.shape, m, g, w.device) if t == last else w)}}))
+    if kind in ("lsel", "lsel_all"):
+        if kind == "lsel":
+            plan.append(("random_exit", {"make": lambda g: {"select_fn": (
+                lambda t, w: _rand_cells(w.shape, m, g, w.device) if t == last else w)}}))
         plan.append(("random_search", {"make": lambda g: {"select_fn": (
             lambda t, w: _rand_cells(w.shape, m, g, w.device))}}))
         plan.append(("teacher", {"make": lambda g: {}, "follow": "teacher"}))
         for i in range(m):
-            plan.append((f"cell_{i}", {"make": (lambda i: lambda g: {"select_fn": (
-                lambda t, w: torch.full_like(w, i) if t == last else w)})(i)}))
+            if kind == "lsel":
+                plan.append((f"cell_{i}", {"make": (lambda i: lambda g: {"select_fn": (
+                    lambda t, w: torch.full_like(w, i) if t == last else w)})(i)}))
+            else:   # the coda reads every candidate: cell i alone is the write-all blank
+                plan.append((f"cell_{i}", {"make": (lambda i: lambda g: {"write_cell": i})(i)}))
         plan.append(("no_reset", {"make": lambda g: {"no_reset": True}}))
         plan.append(("fixed_lineage", {"make": lambda g: {"select_fn": (
             lambda t, w: torch.zeros_like(w))}}))
@@ -319,9 +324,11 @@ def not_applicable(kind: str) -> dict[str, str]:
     na: dict[str, str] = {}
     if kind == "write_all":
         na |= {"random_exit": why_sel, "teacher": why_sel}
+    if kind == "lsel_all":
+        na["random_exit"] = "the coda reads every final candidate: there is no exit pick"
     if kind == "reader":
         na["teacher"] = "the reader-trained router has no latent teacher"
-    if kind != "lsel":
+    if kind not in ("lsel", "lsel_all"):
         na |= {k: why_loop for k in ("random_search", "no_reset", "fixed_lineage", "loser")}
     return na
 
@@ -406,7 +413,7 @@ def ledger_arm(model, batches, device: str, plain: tuple[np.ndarray, np.ndarray]
 
     # the pass count of the latent-selected loop's eval forward
     passes = 0
-    if kind == "lsel":
+    if kind in ("lsel", "lsel_all"):
         cnt: list = []
         inp, labels, layout, _ = batches[0]
         with ledger_patch(model, counter=cnt):
@@ -427,7 +434,7 @@ def ledger_arm(model, batches, device: str, plain: tuple[np.ndarray, np.ndarray]
         for bi, ((inp, labels, layout, _), tokpos) in enumerate(zip(batches, tok_masks)):
             g = _gen(name, bi, seed)
             kw = spec["make"](g)
-            cnt = [] if kind == "lsel" else None
+            cnt = [] if kind in ("lsel", "lsel_all") else None
             with ledger_patch(model, keep_oracle=spec.get("keep_oracle", False),
                               counter=cnt, **kw):
                 ce, scal = ce_map(model, inp, labels, layout.to(device), device,

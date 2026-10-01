@@ -333,3 +333,25 @@ def test_plain_join_is_shift_zero_and_splits_by_quartile():
     q = block["readings"]["random_exit"]["by_plain_quartile"]
     assert sum(v["n_tokens"] for v in q.values()) == pidx.size
     assert set(np.unique(toks["plain_quartile"])) <= {0, 1, 2, 3}
+
+
+def test_ledger_arm_on_the_read_all_latent_selected_loop():
+    """`fan_lsel_read: all` (2026-10-01): kind "lsel_all", no exit pick (random_exit is
+    n/a), the loop readings run, and cell_i is the write-all blank (the coda reads cell i
+    alone), so it differs from the shipped all-cell read."""
+    m = _lsel("detached", fan_lsel_train_follow="router", fan_lsel_read="all").eval()
+    assert XL.arm_kind(m) == "lsel_all"
+    _ids, inp, lab, layout = _batch(M)
+    idx = torch.full(inp.shape, -1, dtype=torch.long)
+    tok = ~layout.slot_mask
+    idx[tok] = torch.arange(int(tok.sum()))
+    block, toks = XL.ledger_arm(m, [(inp, lab, layout, idx)], "cpu", None, n_boot=50,
+                                log=lambda s: None)
+    passes = block["passes"]
+    exp = {"random_search", "teacher", "no_reset", "fixed_lineage", "single_cell", "oracle",
+           *(f"cell_{i}" for i in range(M)), *(f"loser_t{t}" for t in range(passes - 1))}
+    assert set(block["readings"]) == exp
+    assert "random_exit" in block["not_applicable"]
+    for i in range(M):
+        assert not np.array_equal(toks[f"cell_{i}"], toks["shipped"])
+    assert block["self_checks"]["ce_tokens_max_abs_dev"] < 1e-5

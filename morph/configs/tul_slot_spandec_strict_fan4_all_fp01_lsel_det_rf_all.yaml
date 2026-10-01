@@ -1,0 +1,19 @@
+# The router-followed latent-selected loop, detached, with the coda reading ALL four final
+# candidates (2026-10-01). Composes `tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf` and
+# changes ONE key plus the run name:
+#
+#   tul.fan_lsel_read   winner -> all
+#
+# Why: the ungraded fan's read of all four cells is worth +0.17 nats over one cell (ledger,
+# 480 rows); the parent reads the winner alone and trails the ungraded fan by 0.157. Here
+# the selection still steers the loop (reset to the winner after every continuing pass),
+# and the coda reads the M candidates of the last pass 1:1, the write-all fan's write.
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf
+  - _self_
+
+tul:
+  fan_lsel_read: all
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all

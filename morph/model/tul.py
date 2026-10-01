@@ -539,6 +539,12 @@ class TULConfig:
     # follows the router at train as at eval: the teacher only labels the router (CE) and
     # names the exit loss's winner, both gradient paths, never an input to the forward.
     fan_lsel_train_follow: str = "teacher"   # "teacher" | "router"
+    # What the coda READS at the exit (2026-10-01). "winner" (the first arms): the final
+    # pick alone, the routers' hard write. "all": every one of the M final candidates 1:1
+    # into its prefix cell, the ungraded fan's write (its read of all four cells is worth
+    # 0.17 nats over one, ledger 2026-10-01). The selection still steers the loop (reset
+    # to the winner after every continuing pass); only the exit read changes.
+    fan_lsel_read: str = "winner"            # "winner" | "all"
     fan_repel_mode: str = "cos"        # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
@@ -4136,6 +4142,9 @@ class TULConfig:
         if self.fan_lsel_hidden < 0:
             raise ValueError(
                 f"tul.fan_lsel_hidden must be >= 0 (0 = d_model), got {self.fan_lsel_hidden}")
+        if self.fan_lsel_read not in ("winner", "all"):
+            raise ValueError(
+                f"tul.fan_lsel_read must be 'winner' or 'all', got {self.fan_lsel_read!r}")
         if self.fan_lsel_train_follow not in ("teacher", "router"):
             raise ValueError(
                 f"tul.fan_lsel_train_follow must be 'teacher' or 'router', got "
@@ -4143,7 +4152,7 @@ class TULConfig:
         _defaults = TULConfig.__dataclass_fields__
         _keys = ("fan_lsel_lambda", "fan_lsel_eps", "fan_lsel_enc_lambda",
                  "fan_lsel_enc_gamma", "fan_lsel_router_lambda", "fan_lsel_router_rank",
-                 "fan_lsel_hidden", "fan_lsel_train_follow")
+                 "fan_lsel_hidden", "fan_lsel_train_follow", "fan_lsel_read")
         if self.fan_loop_select == "off":
             _unread = [k for k in _keys if getattr(self, k) != _defaults[k].default]
             if _unread:
