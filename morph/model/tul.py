@@ -532,6 +532,13 @@ class TULConfig:
     fan_lsel_router_lambda: float = 1.0
     fan_lsel_router_rank: int = 64
     fan_lsel_hidden: int = 0                # g's hidden width; 0 = d_model
+    # Who the loop FOLLOWS at train (2026-10-01). "teacher" (the first two arms) follows
+    # the latent teacher on slots with a target: a pick made with the next span's latent,
+    # so the coda trains on hindsight-chosen cells and deploys on the router's (the
+    # fitted-z trap; teacher path 4.372 vs router path 4.795 on the same rows). "router"
+    # follows the router at train as at eval: the teacher only labels the router (CE) and
+    # names the exit loss's winner, both gradient paths, never an input to the forward.
+    fan_lsel_train_follow: str = "teacher"   # "teacher" | "router"
     fan_repel_mode: str = "cos"        # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
@@ -4129,10 +4136,14 @@ class TULConfig:
         if self.fan_lsel_hidden < 0:
             raise ValueError(
                 f"tul.fan_lsel_hidden must be >= 0 (0 = d_model), got {self.fan_lsel_hidden}")
+        if self.fan_lsel_train_follow not in ("teacher", "router"):
+            raise ValueError(
+                f"tul.fan_lsel_train_follow must be 'teacher' or 'router', got "
+                f"{self.fan_lsel_train_follow!r}")
         _defaults = TULConfig.__dataclass_fields__
         _keys = ("fan_lsel_lambda", "fan_lsel_eps", "fan_lsel_enc_lambda",
                  "fan_lsel_enc_gamma", "fan_lsel_router_lambda", "fan_lsel_router_rank",
-                 "fan_lsel_hidden")
+                 "fan_lsel_hidden", "fan_lsel_train_follow")
         if self.fan_loop_select == "off":
             _unread = [k for k in _keys if getattr(self, k) != _defaults[k].default]
             if _unread:

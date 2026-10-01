@@ -55,7 +55,7 @@ from test_tul_lxfan import _build, _fan_kw, _Spy
 NEW_KEY_DEFAULTS = dict(
     fan_loop_select="off", fan_lsel_lambda=10.0, fan_lsel_eps=0.05,
     fan_lsel_enc_lambda=0.2, fan_lsel_enc_gamma=0.1, fan_lsel_router_lambda=1.0,
-    fan_lsel_router_rank=64, fan_lsel_hidden=0)
+    fan_lsel_router_rank=64, fan_lsel_hidden=0, fan_lsel_train_follow="teacher")
 
 # Measured 2026-09-30 on the UNMODIFIED tree at 213b585 (`git archive 213b585`, before
 # any `fan_lsel_*` key existed) with these fixtures and one CPU thread, by
@@ -419,6 +419,82 @@ def test_train_follows_the_teacher_eval_follows_the_router():
     with pytest.raises(ValueError, match="eval-only"):
         m.train()
         m.tul_forward_ablated(inp, lab, layout, lsel_follow="teacher")
+
+
+def test_router_followed_train_follows_the_router_and_still_trains_it():
+    """`fan_lsel_train_follow: router` (2026-10-01): at train the loop follows the ROUTER
+    on every slot, the teacher still exists (it labels the router and names the exit
+    loss's winner), and the router CE and the exit loss are both charged. The same
+    weights under the default follow the teacher, so the key is what moves the follow."""
+    _ids0, inp, lab, layout = _batch(M)
+    m = _lsel(fan_lsel_train_follow="router").train()
+    seen = _finish_spy(m)
+    cap = _cap(m)
+    torch.manual_seed(5)
+    out = m(inp, labels=lab, slot_layout=layout)
+    ok = seen["st"]["ok"]
+    assert cap and seen["st"]["teacher_drives"] is False
+    n_diff = 0
+    for c in cap:
+        assert c["teacher"] is not None
+        assert torch.equal(c["follow"], c["router"])
+        n_diff += int((c["teacher"] != c["router"])[ok & c["act"]].sum())
+    assert n_diff > 0          # teacher and router differ, so following one is visible
+    assert float(seen["st"]["rce_n"]) > 0
+    assert float(out["fan_lsel_weighted"]) > 0
+    out["loss"].backward()
+    assert float(sum(p.grad.abs().sum() for p in m.tul_fan_lsel_router.parameters()
+                     if p.grad is not None)) > 0
+    # same weights, default key: the train forward follows the teacher on `ok` slots
+    m2 = _lsel()
+    m2.load_state_dict(m.state_dict())
+    m2.tul_fan_target_build()
+    m2.train()
+    cap2 = _cap(m2)
+    torch.manual_seed(5)
+    m2(inp, labels=lab, slot_layout=layout)
+    assert any(not torch.equal(a["follow"], b["follow"]) for a, b in zip(cap, cap2))
+
+
+def test_train_follow_key_refusals():
+    with pytest.raises(ValueError, match="fan_lsel_train_follow"):
+        _lsel(fan_lsel_train_follow="oracle")
+    with pytest.raises(ValueError, match="silent no-op"):
+        _build(**_nowta_kw(fan_lsel_train_follow="router"))
+
+
+@pytest.mark.parametrize("name,parent,wb", [
+    ("tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf",
+     "tul_slot_spandec_strict_fan4_all_fp01_lsel_joint",
+     "slot-spandec-strict-fan4-all-fp01-lsel-joint-rf"),
+    ("tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf",
+     "tul_slot_spandec_strict_fan4_all_fp01_lsel_det",
+     "slot-spandec-strict-fan4-all-fp01-lsel-det-rf"),
+])
+def test_router_followed_configs_change_one_key_and_reach_the_model(
+        name, parent, wb, monkeypatch):
+    import dataclasses
+
+    from omegaconf import OmegaConf
+    from test_slot_gain_tail import _leaves, _MISSING
+    from test_tul_strict_geometry import _runtime
+
+    from morph.training.train import build_morph_config
+
+    cfg, rt = _runtime(name, monkeypatch)
+    pcfg, prt = _runtime(parent, monkeypatch)
+    c = _leaves(OmegaConf.to_container(cfg, resolve=True))
+    p = _leaves(OmegaConf.to_container(pcfg, resolve=True))
+    diff = {k for k in c.keys() | p.keys() if c.get(k, _MISSING) != p.get(k, _MISSING)}
+    assert diff == {"tul.fan_lsel_train_follow", "wandb.name"}, sorted(diff)
+    assert c["wandb.name"] == wb
+    mc = build_morph_config(cfg, tul=rt.model_cfg)
+    pmc = build_morph_config(pcfg, tul=prt.model_cfg)
+    tdiff = {f.name for f in dataclasses.fields(mc.tul)
+             if getattr(mc.tul, f.name) != getattr(pmc.tul, f.name)}
+    assert tdiff == {"fan_lsel_train_follow"}, sorted(tdiff)
+    assert mc.tul.fan_lsel_train_follow == "router"
+    assert rt.manifest.get("fan_lsel_train_follow") == "router"
 
 
 def test_the_coda_reads_the_final_winner_alone():

@@ -1,0 +1,22 @@
+# The latent-selected loop (joint), ROUTER-FOLLOWED at train (2026-10-01). Composes
+# `tul_slot_spandec_strict_fan4_all_fp01_lsel_joint` and changes ONE key plus the run name:
+#
+#   tul.fan_lsel_train_follow   teacher -> router
+#
+# Why: the parent follows the latent TEACHER at train. The teacher picks with the next
+# span's latent, so the coda trains on hindsight-chosen cells and deploys on the router's.
+# Measured on the parent (exploration ledger, 480 rows): teacher path 4.372, router path
+# 4.795; zeroing the cell IMPROVED the router path by 0.17; router-teacher agreement 0.31
+# (chance 0.25). Here the forward follows the router at train as at eval. The teacher still
+# labels the router (CE at every pass) and names the exit latent loss's winner: gradient
+# paths only, never an input to the forward.
+# Prereg: lab/experiments/planned/2026-10-01-latent-selected-loop-router-followed.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_joint
+  - _self_
+
+tul:
+  fan_lsel_train_follow: router
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-joint-rf

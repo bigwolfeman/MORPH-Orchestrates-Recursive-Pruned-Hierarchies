@@ -72,7 +72,7 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_route", "fan_route_rank", "fan_route_bias_u", "fan_rlat_lambda",
     "fan_loop_select", "fan_lsel_lambda", "fan_lsel_eps", "fan_lsel_enc_lambda",
     "fan_lsel_enc_gamma", "fan_lsel_router_lambda", "fan_lsel_router_rank",
-    "fan_lsel_hidden",
+    "fan_lsel_hidden", "fan_lsel_train_follow",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -427,6 +427,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_lsel_router_lambda=float(tc.get("fan_lsel_router_lambda", 1.0)),
         fan_lsel_router_rank=int(tc.get("fan_lsel_router_rank", 64)),
         fan_lsel_hidden=int(tc.get("fan_lsel_hidden", 0)),
+        fan_lsel_train_follow=str(tc.get("fan_lsel_train_follow", "teacher")),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -724,6 +725,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_lsel_router_lambda": model_cfg.fan_lsel_router_lambda,
         "fan_lsel_router_rank": model_cfg.fan_lsel_router_rank,
         "fan_lsel_hidden": model_cfg.fan_lsel_hidden,
+        "fan_lsel_train_follow": model_cfg.fan_lsel_train_follow,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1097,8 +1099,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                       "vs fan/rand_pick_regret at val "
                     if model_cfg.fan_route != "none" else "")
                  + (f"LATENT-SELECTED LOOP '{model_cfg.fan_loop_select}': after every pass "
-                    f"the M cells of a continuing slot are reset to the winner (train: the "
-                    f"teacher argmin ||g(cell) - z||^2 on the EMA-prelude target, EMA m="
+                    f"the M cells of a continuing slot are reset to the winner (train: "
+                    f"follow the {model_cfg.fan_lsel_train_follow.upper()}; the teacher is the "
+                    f"argmin ||g(cell) - z||^2 on the EMA-prelude target, EMA m="
                     f"{model_cfg.fan_target_ema}; eval and slots without a target: the "
                     f"router, rank {model_cfg.fan_lsel_router_rank}, CE onto the teacher "
                     f"at weight {model_cfg.fan_lsel_router_lambda}); ONE latent loss at "

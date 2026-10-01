@@ -9191,7 +9191,11 @@ class MORPHTransformer(nn.Module):
             "z": None if tgt is None else tgt["z"],
             "ok": None if tgt is None else tgt["ok"] & layout.slot_valid,
             "zo": None if tgt is None else tgt["zo"],
-            "teacher_drives": tgt is not None and (self.training or follow == "teacher"),
+            # Train follows the teacher only under `fan_lsel_train_follow: teacher` (the
+            # hindsight pick, kept for the first two arms); the eval switch always may.
+            "teacher_drives": tgt is not None and (
+                (self.training and self.cfg.tul.fan_lsel_train_follow == "teacher")
+                or follow == "teacher"),
             "final": none_pick, "final_router": none_pick.clone(),
             "final_teacher": none_pick.clone(), "prev": None,
             "rce_sum": zero, "rce_n": zero.clone(), "agree_sum": zero.clone(),
