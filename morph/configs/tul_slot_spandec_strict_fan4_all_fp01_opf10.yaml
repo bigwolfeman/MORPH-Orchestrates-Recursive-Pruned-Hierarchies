@@ -1,0 +1,20 @@
+# Factor fan with the latent task at 10x weight (2026-09-30). Composes the factor fan
+# (`tul_slot_spandec_strict_fan4_all_fp01_opf`) and scales the WHOLE latent block by 10,
+# keeping the paper's ratios (JEPA-Anything Table 10): lambda_pred 1 -> 10, lambda_fac
+# 0.05 -> 0.5, lambda_enc 0.02 -> 0.2. Why: at weight 1 the cells barely learned their
+# factors in 5k steps (val R^2 mean 0.026, three of four factors below 0), so the latent
+# term was mostly noise beside the token CE; at 10 the factor loss (~0.44 at weight 1) is
+# about the size of the token CE (~4.4). The floors scale with it because the collapse
+# pressure through the cells into the online prelude scales with lambda_pred.
+# Note: .agents/notes/proposed/architecture/2026-09-30-fan-opf-and-routers.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_opf
+  - _self_
+
+tul:
+  fan_opf_lambda_pred: 10.0
+  fan_opf_lambda_fac: 0.5
+  fan_opf_lambda_enc: 0.2
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-opf10
