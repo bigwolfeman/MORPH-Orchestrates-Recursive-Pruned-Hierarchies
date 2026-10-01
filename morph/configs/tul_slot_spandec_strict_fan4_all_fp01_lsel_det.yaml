@@ -1,0 +1,26 @@
+# The latent-selected loop, detached (2026-09-30). Composes the ungraded fan
+# (`tul_slot_spandec_strict_fan4_all_fp01_nowta`) and changes ONE key plus the run name:
+#
+#   tul.fan_loop_select   off -> detached
+#
+# The same loop as the joint twin (`tul_slot_spandec_strict_fan4_all_fp01_lsel_joint`):
+# per-pass reset to the winner, teacher at train / router at eval, ONE exit latent loss
+# (relaxed WTA, weight 10) WITH gradient into the loop. The difference: the coda and the
+# span decoder read the loop's output DETACHED (W_prefix, the coda and the decoder still
+# train on the token CE). Nothing token-driven reaches the loop; it learns only from the
+# latent loss, the fixed-point term (0.1), the epivol diversity term (0.1) and the slot
+# gain hinge. This is the "is the latent objective alone a loop trainer?" arm.
+#
+# WHAT TO READ: as the joint twin, plus the gap to it. A detached arm near the joint one
+# says the token CE was not what trained the loop; a large gap says the latent target
+# alone does not make the loop useful to the coda.
+# Note: .agents/notes/proposed/architecture/2026-09-30-latent-selected-loop.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_nowta
+  - _self_
+
+tul:
+  fan_loop_select: detached
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-det

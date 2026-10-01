@@ -70,6 +70,9 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_opf", "fan_opf_lambda_pred", "fan_opf_lambda_fac", "fan_opf_lambda_enc",
     "fan_opf_gamma_fac", "fan_opf_gamma_enc", "fan_opf_pred_hidden", "fan_target_ema",
     "fan_route", "fan_route_rank", "fan_route_bias_u", "fan_rlat_lambda",
+    "fan_loop_select", "fan_lsel_lambda", "fan_lsel_eps", "fan_lsel_enc_lambda",
+    "fan_lsel_enc_gamma", "fan_lsel_router_lambda", "fan_lsel_router_rank",
+    "fan_lsel_hidden",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -416,6 +419,14 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_route_rank=int(tc.get("fan_route_rank", 64)),
         fan_route_bias_u=float(tc.get("fan_route_bias_u", 1e-3)),
         fan_rlat_lambda=float(tc.get("fan_rlat_lambda", 1.0)),
+        fan_loop_select=str(tc.get("fan_loop_select", "off")),
+        fan_lsel_lambda=float(tc.get("fan_lsel_lambda", 10.0)),
+        fan_lsel_eps=float(tc.get("fan_lsel_eps", 0.05)),
+        fan_lsel_enc_lambda=float(tc.get("fan_lsel_enc_lambda", 0.2)),
+        fan_lsel_enc_gamma=float(tc.get("fan_lsel_enc_gamma", 0.1)),
+        fan_lsel_router_lambda=float(tc.get("fan_lsel_router_lambda", 1.0)),
+        fan_lsel_router_rank=int(tc.get("fan_lsel_router_rank", 64)),
+        fan_lsel_hidden=int(tc.get("fan_lsel_hidden", 0)),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -705,6 +716,14 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_route_rank": model_cfg.fan_route_rank,
         "fan_route_bias_u": model_cfg.fan_route_bias_u,
         "fan_rlat_lambda": model_cfg.fan_rlat_lambda,
+        "fan_loop_select": model_cfg.fan_loop_select,
+        "fan_lsel_lambda": model_cfg.fan_lsel_lambda,
+        "fan_lsel_eps": model_cfg.fan_lsel_eps,
+        "fan_lsel_enc_lambda": model_cfg.fan_lsel_enc_lambda,
+        "fan_lsel_enc_gamma": model_cfg.fan_lsel_enc_gamma,
+        "fan_lsel_router_lambda": model_cfg.fan_lsel_router_lambda,
+        "fan_lsel_router_rank": model_cfg.fan_lsel_router_rank,
+        "fan_lsel_hidden": model_cfg.fan_lsel_hidden,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1077,6 +1096,23 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                     + "- read fan/router_coda_agree (chance 1/K) and fan/router_pick_regret "
                       "vs fan/rand_pick_regret at val "
                     if model_cfg.fan_route != "none" else "")
+                 + (f"LATENT-SELECTED LOOP '{model_cfg.fan_loop_select}': after every pass "
+                    f"the M cells of a continuing slot are reset to the winner (train: the "
+                    f"teacher argmin ||g(cell) - z||^2 on the EMA-prelude target, EMA m="
+                    f"{model_cfg.fan_target_ema}; eval and slots without a target: the "
+                    f"router, rank {model_cfg.fan_lsel_router_rank}, CE onto the teacher "
+                    f"at weight {model_cfg.fan_lsel_router_lambda}); ONE latent loss at "
+                    f"the exit (relaxed WTA eps={model_cfg.fan_lsel_eps}, weight "
+                    f"{model_cfg.fan_lsel_lambda}, WITH grad into the loop; online floor "
+                    f"{model_cfg.fan_lsel_enc_lambda} @ {model_cfg.fan_lsel_enc_gamma}); "
+                    f"the coda reads the final winner alone"
+                    + (" DETACHED (no token CE reaches the loop) "
+                       if model_cfg.fan_loop_select == "detached" else
+                       " (the coda's CE reaches the loop through the winner) ")
+                    + "- read fan/lsel_r2, fan/lsel_teacher_router_agree (chance 1/K), "
+                      "fan/lsel_switch_rate, fan/lsel_cell_spread, and at val "
+                      "fan/lsel_teacher_pick_gap "
+                    if model_cfg.fan_loop_select != "off" else "")
                  if model_cfg.fan_mix == "all" else "")
               + ("TRIGGER EVERY PASS (the per-stream trigger W_o(pooled)+P_cell, the "
                  "SAME tensor the seed adds once, is added to the cell carrier at the "

@@ -1,0 +1,38 @@
+# The latent-selected loop, joint (2026-09-30). Composes the ungraded fan
+# (`tul_slot_spandec_strict_fan4_all_fp01_nowta`: write-all fan, M=4 cells, no WTA term,
+# epivol 0.1, fixed-point term 0.1) and changes ONE key plus the run name:
+#
+#   tul.fan_loop_select   off -> joint
+#
+# Selection moves INTO the loop. After every pass of a slot whose depth continues, the
+# four cells are reset to the pass's winner and the next pass explores four variations
+# around it (each cell keeps its own seed in the per-pass injection, its own register
+# term and its own core position). The winner at train is the latent TEACHER, argmin_i
+# ||g(c_i) - z||^2, z = the factor fan's EMA-prelude code of the next span (momentum
+# tul.fan_target_ema 0.996); slots without a next span and every eval / deploy pass follow
+# the ROUTER (FanRouter on detached cells, CE onto the teacher at every pass). ONE latent
+# loss, at the EXIT: relaxed WTA (eps 0.05) of g(cell) to z, weight 10, WITH gradient into
+# the loop; L_enc floor 0.2 @ 0.1 on the online prelude's pooled span states. The coda
+# reads the final winner alone; its token CE also reaches the loop through that winner.
+# Folded as fan_lsel_weighted.
+#
+# WHAT TO READ (pairs with the ungraded fan and the detached twin at 5k):
+#   * val/ce_tokens (router path) against the ungraded fan; fan/lsel_teacher_pick_gap
+#     (what a perfect router would buy) and fan/lsel_teacher_pick_ce.
+#   * fan/lsel_r2 (the loop meets the latent?), fan/lsel_teacher_router_agree (chance
+#     0.25), fan/lsel_switch_rate (does the winner change across passes?),
+#     fan/lsel_cell_spread (0 = the four cells collapsed onto the winner).
+#   * fan/router_coda_agree and fan/teacher_coda_agree at val (is the latent pick the
+#     coda's best cell? the latent-teacher router read chance there).
+#   * the K-curve (depth use) and tok/s against the ungraded fan.
+# FOOT GUN: the EMA twin is NOT in `model`; it rides the checkpoint's `fan_target` key.
+# Note: .agents/notes/proposed/architecture/2026-09-30-latent-selected-loop.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_nowta
+  - _self_
+
+tul:
+  fan_loop_select: joint
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-joint

@@ -1,4 +1,8 @@
-"""Three one-factor arms on the write-all fan with no WTA term ("nowta", 2026-09-30).
+"""Three one-factor arms on the write-all fan with no WTA term ("nowta", 2026-09-30),
+and the latent-selected loop that reuses their target, twin and router (at the end of
+this file: ``FanLatentHead``, ``lsel_distance``, ``lsel_exit_loss``, ``reset_to_winner``,
+``cell_spread``; wiring in ``MORPHTransformer._lsel_begin / _lsel_pass / _lsel_finish``;
+note ``.agents/notes/proposed/architecture/2026-09-30-latent-selected-loop.md``).
 
 nowta (``tul_slot_spandec_strict_fan4_all_fp01_nowta.yaml``) writes all M loop cells of a
 slot 1:1 into its M prefix cells and lets the coda's attention pick per token. Nothing
@@ -44,8 +48,10 @@ from torch import Tensor
 _OPF_SEED = 0x0F0F_2609
 _ROUTER_SEED = 0x2007_E6
 _TEACHER_SEED = 0x7EAC_4E6
+_LSEL_HEAD_SEED = 0x15E1_0930
 
 FAN_ROUTE_MODES = ("none", "reader", "latent")
+FAN_LOOP_SELECT_MODES = ("off", "joint", "detached")
 
 
 @contextlib.contextmanager
@@ -447,3 +453,86 @@ class FanTeacherMap(nn.Module):
     def forward(self, cells: Tensor) -> Tensor:
         with torch.autocast(device_type=cells.device.type, enabled=False):
             return F.linear(_ln(cells), self.g.weight.float(), self.g.bias.float())
+
+
+# ── the latent-selected loop (tul.fan_loop_select, 2026-09-30) ───────────────────────
+
+
+class FanLatentHead(nn.Module):
+    """The latent-selected loop's map ``g``: LayerNorm (no affine) -> ``Linear(d, h)`` ->
+    GELU -> ``Linear(h, d)``, ONE head shared by the M cells.
+
+    Unlike :class:`FanTeacherMap` (which reads detached cells and only ranks them), this
+    head is the loop's TRAINER: the exit's relaxed winner-takes-all loss reaches the cells
+    and the loop through it. The per-pass selection reads it under ``no_grad``. Built in
+    a forked CPU stream with its own seed (RNG-neutral), never ternarised."""
+
+    def __init__(self, d_model: int, hidden: int):
+        super().__init__()
+        d = int(d_model)
+        h = int(hidden) if int(hidden) > 0 else d
+        with _cpu_seeded(_LSEL_HEAD_SEED):
+            self.fc1 = nn.Linear(d, h)
+            self.fc2 = nn.Linear(h, d)
+        self._ternary_exclude = True
+        for mod in (self.fc1, self.fc2):
+            mod._ternary_exclude = True
+
+    def forward(self, cells: Tensor) -> Tensor:
+        """``[..., C]`` -> ``[..., C]`` fp32, autocast off."""
+        with torch.autocast(device_type=cells.device.type, enabled=False):
+            a = F.gelu(F.linear(_ln(cells), self.fc1.weight.float(), self.fc1.bias.float()))
+            return F.linear(a, self.fc2.weight.float(), self.fc2.bias.float())
+
+
+def lsel_distance(gz: Tensor, z: Tensor) -> Tensor:
+    """``||g(c_i) - z||^2`` per coordinate: ``gz`` ``[B, S, M, C]``, ``z`` ``[B, S, C]``
+    -> ``[B, S, M]`` fp32, the MEAN over coordinates (z is LayerNormed, so a cell that
+    predicts 0 reads ~1). The selection's argmin and the exit loss use this one form."""
+    return (gz.float() - z.float().unsqueeze(2)).square().mean(dim=-1)
+
+
+def lsel_exit_loss(dist: Tensor, winner: Tensor, ok: Tensor, eps: float) -> Tensor:
+    """The relaxed winner-takes-all latent loss at the loop's EXIT.
+
+    ``dist`` ``[B, S, M]`` (with grad), ``winner`` ``[B, S]`` (the teacher pick), ``ok``
+    ``[B, S]`` the slots with a target. Per slot ``(1 - eps) * d_win + eps / (M - 1) *
+    sum_{i != win} d_i`` (a hypothesis that never wins still gets a small pull toward the
+    target, so it cannot drift off and die), averaged over the ``ok`` slots. ``eps = 0``
+    is the hard WTA."""
+    m = int(dist.shape[-1])
+    oh = F.one_hot(winner, m).to(dist.dtype)
+    w = (1.0 - eps) * oh + (eps / (m - 1)) * (1.0 - oh)
+    okf = ok.to(dist.dtype)
+    return ((w * dist).sum(dim=-1) * okf).sum() / okf.sum().clamp_min(1.0)
+
+
+def reset_to_winner(h: Tensor, winner: Tensor, reset: Tensor, m: int) -> Tensor:
+    """THE RESET: on the compact cell axis ``h`` ``[B, S*M, ...]`` (slot-major, cell
+    ``s*M + i``), every cell of a slot with ``reset[b, s]`` True takes the state of cell
+    ``winner[b, s]``; every other slot is returned untouched.
+
+    A ``gather`` on the cell axis, so the gradient of every copy flows back into the
+    winner's own path (BPTT through the winner) and a loser's state of this pass gets
+    none from later passes. ``torch.where`` saves only its condition, the gather only its
+    index, so the reset adds no carrier-sized tensor to the backward."""
+    B, SM = int(h.shape[0]), int(h.shape[1])
+    S = SM // m
+    rest = tuple(h.shape[2:])
+    hc = h.view(B, S, m, *rest)
+    idx = winner.view(B, S, 1, *([1] * len(rest))).expand(B, S, 1, *rest)
+    w = torch.gather(hc, 2, idx).expand(B, S, m, *rest)
+    out = torch.where(reset.view(B, S, 1, *([1] * len(rest))), w, hc)
+    return out.reshape(B, SM, *rest)
+
+
+def cell_spread(cr: Tensor, w: Tensor) -> Tensor:
+    """How far a slot's M cells sit from their mean, relative to the mean: per slot
+    ``RMS(c_i - mean) / RMS(mean)`` over cells and coordinates, averaged over the slots
+    with ``w = 1``. ``cr`` ``[B, S, M, C]``. 0 = M identical copies (a dead fan)."""
+    crf = cr.float()
+    mu = crf.mean(dim=2, keepdim=True)
+    dev = (crf - mu).square().mean(dim=(2, 3)).sqrt()
+    base = mu.squeeze(2).square().mean(dim=-1).sqrt().clamp_min(1e-12)
+    wf = w.float()
+    return ((dev / base) * wf).sum() / wf.sum().clamp_min(1.0)

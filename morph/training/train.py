@@ -189,7 +189,10 @@ def evaluate(
                           # tul.fan_opf (arm F, 2026-09-30): the OPF objective and
                           # tul.fan_route="latent" (arm T): the teacher's router CE + g's
                           # MSE. Both are built at eval too (labels present).
-                          "opf_weighted", "rlat_weighted"):
+                          "opf_weighted", "rlat_weighted",
+                          # tul.fan_loop_select (the latent-selected loop, 2026-09-30):
+                          # the exit latent loss + floor + router CE, built at eval too.
+                          "fan_lsel_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -280,6 +283,18 @@ def evaluate(
             for _ck in [k for k in out if str(k).startswith("code_policy")]:
                 if torch.is_tensor(out[_ck]):
                     acc.setdefault(f"val/{_ck}", []).append(float(out[_ck]))
+            if str(getattr(_tul_cfg, "fan_loop_select", "off")) != "off":
+                # The latent-selected loop's VAL-ONLY EXTRA PASS: the same rows with the
+                # loop following the latent TEACHER's pick (as training does) instead of
+                # the router's. Eval depth and dropout are deterministic, so the two
+                # passes differ in the picks alone. `fan/lsel_teacher_pick_gap` = token CE
+                # (router path, the shipped `val/ce_tokens`) - token CE (teacher path):
+                # what a perfect router would buy. Same autocast as the main val row.
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    _ce_teach = float(_m.tul_forward_ablated(
+                        x, y, layout, lsel_follow="teacher")["ce_tokens"])
+                acc.setdefault("fan/lsel_teacher_pick_ce", []).append(_ce_teach)
+                acc.setdefault("fan/lsel_teacher_pick_gap", []).append(ce_tok - _ce_teach)
             if getattr(_m, "tul_code_policy", None) is not None:
                 # THE DECISIVE READING, a VAL-ONLY EXTRA PASS (never at train): the same
                 # rows with a uniformly RANDOM code per slot (the policy's private
@@ -315,6 +330,8 @@ def evaluate(
             # `teacher_router_agree` are built at train AND eval, so they go to `val/fan_*`;
             # the router-vs-coda readings (`router_coda_agree`, `router_pick_regret`,
             # `rand_pick_regret`, `teacher_coda_agree`) are eval-only and stay in `fan/`.
+            # The latent-selected loop's `lsel_*` readings (and its `lsel_weighted`) are
+            # built at train AND eval, so they go to `val/fan_lsel_*` the same way.
             _fan_train_side = ("mix_entropy", "mix_w_max", "repel_terms",
                                "teacher_router_agree")
             for _fk in [k for k in out if str(k).startswith("fan_")]:
@@ -323,7 +340,7 @@ def evaluate(
                 _name = str(_fk)[4:]
                 _dest = (f"val/fan_{_name}"
                          if _name.startswith(("stream_cos_t", "epi_t", "vol_t", "head_wta",
-                                              "opf_", "route_", "rlat_"))
+                                              "opf_", "route_", "rlat_", "lsel_"))
                          or _name in _fan_train_side
                          else f"fan/{_name}")
                 acc.setdefault(_dest, []).append(float(out[_fk]))
@@ -3868,6 +3885,7 @@ def main(cfg: DictConfig) -> None:
                         "fan_head_wta_weighted",   # tul.fan_all_wta_grader=head, 2026-09-29
                         "opf_weighted",            # tul.fan_opf (arm F), 2026-09-30
                         "rlat_weighted",           # tul.fan_route=latent (arm T), 2026-09-30
+                        "fan_lsel_weighted",       # tul.fan_loop_select, 2026-09-30
                         "critic_weighted",   # arc E10 / 2026-09-12
                         "horizon_weighted",  # LoopMTP horizon alignment, 2026-09-14
                         "code_fm_weighted",   # TUL-Code flow term (the val side already

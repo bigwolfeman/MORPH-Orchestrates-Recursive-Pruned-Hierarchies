@@ -504,6 +504,34 @@ class TULConfig:
     fan_route_rank: int = 64
     fan_route_bias_u: float = 1e-3
     fan_rlat_lambda: float = 1.0
+    # ── the latent-selected loop (2026-09-30; morph/model/tul_fan_route.py) ──────────
+    # `fan_loop_select` moves the fan's SELECTION into the loop and lets a latent objective
+    # train the loop. "off" (default) builds nothing. On the write-all fan with no WTA
+    # term: after EVERY pass of a slot whose depth continues, the M cells are reset to the
+    # pass's winner (a gather on the cell axis, so BPTT flows through the winner's path)
+    # and the next pass explores M variations around it (each cell keeps its own seed
+    # `e_i` in the per-pass injection, its own register term and its own core position).
+    # The winner is the TEACHER at train (argmin_i ||g(c_i) - z||^2 under no_grad, z the
+    # factor fan's EMA-prelude target of the next span) on the slots with a target, the
+    # ROUTER (`FanRouter`, detached inputs, CE onto the teacher at every pass) everywhere
+    # else and at eval / deploy. ONE latent loss, at the EXIT only: the relaxed WTA
+    # (1 - eps) d_win + eps/(M-1) sum d_other, d the per-coordinate MSE of g(cell) to z,
+    # WITH gradient into the cells and the loop. The coda reads the final winner alone.
+    # "joint": the coda's token CE reaches the loop through the winner. "detached": the
+    # coda and the span decoder read the loop's output detached, so the loop learns only
+    # from the latent loss, the fixed-point term, the diversity term and the gain hinge.
+    # Folded as `fan_lsel_weighted` = fan_lsel_lambda L_lat + fan_lsel_enc_lambda L_enc
+    # (the online prelude's pooled-state floor at fan_lsel_enc_gamma) +
+    # fan_lsel_router_lambda L_router. Checked in `_check_fan_loop_select`.
+    # Note .agents/notes/proposed/architecture/2026-09-30-latent-selected-loop.md
+    fan_loop_select: str = "off"            # "off" | "joint" | "detached"
+    fan_lsel_lambda: float = 10.0
+    fan_lsel_eps: float = 0.05
+    fan_lsel_enc_lambda: float = 0.2
+    fan_lsel_enc_gamma: float = 0.1
+    fan_lsel_router_lambda: float = 1.0
+    fan_lsel_router_rank: int = 64
+    fan_lsel_hidden: int = 0                # g's hidden width; 0 = d_model
     fan_repel_mode: str = "cos"        # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
@@ -2441,6 +2469,8 @@ class TULConfig:
         self._check_fan_head_grader()
         # ── the fan's OPF / router arms (2026-09-30) — same rule, same place ─────
         self._check_fan_opf_route()
+        # ── the latent-selected loop (2026-09-30) — same rule, same place ────────
+        self._check_fan_loop_select()
 
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
         if self.loop_carry not in LOOP_CARRY_MODES:
@@ -4037,7 +4067,7 @@ class TULConfig:
         _unread = []
         if not self.fan_opf:
             _unread += [k for k in _opf_keys if getattr(self, k) != _defaults[k].default]
-        if not (self.fan_opf or self.fan_route == "latent"):
+        if not (self.fan_opf or self.fan_route == "latent" or self.fan_loop_select != "off"):
             _unread += [k for k in ("fan_target_ema",)
                         if getattr(self, k) != _defaults[k].default]
         if self.fan_route == "none":
@@ -4069,6 +4099,97 @@ class TULConfig:
              "bcast=true: the unpack reads the MEAN of the written cells, which under a "
              "router is a scaled winner; not defined for these arms"),
         ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.{_arm} with {why}.")
+
+    def _check_fan_loop_select(self) -> None:
+        """``tul.fan_loop_select`` (the latent-selected loop, 2026-09-30). Values first,
+        then every ``fan_lsel_*`` knob set while the loop select is off (a silent no-op),
+        then the compositions. It sits on the write-all fan with NO WTA term and is ONE
+        mechanism: the factor fan, the routers, a WTA term and the code rollouts are each
+        a second factor. Then every mode that would fight the per-pass reset (the halting
+        gate, the denoise entry, per-pass prefix cells, the gated readout, history streams,
+        a per-stream lineage). Under "detached" every DEFINED token-driven path into the
+        loop that the forward does not already detach is refused (the MUX, the per-pass
+        targets, the oracle teacher, the gradient-conditioned pass, the code target)."""
+        if self.fan_loop_select not in ("off", "joint", "detached"):
+            raise ValueError(
+                f"tul.fan_loop_select must be 'off', 'joint' or 'detached', got "
+                f"{self.fan_loop_select!r}")
+        for name in ("fan_lsel_lambda", "fan_lsel_enc_lambda", "fan_lsel_enc_gamma",
+                     "fan_lsel_router_lambda"):
+            if not getattr(self, name) >= 0.0:
+                raise ValueError(f"tul.{name} must be >= 0, got {getattr(self, name)}")
+        if not 0.0 <= self.fan_lsel_eps < 1.0:
+            raise ValueError(f"tul.fan_lsel_eps must be in [0, 1), got {self.fan_lsel_eps}")
+        if self.fan_lsel_router_rank < 1:
+            raise ValueError(
+                f"tul.fan_lsel_router_rank must be >= 1, got {self.fan_lsel_router_rank}")
+        if self.fan_lsel_hidden < 0:
+            raise ValueError(
+                f"tul.fan_lsel_hidden must be >= 0 (0 = d_model), got {self.fan_lsel_hidden}")
+        _defaults = TULConfig.__dataclass_fields__
+        _keys = ("fan_lsel_lambda", "fan_lsel_eps", "fan_lsel_enc_lambda",
+                 "fan_lsel_enc_gamma", "fan_lsel_router_lambda", "fan_lsel_router_rank",
+                 "fan_lsel_hidden")
+        if self.fan_loop_select == "off":
+            _unread = [k for k in _keys if getattr(self, k) != _defaults[k].default]
+            if _unread:
+                raise ValueError(
+                    f"tul.{', tul.'.join(_unread)} set with tul.fan_loop_select='off': "
+                    f"a silent no-op.")
+            return
+        _arm = f"fan_loop_select={self.fan_loop_select!r}"
+        _refused = [
+            (self.fan_k < 2 or self.fan_mix != "all",
+             f"fan_k={self.fan_k}, fan_mix={self.fan_mix!r}: the selection acts on the M "
+             f"cells of the write-all fan (fan_k >= 2, fan_mix='all')"),
+            (self.fan_opf, "fan_opf=true: the factor fan is a second latent objective"),
+            (self.fan_route != "none",
+             f"fan_route={self.fan_route!r}: a second router on the exit cells"),
+            (self.fan_all_wta_lambda > 0.0,
+             f"fan_all_wta_lambda={self.fan_all_wta_lambda}: the loop select sits on the "
+             f"ungraded fan (no WTA term); a WTA term beside it is a second factor"),
+            (self.code_enum_k > 1,
+             f"code_enum_k={self.code_enum_k}: the K rollouts are a second width axis the "
+             f"per-pass reset was not built for"),
+            (self.bcast, "bcast=true: the unpack reads the MEAN of the written cells"),
+            (self.gate is not None,
+             "tul.gate: the halting readout decides the depth from a state the reset "
+             "overwrites"),
+            (self.loop_denoise,
+             "loop_denoise=true: the denoise schedule REPLACES every pass's entry, so the "
+             "reset to the winner would be discarded"),
+            (self.prefix_source != "exit",
+             f"prefix_source={self.prefix_source!r}: per-pass prefix cells read the "
+             f"trajectory, which holds the PRE-reset candidates"),
+            (self.pass_readout != "last",
+             f"pass_readout={self.pass_readout!r}: the gated readout mixes the per-pass "
+             f"candidates, not the selected exit"),
+            (self.fan_history_streams > 0,
+             f"fan_history_streams={self.fan_history_streams}: a history stream relays "
+             f"its own lineage, which the reset to the winner overwrites"),
+            (self.fan_lineage != "off",
+             f"fan_lineage={self.fan_lineage!r}: a per-stream lineage across slots, which "
+             f"the reset to the winner overwrites"),
+            (self.loop_carry != "none",
+             f"loop_carry={self.loop_carry!r}: the carry adds to the exit after the last "
+             f"pass, so the coda would read a state the exit's latent loss never graded"),
+        ]
+        if self.fan_loop_select == "detached":
+            _refused += [
+                (self.mux_beta > 0.0,
+                 f"mux_beta={self.mux_beta}: the MUX grades the loop's exit by the next "
+                 f"span's TOKENS, a token-driven path into the loop"),
+                (self.oracle_z, "oracle_z=true: a per-pass token-driven teacher"),
+                (self.spandec_per_pass, "spandec_per_pass=true: per-pass span-decoder CE"),
+                (self.horizon_weight > 0.0,
+                 f"horizon_weight={self.horizon_weight}: per-pass token targets"),
+                (self.grad_pass, "grad_pass=true: the own-span token loss's gradient is "
+                                 "a feature inside the loop"),
+                (self.code_target, "code_target=true: a second exit target"),
+            ]
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.{_arm} with {why}.")

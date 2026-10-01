@@ -58,8 +58,10 @@ from .tul_carry import TULLoopCarry
 from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_repel_term,
                       fan_stream_rank, fan_vol_term, select_gate_loss, select_streams,
                       select_winners, fan_stream_stats, plan_streams)
-from .tul_fan_route import (FanOPF, FanRouter, FanTargetFront, FanTeacherMap, opf_terms,
-                            participation_ratio, pooled_span_states)
+from .tul_fan_route import (FanLatentHead, FanOPF, FanRouter, FanTargetFront, FanTeacherMap,
+                            batch_std, batch_var, cell_spread, lsel_distance,
+                            lsel_exit_loss, opf_terms, participation_ratio,
+                            pooled_span_states, reset_to_winner)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
@@ -1806,6 +1808,13 @@ class MORPHTransformer(nn.Module):
     # default, so the shipped graph never sees it.
     _fan_all_ce_capture: list | None = None
 
+    # `tul.fan_loop_select`'s test hook (the `_trigger_capture` pattern): attach a list
+    # and `_lsel_pass` appends ``{"t", "pre" (the carrier BEFORE the reset), "post" (the
+    # carrier the next pass reads), "follow" (the winner the loop followed), "router"
+    # (the router's pick), "teacher" (the teacher's, or None without a target), "act"
+    # (the slots whose pass t ran)}`` (detached) once per pass. None by default.
+    _lsel_capture: list | None = None
+
     # `tul.fan_all_wta_winner="map"`/`"latent"`'s test hook: attach a list and
     # `_tul_fan_all` appends ``{"map_idx", "choice", "forced", "ce_map", "cells_map",
     # "S_slots"}`` (all detached) once per train step, right after the winner is picked
@@ -2736,7 +2745,8 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_router: FanRouter | None = None
         self.tul_fan_teacher: FanTeacherMap | None = None
         self._fan_target_needed: bool = bool(
-            cfg.tul is not None and (cfg.tul.fan_opf or cfg.tul.fan_route == "latent"))
+            cfg.tul is not None and (cfg.tul.fan_opf or cfg.tul.fan_route == "latent"
+                                     or cfg.tul.fan_loop_select != "off"))
         self.__dict__["_fan_target"] = None
         if cfg.tul is not None and cfg.tul.fan_opf:
             if self.tul_fan is None or self.tul_fan.mode != "all":
@@ -2755,6 +2765,28 @@ class MORPHTransformer(nn.Module):
             self.tul_fan_router = FanRouter(d, int(cfg.tul.fan_k), int(cfg.tul.fan_route_rank))
             if cfg.tul.fan_route == "latent":
                 self.tul_fan_teacher = FanTeacherMap(d)
+        # ── the latent-selected loop (tul.fan_loop_select; tul_fan_route.py) ─────────
+        # "off" (default) builds nothing: the two attributes stay None, `_lsel_mode` is the
+        # Python constant "off" and every branch on it traces out. On: the shared latent
+        # head g and a router of its own (`FanRouter`, reused; its balance bias is never
+        # stepped, so it stays 0 and the pick is argmax(score)). Both RNG-neutral (forked
+        # CPU stream, fixed seeds). The EMA target twin is the factor fan's, built by the
+        # trainer (`_fan_target_needed` above). The selection itself runs INSIDE
+        # `_tul_core`, after every pass (`_lsel_begin / _lsel_pass / _lsel_finish`).
+        self._lsel_mode: str = "off" if cfg.tul is None else str(cfg.tul.fan_loop_select)
+        self.tul_fan_lsel_head: FanLatentHead | None = None
+        self.tul_fan_lsel_router: FanRouter | None = None
+        self._lsel_out: dict | None = None
+        if self._lsel_mode != "off":
+            if self.tul_fan is None or self.tul_fan.mode != "all":
+                raise RuntimeError("tul.fan_loop_select built without the write-all fan; "
+                                   "TULConfig should have refused this configuration.")
+            if int(cfg.n_core) == 0:
+                raise ValueError("tul.fan_loop_select with n_core=0: there is no loop to "
+                                 "select inside.")
+            self.tul_fan_lsel_head = FanLatentHead(d, int(cfg.tul.fan_lsel_hidden))
+            self.tul_fan_lsel_router = FanRouter(d, int(cfg.tul.fan_k),
+                                                 int(cfg.tul.fan_lsel_router_rank))
 
         # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
         # K codes per span instead of one continuous vector, lifted into the K prefix
@@ -5411,8 +5443,19 @@ class MORPHTransformer(nn.Module):
                   slot_depths: Tensor | None = None,
                   code_x0: Tensor | None = None, code_ok: Tensor | None = None,
                   gram_mode: str | None = None, gram_seed: int | None = None,
-                  iw_rollouts: int = 1, code_policy_pick: str | None = None):
+                  iw_rollouts: int = 1, code_policy_pick: str | None = None,
+                  lsel_tgt: dict | None = None, lsel_follow: str | None = None):
         """Gather slots → masked per-slot depth loop → looped states (spec §3.3).
+
+        ``lsel_tgt`` / ``lsel_follow`` (``tul.fan_loop_select`` ONLY, the latent-selected
+        loop): ``lsel_tgt`` is :meth:`_tul_fan_target`'s ``{"z", "ok", "zo"}`` (None on a
+        label-free forward: the router picks every pass); ``lsel_follow`` ``"teacher"``
+        (EVAL ONLY, the val instrument ``fan/lsel_teacher_pick_ce``) makes the loop follow
+        the teacher on the slots with a target, as training does. After every pass the
+        M cells of a slot whose depth continues are reset to the pass's winner
+        (:meth:`_lsel_pass`); the exit's latent loss, the final winner and the readings
+        are stashed on ``self._lsel_out`` (:meth:`_lsel_finish`), consumed and cleared by
+        ``_forward_tul``. Every other model passes neither and traces the old graph.
 
         ``code_policy_pick`` (``tul.code_policy_k`` ONLY, EVAL ONLY): how the policy picks
         each slot's code for THIS forward — ``"argmax"``, ``"sample"`` or ``"random"``
@@ -5925,6 +5968,17 @@ class MORPHTransformer(nn.Module):
                 depths = _dv[:, :, :1].expand(B, _n_slots, _m_cells).reshape(
                     B, _n_slots * _m_cells).contiguous()
             total_iters = int(depths.max().item())
+        # ── tul.fan_loop_select: the latent-selected loop's per-forward state ──────
+        # A Python-level constant: "off" (every other model) binds None and the three
+        # `_ls` sites below trace out. Built after the depth draw because the reset mask of
+        # pass t is "this slot's depth reaches pass t + 1".
+        _ls = None
+        if self._lsel_mode != "off":
+            _ls = self._lsel_begin(xn, _layout_slots, depths, _m_cells, lsel_tgt,
+                                   lsel_follow)
+        elif lsel_tgt is not None or lsel_follow is not None:
+            raise ValueError("lsel_tgt / lsel_follow need a model built with "
+                             "tul.fan_loop_select.")
         # db_loop: the truncated-BPTT window is meaningless (no gradient crosses an
         # iteration boundary by construction), and a no_grad iteration would silently
         # drop that iteration's LOCAL loss — so every iteration carries grad.
@@ -6848,6 +6902,15 @@ class MORPHTransformer(nn.Module):
             h = torch.where(active.view(*active.shape, *([1] * (h.dim() - 2))), h_new, h)
             if _db_traj is not None:
                 _db_traj.append(h)
+            if _ls is not None:
+                # ── tul.fan_loop_select: SELECT, THEN FAN OUT FROM THE WINNER ─────────
+                # AFTER the trajectory append, so `db_traj[t + 1]` — what the diversity
+                # term and the per-pass instruments read — holds this pass's M CANDIDATES,
+                # not M copies of the winner. The cells of a slot whose depth continues
+                # enter pass t + 1 as the winner's state; a slot that finished here keeps
+                # its M final candidates (the coda reads its winner alone, later slots'
+                # loops read all M), and a slot that stopped earlier is not touched.
+                h = self._lsel_pass(_ls, h, t)
             if _mep:
                 # `active` is `depths > t`, so this is "the slot's depth reaches pass t+1",
                 # ANDed with validity (a pad enters at 0 and is "active" at t = 0) and,
@@ -6953,6 +7016,10 @@ class MORPHTransformer(nn.Module):
             # Eq. 5 tail: h_T = h* + Delta_T (invariant S6). The deviation lives ONLY inside
             # this function; `_forward_tul` scatters an absolute carrier exactly as today.
             h = h_star + h
+        if _ls is not None:
+            # The exit: the latent loss on the FINAL pass's cells (the state the coda's
+            # write reads), the final winner and the readings, stashed on `_lsel_out`.
+            self._lsel_finish(_ls, h)
         _aux: dict = {}
         if _fp_terms:
             _fp = torch.cat(_fp_terms).mean()
@@ -8081,7 +8148,8 @@ class MORPHTransformer(nn.Module):
         w_head_pad = pad_vocab_align8(w_head)          # once per call (perf: aligned GEMM)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]        # [B, S]
         per_stream = []
-        if (self.tul_fan_router is not None) != (route is not None):
+        if ((self.tul_fan_router is not None or self._lsel_mode != "off")
+                != (route is not None)):
             raise RuntimeError("_tul_fan_oracle: a router model must hand in its route "
                                "(and no other model may).")
         _rscale = {} if route is None else {"route_scale": route["scale"]}
@@ -8939,9 +9007,10 @@ class MORPHTransformer(nn.Module):
         masks ``front_kw`` / ``front_reset`` the live front ran under) mean-pooled over
         slot ``s``'s NEXT span's token positions (``span_ce_index``'s bin ``s + 1``) and
         LayerNormed without affine; ``ok`` ``[B, S]`` — the slot is real AND its next span
-        has a scored token (the coda table's own rule); ``zo`` (arm F only, else None) —
-        the SAME pooling of the LIVE front's output ``x_online``, with grad: the tensor
-        whose EMA the target is, where ``L_enc``'s collapse guard sits.
+        has a scored token (the coda table's own rule); ``zo`` (arm F and the
+        latent-selected loop, else None) — the SAME pooling of the LIVE front's output
+        ``x_online``, with grad: the tensor whose EMA the target is, where ``L_enc``'s
+        collapse guard sits.
 
         WHAT THE TARGET CAN SEE. Under ``tg_geometry: strict`` the prelude is same-span
         only, so ``z[s]`` is a function of span ``s + 1``'s tokens and nothing else
@@ -8963,7 +9032,7 @@ class MORPHTransformer(nn.Module):
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]
         ok = layout.slot_valid & (n_tok > 0)
         zo = (pooled_span_states(x_online, gid, keep_tok, g_bins)
-              if self.tul_fan_opf is not None else None)
+              if (self.tul_fan_opf is not None or self._lsel_mode != "off") else None)
         return {"z": z, "ok": ok, "zo": zo}
 
     def _tul_fan_opf(self, cells: Tensor, tgt: dict, stats: dict) -> Tensor:
@@ -9089,6 +9158,160 @@ class MORPHTransformer(nn.Module):
         if route["scale"] is not None:
             oh = oh * route["scale"].to(cells.dtype)
         return cells * oh.view(*oh.shape, *([1] * (cells.dim() - 3)))
+
+    # ── the latent-selected loop (tul.fan_loop_select, 2026-09-30) ───────────────────
+
+    def _lsel_begin(self, xn: Tensor, layout: SlotLayout, depths: Tensor, m: int,
+                    tgt: dict | None, follow: str | None) -> dict:
+        """The per-forward state of the latent-selected loop, built once before pass 0.
+
+        ``layout`` is the PER-SLOT view, ``depths`` the CELL-level table ``[B, S*M]``
+        (constant within a slot). ``ctx`` is the router's conditioning, exactly
+        :meth:`_tul_fan_route`'s: the normed prelude output at the slot's first prefix
+        position, stream mean, DETACHED. ``teacher_drives`` decides who picks on the slots
+        with a target: the teacher at train and under ``follow="teacher"`` (an eval-only
+        instrument), the router otherwise; a slot without a target always follows the
+        router. Readings accumulate as 0-dim GPU tensors (no host sync in the loop)."""
+        if follow not in (None, "teacher"):
+            raise ValueError(f"lsel_follow must be None or 'teacher', got {follow!r}")
+        if follow == "teacher" and (self.training or tgt is None):
+            raise ValueError(
+                "lsel_follow='teacher' is an EVAL-ONLY instrument and needs the target "
+                "(a labelled forward in plan_mode 'normal'): training follows the teacher "
+                "by construction.")
+        B, S = layout.slot_valid.shape
+        ctx = gather_valid(xn, layout.slot_index, layout.slot_valid)
+        while ctx.dim() > 3:
+            ctx = ctx.mean(dim=-2)
+        zero = xn.new_zeros((), dtype=torch.float32)
+        none_pick = torch.zeros(B, S, dtype=torch.long, device=xn.device)
+        return {
+            "m": int(m), "ctx": ctx.detach(), "valid": layout.slot_valid,
+            "dslot": depths.view(B, S, int(m))[:, :, 0],
+            "z": None if tgt is None else tgt["z"],
+            "ok": None if tgt is None else tgt["ok"] & layout.slot_valid,
+            "zo": None if tgt is None else tgt["zo"],
+            "teacher_drives": tgt is not None and (self.training or follow == "teacher"),
+            "final": none_pick, "final_router": none_pick.clone(),
+            "final_teacher": none_pick.clone(), "prev": None,
+            "rce_sum": zero, "rce_n": zero.clone(), "agree_sum": zero.clone(),
+            "sw_sum": zero.clone(), "sw_n": zero.clone(), "agree_t": [],
+        }
+
+    def _lsel_pass(self, st: dict, h: Tensor, t: int) -> Tensor:
+        """After pass ``t``: pick each active slot's winner, train the router on the
+        teacher's pick, and reset the cells of every slot whose depth continues to the
+        winner's state (:func:`reset_to_winner`). Returns the carrier the next pass reads.
+
+        The router reads the cells DETACHED (and a detached ``ctx``): its CE trains the
+        router alone. The teacher's distance runs under ``no_grad``: the selection is a
+        discrete choice, and the only latent gradient into the loop is the EXIT loss."""
+        m, valid, dslot = st["m"], st["valid"], st["dslot"]
+        B, S = valid.shape
+        act = valid & (dslot > t)                         # slots whose pass t ran
+        cr = _cell_readout(h.view(B, S, m, *h.shape[2:])).detach()        # [B, S, M, C]
+        scores = self.tul_fan_lsel_router.scores(cr, st["ctx"])            # grad: router
+        rpick = self.tul_fan_lsel_router.select(scores)[0]
+        follow = rpick
+        tpick = None
+        if st["z"] is not None:
+            with torch.no_grad():
+                tpick = lsel_distance(self.tul_fan_lsel_head(cr), st["z"]).argmin(dim=-1)
+            okp = act & st["ok"]
+            okf = okp.float()
+            ce = F.cross_entropy(scores.reshape(B * S, m), tpick.reshape(B * S),
+                                 reduction="none").view(B, S)
+            st["rce_sum"] = st["rce_sum"] + (ce * okf).sum()
+            st["rce_n"] = st["rce_n"] + okf.sum().detach()
+            with torch.no_grad():
+                agree = ((rpick == tpick).float() * okf).sum()
+                st["agree_sum"] = st["agree_sum"] + agree
+                st["agree_t"].append(agree / okf.sum().clamp_min(1.0))
+            if st["teacher_drives"]:
+                follow = torch.where(st["ok"], tpick, rpick)
+            st["final_teacher"] = torch.where(act, tpick, st["final_teacher"])
+        with torch.no_grad():
+            if st["prev"] is not None:
+                # `act` at pass t implies the slot was active at t - 1 (depth > t > t - 1).
+                af = act.float()
+                st["sw_sum"] = st["sw_sum"] + ((follow != st["prev"]).float() * af).sum()
+                st["sw_n"] = st["sw_n"] + af.sum()
+        st["prev"] = follow
+        st["final"] = torch.where(act, follow, st["final"])
+        st["final_router"] = torch.where(act, rpick, st["final_router"])
+        out = reset_to_winner(h, follow, valid & (dslot > t + 1), m)
+        if self._lsel_capture is not None:
+            # The test hook (the `_trigger_capture` pattern): detached, None by default.
+            self._lsel_capture.append({
+                "t": t, "pre": h.detach(), "post": out.detach(), "follow": follow.detach(),
+                "router": rpick.detach(), "act": act.detach(),
+                "teacher": None if tpick is None else tpick.detach()})
+        return out
+
+    def _lsel_finish(self, st: dict, h: Tensor) -> None:
+        """The exit. ``h`` ``[B, S*M, ...]`` holds every slot's FINAL candidates (the last
+        pass never resets). With a target: ``g`` reads the cells WITH grad, the teacher
+        pick at the exit is the argmin of that distance, and the relaxed WTA loss
+        (:func:`lsel_exit_loss`) trains g, the cells and the loop; ``L_enc`` floors the
+        online prelude's pooled span states; the router CE is the mean over every
+        (pass, slot) the teacher graded. Stashes ``self._lsel_out`` = ``{"loss",
+        "stats", "winner", "teacher"}``; ``loss`` is None without a target."""
+        tc = self.cfg.tul
+        m, valid, dslot = st["m"], st["valid"], st["dslot"]
+        B, S = valid.shape
+        cr = _cell_readout(h.view(B, S, m, *h.shape[2:]))                 # [B, S, M, C]
+        winner = st["final"]
+        stats: dict = {}
+        vf = valid.float()
+        nv = vf.sum().clamp_min(1.0)
+        with torch.no_grad():
+            share = (F.one_hot(winner, m).float() * vf.unsqueeze(-1)).sum(dim=(0, 1)) / nv
+            for i in range(m):
+                stats[f"lsel_share_k{i}"] = share[i]
+            stats["lsel_switch_rate"] = st["sw_sum"] / st["sw_n"].clamp_min(1.0)
+            stats["lsel_switch_n"] = st["sw_n"]
+            stats["lsel_cell_spread"] = cell_spread(cr.detach(), valid & (dslot >= 2))
+        loss = None
+        teacher = None
+        if st["z"] is not None:
+            z, ok, zo = st["z"], st["ok"], st["zo"]
+            dist = lsel_distance(self.tul_fan_lsel_head(cr), z)            # [B, S, M]
+            tex = dist.detach().argmin(dim=-1)
+            l_lat = lsel_exit_loss(dist, tex, ok, float(tc.fan_lsel_eps))
+            okf = ok.float()
+            s_enc = batch_std(zo.reshape(B * S, -1), okf.reshape(B * S))
+            l_enc = torch.relu(float(tc.fan_lsel_enc_gamma) - s_enc).mean()
+            l_rce = st["rce_sum"] / st["rce_n"].clamp_min(1.0)
+            loss = (float(tc.fan_lsel_lambda) * l_lat
+                    + float(tc.fan_lsel_enc_lambda) * l_enc
+                    + float(tc.fan_lsel_router_lambda) * l_rce)
+            teacher = st["final_teacher"]
+            with torch.no_grad():
+                n = okf.sum().clamp_min(1.0)
+                gw = self.tul_fan_lsel_head(
+                    cr.detach().gather(2, winner.view(B, S, 1, 1).expand(B, S, 1, cr.shape[-1])
+                                       ).squeeze(2))
+                mse = ((gw - z).square().mean(dim=-1) * okf).sum() / n
+                var = batch_var(z.reshape(B * S, -1), okf.reshape(B * S)).mean()
+                stats["lsel_lat"] = l_lat.detach()
+                stats["lsel_enc"] = l_enc.detach()
+                stats["lsel_router_ce"] = l_rce.detach()
+                stats["lsel_r2"] = 1.0 - mse / var.clamp_min(1e-12)
+                stats["lsel_win_dist"] = (dist.detach().gather(-1, tex.unsqueeze(-1))
+                                          .squeeze(-1) * okf).sum() / n
+                stats["lsel_mean_dist"] = (dist.detach().mean(dim=-1) * okf).sum() / n
+                stats["lsel_enc_std_min"] = s_enc.detach().amin()
+                stats["lsel_target_rank"] = participation_ratio(z.reshape(B * S, -1),
+                                                                okf.reshape(B * S))
+                stats["lsel_teacher_router_agree"] = (st["agree_sum"]
+                                                      / st["rce_n"].clamp_min(1.0))
+                for i, a in enumerate(st["agree_t"]):
+                    stats[f"lsel_teacher_router_agree_t{i}"] = a
+                stats["lsel_exit_teacher_router_agree"] = (
+                    (st["final_router"] == tex).float() * okf).sum() / n
+                stats["lsel_n_slots"] = okf.sum()
+        self._lsel_out = {"loss": loss, "stats": stats, "winner": winner,
+                          "teacher": teacher}
 
     # ── the EMA target twin's lifecycle (trainer hooks) ──────────────────────────────
 
@@ -11856,8 +12079,14 @@ class MORPHTransformer(nn.Module):
                      coda_state_only: bool = False,
                      gram_mode: str | None = None,
                      gram_sample_seed: int | None = None,
-                     code_policy_pick: str | None = None) -> dict:
+                     code_policy_pick: str | None = None,
+                     lsel_follow: str | None = None) -> dict:
         """The TUL forward (docs/tul-spec.md §3). One shared position axis.
+
+        ``lsel_follow`` (``tul.fan_loop_select``, EVAL ONLY, labels required): ``"teacher"``
+        makes the loop follow the latent teacher's pick on the slots with a target, as
+        training does, instead of the router's (train.py's ``fan/lsel_teacher_pick_ce``).
+        ``None`` is the model's own rule. See :meth:`_lsel_begin`.
 
         ``code_policy_pick`` (``tul.code_policy_k``, EVAL ONLY): the policy's pick for
         this forward (``"argmax"`` | ``"sample"`` | ``"random"``); ``None`` is the model's
@@ -11902,6 +12131,15 @@ class MORPHTransformer(nn.Module):
         self._gram_eval = None
         # tul.code_policy_k's entry-time choice: the same rule.
         self._code_policy_step = None
+        # tul.fan_loop_select's exit stash (graph tensors): the same rule.
+        self._lsel_out = None
+        if lsel_follow is not None:
+            if self._lsel_mode == "off":
+                raise ValueError("lsel_follow needs a model built with tul.fan_loop_select.")
+            if labels is None or plan_mode != "normal" or self.training:
+                raise ValueError(
+                    "lsel_follow='teacher' is an eval-only instrument: it needs labels (the "
+                    "teacher's target), plan_mode 'normal' and model.eval().")
         if code_policy_pick is not None and self.tul_code_policy is None:
             raise ValueError("code_policy_pick needs a model built with tul.code_policy_k.")
         if self.tul_gram is None and (gram_mode is not None or gram_sample_seed is not None):
@@ -12143,6 +12381,8 @@ class MORPHTransformer(nn.Module):
         # (winner, gate, teacher, arm T's loss) the write and the val oracle read.
         fan_opf_loss = None
         _fan_route = None
+        # tul.fan_loop_select: the exit's latent loss (graph), folded as `fan_lsel_weighted`.
+        fan_lsel_loss = None
         fan_stats: dict[str, float] = {}
         _fan_cells = None
         # LX efficient-exploration knobs 3/4/6 (2026-09-29). Bound here for the same
@@ -12315,6 +12555,14 @@ class MORPHTransformer(nn.Module):
             # Both are scoped to THIS branch only — the tokens_through_core/fm_planner
             # branches above already raise on tul_step_mode="db1" rather than silently
             # ignoring it (see the guards at the top of this function).
+            if self._lsel_mode != "off" and (
+                    tul_step_mode == "db1" or (not self.training
+                                               and self._core_stage_cond_mode == "sigma"
+                                               and tul_step_mode != "bptt")):
+                raise NotImplementedError(
+                    "tul.fan_loop_select on the DiffusionBlocks one-pass / Euler-ladder "
+                    "path: the selection lives in `_tul_core`'s pass loop, which that path "
+                    "bypasses.")
             if tul_step_mode == "db1":
                 xn, h_slots, depths, g_traj, db_traj = self._tul_core_db1(
                     x, x0, bigram_emb, layout)
@@ -12345,9 +12593,27 @@ class MORPHTransformer(nn.Module):
                     _gram_kw["iw_rollouts"] = _iw_k
                 if code_policy_pick is not None:
                     _gram_kw["code_policy_pick"] = code_policy_pick
+                if self._lsel_mode != "off":
+                    # The latent-selected loop: the factor fan's target (None on a
+                    # label-free forward, so the router picks) and the eval-only teacher
+                    # switch. Passed only here, so every other model's call is the old one.
+                    _gram_kw["lsel_tgt"] = _fan_tgt
+                    _gram_kw["lsel_follow"] = lsel_follow
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
                     x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids,
                     slot_depths=slot_depths, code_x0=_ct_z, code_ok=_ct_ok, **_gram_kw)
+                if self._lsel_mode == "detached":
+                    # ── THE DETACHED VARIANT: no token-driven gradient into the loop ──
+                    # ONE cut, at the loop's output and upstream of EVERY reader of it:
+                    # the coda's 1:1 write of the winner, the span decoder (the MEAN of
+                    # the cells, and the cells under `spandec_reads_cells`), the val
+                    # oracle and any other reader of `h_slots` / `_reg_cells` below. The
+                    # loop still trains on the terms `_tul_core` built on the LIVE states
+                    # before this line: the exit latent loss (`_lsel_out`), the
+                    # fixed-point term (`_core_aux`), the gain hinge (`gain_reg`) and the
+                    # diversity term (`db_traj`, untouched). Every per-pass token target
+                    # that reads `db_traj` is refused in TULConfig under this mode.
+                    h_slots = h_slots.detach()
             # ── the Thought Register (tul.slot_cells) ─────────────────────────────
             # `_tul_core` returns the compact CELL axis, [B, S*M, …]. M == 1 — every model
             # before the knob — leaves `_reg_cells` None and this block traces out.
@@ -12455,6 +12721,21 @@ class MORPHTransformer(nn.Module):
                         if self.tul_fan_router is not None:
                             _fan_route = self._tul_fan_route(_reg_cells, xn, layout,
                                                              _fan_tgt, fan_stats)
+                        # The latent-selected loop (tul.fan_loop_select): the pick was
+                        # made INSIDE the loop; the coda reads the FINAL winner alone,
+                        # hard (no p), through the routers' one write
+                        # (`_fan_route_cells`). The route dict is the routers' shape, so
+                        # the val oracle prices the pick with the same instruments.
+                        if self._lsel_mode != "off":
+                            _lo = self._lsel_out
+                            if _lo is None:
+                                raise RuntimeError(
+                                    "tul.fan_loop_select: `_tul_core` left no exit stash "
+                                    "(`_lsel_out`); the selection did not run.")
+                            _fan_route = {"winner": _lo["winner"], "scale": None,
+                                          "teacher": _lo["teacher"], "loss": None}
+                            fan_lsel_loss = _lo["loss"]
+                            fan_stats.update(_lo["stats"])
                     else:
                         h_slots, _fan_w = self.tul_fan(_reg_cells)
                     # Detached 0-dim TENSORS, not `float(...)` (perf: no host sync on the
@@ -13484,6 +13765,20 @@ class MORPHTransformer(nn.Module):
                 "tul.fan_opf but this forward never computed the OPF term (it is wired at "
                 "the write-all fan seam of the slot-loop branch only). Refusing to return "
                 "a loss without it.")
+        if fan_lsel_loss is not None and groups is not None:
+            # tul.fan_loop_select: the exit's relaxed-WTA latent loss + the online floor +
+            # the router CE, folded like `opf_weighted` (train.py subtracts
+            # `fan_lsel_weighted` at train AND val, so train/loss and val loss stay the
+            # MODEL's CE). Its readings (`lsel_*`) are in `fan_stats`.
+            groups = dict(groups)
+            groups["fan_lsel_weighted"] = fan_lsel_loss.detach()
+            groups["loss"] = groups["loss"] + fan_lsel_loss
+        elif (self._lsel_mode != "off" and groups is not None and labels is not None
+              and plan_mode == "normal"):
+            raise RuntimeError(
+                "tul.fan_loop_select but this forward never computed the latent term (it "
+                "is built in `_tul_core` on the slot-loop branch). Refusing to return a "
+                "loss without it.")
         if _fan_route is not None and _fan_route["loss"] is not None and groups is not None:
             # tul.fan_route="latent" (arm T): the teacher's router CE + g's MSE, same
             # contract (`rlat_weighted` subtracted at train and val). Its gradient reaches
@@ -14081,8 +14376,13 @@ class MORPHTransformer(nn.Module):
                             code_seed: int | None = None,
                             gram_mode: str | None = None,
                             gram_sample_seed: int | None = None,
-                            code_policy_pick: str | None = None) -> dict:
+                            code_policy_pick: str | None = None,
+                            lsel_follow: str | None = None) -> dict:
         """Eval-only forward with the slot state ablated. Works on ANY TUL arm.
+
+        ``lsel_follow`` (``tul.fan_loop_select`` only): ``"teacher"`` makes the loop follow
+        the latent teacher's pick, as training does, instead of the router's (train.py's
+        val-only ``fan/lsel_teacher_pick_ce``). ``None`` is the shipped router path.
 
         ``code_policy_pick`` (``tul.code_policy_k`` only): the policy's pick for this
         forward — ``"argmax"``, ``"sample"`` or ``"random"`` (a uniformly random code per
@@ -14142,7 +14442,12 @@ class MORPHTransformer(nn.Module):
                                         _code_seed=code_seed,
                                         _gram_mode=gram_mode,
                                         _gram_sample_seed=gram_sample_seed,
-                                        _code_policy_pick=code_policy_pick)
+                                        _code_policy_pick=code_policy_pick,
+                                        _lsel_follow=lsel_follow)
+        if lsel_follow is not None:
+            raise NotImplementedError(
+                "lsel_follow with plan_mode='wrong_seed': the teacher instrument needs the "
+                "shipped forward (plan_mode 'normal').")
         if code_policy_pick is not None:
             raise NotImplementedError(
                 "code_policy_pick with plan_mode='wrong_seed': two interventions on one "
@@ -14816,7 +15121,8 @@ class MORPHTransformer(nn.Module):
                         _coda_state_only: bool = False,
                         _gram_mode: str | None = None,
                         _gram_sample_seed: int | None = None,
-                        _code_policy_pick: str | None = None) -> dict:
+                        _code_policy_pick: str | None = None,
+                        _lsel_follow: str | None = None) -> dict:
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "
@@ -14840,7 +15146,12 @@ class MORPHTransformer(nn.Module):
                                      coda_state_only=_coda_state_only,
                                      gram_mode=_gram_mode,
                                      gram_sample_seed=_gram_sample_seed,
-                                     code_policy_pick=_code_policy_pick)
+                                     code_policy_pick=_code_policy_pick,
+                                     **({"lsel_follow": _lsel_follow}
+                                        if _lsel_follow is not None else {}))
+        if _lsel_follow is not None:
+            raise ValueError("lsel_follow requires slot_layout: the latent-selected loop "
+                             "lives in the slot loop.")
         if _code_policy_pick is not None:
             raise ValueError(
                 "code_policy_pick requires slot_layout: the code policy lives in the slot "
