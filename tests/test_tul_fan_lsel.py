@@ -62,9 +62,9 @@ NEW_KEY_DEFAULTS = dict(
 # /home/wolfe/morph-scratch/lsel-smoke/pin_arms.py: `_fan_pin_run` of the factor fan and
 # the two router arms (their twin built where the arm has one), dropout 0.0.
 ARM_PINS = {
-    "opf": None,
-    "rmoe": None,
-    "rlat": None,
+    "opf": (10.776350021362305, 1358.1454057991505, 10.8211669921875, 2036.2593129592565, 200),
+    "rmoe": (9.775012016296387, 1184.021321195265, 9.819000244140625, 1957.2451360127582, 199),
+    "rlat": (12.512540817260742, 1173.9946138417436, 12.584196090698242, 2032.928871618136, 201),
 }
 _ARM_KW = {"opf": dict(fan_opf=True), "rmoe": dict(fan_route="reader"),
            "rlat": dict(fan_route="latent")}
