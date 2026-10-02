@@ -114,6 +114,45 @@ K1-K6, the exploration ledger's selection and search readings, the repetition ev
   candidate count; InfoNCE and WTA reduce to hand computations on a tiny batch.
 - The gate is applied as written above, and its outcome is filed either way.
 
+Amended 2026-10-02 at the stage-1 build (three design decisions changed; the build is
+`tul.latent_pre_*`, `morph/model/tul_latent_pre.py`, `morph/training/latent_pre_ref.py`,
+tests `tests/test_tul_latent_pre.py`):
+
+- **New keys, not `code_target_skip_coda` / `code_target_ref`.** Both are wired to the
+  VAE-stage encoder E and its projection (`TULCodeProj`, M = prefix_k cells, a frozen
+  deep copy of the LIVE model), and their eval forward still runs the coda. Stage 1 needs
+  a different target model (the plain run, its own config), a different head, and no coda
+  at val either, so it is its own forward (`_forward_latent_pre`) behind
+  `tul.latent_pre_target`.
+- **The plain-prelude target (S1-A) is span-local.** The frozen plain model's front runs
+  on each next span as its own sequence, so slot s's target reads span s+1 and nothing
+  else. A causal prelude over the whole token row would carry the prefix the loop already
+  reads, and same-row retrieval could then be won by matching that prefix instead of
+  predicting span s+1 (this note's S1-D risk, applied to S1-A). S1-D's final-hidden target
+  stays causal over the plain token row, as written above.
+- **Both plain targets right-pad**, which is exact only while CSA selects every block
+  (top_k >= n_blocks; true at the run's shapes: 256 >= 1152 / 8 or 1280 / 8). The code
+  refuses any other shape (`assert_padding_invariant`): measured on the tiny fixture at
+  top_k 8, eight pad tokens moved earlier positions by 0.44.
+- **The two frozen targets are standardised with FIXED statistics** (decided 2026-10-02
+  after the first smokes; `tul.latent_pre_target_norm: standard`, the default). Why: the
+  LayerNormed plain prelude is about 98 % one common direction. On two val batches its
+  mean pairwise cosine is 0.98, its centred participation ratio 3.5 to 5.3, its
+  per-coordinate variance about 0.02, with four channels at |mean| about 11. An L2 on it
+  mostly rewards predicting a constant. The target is now `(z_ln - mu) / sigma` per
+  coordinate. `mu` and `sigma` are computed ONCE at build from the frozen model, over the
+  real span slots of 64 TRAINING batches from document 40 000. That is past the run's own
+  documents (refused if the run's estimated document count reaches it) and before val's
+  50 000 (refused if the draw reads into it). The batches come from a separate loader in a
+  separate process, so the run's training stream is untouched (pinned by a test). `sigma`
+  is floored at 1e-3 x its median. The statistics are not saved; a resume recomputes them
+  bit-identically. Standardised, the mean predictor's L2 is about 1.0, so L2 is about
+  1 - R^2. InfoNCE takes cosines of the standardised vectors.
+- **The live EMA control keeps the LayerNorm only** (`latent_pre_target_norm: ln`;
+  `standard` is refused with it). Its target drifts with the live model, so statistics
+  fixed at build go stale, and per-batch statistics would standardise away the very rank
+  collapse that arm exists to measure.
+
 ## Risks
 
 - **The target is unpredictable.** If S1-A to S1-D all sit near chance, the "ground-truth

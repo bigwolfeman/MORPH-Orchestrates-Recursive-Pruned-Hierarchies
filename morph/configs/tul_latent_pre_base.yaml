@@ -1,0 +1,58 @@
+# STAGE 1 of the staged latent pretraining (2026-10-02): the common base every stage-1 arm
+# composes. Note: .agents/notes/proposed/architecture/2026-10-02-staged-latent-pretraining.md
+# Code: morph/model/tul_latent_pre.py, MORPHTransformer._forward_latent_pre,
+# morph/training/latent_pre_ref.py. Tests: tests/test_tul_latent_pre.py.
+#
+# NO coda and NO token CE, at train AND at val. The strict prelude, the slot loop and a
+# predictor head g train on a latent objective alone: slot s predicts a target computed
+# from span s+1. The val instrument is per-pass retrieval (val/latent_pre_retr_same_t{t},
+# val/latent_pre_retr_all_t{t} against val/latent_pre_chance_same / _chance_all), R^2,
+# prediction and target rank.
+#
+# GEOMETRY: the strict single-cell slot loop with fp01's fixed-point term
+# (`tul_slot_spandec_strict` + model.core_fixed_point_lambda 0.1; there is no config named
+# `tul_slot_spandec_strict_fp01` — fp01's own file, `..._e4probe_fp01`, adds the LXTUL-E
+# code rollouts and the parallel head, which stage 1 refuses). The span decoder is OFF:
+# it is a token target, and TULConfig refuses every post-loop knob on a stage-1 model.
+# The slot-loop gain hinge and the fixed-point term stay (the loop's own constraint).
+#
+# THIS FILE IS ALSO the first arm's content (frozen plain-5k prelude target, L2): the arm
+# configs below compose it and change one or two keys each.
+#   tul_latent_pre_prelude_l2   plain prelude target, L2
+#   tul_latent_pre_prelude_nce  plain prelude target, InfoNCE over in-batch spans
+#   tul_latent_pre_prelude_wta4 plain prelude target, relaxed WTA over 4 fan cells
+#   tul_latent_pre_final_l2     plain FINAL hidden state target, L2
+#   tul_latent_pre_ema_l2       the live EMA prelude twin target, L2 (collapse control)
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.1
+
+training:
+  steps: 3000
+  seed: 1
+  gen_every: 0        # stage 1 has no trained coda (the trainer refuses gen_every > 0)
+
+tul:
+  spandec: false
+  eval_ablations: false   # the plan ablations run the coda; stage 1 has none to ablate
+  latent_pre_target: plain_prelude
+  latent_pre_loss: l2
+  # The frozen plain 5k model the plain_* targets read: its own config (architecture and
+  # quantisation) and its checkpoint, loaded strictly, never trained.
+  latent_pre_ref_config: notul_panel_norm_match_s1r
+  latent_pre_ref_ckpt: /home/wolfe/morph-to/checkpoints/morph/plain-panel-nm-ctrl-s1r/step_5000.pt
+  # The frozen targets are STANDARDISED with fixed per-coordinate stats, computed once at
+  # build from 64 TRAINING batches at document 40000 (past this run's ~13k documents,
+  # before val's 50000). The LayerNormed target alone is ~98 % one common direction
+  # (cosine 0.98, centred participation ratio 3.5-5.3, per-coordinate variance ~0.02), so
+  # an L2 on it mostly rewards predicting a constant. Standardised, the mean predictor
+  # scores L2 ~1.0 and L2 ~ 1 - R^2.
+  latent_pre_target_norm: standard
+  latent_pre_cal_batches: 64
+  latent_pre_cal_doc_offset: 40000
+
+wandb:
+  name: stage1-latent-base

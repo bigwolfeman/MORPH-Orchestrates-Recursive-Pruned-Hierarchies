@@ -35,6 +35,10 @@ __all__ = ["TulRuntime", "build_tul_runtime", "build_boundary_rule",
 KNOWN_TUL_KEYS = frozenset({
     "activate_at", "bcast", "bcast_layers", "boundary_chars", "boundary_substrings", "carry",
     "center_bag_mean", "center_exit", "coda_logit_l2", "coda_sees_slots",
+    # stage-1 latent pretraining (2026-10-02): morph/model/tul_latent_pre.py
+    "latent_pre_target", "latent_pre_loss", "latent_pre_tau", "latent_pre_eps",
+    "latent_pre_hidden", "latent_pre_ref_config", "latent_pre_ref_ckpt",
+    "latent_pre_target_norm", "latent_pre_cal_batches", "latent_pre_cal_doc_offset",
     "coda_span_heads", "coda_span_source",
     "coda_span_weight", "coda_token_cut", "coda_token_input", "cond_layers",
     "core_stage_cond", "core_token_aux", "core_token_aux_weight",
@@ -568,6 +572,16 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         gram_objective=str(tc.get("gram_objective", "elbo")),
         gram_iw_k=int(tc.get("gram_iw_k", 4)),
         coda_logit_l2=float(tc.get("coda_logit_l2", 0.0)),
+        latent_pre_target=str(tc.get("latent_pre_target", "off")),
+        latent_pre_loss=str(tc.get("latent_pre_loss", "l2")),
+        latent_pre_tau=float(tc.get("latent_pre_tau", 0.1)),
+        latent_pre_eps=float(tc.get("latent_pre_eps", 0.05)),
+        latent_pre_hidden=int(tc.get("latent_pre_hidden", 0)),
+        latent_pre_ref_config=str(tc.get("latent_pre_ref_config", "") or ""),
+        latent_pre_ref_ckpt=str(tc.get("latent_pre_ref_ckpt", "") or ""),
+        latent_pre_target_norm=str(tc.get("latent_pre_target_norm", "standard")),
+        latent_pre_cal_batches=int(tc.get("latent_pre_cal_batches", 64)),
+        latent_pre_cal_doc_offset=int(tc.get("latent_pre_cal_doc_offset", 40_000)),
         code_grade=bool(tc.get("code_grade", False)),
         code_grade_k=int(tc.get("code_grade_k", 4)),
         code_grade_tokens=int(tc.get("code_grade_tokens", 16)),
@@ -849,6 +863,16 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "gram_objective": model_cfg.gram_objective,
         "gram_iw_k": model_cfg.gram_iw_k,
         "coda_logit_l2": model_cfg.coda_logit_l2,
+        "latent_pre_target": model_cfg.latent_pre_target,
+        "latent_pre_loss": model_cfg.latent_pre_loss,
+        "latent_pre_tau": model_cfg.latent_pre_tau,
+        "latent_pre_eps": model_cfg.latent_pre_eps,
+        "latent_pre_hidden": model_cfg.latent_pre_hidden,
+        "latent_pre_ref_config": model_cfg.latent_pre_ref_config,
+        "latent_pre_ref_ckpt": model_cfg.latent_pre_ref_ckpt,
+        "latent_pre_target_norm": model_cfg.latent_pre_target_norm,
+        "latent_pre_cal_batches": model_cfg.latent_pre_cal_batches,
+        "latent_pre_cal_doc_offset": model_cfg.latent_pre_cal_doc_offset,
         "code_grade": model_cfg.code_grade,
         "code_grade_k": model_cfg.code_grade_k,
         "code_grade_tokens": model_cfg.code_grade_tokens,
@@ -1558,5 +1582,19 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         print("  TUL TG SPAN-GATE ON: learned per-head gated softmax span pool "
               "(E-SAC-G; one zero-init [H,D] gate per attn layer — mean pool at "
               "init)", flush=True)
+    if model_cfg.latent_pre_target != "off":
+        print(f"  TUL STAGE 1 (latent pretraining) ON: NO coda and NO token CE at train or "
+              f"val; prelude + slot loop + head g train on '{model_cfg.latent_pre_loss}' to "
+              f"the next span's '{model_cfg.latent_pre_target}' target"
+              + (f" (frozen plain model: config {model_cfg.latent_pre_ref_config!r}, "
+                 f"checkpoint {model_cfg.latent_pre_ref_ckpt})"
+                 if model_cfg.latent_pre_target != "ema_prelude" else
+                 f" (the live EMA prelude twin, m={model_cfg.fan_target_ema})")
+              + f", normalised '{model_cfg.latent_pre_target_norm}'"
+              + (f" (FIXED per-coordinate mean/std from {model_cfg.latent_pre_cal_batches} "
+                 f"training batches at document {model_cfg.latent_pre_cal_doc_offset})"
+                 if model_cfg.latent_pre_target_norm == "standard" else "")
+              + " - read val/latent_pre_retr_same_t{t} against val/latent_pre_chance_same",
+              flush=True)
     return TulRuntime(model_cfg=model_cfg, data_cfg=data_cfg,
                       activate_at=activate_at, manifest=manifest)

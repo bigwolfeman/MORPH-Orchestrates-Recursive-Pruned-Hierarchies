@@ -131,6 +131,21 @@ def evaluate(
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 _m = getattr(model, "_orig_mod", model)
                 out = _m.tul_forward_with_plan_nats(x, y, layout)
+            if out.get("latent_pre") is not None:
+                # Stage-1 latent pretraining (tul.latent_pre_target): NO coda ran, so there
+                # is no token CE and none of the coda readings below exist. The val loss of
+                # this model IS its latent objective (`latent_pre`, unweighted); every
+                # `latent_pre_*` reading (per-pass retrieval, chance, R^2, ranks) is
+                # accumulated under `val/`. (`latent_pre_weighted` is in the subtraction
+                # tuple below for every model that also has a CE; here nothing is left.)
+                losses.append(float(out["latent_pre"]))
+                for _lk in [k for k in out if str(k).startswith("latent_pre")]:
+                    if torch.is_tensor(out[_lk]):
+                        acc.setdefault(f"val/{_lk}", []).append(float(out[_lk]))
+                for _gk in ("gain_est", "fixed_point"):
+                    if out.get(_gk) is not None:
+                        acc.setdefault(f"val/{_gk}", []).append(float(out[_gk]))
+                continue
             _l = out["loss"].item()
             if out.get("mux_weighted") is not None:
                 _l -= float(out["mux_weighted"])   # val loss = model CE (see train/loss note)
@@ -192,7 +207,11 @@ def evaluate(
                           "opf_weighted", "rlat_weighted",
                           # tul.fan_loop_select (the latent-selected loop, 2026-09-30):
                           # the exit latent loss + floor + router CE, built at eval too.
-                          "fan_lsel_weighted"):
+                          "fan_lsel_weighted",
+                          # tul.latent_pre_target (stage 1, 2026-10-02): the latent term.
+                          # A stage-1 forward never reaches this line (no CE; see the
+                          # branch above); listed for the both-tuples rule.
+                          "latent_pre_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -2375,6 +2394,49 @@ def main(cfg: DictConfig) -> None:
               f"are shared), frozen, eval mode, momentum "
               f"m={model.cfg.tul.fan_target_ema}", flush=True)
 
+    # ── tul.latent_pre_target (stage-1 latent pretraining, 2026-10-02) ────────────────
+    # The "plain_*" targets read a FROZEN plain model built from its own config and
+    # checkpoint (morph/training/latent_pre_ref.py). Built before the compile warmup,
+    # whose labelled forwards already compute the target. Stage 1 has no trained coda, so
+    # a generation test would decode from random coda weights: refused, not skipped.
+    _lp_mode = str(getattr(model, "_latent_pre_mode", "off"))
+    _lp_cal: dict | None = None        # the stage-1 target calibration's statistics
+    if _lp_mode != "off":
+        if gen_every > 0 or bool(getattr(tr, "gen_test", False)):
+            raise ValueError(
+                f"tul.latent_pre_target={_lp_mode!r} (stage 1) with training.gen_every="
+                f"{gen_every} / gen_test={bool(getattr(tr, 'gen_test', False))}: a stage-1 "
+                f"model has no trained coda and builds no logits. Set gen_every: 0.")
+        if _lp_mode in ("plain_prelude", "plain_final"):
+            from morph.training.latent_pre_ref import build_latent_pre_ref
+            _lp_ref = build_latent_pre_ref(model.cfg.tul, device, int(model.cfg.d_model))
+            model.tul_latent_pre_attach_ref(_lp_ref)
+            if model.cfg.tul.latent_pre_target_norm == "standard":
+                # The FIXED target statistics, once, before the warmup's labelled forwards
+                # (which already standardise). The batches come from a separate PROCESS
+                # (fork-safe here, and the run's own stream is untouched).
+                from morph.training.latent_pre_ref import (calibrate_latent_pre_ref,
+                                                           calibration_batches)
+                _t_cal = time.perf_counter()
+                _cal_b, _cal_info = calibration_batches(
+                    data_cfg.tokenizer, data_cfg.dataset, seq_len, batch_size,
+                    tul_rt.data_cfg, int(model.cfg.tul.latent_pre_cal_doc_offset),
+                    int(model.cfg.tul.latent_pre_cal_batches),
+                    run_tokens=total_steps * batch_size * seq_len)
+                _lp_cal = calibrate_latent_pre_ref(_lp_ref, _lp_mode, _cal_b, device)
+                del _cal_b
+                _lp_cal.update(_cal_info)
+                print(f"  [latent-pre] target standardised with FIXED stats from "
+                      f"{_lp_cal['n']} target slots of training documents "
+                      f"{_lp_cal['doc_first']}..{_lp_cal['doc_end']} (the run reads ~"
+                      f"{_lp_cal['est_run_docs']}; val starts at 50000): "
+                      f"|mu|={_lp_cal['mu_norm']:.3f} sigma median="
+                      f"{_lp_cal['sigma_median']:.5f} min={_lp_cal['sigma_min']:.6f} "
+                      f"({_lp_cal['n_floored']} floored); participation ratio "
+                      f"LN {_lp_cal['pr_ln']:.2f} -> standardised "
+                      f"{_lp_cal['pr_standard']:.2f}; {time.perf_counter() - _t_cal:.1f}s",
+                      flush=True)
+
     # Phase-1 onset probe: arm the model-side half (the looped-core state collector in
     # TULTransformer._tul_core). Set before the first forward. Left unset — the default —
     # _tul_core takes the identical code path it always has.
@@ -2638,6 +2700,12 @@ def main(cfg: DictConfig) -> None:
         resume=("allow" if _wandb_resume_id else None),
         settings=wandb.Settings(_service_wait=60),
     )
+    if _lp_cal is not None:
+        # Logged ONCE: the fixed statistics of the standardised stage-1 target (summary,
+        # and the config, so a run's calibration is greppable beside its keys).
+        _lp_cal_log = {f"latent_pre/target_{k}": v for k, v in _lp_cal.items()}
+        wandb.run.summary.update(_lp_cal_log)
+        wandb.config.update({"latent_pre_calibration": dict(_lp_cal)}, allow_val_change=True)
 
     # ── training.train_only: freeze everything outside the listed prefixes (before the
     # optimizer is built, which skips parameters that need no gradient) ────────────────
@@ -2753,6 +2821,10 @@ def main(cfg: DictConfig) -> None:
     if wandb.run is not None:
         _run_tag = wandb.run.name or str(wandb.run.id) or "run"
     ckpt_dir = os.path.join(_MORPH_ROOT, "checkpoints", "morph", _run_tag)
+    if _lp_mode in ("plain_prelude", "plain_final"):
+        # The stage-1 target must be FROZEN: never a checkpoint this run writes.
+        from morph.training.latent_pre_ref import assert_not_live
+        assert_not_live(str(model.cfg.tul.latent_pre_ref_ckpt), ckpt_dir)
     os.makedirs(ckpt_dir, exist_ok=True)
     # Seed the retention ring from what is already on disk, so a RESUMED run enforces
     # ckpt_keep_last over the whole run and not just over the checkpoints this process
@@ -3886,6 +3958,11 @@ def main(cfg: DictConfig) -> None:
                         "opf_weighted",            # tul.fan_opf (arm F), 2026-09-30
                         "rlat_weighted",           # tul.fan_route=latent (arm T), 2026-09-30
                         "fan_lsel_weighted",       # tul.fan_loop_select, 2026-09-30
+                        "latent_pre_weighted",     # tul.latent_pre_target (stage 1),
+                                                   # 2026-10-02: no CE on that forward, so
+                                                   # train/loss reads the loop constraint's
+                                                   # remainder 0; the objective is
+                                                   # train/loss_total and tul/latent_pre
                         "critic_weighted",   # arc E10 / 2026-09-12
                         "horizon_weighted",  # LoopMTP horizon alignment, 2026-09-14
                         "code_fm_weighted",   # TUL-Code flow term (the val side already
@@ -4084,6 +4161,11 @@ def main(cfg: DictConfig) -> None:
                            # `tul/coda_logit_sq` (the raw stat) and its weighted twin.
                            "coda_logit_sq", "coda_logit_l2_weighted"):
                     if _k in out and out[_k] is not None:
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.latent_pre_target (stage 1): the latent term and its exit readings
+                # (retrieval vs chance, R^2, ranks; the per-pass ones are val-only).
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("latent_pre") and torch.is_tensor(out[_k]):
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.code_target: the term, its weighted twin, the exit cosine and the
                 # per-pass cosines `code_target_cos_l{t}` (one key per realised pass).
@@ -4293,6 +4375,13 @@ def main(cfg: DictConfig) -> None:
                 # wandb history is not readable locally; the log file must be sufficient)
                 if isinstance(out, dict) and out.get("code_fm_rel") is not None:
                     _second += f"fm={float(out['code_fm_rel']):.3f}  "
+                # tul.latent_pre_target (stage 1): the latent term, exit R^2 and same-row
+                # retrieval against its chance (there is no CE on this forward).
+                if isinstance(out, dict) and out.get("latent_pre") is not None:
+                    _second += (f"lat={float(out['latent_pre']):.4f}  "
+                                f"r2={float(out['latent_pre_r2_exit']):+.4f}  "
+                                f"retr_same={float(out['latent_pre_retr_same_exit']):.3f}"
+                                f"/{float(out['latent_pre_chance_same']):.3f}  ")
                 # tul.spandec_parallel (LXTUL-E): the head's mixture CE per span token is
                 # the arm's reading (Stage 0 trains nothing else), so the log carries it,
                 # with the code-usage entropy and the in-head width gain at K > 1.
@@ -4338,6 +4427,10 @@ def main(cfg: DictConfig) -> None:
                                          tul=phase.tul_on, extra=_val_extra,
                                          halt=_halt_eval)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
+            if _lp_mode != "off":
+                # Stage 1: val/loss is the LATENT objective (no token CE exists), so a
+                # perplexity of it would be a number with no meaning. Not logged.
+                del val_log["val/ppl"]
             val_log.update(_val_extra)
 
             wandb.log(val_log, step=step)
@@ -4382,10 +4475,22 @@ def main(cfg: DictConfig) -> None:
                 _tul_msg += (f"  ce_tf={_val_extra['val/ce_tf']:.4f}"
                              + (f" ce_marginal={_val_extra['val/ce_marginal']:.4f}"
                                 if "val/ce_marginal" in _val_extra else ""))
-            print(
-                f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
-                flush=True,
-            )
+            if _lp_mode != "off":
+                _lpk = lambda k: _val_extra.get(f"val/latent_pre_{k}", float("nan"))
+                _tul_msg = (f"  latent={val_loss:.4f}  r2_exit={_lpk('r2_exit'):+.4f}  "
+                            f"retr_same_exit={_lpk('retr_same_exit'):.4f} "
+                            f"(chance {_lpk('chance_same'):.4f})  "
+                            f"retr_all_exit={_lpk('retr_all_exit'):.4f} "
+                            f"(chance {_lpk('chance_all'):.4f})  "
+                            + "  ".join(f"t{t}:{_val_extra[f'val/latent_pre_retr_same_t{t}']:.3f}"
+                                        for t in range(0, 17)
+                                        if f"val/latent_pre_retr_same_t{t}" in _val_extra))
+                print(f"  [VAL {step:7d}] stage-1{_tul_msg}", flush=True)
+            else:
+                print(
+                    f"  [VAL {step:7d}] loss={val_loss:.4f}  ppl={val_ppl:.2f}{_tul_msg}",
+                    flush=True,
+                )
             _train_mode()
 
         # docs/tul-gate-spec.md §10: `w` starts at exactly zero and takes a gradient
@@ -4487,9 +4592,13 @@ def main(cfg: DictConfig) -> None:
         val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
                                      tul=phase.tul_on, extra=_val_extra)
         _final = {"val/loss_final": val_loss, "val/ppl_final": val_ppl}
+        if _lp_mode != "off":
+            del _final["val/ppl_final"]   # stage 1: the latent objective has no perplexity
         _final.update({f"{k}_final": v for k, v in _val_extra.items()})
         wandb.log(_final, step=total_steps)
-        print(f"Final val_loss={val_loss:.4f}  ppl={val_ppl:.2f}"
+        print(f"Final val_loss={val_loss:.4f}"
+              + ("  (stage 1: the latent objective)" if _lp_mode != "off"
+                 else f"  ppl={val_ppl:.2f}")
               + "".join(f"  {k}={v:.4f}" for k, v in sorted(_val_extra.items())))
 
     if gen_every > 0 or bool(getattr(tr, "gen_test", False)):

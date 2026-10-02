@@ -22,6 +22,7 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_carry import LOOP_CARRY_MODES
 from .tul_denoise import LOOP_DENOISE_GRIDS
+from .tul_latent_pre import LATENT_PRE_LOSSES, LATENT_PRE_TARGET_NORMS, LATENT_PRE_TARGETS
 from .tul_layout import SlotLayout
 
 __all__ = ["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass",
@@ -2382,10 +2383,52 @@ class TULConfig:
     # never wired into.
     coda_logit_l2: float = 0.0
 
+    # ── STAGE 1 of the staged latent pretraining (2026-10-02) ───────────────────────
+    #
+    # morph/model/tul_latent_pre.py; note
+    # .agents/notes/proposed/architecture/2026-10-02-staged-latent-pretraining.md. ON, the
+    # model runs NO coda and NO token CE, at train AND at val: the strict prelude, the slot
+    # loop and a predictor head g (FanLatentHead) train on a latent objective alone, scored
+    # against the NEXT span's target. "off" (the default) builds nothing and every forward
+    # is the one from before these keys.
+    #   "plain_prelude": a FROZEN plain model's front run on each next span ALONE, pooled
+    #                    and LayerNormed (span-local: it reads span s+1 and nothing else);
+    #   "plain_final":   the frozen plain model's final hidden state at span s+1's LAST
+    #                    token, on the plain token row (causal: it reads the whole past);
+    #   "ema_prelude":   the live EMA prelude twin (the latent-selected loop's target,
+    #                    `_tul_fan_target`, momentum `fan_target_ema`): the collapse control.
+    # The frozen plain model is built by the TRAINER (morph/training/latent_pre_ref.py) from
+    # `latent_pre_ref_config` (a Hydra config name) and `latent_pre_ref_ckpt` (a checkpoint
+    # path) and attached with `MORPHTransformer.tul_latent_pre_attach_ref`. It is NOT a
+    # registered submodule and NOT saved in the checkpoint: a resume rebuilds it from the
+    # same two keys (it never trains, so there is no state to carry).
+    latent_pre_target: str = "off"
+    latent_pre_loss: str = "l2"          # "l2" | "infonce" | "wta" (wta needs fan_k >= 2)
+    latent_pre_tau: float = 0.1          # InfoNCE temperature on the cosine logits
+    latent_pre_eps: float = 0.05         # relaxed-WTA weight on the losing cells
+    latent_pre_hidden: int = 0           # g's hidden width; 0 = d_model
+    latent_pre_ref_config: str = ""      # Hydra config name of the frozen plain model
+    latent_pre_ref_ckpt: str = ""        # its checkpoint (weights under "model")
+    # How the target is normalised (2026-10-02). `ln`: LayerNorm, no affine. `standard`:
+    # that LayerNormed target minus a FIXED per-coordinate mean, over a FIXED per-coordinate
+    # std, both computed ONCE at build from the frozen plain model on a calibration set
+    # (`latent_pre_cal_batches` TRAINING batches drawn through a separate loader from
+    # document `latent_pre_cal_doc_offset` on). Why: the LayerNormed plain prelude is ~98 %
+    # one common direction (mean pairwise cosine 0.98, centred participation ratio 3.5-5.3,
+    # per-coordinate variance ~0.02), so an L2 on it mostly rewards predicting a constant.
+    # `standard` is for the two FROZEN targets only: the EMA control drifts, so fixed stats
+    # go stale, and batch stats would hide the very rank collapse that arm measures.
+    latent_pre_target_norm: str = "standard"     # "standard" | "ln" (ema_prelude: "ln" only)
+    latent_pre_cal_batches: int = 64             # calibration batches (standard only)
+    latent_pre_cal_doc_offset: int = 40_000      # first calibration document (standard only)
+
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
         # and not about a rule of the refused mode it never meant to run.
         self._check_gram()
+        # Stage-1 latent pretraining: near the top and unconditional (the code policy's
+        # lesson: a check placed below one of this method's early returns never fires).
+        self._check_latent_pre()
         # The code policy (arm B, 2026-09-29): checked HERE, near the top and
         # unconditionally. An earlier builder's refusals at the tail of this method never
         # fired (`test_tul_explore_wiring.py` caught it), so a new knob's rules go first.
@@ -4414,6 +4457,115 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.code_enum_k > 1 with {why}.")
+
+    # Knobs whose effect lives AFTER `_tul_core` in `_forward_tul` (a reader, a token
+    # target, a write, an eval ablation) or that replace the loop's own step. The stage-1
+    # forward runs none of them, so a non-default value would be silently ignored: each is
+    # refused by name, against its own dataclass default.
+    _LATENT_PRE_REFUSED = (
+        "tokens_through_core", "loop_reads_tokens", "spandec", "spandec_parallel",
+        "spandec_per_pass", "spandec_reads_cells", "mux_beta", "mux_every_pass",
+        "mux_stage_own_iters", "mux_stage_all", "sigreg_lambda", "bcast", "xattn", "reread",
+        "carry", "stp_lambda", "set_lambda", "gate", "detach_z", "db_loop",
+        "core_stage_cond", "center_exit", "cond_layers", "row_contrast_lambda", "oracle_z",
+        "horizon_weight", "pass_readout", "grad_pass", "grad_pass_energy", "coda_span_heads",
+        "core_token_aux", "nextlat_weight", "code_enum_k", "code_policy_k", "hyp_score_head",
+        "latent_set_loss", "hyp_merge", "enum_decode_k", "xhc_streams", "code",
+        "code_target", "code_grade", "loop_denoise", "gram", "vq_codes", "fan_repel_lambda",
+        "fan_opf", "fan_route", "fan_loop_select", "fan_all_wta_grader", "coda_logit_l2",
+        "eval_ablations", "slot_chain", "prefix_source")
+
+    def _check_latent_pre(self) -> None:
+        """``tul.latent_pre_*`` — stage 1 of the staged latent pretraining."""
+        import dataclasses
+        _f = {f.name: f for f in dataclasses.fields(self)}
+        _keys = ("latent_pre_loss", "latent_pre_tau", "latent_pre_eps", "latent_pre_hidden",
+                 "latent_pre_ref_config", "latent_pre_ref_ckpt", "latent_pre_target_norm",
+                 "latent_pre_cal_batches", "latent_pre_cal_doc_offset")
+        if self.latent_pre_target not in LATENT_PRE_TARGETS:
+            raise ValueError(f"tul.latent_pre_target must be one of {LATENT_PRE_TARGETS}, "
+                             f"got {self.latent_pre_target!r}")
+        if self.latent_pre_target == "off":
+            _set = [k for k in _keys if getattr(self, k) != _f[k].default]
+            if _set:
+                raise ValueError(
+                    f"tul.latent_pre_* set with tul.latent_pre_target='off' ({', '.join(_set)}):"
+                    f" nothing reads them, so they would be silently ignored.")
+            return
+        if self.latent_pre_loss not in LATENT_PRE_LOSSES:
+            raise ValueError(f"tul.latent_pre_loss must be one of {LATENT_PRE_LOSSES}, got "
+                             f"{self.latent_pre_loss!r}")
+        if self.latent_pre_tau <= 0.0:
+            raise ValueError(f"tul.latent_pre_tau must be > 0, got {self.latent_pre_tau}")
+        if not 0.0 <= self.latent_pre_eps < 1.0:
+            raise ValueError(f"tul.latent_pre_eps must be in [0, 1), got {self.latent_pre_eps}")
+        if self.latent_pre_hidden < 0:
+            raise ValueError(f"tul.latent_pre_hidden must be >= 0 (0 = d_model), got "
+                             f"{self.latent_pre_hidden}")
+        if self.latent_pre_loss != "infonce" and self.latent_pre_tau != _f["latent_pre_tau"].default:
+            raise ValueError("tul.latent_pre_tau set with a non-InfoNCE loss: nothing reads it.")
+        if self.latent_pre_loss != "wta" and self.latent_pre_eps != _f["latent_pre_eps"].default:
+            raise ValueError("tul.latent_pre_eps set with a non-WTA loss: nothing reads it.")
+        _plain = self.latent_pre_target in ("plain_prelude", "plain_final")
+        if _plain and not (self.latent_pre_ref_config and self.latent_pre_ref_ckpt):
+            raise ValueError(
+                f"tul.latent_pre_target={self.latent_pre_target!r} needs the frozen plain "
+                f"model: set tul.latent_pre_ref_config (its Hydra config name) and "
+                f"tul.latent_pre_ref_ckpt (its checkpoint).")
+        if not _plain and (self.latent_pre_ref_config or self.latent_pre_ref_ckpt):
+            raise ValueError(
+                "tul.latent_pre_ref_config / latent_pre_ref_ckpt set with "
+                "latent_pre_target='ema_prelude': the EMA twin is the LIVE model's, so the "
+                "frozen plain model would be loaded and never read.")
+        if self.latent_pre_target_norm not in LATENT_PRE_TARGET_NORMS:
+            raise ValueError(f"tul.latent_pre_target_norm must be one of "
+                             f"{LATENT_PRE_TARGET_NORMS}, got {self.latent_pre_target_norm!r}")
+        if not _plain and self.latent_pre_target_norm == "standard":
+            raise NotImplementedError(
+                "tul.latent_pre_target_norm='standard' with latent_pre_target='ema_prelude': "
+                "the EMA twin's target DRIFTS with the live model, so statistics fixed at build "
+                "go stale, and per-batch statistics would standardise away the very rank "
+                "collapse this control arm exists to measure. Set latent_pre_target_norm: ln.")
+        _cal = ("latent_pre_cal_batches", "latent_pre_cal_doc_offset")
+        if self.latent_pre_target_norm != "standard":
+            _set = [k for k in _cal if getattr(self, k) != _f[k].default]
+            if _set:
+                raise ValueError(f"{', '.join('tul.' + k for k in _set)} set with "
+                                 f"latent_pre_target_norm={self.latent_pre_target_norm!r}: "
+                                 f"only 'standard' calibrates, so nothing reads them.")
+        if self.latent_pre_cal_batches < 1:
+            raise ValueError(f"tul.latent_pre_cal_batches must be >= 1, got "
+                             f"{self.latent_pre_cal_batches}")
+        if self.latent_pre_cal_doc_offset < 0:
+            raise ValueError(f"tul.latent_pre_cal_doc_offset must be >= 0, got "
+                             f"{self.latent_pre_cal_doc_offset}")
+        if self.tg_geometry != "strict":
+            raise NotImplementedError(
+                f"tul.latent_pre_target needs tul.tg_geometry='strict' (got "
+                f"{self.tg_geometry!r}): the slot cell must be the only route from span s "
+                f"to span s+1, or the latent task is not the loop's.")
+        if self.latent_pre_loss == "wta":
+            if self.fan_k < 2 or self.fan_mix != "all":
+                raise NotImplementedError(
+                    f"tul.latent_pre_loss='wta' needs the write-all fan (fan_k >= 2, "
+                    f"fan_mix='all'), got fan_k={self.fan_k}, fan_mix={self.fan_mix!r}: the M "
+                    f"hypotheses are the fan's M cells.")
+            if self.fan_all_wta_lambda != 0.0:
+                raise ValueError(
+                    "tul.latent_pre_loss='wta' with tul.fan_all_wta_lambda > 0: that is the "
+                    "CODA's winner-alone span CE, and stage 1 runs no coda. Set it to 0.")
+        elif self.slot_cells != 1 or self.fan_k != 0:
+            raise NotImplementedError(
+                f"tul.latent_pre_loss={self.latent_pre_loss!r} scores ONE prediction per "
+                f"slot; slot_cells={self.slot_cells} / fan_k={self.fan_k} would give it M. "
+                f"Use latent_pre_loss='wta' for M cells.")
+        _bad = [k for k in self._LATENT_PRE_REFUSED if getattr(self, k) != _f[k].default]
+        if _bad:
+            raise NotImplementedError(
+                f"tul.latent_pre_target (stage 1: no coda, no token CE) with "
+                f"{', '.join(f'{k}={getattr(self, k)!r}' for k in _bad)}: each of these acts "
+                f"after the loop or replaces its step, and the stage-1 forward runs none of "
+                f"them. Set them back to their defaults.")
 
     def _check_code_policy(self) -> None:
         """``tul.code_policy_k`` (arm B, morph/model/tul_code_policy.py). The policy picks

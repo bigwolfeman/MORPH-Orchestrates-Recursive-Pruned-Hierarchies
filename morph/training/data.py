@@ -27,6 +27,7 @@ def create_dataloader(
     skip_samples: int = 0,
     bag_size: int = 0,
     tul: TulDataConfig | None = None,
+    doc_stats: dict | None = None,
 ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
     """Infinite generator of (input_ids, labels) pairs.
 
@@ -65,6 +66,9 @@ def create_dataloader(
         split:          Dataset split ("train" / "validation").
         skip_samples:   Number of documents to skip at the start of the stream.
                         Used to offset the validation loader from train.
+        doc_stats:      Optional dict; when given, ``doc_stats["docs"]`` and
+                        ``doc_stats["tokens"]`` count the documents read (after the skip)
+                        and their tokens. Read-only bookkeeping: the stream is unchanged.
 
     Yields:
         (input_ids, labels): each [batch_size, seq_len], dtype=torch.long.
@@ -164,6 +168,9 @@ def create_dataloader(
             )["input_ids"]
             if sep_token_id is not None:
                 ids = ids + [sep_token_id]
+            if doc_stats is not None:
+                doc_stats["docs"] = doc_stats.get("docs", 0) + 1
+                doc_stats["tokens"] = doc_stats.get("tokens", 0) + len(ids)
             buf.extend(ids)
 
             while len(buf) >= chunk_len:
