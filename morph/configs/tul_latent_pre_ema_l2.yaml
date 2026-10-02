@@ -1,0 +1,19 @@
+# Stage-1 arm: the collapse control. The target is the LIVE model's EMA prelude twin (the
+# latent-selected loop's target, `_tul_fan_target`, momentum tul.fan_target_ema 0.996),
+# not a frozen model, so the frozen plain model is not loaded (its two keys cleared).
+# Read val/latent_pre_target_rank over the run: the 2026-09-22 EMA arm lost half the
+# target's rank by step 1500.
+defaults:
+  - tul_latent_pre_base
+  - _self_
+
+tul:
+  latent_pre_target: ema_prelude
+  latent_pre_ref_config: ""
+  latent_pre_ref_ckpt: ""
+  # LayerNorm only. Standardising is refused here: the EMA target drifts, so stats fixed
+  # at build go stale, and batch stats would hide the very rank collapse this arm measures.
+  latent_pre_target_norm: ln
+
+wandb:
+  name: stage1-ema-prelude-l2

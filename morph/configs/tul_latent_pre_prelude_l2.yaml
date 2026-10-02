@@ -1,0 +1,8 @@
+# Stage-1 arm: the frozen plain-5k PRELUDE target (span-local, pooled, LayerNormed), L2.
+# The blurred-mean baseline on the new target. Composes the base, changes the run name.
+defaults:
+  - tul_latent_pre_base
+  - _self_
+
+wandb:
+  name: stage1-plain-prelude-l2

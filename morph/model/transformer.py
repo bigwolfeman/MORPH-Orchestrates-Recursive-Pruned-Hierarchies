@@ -81,6 +81,8 @@ from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        code_grade_distinct2, code_grade_pref_loss, code_enc_var_floor,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_denoise import (TULLoopDenoiseIn, loop_denoise_interp, loop_denoise_levels)
+from .tul_latent_pre import (PLAIN_TARGET_FNS, latent_infonce, latent_l2, latent_readings,
+                             latent_wta, standardise)
 from .tul_gram import (GRAM_MODES, TULGramStep, gram_kl_balanced, iw_span_bound,
                        iw_span_groups)
 from .tul_layout import (SlotLayout, span_reach_allow, span_ids_from_ids,
@@ -2746,7 +2748,8 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_teacher: FanTeacherMap | None = None
         self._fan_target_needed: bool = bool(
             cfg.tul is not None and (cfg.tul.fan_opf or cfg.tul.fan_route == "latent"
-                                     or cfg.tul.fan_loop_select != "off"))
+                                     or cfg.tul.fan_loop_select != "off"
+                                     or cfg.tul.latent_pre_target == "ema_prelude"))
         self.__dict__["_fan_target"] = None
         if cfg.tul is not None and cfg.tul.fan_opf:
             if self.tul_fan is None or self.tul_fan.mode != "all":
@@ -2790,6 +2793,26 @@ class MORPHTransformer(nn.Module):
             self.tul_fan_lsel_head = FanLatentHead(d, int(cfg.tul.fan_lsel_hidden))
             self.tul_fan_lsel_router = FanRouter(d, int(cfg.tul.fan_k),
                                                  int(cfg.tul.fan_lsel_router_rank))
+
+        # ── stage-1 latent pretraining (tul.latent_pre_target; tul_latent_pre.py) ────
+        # "off" (default) builds nothing: `_latent_pre_mode` is the Python constant "off",
+        # `tul_latent_pre_head` stays None and `_forward_tul` never dispatches. On: the
+        # predictor head g (the latent-selected loop's FanLatentHead, RNG-neutral: forked
+        # CPU stream, fixed seed) and, for the "plain_*" targets, a slot for the FROZEN
+        # plain model the trainer attaches (`tul_latent_pre_attach_ref`; not a registered
+        # submodule, the `_code_ref` rule). "ema_prelude" uses the fan's EMA twin
+        # (`_fan_target_needed` above).
+        self._latent_pre_mode: str = ("off" if cfg.tul is None
+                                      else str(cfg.tul.latent_pre_target))
+        self.tul_latent_pre_head: FanLatentHead | None = None
+        self.__dict__["_latent_pre_ref"] = None
+        if self._latent_pre_mode != "off":
+            if getattr(cfg, "fm", None) is not None:
+                raise NotImplementedError("tul.latent_pre_target with an FM planner (cfg.fm): "
+                                          "the planner replaces the slot loop stage 1 trains.")
+            if int(cfg.n_core) == 0:
+                raise ValueError("tul.latent_pre_target with n_core=0: there is no loop.")
+            self.tul_latent_pre_head = FanLatentHead(d, int(cfg.tul.latent_pre_hidden))
 
         # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
         # K codes per span instead of one continuous vector, lifted into the K prefix
@@ -4281,6 +4304,30 @@ class MORPHTransformer(nn.Module):
                 nv = diff.mean(0)
                 self._core_gain_dir = (nv / (nv.norm() + 1e-6)).detach()
         return {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen}
+
+    @staticmethod
+    def _fold_gain_reg(groups: dict, gain_reg: dict) -> dict:
+        """Fold the slot map's typical-gain penalty (``model.slot_gain_lambda``, the dict
+        ``_tul_core`` returns as ``gain_reg``) into a copy of ``groups``. Same contract as
+        sigreg: ``gain_reg_weighted`` is subtracted from every reported model loss so a
+        penalised arm stays comparable to its control; ``gain_est`` is the live reading.
+        ONE home: ``_forward_tul`` and the stage-1 forward (``_forward_latent_pre``)."""
+        groups = dict(groups)
+        groups["gain_est"] = gain_reg["gain"]
+        groups["gain_est_max"] = gain_reg["gain_max"]
+        if "n_iters" in gain_reg:
+            groups["gain_n_iters"] = gain_reg["gain"].new_tensor(gain_reg["n_iters"])
+        groups["gain_reg_weighted"] = gain_reg["penalty"].detach()
+        # Per-slot readings of the same finite difference (`slot_gain_tail_*`); the
+        # weighted tail term is inside `gain_reg_weighted` and reported apart as well.
+        for _gk in ("gain_slot_p50", "gain_slot_p90", "gain_slot_max",
+                    "gain_slot_frac_gt1", "gain_tail_pen", "gain_floor_pen"):
+            groups[_gk] = gain_reg[_gk]
+        if "gain_raw" in gain_reg:
+            # `slot_gain_renorm`: `gain_est` is R(f)'s gain; this is f's, same difference.
+            groups["gain_est_raw"] = gain_reg["gain_raw"]
+        groups["loss"] = groups["loss"] + gain_reg["penalty"]
+        return groups
 
     def _apply_core_aux(self, out: dict) -> None:
         """Add the arc E10 loop terms stashed by ``_core_region`` to ``out`` and the loss."""
@@ -5825,6 +5872,11 @@ class MORPHTransformer(nn.Module):
         # depth instrument of that arm. An eval forward keeps `db_traj` None and the
         # forced-depth sweep reads the ruler's columns.
         _ct = self.tul_code_proj is not None and self.training
+        # Stage-1 latent pretraining (tul.latent_pre_target) reads the SAME trajectory at
+        # EVAL only: its per-pass retrieval / R^2 readings (`latent_pre_*_t{t}`) run every
+        # pass through the predictor under the eval forward's deterministic depth. Training
+        # scores the exit alone, so a train forward collects nothing for it.
+        _lp = self._latent_pre_mode != "off" and not self.training
         # LXTUL's fan (tul.fan_k) reads the SAME trajectory, and — like
         # `prefix_source='trajectory'` and unlike every training-only reader above — it
         # reads it at EVAL too. Two reasons: the repulsion term is charged per PASS, and
@@ -5879,7 +5931,7 @@ class MORPHTransformer(nn.Module):
                 "(the prefix_source='trajectory' precedent).")
         _db_traj: list[Tensor] | None = (
             [h] if (_db or _stage or _mep or _oz or _pp or _cr or _traj_src
-                    or _hz_loss or _hz_gate or _ct or _fan) else None)
+                    or _hz_loss or _hz_gate or _ct or _fan or _lp) else None)
         # Per-pass MUX: entry t-1 is the mask for `_db_traj[t]` — the slots whose realised
         # depth REACHES pass t and whose pass t carries gradient (a progressive prefix pass
         # is excluded: it is detached, so a term there would train nothing and still be
@@ -8998,6 +9050,146 @@ class MORPHTransformer(nn.Module):
         table = nd.new_zeros(B, S, M)
         table[sup] = nd.t()
         return loss, (table, sup, ntok_bs, n_drop)
+
+    # ── stage-1 latent pretraining (tul.latent_pre_target; tul_latent_pre.py) ─────────
+
+    @property
+    def latent_pre_ref(self):
+        """The frozen plain model the ``plain_*`` stage-1 targets read, or ``None``."""
+        return self.__dict__.get("_latent_pre_ref")
+
+    def tul_latent_pre_attach_ref(self, ref: "MORPHTransformer") -> None:
+        """Attach the FROZEN plain model of the ``plain_prelude`` / ``plain_final`` targets.
+
+        Built by the trainer (``morph/training/latent_pre_ref.py``: the ref's own Hydra
+        config, its own quantisation, its checkpoint). Stored OUTSIDE the module tree (the
+        ``_code_ref`` rule): every walk in this tree (ternary QAT, prune / carve / route,
+        the optimizer, the gradient probes) enumerates modules or parameters and would
+        otherwise train, prune or count it. So ``.to()`` / ``.train()`` on this model do
+        not reach it: it is frozen here (``requires_grad`` False, eval mode) and every use
+        RAISES if it was put back in train mode."""
+        if self._latent_pre_mode not in ("plain_prelude", "plain_final"):
+            raise RuntimeError(
+                f"tul_latent_pre_attach_ref on a model with latent_pre_target="
+                f"{self._latent_pre_mode!r}: only the plain_* targets read a frozen model.")
+        if not isinstance(ref, MORPHTransformer) or ref.cfg.tul is not None:
+            raise ValueError("the stage-1 target model must be a PLAIN MORPHTransformer "
+                             "(cfg.tul None): the target is the plain model's own forward.")
+        if ref is self:
+            raise ValueError("the stage-1 target model cannot be the live model itself.")
+        if int(ref.cfg.d_model) != int(self.cfg.d_model):
+            raise ValueError(f"the stage-1 target model's d_model {ref.cfg.d_model} != the "
+                             f"live model's {self.cfg.d_model}: the head predicts in the "
+                             f"target's space.")
+        if ref._span_mask or ref._tg_restrict:
+            raise ValueError("the stage-1 target model carries span masks; its own forward "
+                             "would not be the plain causal one.")
+        for prm in ref.parameters():
+            prm.requires_grad_(False)
+        ref.eval()
+        self.__dict__["_latent_pre_ref"] = ref
+
+    def _latent_pre_target(self, input_ids: Tensor, labels: Tensor, layout: SlotLayout,
+                           front_kw: dict | None, front_reset: Tensor | None,
+                           x_online: Tensor) -> tuple[Tensor, Tensor]:
+        """``(z [B, S, C] fp32, ok [B, S])``: slot ``s``'s target, computed from span
+        ``s + 1`` (module docstring of ``tul_latent_pre.py``). No graph."""
+        if self._latent_pre_mode == "ema_prelude":
+            t = self._tul_fan_target(input_ids, labels, layout, front_kw, front_reset,
+                                     x_online)
+            return t["z"], t["ok"]
+        ref = self.__dict__.get("_latent_pre_ref")
+        if ref is None:
+            raise RuntimeError(
+                f"tul.latent_pre_target={self._latent_pre_mode!r}: the frozen plain model "
+                f"was never attached (tul_latent_pre_attach_ref; the trainer builds it with "
+                f"morph/training/latent_pre_ref.py before the first forward).")
+        if ref.training or any(p.requires_grad for p in ref.parameters()):
+            raise RuntimeError("the stage-1 frozen plain model is no longer frozen (train "
+                               "mode or a parameter with requires_grad).")
+        z, ok = PLAIN_TARGET_FNS[self._latent_pre_mode](ref, input_ids, labels, layout)
+        if self.cfg.tul.latent_pre_target_norm == "standard":
+            mu, sigma = getattr(ref, "latent_pre_mu", None), getattr(ref, "latent_pre_sigma", None)
+            if mu is None or sigma is None:
+                raise RuntimeError(
+                    "tul.latent_pre_target_norm='standard' but the frozen plain model carries "
+                    "no calibration (latent_pre_mu / latent_pre_sigma): the trainer computes "
+                    "them once at build (morph/training/latent_pre_ref.py::"
+                    "calibrate_latent_pre_ref).")
+            z = standardise(z, ok, mu, sigma)
+        return z, ok
+
+    def _latent_pre_predict(self, state: Tensor, B: int, S: int) -> Tensor:
+        """A loop state on the compact (cell) axis ``[B, S*M, (n,) C]`` -> the head's
+        prediction per cell ``[B, S, M, C]`` fp32 (HC stream mean first, `_cell_readout`)."""
+        m = int(self.cfg.tul.slot_cells)
+        return self.tul_latent_pre_head(_cell_readout(state.view(B, S, m, *state.shape[2:])))
+
+    def _forward_latent_pre(self, input_ids: Tensor, labels: Tensor | None,
+                            layout: SlotLayout, slot_depths: Tensor | None) -> dict:
+        """The stage-1 forward: strict front -> slot loop -> head -> latent loss.
+
+        NO coda and NO token CE, at train and at eval (the val instrument is latent too).
+        The loss is the latent term plus the loop's own constraint (the gain hinge folded
+        by :meth:`_fold_gain_reg`, the fixed-point term by :meth:`_apply_core_aux`).
+        ``latent_pre_weighted`` is the latent term (weight 1), subtracted from the reported
+        model loss by train.py like every other auxiliary. Readings (``latent_pre_*``,
+        0-dim tensors): the exit at train and eval, and at eval every pass ``t`` of the
+        trajectory (``*_t0`` is the loop's ENTRY state, ``*_t{t}`` the state after pass
+        ``t``; the eval depth is deterministic). A label-free forward RAISES: a stage-1
+        model has no trained coda and therefore no logits."""
+        if labels is None:
+            raise ValueError(
+                "tul.latent_pre_target (stage 1): a label-free forward has nothing to "
+                "return; the model has no trained coda and builds no logits.")
+        tc = self.cfg.tul
+        if layout.prefix_k != tc.prefix_k:
+            raise ValueError(f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
+        front_kw, front_reset, _ckw, _creset = self._tul_tg_kwargs(layout)
+        x, x0, bigram_emb = self._tul_front(input_ids, layout, attn_kwargs=front_kw,
+                                            ret_reset_mask=front_reset)
+        z, ok = self._latent_pre_target(input_ids, labels, layout, front_kw, front_reset, x)
+        _xn, h, _depths, _g, db_traj, gain_reg, _mep = self._tul_core(
+            x, x0, bigram_emb, layout, input_ids=input_ids, slot_depths=slot_depths)
+        B, S = layout.slot_valid.shape
+        pred = self._latent_pre_predict(h, B, S)                          # [B, S, M, C]
+        M = int(pred.shape[2])
+        if tc.latent_pre_loss == "l2":
+            loss = latent_l2(pred[:, :, 0], z, ok)
+        elif tc.latent_pre_loss == "infonce":
+            loss = latent_infonce(pred[:, :, 0], z, ok, float(tc.latent_pre_tau))
+        else:
+            loss, winner = latent_wta(pred, z, ok, float(tc.latent_pre_eps))
+        stats: dict[str, Tensor] = {}
+        with torch.no_grad():
+            stats.update(latent_readings(pred.detach(), z, ok, "exit"))
+            okf = ok.reshape(-1).float()
+            stats["target_rank"] = participation_ratio(z.reshape(B * S, -1), okf)
+            stats["n_slots"] = okf.sum()
+            if tc.latent_pre_loss == "wta":
+                share = (F.one_hot(winner, M).float() * ok.float().unsqueeze(-1)).sum(
+                    dim=(0, 1)) / okf.sum().clamp_min(1.0)
+                for i in range(M):
+                    stats[f"win_share_k{i}"] = share[i]
+            if db_traj is not None and not self.training:
+                # (a fan model collects the trajectory at train too, for its own reasons;
+                # the per-pass readings are an EVAL instrument on every arm)
+                for t, ht in enumerate(db_traj):
+                    stats.update(latent_readings(self._latent_pre_predict(ht, B, S), z, ok,
+                                                 f"t{t}"))
+        out: dict = {"logits": None, "loss": loss, "latent_pre": loss.detach(),
+                     "latent_pre_weighted": loss.detach(),
+                     "n_tokens": ((~layout.slot_mask) & (labels >= 0)).sum()}
+        for k, v in stats.items():
+            out[f"latent_pre_{k}"] = v
+        if gain_reg is not None:
+            out = self._fold_gain_reg(out, gain_reg)
+        if self._core_aux is not None:
+            self._apply_core_aux(out)
+            # `_apply_core_aux` names the loss before the loop terms `ce_main`; there is no
+            # CE on this forward, so the key would mislabel the latent term.
+            out.pop("ce_main", None)
+        return out
 
     # ── the fan's OPF / router arms (2026-09-30; morph/model/tul_fan_route.py) ─────────
 
@@ -12144,6 +12336,24 @@ class MORPHTransformer(nn.Module):
         self._code_policy_step = None
         # tul.fan_loop_select's exit stash (graph tensors): the same rule.
         self._lsel_out = None
+        if self._latent_pre_mode != "off":
+            # Stage-1 latent pretraining: its own forward (no coda, no token CE, train AND
+            # eval). Every per-forward argument it does not define is refused by name.
+            _unsupported = [n for n, bad in (
+                ("plan_nats", bool(plan_nats)), ("halt", bool(halt)),
+                ("plan_mode", plan_mode != "normal"), ("tul_step_mode", tul_step_mode is not None),
+                ("code_mode", code_mode is not None), ("code_steps", code_steps is not None),
+                ("code_seed", code_seed is not None), ("code_given", code_given is not None),
+                ("code_given_mask", code_given_mask is not None),
+                ("coda_state_only", bool(coda_state_only)), ("gram_mode", gram_mode is not None),
+                ("gram_sample_seed", gram_sample_seed is not None),
+                ("code_policy_pick", code_policy_pick is not None),
+                ("lsel_follow", lsel_follow is not None)) if bad]
+            if _unsupported:
+                raise NotImplementedError(
+                    f"tul.latent_pre_target (stage 1) with {_unsupported}: the stage-1 "
+                    f"forward runs no coda and has no such mode.")
+            return self._forward_latent_pre(input_ids, labels, layout, slot_depths)
         if lsel_follow is not None:
             if self._lsel_mode == "off":
                 raise ValueError("lsel_follow needs a model built with tul.fan_loop_select.")
@@ -13517,24 +13727,7 @@ class MORPHTransformer(nn.Module):
             groups["loss"] = groups["loss"] + _sw
 
         if gain_reg is not None and groups is not None:
-            # The slot map's typical-gain penalty (model.slot_gain_lambda). Same contract as
-            # sigreg: `gain_reg_weighted` is subtracted from every reported model loss so a
-            # penalised arm stays comparable to its control; `gain_est` is the live reading.
-            groups = dict(groups)
-            groups["gain_est"] = gain_reg["gain"]
-            groups["gain_est_max"] = gain_reg["gain_max"]
-            if "n_iters" in gain_reg:
-                groups["gain_n_iters"] = gain_reg["gain"].new_tensor(gain_reg["n_iters"])
-            groups["gain_reg_weighted"] = gain_reg["penalty"].detach()
-            # Per-slot readings of the same finite difference (`slot_gain_tail_*`); the
-            # weighted tail term is inside `gain_reg_weighted` and reported apart as well.
-            for _gk in ("gain_slot_p50", "gain_slot_p90", "gain_slot_max",
-                        "gain_slot_frac_gt1", "gain_tail_pen", "gain_floor_pen"):
-                groups[_gk] = gain_reg[_gk]
-            if "gain_raw" in gain_reg:
-                # `slot_gain_renorm`: `gain_est` is R(f)'s gain; this is f's, same difference.
-                groups["gain_est_raw"] = gain_reg["gain_raw"]
-            groups["loss"] = groups["loss"] + gain_reg["penalty"]
+            groups = self._fold_gain_reg(groups, gain_reg)
 
         if mux_loss is not None and groups is not None:
             groups = dict(groups)

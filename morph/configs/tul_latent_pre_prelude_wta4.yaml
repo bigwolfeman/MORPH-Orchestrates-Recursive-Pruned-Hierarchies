@@ -1,0 +1,23 @@
+# Stage-1 arm: the frozen plain-5k prelude target, relaxed winner-takes-all over M = 4 fan
+# cells (eps 0.05 on the losers; the latent-selected loop's `lsel_exit_loss`): M hypotheses
+# can each take a mode instead of averaging them. The fan's write-all geometry
+# (`tul_slot_spandec_strict_fan4_all_fp01`: fan_k 4 = slot_cells 4, prefix_k 4, distinct
+# cell seeds, fan_mix all) with every coda-side fan term off: the coda's WTA
+# (fan_all_wta_lambda 0) and the diversity term (fan_repel_lambda left at its default 0).
+# Readings add the best-of-4 retrieval (val/latent_pre_retr_best_same_t{t} against
+# val/latent_pre_chance_best_same) and the cell spread.
+defaults:
+  - tul_latent_pre_base
+  - _self_
+
+tul:
+  prefix_k: 4
+  fan_k: 4
+  slot_cell_init: distinct
+  fan_mix: all
+  fan_all_wta_lambda: 0.0
+  latent_pre_loss: wta
+  latent_pre_eps: 0.05
+
+wandb:
+  name: stage1-plain-prelude-wta4

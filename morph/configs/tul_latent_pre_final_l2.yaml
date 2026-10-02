@@ -1,0 +1,13 @@
+# Stage-1 arm: the frozen plain-5k model's FINAL hidden state (the state its LM head
+# reads) at span s+1's LAST token, on the plain token row, LayerNormed; L2. A deeper target
+# that READS THE WHOLE PAST: compare it on same-row retrieval only (the note), and not
+# with the prelude arms' numbers. The loss is a key; the orchestrator may swap it.
+defaults:
+  - tul_latent_pre_base
+  - _self_
+
+tul:
+  latent_pre_target: plain_final
+
+wandb:
+  name: stage1-plain-final-l2

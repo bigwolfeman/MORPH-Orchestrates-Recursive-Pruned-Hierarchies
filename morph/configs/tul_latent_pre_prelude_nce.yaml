@@ -1,0 +1,13 @@
+# Stage-1 arm: the frozen plain-5k prelude target, InfoNCE over the in-batch spans (every
+# target slot of the batch in one softmax, cosine logits / 0.1): ranking, not regression,
+# so hedging to the mean earns nothing. Changes ONE key from the base plus the run name.
+defaults:
+  - tul_latent_pre_base
+  - _self_
+
+tul:
+  latent_pre_loss: infonce
+  latent_pre_tau: 0.1
+
+wandb:
+  name: stage1-plain-prelude-infonce
