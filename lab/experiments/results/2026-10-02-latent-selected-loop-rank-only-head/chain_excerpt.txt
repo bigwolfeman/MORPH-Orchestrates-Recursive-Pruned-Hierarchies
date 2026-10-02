@@ -1,0 +1,26 @@
+[10-02 10:48:31] LSELV3 SMOKE lam1 exit=0 tok/s=9298 peak=14.30GB WITH grad into the loop
+[10-02 10:49:26] LSELV3 SMOKE lam1_rank exit=0 tok/s=9275 peak=14.29GB ranks only, no pull on the loop
+[10-02 10:49:26] LSELV3 QUEUED pull twin then rank-only head at f3893cc
+[10-02 10:49:26] LSELV3 runner started
+[10-02 10:49:26] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 START at f3893cc1 Latent-selected loop: tul.fan_lsel_head_input, a ra cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1 steps=5000
+[10-02 12:02:23] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 TRAIN exit=0 tok/s=9688 peak=15.69GB Final val_loss=4.5147  ppl=91.35  fan/ls
+[10-02 12:02:23] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 TRIPWIRE HEALTHY last=4999 max=58.3@241
+[10-02 12:08:28] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 ce_tokens K1-K6: +0.0096 [+0.0089, +0.0103] over 480 rows
+[10-02 12:08:28] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 GAP exit=0  ce_6_minus_ruler_ce6: +0.3065 [+0.2910, +0.3242]
+[10-02 12:12:18] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 SCORE exit=1 
+[10-02 12:12:18] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 PAIR exit=1 
+[10-02 12:13:51] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 zero TOTAL +0.1593 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 shuffle TOTAL +0.1568 
+[10-02 12:13:51] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1 DONE steps=5000
+[10-02 12:13:51] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank START at f3893cc1 Latent-selected loop: tul.fan_lsel_head_input, a ra cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank steps=5000
+[10-02 13:27:23] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank TRAIN exit=0 tok/s=9669 peak=15.69GB Final val_loss=4.5087  ppl=90.80  fan/ls
+[10-02 13:27:24] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank TRIPWIRE HEALTHY last=4999 max=88.4@239
+[10-02 13:33:28] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank ce_tokens K1-K6: +0.0052 [+0.0047, +0.0058] over 480 rows
+[10-02 13:33:28] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank GAP exit=0  ce_6_minus_ruler_ce6: +0.2994 [+0.2840, +0.3164]
+[10-02 13:36:52] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank SCORE exit=1 
+[10-02 13:36:52] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank PAIR exit=1 
+[10-02 13:37:59] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank zero TOTAL +0.1657 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank shuffle TOTAL +0.1560 
+[10-02 13:37:59] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank DONE steps=5000
+[10-02 13:46:29] LEDGER jrf-lam1 exit=0  shipped ce=4.3868 (42s)
+[10-02 13:54:31] LEDGER jrf-lam1-rank exit=0  shipped ce=4.3799 (42s)
+[10-02 13:54:31] V3-EVAL start
+[10-02 14:21:57] V3-EVAL exit=0
