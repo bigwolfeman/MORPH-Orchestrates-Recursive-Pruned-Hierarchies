@@ -1,6 +1,6 @@
 # Planned: orthogonal factors or a trained router on the write-all fan (arms F, R, T)
 
-Status: planned
+Status: failure
 
 Date: 2026-09-30 12:24 CDT (frozen before any of the three runs trained; nowta's and e1probe's
 repetition eval was still running, so no nowta repetition number is known here).
@@ -83,3 +83,82 @@ below nowta's (overlapping or lower CI), AND tok/s >= 0.9x nowta.
 - Hazard: another Claude session (Olympiad) runs GPU jobs of ~23 GB outside
   `gpu.lock`; one OOM-killed an eval on 2026-09-30. A run killed that way is re-queued, and a
   tok/s series with a foreign job in it is marked.
+
+## Results
+
+All three runs finished 5000 steps at commit cbdd501, seed 1, in order factor fan, then
+reader-trained router, then latent-teacher router. In this section F is the factor fan, R
+is the reader-trained router, and T is the latent-teacher router (the letters match the
+Predictions section above, which is frozen). No run detonated: `chain.log` reads TRIPWIRE
+HEALTHY for all three, with the worst preclip/total ratio at 243 (factor fan), far under the
+1e4 abort bar.
+
+| arm | tok/s | paired CE vs ungraded fan | K1-K6 | gap to plain | greedy seq-rep-4 |
+| --- | --- | --- | --- | --- | --- |
+| plain | 9988 | - | - | 0 | 0.794 [0.760, 0.828] |
+| ungraded fan (nowta) | 9797 | 0 | +0.0042 | +0.2543 | 0.523 [0.450, 0.597] |
+| coda-graded fan (a2, reference) | 7784 | -0.036 | +0.0057 | +0.218 | 0.510 [0.444, 0.579] |
+| factor fan (F) | 9197 | +0.0078 [+0.0056, +0.0098] | +0.0073 | +0.262 | 0.561 [0.487, 0.639] |
+| reader-trained router (R) | 9718 | +0.0109 [+0.0081, +0.0137] | +0.0068 | +0.2649 | 0.5535 [0.482, 0.623] |
+| latent-teacher router (T) | 9355 | +0.0134 [+0.0107, +0.0161] | +0.0063 | +0.2677 | 0.5628 [0.489, 0.635] |
+
+Per-arm val readings at step 5000: factor fan `fan_opf_enc_std_min` 0.4332, `fan_opf_r2_mean`
+0.0264, `fan_opf_target_rank` 12.39, `fan_opf_orth_err` 0.0039. Reader-trained router
+`router_coda_agree` 0.4574, `router_pick_regret` 0.0300 against `rand_pick_regret` 0.0637,
+load shares 0.36 / 0.25 / 0.08 / 0.32, `route_p_win` 0.8387. Latent-teacher router
+`router_coda_agree` 0.2894, `teacher_coda_agree` 0.2766, `teacher_router_agree` 0.2938.
+
+| prediction | reading | held |
+| --- | --- | --- |
+| P-1 none detonates | all three HEALTHY | yes |
+| P-2 F tok/s >= 8817 | 9197 | yes |
+| P-2 R, T tok/s >= 9307 | 9718, 9355 | yes |
+| P-3 F vs ungraded fan within 0.0137 | +0.0078 | yes (within) |
+| P-4 R worse than ungraded fan by > 0.0137 | +0.0109, under the bar | no |
+| P-5 T worse than ungraded fan by > 0.0137 | +0.0134, under the bar by 0.0003 | no |
+| P-6 F `opf_enc_std_min` >= 0.1 | 0.4332 | yes |
+| P-6 F `opf_r2_mean` > 0.1 | 0.0264 | no |
+| P-7 R `router_coda_agree` > 0.35 | 0.4574 | yes |
+| P-7 R largest load share < 0.4 | 0.36 | yes |
+| P-8 T `teacher_router_agree` > 0.5 | 0.2938 | no |
+| P-8 T `teacher_coda_agree` > 0.35 | 0.2766 | no |
+| P-9 each arm's rep4 below plain's 0.794, disjoint | 0.561 / 0.5535 / 0.5628, all disjoint | yes |
+| P-9 F's rep4 below the ungraded fan's, disjoint | 0.561 vs 0.523, F is HIGHER | no |
+| P-10 each arm's K1-K6 within 0.007 of +0.0042 | +0.0073, +0.0068, +0.0063 (diffs 0.0031, 0.0026, 0.0021) | yes |
+
+## Verdict
+
+Filed as a failure because the predictions that test each mechanism missed, not because
+of the pass rule. (Corrected 2026-10-02 by the orchestrator: an earlier draft of this
+section misread the pass rule.)
+
+The pass rule is a non-inferiority bar, and all three arms MEET it. Each arm's paired CE
+sits within 0.0137 of the ungraded fan's (+0.0078, +0.0109, +0.0134). Each arm's greedy
+seq-rep-4 interval overlaps the ungraded fan's [0.450, 0.597], which the rule accepts. Each
+arm's tok/s is above 0.9x the ungraded fan's 8817. The latent-teacher router clears the CE
+bar by only 0.0003.
+
+The mechanism predictions are what fail. The factor fan did not learn its latent task
+(P-6: R^2 mean 0.026 against the 0.1 bar). The latent-teacher router's teacher did not
+track the router or the coda (P-8: 0.294 and 0.277, chance 0.25). The factor fan did not
+repeat less than the ungraded fan (P-9: 0.561 against 0.523). The two routers cost less CE
+than I predicted (P-4, P-5 missed in the good direction). Only the reader-trained router's
+mechanism held: it picks the coda's own best cell at 0.457 (chance 0.25), with pick regret
+0.030 against a random pick's 0.064. Its exploration ledger, run later on the same
+checkpoint, prices the learned pick at +0.033 nats over a random cell.
+
+So: none of the three arms hurts the ungraded fan beyond the bar, and none of them buys
+anything the ungraded fan lacks, at 5000 steps on seed 1.
+
+## Updated hypothesis
+
+A cheap auxiliary task does not reliably make a write-all fan's cells distinct enough to help
+generation diversity at this scale, in 5000 steps. The factor fan's task undertrains, and
+both routers read the coda's preference at or only slightly above chance. Reading one cell of
+four instead of all four (reader router, latent router) costs nothing on CE beyond the noise
+bar, but does not buy anything either: the question "can we get the ungraded fan's speed and
+the coda-graded fan's quality cheaply" is open after six mechanisms now (ungraded fan itself,
+head-graded WTA, factor fan, reader router, latent router). The next lever worth trying is
+sized correctly rather than auxiliary: see
+[`2026-09-30-factor-fan-10x-latent.md`](2026-09-30-factor-fan-10x-latent.md) for
+what happens when the latent term is reweighted to compete evenly with the token CE.

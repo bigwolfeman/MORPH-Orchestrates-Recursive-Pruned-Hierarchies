@@ -1,0 +1,9 @@
+[09-30 22:26:45] slot-spandec-strict-fan4-all-fp01-opf10 START at 213b585 Prereg + config: factor fan with the latent block at cfg=tul_slot_spandec_strict_fan4_all_fp01_opf10 steps=5000
+[09-30 23:41:37] slot-spandec-strict-fan4-all-fp01-opf10 TRAIN exit=0 tok/s=8418 peak=15.44GB Final val_loss=4.6078  ppl=100.26  fan/m
+[09-30 23:41:37] slot-spandec-strict-fan4-all-fp01-opf10 TRIPWIRE HEALTHY last=4999 max=36.1@331
+[09-30 23:47:08] slot-spandec-strict-fan4-all-fp01-opf10 SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-opf10 ce_tokens K1-K6: +0.0047 [+0.0043, +0.0052] over 480 rows
+[09-30 23:47:09] slot-spandec-strict-fan4-all-fp01-opf10 GAP exit=0  ce_6_minus_ruler_ce6: +0.3845 [+0.3688, +0.4016]
+[09-30 23:51:21] slot-spandec-strict-fan4-all-fp01-opf10 SCORE exit=1 
+[09-30 23:51:21] slot-spandec-strict-fan4-all-fp01-opf10 PAIR exit=1 
+[09-30 23:53:31] slot-spandec-strict-fan4-all-fp01-opf10 WORTH exit=0 slot-spandec-strict-fan4-all-fp01-opf10 zero TOTAL +0.1549 slot-spandec-strict-fan4-all-fp01-opf10 shuffle TOTAL +0.1629 
+[09-30 23:53:31] slot-spandec-strict-fan4-all-fp01-opf10 DONE steps=5000

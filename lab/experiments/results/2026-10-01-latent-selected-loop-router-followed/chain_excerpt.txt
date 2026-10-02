@@ -1,0 +1,19 @@
+[10-01 10:19:44] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf START at 26a894f Exploration ledger: price a fan's selection and sear cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf steps=5000
+[10-01 11:32:36] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf TRAIN exit=0 tok/s=9625 peak=15.69GB Final val_loss=4.6233  ppl=101.83  fan/l
+[10-01 11:32:36] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf TRIPWIRE HEALTHY last=4999 max=125@220
+[10-01 11:38:00] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf ce_tokens K1-K6: +0.0067 [+0.0062, +0.0072] over 480 rows
+[10-01 11:38:00] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf GAP exit=0  ce_6_minus_ruler_ce6: +0.4102 [+0.3939, +0.4286]
+[10-01 11:41:11] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf SCORE exit=1 
+[10-01 11:41:11] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf PAIR exit=1 
+[10-01 11:42:11] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf zero TOTAL +0.1058 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf shuffle TOTAL +0.1234 
+[10-01 11:42:11] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf DONE steps=5000
+[10-01 11:42:12] slot-spandec-strict-fan4-all-fp01-lsel-det-rf START at 26a894f Exploration ledger: price a fan's selection and sear cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf steps=5000
+[10-01 12:54:58] slot-spandec-strict-fan4-all-fp01-lsel-det-rf TRAIN exit=0 tok/s=9681 peak=15.69GB Final val_loss=4.6206  ppl=101.56  fan/l
+[10-01 12:54:59] slot-spandec-strict-fan4-all-fp01-lsel-det-rf TRIPWIRE HEALTHY last=4999 max=50.7@241
+[10-01 13:00:24] slot-spandec-strict-fan4-all-fp01-lsel-det-rf SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf ce_tokens K1-K6: +0.0095 [+0.0086, +0.0104] over 480 rows
+[10-01 13:00:24] slot-spandec-strict-fan4-all-fp01-lsel-det-rf GAP exit=0  ce_6_minus_ruler_ce6: +0.4091 [+0.3930, +0.4278]
+[10-01 13:03:36] slot-spandec-strict-fan4-all-fp01-lsel-det-rf SCORE exit=1 
+[10-01 13:03:36] slot-spandec-strict-fan4-all-fp01-lsel-det-rf PAIR exit=1 
+[10-01 13:04:37] slot-spandec-strict-fan4-all-fp01-lsel-det-rf WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf zero TOTAL +0.1016 slot-spandec-strict-fan4-all-fp01-lsel-det-rf shuffle TOTAL +0.1107 
+[10-01 13:04:37] slot-spandec-strict-fan4-all-fp01-lsel-det-rf DONE steps=5000
+[10-02 01:50:17] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all START at dba8592 Latent-selected loop: tul.fan_lsel_read, and two rou cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_all steps=5000

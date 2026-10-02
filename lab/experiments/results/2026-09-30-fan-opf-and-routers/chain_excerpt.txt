@@ -1,0 +1,36 @@
+[09-30 01:59:20] slot-spandec-strict-fan4-all-fp01-nowta START at 10babd4 Prereg: arm A (head-graded WTA) and the no-WTA write cfg=tul_slot_spandec_strict_fan4_all_fp01_nowta steps=5000
+[09-30 03:08:19] slot-spandec-strict-fan4-all-fp01-nowta TRAIN exit=0 tok/s=9774 peak=15.16GB Final val_loss=4.4658  ppl=86.99  fan/mi
+[09-30 03:08:19] slot-spandec-strict-fan4-all-fp01-nowta TRIPWIRE HEALTHY last=4999 max=361@239
+[09-30 03:13:40] slot-spandec-strict-fan4-all-fp01-nowta SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-nowta ce_tokens K1-K6: +0.0042 [+0.0037, +0.0047] over 480 rows
+[09-30 03:13:40] slot-spandec-strict-fan4-all-fp01-nowta GAP exit=0  ce_6_minus_ruler_ce6: +0.2543 [+0.2395, +0.2710]
+[09-30 03:16:59] slot-spandec-strict-fan4-all-fp01-nowta SCORE exit=1 
+[09-30 03:16:59] slot-spandec-strict-fan4-all-fp01-nowta PAIR exit=1 
+[09-30 03:18:00] slot-spandec-strict-fan4-all-fp01-nowta WORTH exit=0 slot-spandec-strict-fan4-all-fp01-nowta zero TOTAL +0.1906 slot-spandec-strict-fan4-all-fp01-nowta shuffle TOTAL +0.1756 
+[09-30 03:18:00] slot-spandec-strict-fan4-all-fp01-nowta DONE steps=5000
+[09-30 12:29:13] slot-spandec-strict-fan4-all-fp01-opf START at ff7efe5 Prereg: fan arms F (OPF factors), R (reader router), cfg=tul_slot_spandec_strict_fan4_all_fp01_opf steps=5000
+[09-30 13:49:30] slot-spandec-strict-fan4-all-fp01-opf TRAIN exit=0 tok/s=9249 peak=15.44GB Final val_loss=4.4736  ppl=87.67  fan/mi
+[09-30 13:49:31] slot-spandec-strict-fan4-all-fp01-opf TRIPWIRE HEALTHY last=4999 max=243@239
+[09-30 13:56:42] slot-spandec-strict-fan4-all-fp01-opf SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-opf ce_tokens K1-K6: +0.0073 [+0.0067, +0.0079] over 480 rows
+[09-30 13:56:42] slot-spandec-strict-fan4-all-fp01-opf GAP exit=0  ce_6_minus_ruler_ce6: +0.2620 [+0.2472, +0.2788]
+[09-30 14:00:00] slot-spandec-strict-fan4-all-fp01-opf SCORE exit=1 
+[09-30 14:00:00] slot-spandec-strict-fan4-all-fp01-opf PAIR exit=1 
+[09-30 14:01:01] slot-spandec-strict-fan4-all-fp01-opf WORTH exit=0 slot-spandec-strict-fan4-all-fp01-opf zero TOTAL +0.1875 slot-spandec-strict-fan4-all-fp01-opf shuffle TOTAL +0.1762 
+[09-30 14:01:01] slot-spandec-strict-fan4-all-fp01-opf DONE steps=5000
+[09-30 14:01:02] slot-spandec-strict-fan4-all-fp01-rmoe START at ff7efe5 Prereg: fan arms F (OPF factors), R (reader router), cfg=tul_slot_spandec_strict_fan4_all_fp01_rmoe steps=5000
+[09-30 15:10:28] slot-spandec-strict-fan4-all-fp01-rmoe TRAIN exit=0 tok/s=9669 peak=15.20GB Final val_loss=4.4736  ppl=87.67  fan/mi
+[09-30 15:10:28] slot-spandec-strict-fan4-all-fp01-rmoe TRIPWIRE HEALTHY last=4999 max=50.5@241
+[09-30 15:21:53] slot-spandec-strict-fan4-all-fp01-rmoe SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-rmoe ce_tokens K1-K6: +0.0068 [+0.0062, +0.0074] over 480 rows
+[09-30 15:21:53] slot-spandec-strict-fan4-all-fp01-rmoe GAP exit=0  ce_6_minus_ruler_ce6: +0.2649 [+0.2490, +0.2824]
+[09-30 15:25:10] slot-spandec-strict-fan4-all-fp01-rmoe SCORE exit=1 
+[09-30 15:25:10] slot-spandec-strict-fan4-all-fp01-rmoe PAIR exit=1 
+[09-30 15:26:11] slot-spandec-strict-fan4-all-fp01-rmoe WORTH exit=0 slot-spandec-strict-fan4-all-fp01-rmoe zero TOTAL +0.1743 slot-spandec-strict-fan4-all-fp01-rmoe shuffle TOTAL +0.1563 
+[09-30 15:26:11] slot-spandec-strict-fan4-all-fp01-rmoe DONE steps=5000
+[09-30 15:26:12] slot-spandec-strict-fan4-all-fp01-rlat START at ff7efe5 Prereg: fan arms F (OPF factors), R (reader router), cfg=tul_slot_spandec_strict_fan4_all_fp01_rlat steps=5000
+[09-30 16:38:16] slot-spandec-strict-fan4-all-fp01-rlat TRAIN exit=0 tok/s=9281 peak=15.39GB Final val_loss=4.4844  ppl=88.63  fan/mi
+[09-30 16:38:16] slot-spandec-strict-fan4-all-fp01-rlat TRIPWIRE HEALTHY last=4999 max=88.9@219
+[09-30 16:44:11] slot-spandec-strict-fan4-all-fp01-rlat SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-rlat ce_tokens K1-K6: +0.0063 [+0.0057, +0.0069] over 480 rows
+[09-30 16:44:12] slot-spandec-strict-fan4-all-fp01-rlat GAP exit=0  ce_6_minus_ruler_ce6: +0.2677 [+0.2521, +0.2851]
+[09-30 16:47:40] slot-spandec-strict-fan4-all-fp01-rlat SCORE exit=1 
+[09-30 16:47:40] slot-spandec-strict-fan4-all-fp01-rlat PAIR exit=1 
+[09-30 16:48:43] slot-spandec-strict-fan4-all-fp01-rlat WORTH exit=0 slot-spandec-strict-fan4-all-fp01-rlat zero TOTAL +0.1698 slot-spandec-strict-fan4-all-fp01-rlat shuffle TOTAL +0.1611 
+[09-30 16:48:43] slot-spandec-strict-fan4-all-fp01-rlat DONE steps=5000
