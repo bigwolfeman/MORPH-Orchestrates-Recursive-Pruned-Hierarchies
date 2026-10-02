@@ -147,6 +147,24 @@ run GRPO on a discounted per-depth process reward. GSM8K 13.49 to 17.76 at r = 8
 flat at r = 4 (8.36 to 8.59); and the decode-the-cell-and-read-it instrument, which MORPH has
 never run on a slot cell.
 
+### LoopCD — Contrastive Decoding Across Recurrent Loops (training-free, deployment only)
+
+**Title:** Decoding Looped Transformers Better for (Almost) Free  
+**Authors:** Weihao Liu, Huangjie Zheng, Tianrong Chen, Rohit Dilip, Richard He Bai, Yizhu Jiao,
+Yuyang Wang, Ruixiang Zhang  
+**Year:** 2026  
+**arXiv:** [2610.02185](https://arxiv.org/abs/2610.02185)  
+**MORPH uses:** NOTHING shipped. Contrasts a looped model's final-loop token prediction against
+an earlier loop's prediction at decode time, training-free, with two variants (logit-space,
+hidden-state-space) and an adaptive contrast strength gated on prediction margin. Evaluated on
+Ouro-2.6B-Thinking, Huginn, Parcae, and Looped-Qwen3; headline numbers include Ouro's AIME 2024
+pass@1 61.88% to 73.33% and Huginn's HumanEval pass@1 22.56% to 31.71%, and halving loop count
+while matching full-depth accuracy cuts forward FLOPs 22.5% to 48.2%. Full reading and our
+insight log: [references/looping-depth/2026-10-02-loopcd-contrastive-decoding.md](references/looping-depth/2026-10-02-loopcd-contrastive-decoding.md).
+**Verdict (Wolfe, 2026-10-02):** deployment-only, no training-time savings, not useful to us as
+a drop-in now; kept for insights on the hidden-state contrast mapping to our slot-cell prefix
+write and on contrastive decoding's known repetition reduction.
+
 ---
 
 
