@@ -1,0 +1,19 @@
+# The router-followed latent-selected loop, joint (2026-10-02). Composes
+# `tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf` and changes ONE key plus the run name:
+#
+#   tul.fan_lsel_lambda  -> 1.0
+#
+# Change: the latent loss weight 10 -> 1 (the joint twin of ..._lsel_det_rf_lam1).
+# Pair: ..._lsel_joint_rf_lam1 (latent loss pulls the cells, weight 1) against
+# ..._lsel_joint_rf_lam1_rank (the same, the head ranks only). Joint, because a detached
+# loop with a rank-only head would get no task objective at all (refused in TULConfig).
+# Prereg: lab/experiments/planned/2026-10-02-latent-selected-loop-rank-only-head.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf
+  - _self_
+
+tul:
+  fan_lsel_lambda: 1.0
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1

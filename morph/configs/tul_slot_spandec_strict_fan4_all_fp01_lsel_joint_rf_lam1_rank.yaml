@@ -1,0 +1,19 @@
+# The router-followed latent-selected loop, joint (2026-10-02). Composes
+# `tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1` and changes ONE key plus the run name:
+#
+#   tul.fan_lsel_head_input  -> detached
+#
+# Change: the latent head reads DETACHED cells: it learns to rank them for the teacher, and no latent gradient reaches the cells or the loop.
+# Pair: ..._lsel_joint_rf_lam1 (latent loss pulls the cells, weight 1) against
+# ..._lsel_joint_rf_lam1_rank (the same, the head ranks only). Joint, because a detached
+# loop with a rank-only head would get no task objective at all (refused in TULConfig).
+# Prereg: lab/experiments/planned/2026-10-02-latent-selected-loop-rank-only-head.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1
+  - _self_
+
+tul:
+  fan_lsel_head_input: detached
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank

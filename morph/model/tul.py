@@ -545,6 +545,12 @@ class TULConfig:
     # 0.17 nats over one, ledger 2026-10-01). The selection still steers the loop (reset
     # to the winner after every continuing pass); only the exit read changes.
     fan_lsel_read: str = "winner"            # "winner" | "all"
+    # What the latent head g READS for the exit loss (2026-10-02). "live" (the arms so far):
+    # the cells with grad, so the loss PULLS the cells and the loop toward the target (a tax:
+    # R^2 <= 0.01 in all six arms, and weight 10 -> 1 tripled the loop's K1-K6). "detached":
+    # g reads detached cells, so the loss only teaches g to RANK cells for the teacher; no
+    # latent gradient reaches the cells or the loop (the online floor on the prelude stays).
+    fan_lsel_head_input: str = "live"        # "live" | "detached"
     fan_repel_mode: str = "cos"        # "cos" (pairwise cosine) | "epi" (epiplexity of the
                                          # between-stream deviations) | "vol" (within-slot
                                          # volume) | "epivol" (both; morph/model/tul_fan.py)
@@ -4142,6 +4148,10 @@ class TULConfig:
         if self.fan_lsel_hidden < 0:
             raise ValueError(
                 f"tul.fan_lsel_hidden must be >= 0 (0 = d_model), got {self.fan_lsel_hidden}")
+        if self.fan_lsel_head_input not in ("live", "detached"):
+            raise ValueError(
+                f"tul.fan_lsel_head_input must be 'live' or 'detached', got "
+                f"{self.fan_lsel_head_input!r}")
         if self.fan_lsel_read not in ("winner", "all"):
             raise ValueError(
                 f"tul.fan_lsel_read must be 'winner' or 'all', got {self.fan_lsel_read!r}")
@@ -4152,7 +4162,8 @@ class TULConfig:
         _defaults = TULConfig.__dataclass_fields__
         _keys = ("fan_lsel_lambda", "fan_lsel_eps", "fan_lsel_enc_lambda",
                  "fan_lsel_enc_gamma", "fan_lsel_router_lambda", "fan_lsel_router_rank",
-                 "fan_lsel_hidden", "fan_lsel_train_follow", "fan_lsel_read")
+                 "fan_lsel_hidden", "fan_lsel_train_follow", "fan_lsel_read",
+                 "fan_lsel_head_input")
         if self.fan_loop_select == "off":
             _unread = [k for k in _keys if getattr(self, k) != _defaults[k].default]
             if _unread:
@@ -4197,6 +4208,10 @@ class TULConfig:
              f"loop_carry={self.loop_carry!r}: the carry adds to the exit after the last "
              f"pass, so the coda would read a state the exit's latent loss never graded"),
         ]
+        _refused.append(
+            (self.fan_loop_select == "detached" and self.fan_lsel_head_input == "detached",
+             "fan_lsel_head_input='detached': the detached loop already gets no token CE, so "
+             "with no latent gradient either NO task objective would reach the loop"))
         if self.fan_loop_select == "detached":
             _refused += [
                 (self.mux_beta > 0.0,

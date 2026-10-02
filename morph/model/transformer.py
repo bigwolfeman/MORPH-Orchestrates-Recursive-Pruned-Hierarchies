@@ -9283,7 +9283,10 @@ class MORPHTransformer(nn.Module):
         teacher = None
         if st["z"] is not None:
             z, ok, zo = st["z"], st["ok"], st["zo"]
-            dist = lsel_distance(self.tul_fan_lsel_head(cr), z)            # [B, S, M]
+            # `fan_lsel_head_input: detached`: g learns to RANK the cells; no latent
+            # gradient reaches the cells or the loop.
+            _g_in = cr.detach() if self.cfg.tul.fan_lsel_head_input == "detached" else cr
+            dist = lsel_distance(self.tul_fan_lsel_head(_g_in), z)         # [B, S, M]
             tex = dist.detach().argmin(dim=-1)
             l_lat = lsel_exit_loss(dist, tex, ok, float(tc.fan_lsel_eps))
             okf = ok.float()

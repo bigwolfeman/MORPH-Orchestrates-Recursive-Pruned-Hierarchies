@@ -55,7 +55,8 @@ from test_tul_lxfan import _build, _fan_kw, _Spy
 NEW_KEY_DEFAULTS = dict(
     fan_loop_select="off", fan_lsel_lambda=10.0, fan_lsel_eps=0.05,
     fan_lsel_enc_lambda=0.2, fan_lsel_enc_gamma=0.1, fan_lsel_router_lambda=1.0,
-    fan_lsel_router_rank=64, fan_lsel_hidden=0, fan_lsel_train_follow="teacher", fan_lsel_read="winner")
+    fan_lsel_router_rank=64, fan_lsel_hidden=0, fan_lsel_train_follow="teacher", fan_lsel_read="winner",
+    fan_lsel_head_input="live")
 
 # Measured 2026-09-30 on the UNMODIFIED tree at 213b585 (`git archive 213b585`, before
 # any `fan_lsel_*` key existed) with these fixtures and one CPU thread, by
@@ -582,6 +583,70 @@ def test_det_rf_children_change_one_key_and_reach_the_model(name, key, val, wb, 
              if getattr(mc.tul, f.name) != getattr(pmc.tul, f.name)}
     assert tdiff == {key}, sorted(tdiff)
     assert getattr(mc.tul, key) == val and rt.manifest.get(key) == val
+
+
+def _latent_loss_grads(head_input: str):
+    """Gradient of the exit's folded latent term ALONE (latent + floor + router CE) on the
+    loop's parameters and on g, for a joint router-followed model."""
+    _ids0, inp, lab, layout = _batch(M)
+    m = _lsel("joint", fan_lsel_train_follow="router", fan_lsel_head_input=head_input).train()
+    torch.manual_seed(5)
+    m(inp, labels=lab, slot_layout=layout)
+    loss = m._lsel_out["loss"]          # the exit term's graph tensor, kept on the stash
+    assert loss is not None and loss.requires_grad
+    ps = _loop_params(m)
+    gl = torch.autograd.grad(loss, ps, allow_unused=True, retain_graph=True)
+    gg = torch.autograd.grad(loss, list(m.tul_fan_lsel_head.parameters()), allow_unused=True)
+    loop = sum(float(g.abs().sum()) for g in gl if g is not None)
+    head = sum(float(g.abs().sum()) for g in gg if g is not None)
+    return loop, head
+
+
+def test_rank_only_head_sends_no_latent_gradient_into_the_loop():
+    """`fan_lsel_head_input: detached`: the latent term trains g (it still ranks) and puts
+    exactly zero gradient on the loop; under "live" the same term pulls the loop."""
+    loop_d, head_d = _latent_loss_grads("detached")
+    loop_l, head_l = _latent_loss_grads("live")
+    assert loop_d == 0.0 and head_d > 0
+    assert loop_l > 0 and head_l > 0
+
+
+def test_rank_only_head_refused_on_the_detached_loop():
+    with pytest.raises(NotImplementedError, match="NO task objective"):
+        _lsel("detached", fan_lsel_head_input="detached")
+    with pytest.raises(ValueError, match="fan_lsel_head_input"):
+        _lsel(fan_lsel_head_input="frozen")
+    with pytest.raises(ValueError, match="silent no-op"):
+        _build(**_nowta_kw(fan_lsel_head_input="detached"))
+
+
+@pytest.mark.parametrize("name,parent,key,val", [
+    ("tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1",
+     "tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf", "fan_lsel_lambda", 1.0),
+    ("tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank",
+     "tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1", "fan_lsel_head_input",
+     "detached"),
+])
+def test_rank_pair_configs_change_one_key(name, parent, key, val, monkeypatch):
+    import dataclasses
+
+    from omegaconf import OmegaConf
+    from test_slot_gain_tail import _leaves, _MISSING
+    from test_tul_strict_geometry import _runtime
+
+    from morph.training.train import build_morph_config
+
+    cfg, rt = _runtime(name, monkeypatch)
+    pcfg, prt = _runtime(parent, monkeypatch)
+    c = _leaves(OmegaConf.to_container(cfg, resolve=True))
+    p = _leaves(OmegaConf.to_container(pcfg, resolve=True))
+    diff = {k for k in c.keys() | p.keys() if c.get(k, _MISSING) != p.get(k, _MISSING)}
+    assert diff == {f"tul.{key}", "wandb.name"}, sorted(diff)
+    mc = build_morph_config(cfg, tul=rt.model_cfg)
+    pmc = build_morph_config(pcfg, tul=prt.model_cfg)
+    tdiff = {f.name for f in dataclasses.fields(mc.tul)
+             if getattr(mc.tul, f.name) != getattr(pmc.tul, f.name)}
+    assert tdiff == {key} and getattr(mc.tul, key) == val and rt.manifest.get(key) == val
 
 
 def test_the_coda_reads_the_final_winner_alone():
