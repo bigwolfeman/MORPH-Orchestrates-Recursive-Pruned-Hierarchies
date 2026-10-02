@@ -251,6 +251,23 @@ the instability that arises when initial-token KV entries are evicted from a sli
 **NOTES:** I am of the opinion that preventing attention sinking is better than providing a stable place  
 for attention sinking. This needs further ablation.
 
+### Massive Activations, outlier and rogue dimensions (diagnostic reading, 2026-10-02)
+
+**Title:** Massive Activations in Large Language Models  
+**Authors:** Mingjie Sun, Xinlei Chen, J. Zico Kolter, Zhuang Liu  
+**Year:** 2024 (COLM 2024)  
+**arXiv:** [2402.17762](https://arxiv.org/abs/2402.17762)  
+**MORPH uses:** Nothing shipped. A diagnostic: a few fixed channels carry very large,
+nearly input-independent values (a fixed bias; mean-ablation is harmless, zero-ablation is
+fatal), and any raw cosine or L2 statistic on such a state measures mostly those channels.
+The reading also covers BERT Busters (arXiv 2105.06990), Puccetti et al. (arXiv
+2205.11380), Quantizable Transformers (arXiv 2306.12929), Rogue Dimensions (Timkey and van
+Schijndel, arXiv 2109.04404: per-dimension standardisation is the fix for similarity),
+Ethayarajh 2019 (arXiv 1909.00512) and All-but-the-Top (arXiv 1702.01417). Local reading:
+[references/attention/massive-activations/massive-activations.md](references/attention/massive-activations/massive-activations.md).
+MORPH measurement (the plain prelude's channels 194/899/1018/905 vs the slot-loop arms):
+[.agents/notes/proposed/architecture/2026-10-02-layernorm-common-mode-in-latent-targets.md](../.agents/notes/proposed/architecture/2026-10-02-layernorm-common-mode-in-latent-targets.md).
+
 ### Value Shift
 
 The v-shift (blending the current-step value projection with the previous-step value projection)
@@ -549,6 +566,18 @@ via Step Sampling
 sampling the STP geodesic loss at semantic reasoning-step boundaries (rather than random token
 positions) dominates the geometric outcome. MORPH never shipped this variant; it is archived as
 related work for the removed STP / latent-prediction stack (`morph/model/prediction.py` no longer exists). Local notes only (no PDF in the archive). Inspired punc-STP.
+
+### Target normalisation in latent prediction (reading, 2026-10-02)
+
+**Sources:** data2vec (arXiv 2202.03555), I-JEPA (arXiv 2301.08243 and its code), BYOL
+(arXiv 2006.07733), VICReg (arXiv 2105.04906), MAE (arXiv 2111.06377), Colton 2025 on
+I-JEPA's feature normalisation (arXiv 2508.02829).  
+**MORPH uses:** The latent-selected loop's target (`pooled_span_states`: EMA prelude twin,
+span mean, LayerNorm without affine) follows the data2vec / I-JEPA per-vector LayerNorm.
+The reading records what each method normalises and why, and that a per-vector LayerNorm
+does not remove a direction every target shares; per-coordinate standardisation with fixed
+statistics does (`tul.latent_pre_target_norm: standard` in the stage-1 build). Local
+reading: [references/regularization-objectives/target-normalisation/target-normalisation.md](references/regularization-objectives/target-normalisation/target-normalisation.md).
 
 ---
 

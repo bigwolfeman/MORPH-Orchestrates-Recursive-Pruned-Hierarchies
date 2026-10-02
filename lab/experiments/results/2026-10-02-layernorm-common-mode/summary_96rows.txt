@@ -1,0 +1,224 @@
+== A. channels (token level) ==
+det_all     chan_live max/med|mean|     9.2 top4 E-share 0.014 meanvec E-share 0.124  660:+3.3 534:+2.8 461:+2.7 263:-2.3
+det_all     chan_twin max/med|mean|     9.1 top4 E-share 0.014 meanvec E-share 0.129  660:+3.2 534:+2.6 461:+2.5 263:-2.2
+det_tf      chan_live max/med|mean|     9.3 top4 E-share 0.020 meanvec E-share 0.213  660:+3.9 461:+2.9 511:+2.8 35:+2.8
+det_tf      chan_twin max/med|mean|     9.6 top4 E-share 0.020 meanvec E-share 0.213  660:+3.7 461:+2.7 511:+2.6 35:+2.6
+det_w1      chan_live max/med|mean|     6.9 top4 E-share 0.011 meanvec E-share 0.120  366:-2.6 609:-2.6 649:-2.4 1000:+2.2
+det_w1      chan_twin max/med|mean|     7.0 top4 E-share 0.011 meanvec E-share 0.118  366:-2.5 609:-2.4 649:-2.3 461:+2.2
+det_w10     chan_live max/med|mean|    11.1 top4 E-share 0.018 meanvec E-share 0.160  461:+4.3 465:+3.5 35:+3.1 534:+3.0
+det_w10     chan_twin max/med|mean|    11.0 top4 E-share 0.018 meanvec E-share 0.162  461:+4.2 465:+3.3 35:+3.0 534:+2.9
+fan         chan_live max/med|mean|     7.5 top4 E-share 0.010 meanvec E-share 0.099  621:-2.6 660:+1.9 132:+1.8 370:-1.7
+joint_rank  chan_live max/med|mean|     5.9 top4 E-share 0.008 meanvec E-share 0.079  969:-1.4 810:+1.3 82:+1.3 609:-1.3
+joint_rank  chan_twin max/med|mean|     6.1 top4 E-share 0.009 meanvec E-share 0.079  969:-1.5 810:+1.3 82:+1.3 609:-1.3
+joint_tf    chan_live max/med|mean|     9.8 top4 E-share 0.018 meanvec E-share 0.165  461:+3.6 35:+3.6 132:+2.8 428:+2.7
+joint_tf    chan_twin max/med|mean|     9.5 top4 E-share 0.018 meanvec E-share 0.170  461:+3.6 35:+3.6 132:+2.8 428:+2.7
+joint_w1    chan_live max/med|mean|     4.8 top4 E-share 0.008 meanvec E-share 0.066  660:-1.0 314:+1.0 427:+1.0 560:-1.0
+joint_w1    chan_twin max/med|mean|     4.7 top4 E-share 0.008 meanvec E-share 0.065  660:-1.0 427:+1.0 295:+0.9 830:-0.9
+joint_w10   chan_live max/med|mean|    10.8 top4 E-share 0.023 meanvec E-share 0.173  123:+4.3 534:+4.1 461:+4.1 867:-4.0
+joint_w10   chan_twin max/med|mean|    10.7 top4 E-share 0.024 meanvec E-share 0.182  123:+4.2 461:+4.0 867:-3.9 534:+3.9
+plain       chan_live max/med|mean|    61.2 top4 E-share 0.439 meanvec E-share 0.911  194:-110.0 899:-105.0 1018:-101.4 905:+91.1
+== A. pooled LN target ==
+det_all     target_twin_ln           n  4986 cos 0.545 cos->u 0.738 meanE 0.545 PRc  14.10 PRstd  17.05 var/coord 0.4550 top4var 0.008 var_u 0.059  660:+3.8 534:+3.2 461:+3.0 263:-2.6
+det_all     target_online_ln         n  4986 cos 0.537 cos->u 0.733 meanE 0.538 PRc  13.87 PRstd  16.85 var/coord 0.4625 top4var 0.008 var_u 0.060  660:+3.8 534:+3.2 461:+3.0 263:-2.7
+det_all     twin pre-LN pooled cos 0.546 PRc 8.08 rms 29.9
+det_tf      target_twin_ln           n  4986 cos 0.663 cos->u 0.814 meanE 0.663 PRc  11.74 PRstd  14.44 var/coord 0.3368 top4var 0.010 var_u 0.062  660:+4.5 461:+3.2 511:+3.1 35:+3.0
+det_tf      target_online_ln         n  4986 cos 0.661 cos->u 0.813 meanE 0.661 PRc  10.96 PRstd  13.83 var/coord 0.3393 top4var 0.009 var_u 0.067  660:+4.4 461:+3.3 511:+3.1 35:+3.0
+det_tf      twin pre-LN pooled cos 0.663 PRc 3.96 rms 31.6
+det_w1      target_twin_ln           n  4986 cos 0.553 cos->u 0.744 meanE 0.553 PRc  21.71 PRstd  27.24 var/coord 0.4468 top4var 0.006 var_u 0.036  366:-3.1 609:-2.9 649:-2.8 461:+2.7
+det_w1      target_online_ln         n  4986 cos 0.559 cos->u 0.748 meanE 0.559 PRc  23.28 PRstd  28.77 var/coord 0.4406 top4var 0.006 var_u 0.036  366:-3.0 609:-3.0 649:-2.8 1000:+2.6
+det_w1      twin pre-LN pooled cos 0.553 PRc 11.32 rms 28.3
+det_w10     target_twin_ln           n  4986 cos 0.587 cos->u 0.766 meanE 0.587 PRc  14.21 PRstd  17.63 var/coord 0.4133 top4var 0.008 var_u 0.067  461:+4.4 465:+3.4 35:+3.1 123:+3.1
+det_w10     target_online_ln         n  4986 cos 0.585 cos->u 0.765 meanE 0.585 PRc  14.03 PRstd  17.47 var/coord 0.4150 top4var 0.009 var_u 0.067  461:+4.5 465:+3.5 35:+3.1 123:+3.1
+det_w10     twin pre-LN pooled cos 0.587 PRc 10.29 rms 31.4
+joint_rank  target_twin_ln           n  4986 cos 0.428 cos->u 0.654 meanE 0.428 PRc  27.32 PRstd  30.96 var/coord 0.5720 top4var 0.006 var_u 0.025  969:-2.7 82:+2.4 810:+2.4 609:-2.3
+joint_rank  target_online_ln         n  4986 cos 0.426 cos->u 0.653 meanE 0.426 PRc  27.97 PRstd  31.60 var/coord 0.5739 top4var 0.006 var_u 0.025  969:-2.6 810:+2.4 82:+2.4 609:-2.2
+joint_rank  twin pre-LN pooled cos 0.428 PRc 15.98 rms 18.4
+joint_tf    target_twin_ln           n  4986 cos 0.618 cos->u 0.786 meanE 0.618 PRc   9.37 PRstd  11.72 var/coord 0.3821 top4var 0.008 var_u 0.043  461:+4.1 35:+4.1 132:+3.2 428:+3.2
+joint_tf    target_online_ln         n  4986 cos 0.600 cos->u 0.775 meanE 0.600 PRc   9.41 PRstd  11.75 var/coord 0.3999 top4var 0.007 var_u 0.044  461:+4.1 35:+4.0 132:+3.2 428:+3.1
+joint_tf    twin pre-LN pooled cos 0.618 PRc 4.50 rms 31.8
+joint_w1    target_twin_ln           n  4986 cos 0.372 cos->u 0.610 meanE 0.372 PRc  22.17 PRstd  25.27 var/coord 0.6281 top4var 0.008 var_u 0.037  295:+1.7 830:-1.7 660:-1.7 314:+1.7
+joint_w1    target_online_ln         n  4986 cos 0.375 cos->u 0.613 meanE 0.376 PRc  22.39 PRstd  25.65 var/coord 0.6244 top4var 0.006 var_u 0.038  314:+1.8 471:+1.8 830:-1.7 560:-1.7
+joint_w1    twin pre-LN pooled cos 0.372 PRc 11.57 rms 19.5
+joint_w10   target_twin_ln           n  4986 cos 0.610 cos->u 0.781 meanE 0.610 PRc   7.99 PRstd  10.45 var/coord 0.3897 top4var 0.014 var_u 0.083  123:+4.0 461:+3.9 534:+3.8 867:-3.8
+joint_w10   target_online_ln         n  4986 cos 0.606 cos->u 0.778 meanE 0.606 PRc   7.66 PRstd  10.20 var/coord 0.3944 top4var 0.014 var_u 0.082  123:+4.0 534:+3.9 461:+3.8 867:-3.8
+joint_w10   twin pre-LN pooled cos 0.610 PRc 4.84 rms 34.9
+plain       target_plain_prelude_ln  n  4986 cos 0.994 cos->u 0.997 meanE 0.994 PRc   7.98 PRstd  10.81 var/coord 0.0058 top4var 0.011 var_u 0.005  194:-11.6 899:-11.1 1018:-10.7 905:+9.6
+== H3 exit cells raw / centred ==
+det_all     wcos +0.948/+0.497 wrank 2.033/2.033 spread 0.226/0.849 xcos +0.928/+0.002 xPR 10.31/10.31
+det_tf      wcos +0.992/+0.889 wrank 2.702/2.702 spread 0.078/0.297 xcos +0.901/+0.015 xPR 5.53/5.53
+det_w1      wcos +0.976/+0.665 wrank 2.292/2.292 spread 0.142/0.597 xcos +0.950/+0.001 xPR 7.82/7.82
+det_w10     wcos +0.945/+0.503 wrank 2.057/2.057 spread 0.218/0.843 xcos +0.935/+0.002 xPR 7.67/7.67
+fan         wcos +0.127/+0.074 wrank 1.866/1.866 spread 1.385/1.524 xcos +0.196/+0.004 xPR 15.24/15.24
+joint_rank  wcos +0.965/+0.960 wrank 2.148/2.148 spread 0.166/0.179 xcos +0.170/+0.008 xPR 11.85/11.85
+joint_tf    wcos +0.988/+0.929 wrank 2.678/2.678 spread 0.099/0.236 xcos +0.796/+0.008 xPR 5.17/5.17
+joint_w1    wcos +0.958/+0.813 wrank 2.450/2.450 spread 0.188/0.408 xcos +0.799/+0.001 xPR 13.16/13.16
+joint_w10   wcos +0.945/+0.589 wrank 1.950/1.950 spread 0.224/0.719 xcos +0.911/+0.001 xPR 7.39/7.39
+== H2 offline picks (per pass) ==
+det_all     t0 ship==zstd 0.978 ==own 0.818 ==perp 0.941 ==u 0.498 | router== ship 0.462 zstd 0.460 own 0.369 perp 0.453 u 0.416 | varshare_u med 0.081 mean 0.144
+det_all     t1 ship==zstd 0.979 ==own 0.836 ==perp 0.950 ==u 0.471 | router== ship 0.432 zstd 0.431 own 0.369 perp 0.425 u 0.370 | varshare_u med 0.042 mean 0.102
+det_all     t2 ship==zstd 0.985 ==own 0.872 ==perp 0.968 ==u 0.501 | router== ship 0.385 zstd 0.386 own 0.356 perp 0.383 u 0.376 | varshare_u med 0.063 mean 0.144
+det_all     t3 ship==zstd 0.985 ==own 0.876 ==perp 0.966 ==u 0.498 | router== ship 0.377 zstd 0.378 own 0.348 perp 0.377 u 0.367 | varshare_u med 0.054 mean 0.126
+det_all     t4 ship==zstd 0.985 ==own 0.881 ==perp 0.967 ==u 0.492 | router== ship 0.383 zstd 0.384 own 0.356 perp 0.379 u 0.374 | varshare_u med 0.053 mean 0.126
+det_all     t5 ship==zstd 0.984 ==own 0.880 ==perp 0.964 ==u 0.497 | router== ship 0.374 zstd 0.375 own 0.349 perp 0.370 u 0.365 | varshare_u med 0.053 mean 0.127
+det_tf      t0 ship==zstd 0.973 ==own 0.621 ==perp 0.949 ==u 0.458 | router== ship 0.409 zstd 0.411 own 0.527 perp 0.400 u 0.361 | varshare_u med 0.075 mean 0.132
+det_tf      t1 ship==zstd 0.965 ==own 0.584 ==perp 0.940 ==u 0.350 | router== ship 0.300 zstd 0.306 own 0.303 perp 0.294 u 0.303 | varshare_u med 0.007 mean 0.046
+det_tf      t2 ship==zstd 0.969 ==own 0.589 ==perp 0.970 ==u 0.431 | router== ship 0.282 zstd 0.282 own 0.528 perp 0.279 u 0.295 | varshare_u med 0.003 mean 0.026
+det_tf      t3 ship==zstd 0.965 ==own 0.626 ==perp 0.974 ==u 0.315 | router== ship 0.300 zstd 0.302 own 0.483 perp 0.301 u 0.247 | varshare_u med 0.002 mean 0.023
+det_tf      t4 ship==zstd 0.957 ==own 0.642 ==perp 0.962 ==u 0.316 | router== ship 0.273 zstd 0.280 own 0.428 perp 0.277 u 0.268 | varshare_u med 0.003 mean 0.024
+det_tf      t5 ship==zstd 0.952 ==own 0.658 ==perp 0.965 ==u 0.305 | router== ship 0.236 zstd 0.241 own 0.368 perp 0.242 u 0.245 | varshare_u med 0.002 mean 0.020
+det_w1      t0 ship==zstd 0.982 ==own 0.817 ==perp 0.945 ==u 0.461 | router== ship 0.506 zstd 0.505 own 0.427 perp 0.494 u 0.375 | varshare_u med 0.028 mean 0.080
+det_w1      t1 ship==zstd 0.980 ==own 0.806 ==perp 0.943 ==u 0.449 | router== ship 0.518 zstd 0.522 own 0.433 perp 0.509 u 0.387 | varshare_u med 0.023 mean 0.070
+det_w1      t2 ship==zstd 0.987 ==own 0.823 ==perp 0.965 ==u 0.465 | router== ship 0.358 zstd 0.358 own 0.339 perp 0.354 u 0.300 | varshare_u med 0.028 mean 0.070
+det_w1      t3 ship==zstd 0.986 ==own 0.823 ==perp 0.967 ==u 0.459 | router== ship 0.347 zstd 0.346 own 0.323 perp 0.343 u 0.294 | varshare_u med 0.027 mean 0.069
+det_w1      t4 ship==zstd 0.986 ==own 0.825 ==perp 0.965 ==u 0.458 | router== ship 0.351 zstd 0.352 own 0.323 perp 0.346 u 0.293 | varshare_u med 0.026 mean 0.068
+det_w1      t5 ship==zstd 0.986 ==own 0.819 ==perp 0.966 ==u 0.453 | router== ship 0.345 zstd 0.345 own 0.322 perp 0.343 u 0.291 | varshare_u med 0.026 mean 0.067
+det_w10     t0 ship==zstd 0.973 ==own 0.857 ==perp 0.929 ==u 0.515 | router== ship 0.453 zstd 0.457 own 0.411 perp 0.440 u 0.414 | varshare_u med 0.103 mean 0.182
+det_w10     t1 ship==zstd 0.978 ==own 0.842 ==perp 0.951 ==u 0.490 | router== ship 0.458 zstd 0.455 own 0.407 perp 0.451 u 0.389 | varshare_u med 0.122 mean 0.202
+det_w10     t2 ship==zstd 0.981 ==own 0.844 ==perp 0.963 ==u 0.509 | router== ship 0.381 zstd 0.380 own 0.343 perp 0.372 u 0.394 | varshare_u med 0.102 mean 0.160
+det_w10     t3 ship==zstd 0.977 ==own 0.848 ==perp 0.961 ==u 0.518 | router== ship 0.385 zstd 0.382 own 0.344 perp 0.376 u 0.409 | varshare_u med 0.093 mean 0.153
+det_w10     t4 ship==zstd 0.981 ==own 0.853 ==perp 0.962 ==u 0.514 | router== ship 0.379 zstd 0.375 own 0.335 perp 0.372 u 0.407 | varshare_u med 0.094 mean 0.152
+det_w10     t5 ship==zstd 0.981 ==own 0.853 ==perp 0.961 ==u 0.510 | router== ship 0.375 zstd 0.372 own 0.339 perp 0.367 u 0.402 | varshare_u med 0.094 mean 0.152
+joint_rank  t0 ship==zstd 0.975 ==own 0.783 ==perp 0.931 ==u 0.363 | router== ship 0.528 zstd 0.534 own 0.476 perp 0.518 u 0.301 | varshare_u med 0.015 mean 0.061
+joint_rank  t1 ship==zstd 0.978 ==own 0.793 ==perp 0.943 ==u 0.376 | router== ship 0.573 zstd 0.584 own 0.541 perp 0.570 u 0.319 | varshare_u med 0.009 mean 0.042
+joint_rank  t2 ship==zstd 0.986 ==own 0.718 ==perp 0.960 ==u 0.433 | router== ship 0.383 zstd 0.383 own 0.355 perp 0.379 u 0.300 | varshare_u med 0.012 mean 0.040
+joint_rank  t3 ship==zstd 0.983 ==own 0.690 ==perp 0.958 ==u 0.424 | router== ship 0.354 zstd 0.352 own 0.290 perp 0.350 u 0.297 | varshare_u med 0.013 mean 0.042
+joint_rank  t4 ship==zstd 0.985 ==own 0.689 ==perp 0.960 ==u 0.419 | router== ship 0.333 zstd 0.332 own 0.259 perp 0.331 u 0.281 | varshare_u med 0.012 mean 0.041
+joint_rank  t5 ship==zstd 0.986 ==own 0.681 ==perp 0.962 ==u 0.426 | router== ship 0.325 zstd 0.326 own 0.242 perp 0.323 u 0.288 | varshare_u med 0.012 mean 0.042
+joint_tf    t0 ship==zstd 0.974 ==own 0.749 ==perp 0.948 ==u 0.426 | router== ship 0.458 zstd 0.457 own 0.421 perp 0.448 u 0.318 | varshare_u med 0.012 mean 0.045
+joint_tf    t1 ship==zstd 0.954 ==own 0.701 ==perp 0.930 ==u 0.385 | router== ship 0.359 zstd 0.364 own 0.359 perp 0.335 u 0.342 | varshare_u med 0.011 mean 0.046
+joint_tf    t2 ship==zstd 0.957 ==own 0.715 ==perp 0.975 ==u 0.401 | router== ship 0.335 zstd 0.337 own 0.457 perp 0.335 u 0.309 | varshare_u med 0.003 mean 0.020
+joint_tf    t3 ship==zstd 0.955 ==own 0.773 ==perp 0.968 ==u 0.333 | router== ship 0.196 zstd 0.194 own 0.250 perp 0.194 u 0.293 | varshare_u med 0.002 mean 0.019
+joint_tf    t4 ship==zstd 0.957 ==own 0.757 ==perp 0.975 ==u 0.324 | router== ship 0.321 zstd 0.314 own 0.467 perp 0.324 u 0.240 | varshare_u med 0.003 mean 0.021
+joint_tf    t5 ship==zstd 0.951 ==own 0.774 ==perp 0.965 ==u 0.305 | router== ship 0.253 zstd 0.243 own 0.331 perp 0.262 u 0.209 | varshare_u med 0.002 mean 0.022
+joint_w1    t0 ship==zstd 0.987 ==own 0.868 ==perp 0.939 ==u 0.502 | router== ship 0.453 zstd 0.454 own 0.421 perp 0.441 u 0.406 | varshare_u med 0.035 mean 0.089
+joint_w1    t1 ship==zstd 0.985 ==own 0.815 ==perp 0.954 ==u 0.469 | router== ship 0.413 zstd 0.413 own 0.363 perp 0.410 u 0.320 | varshare_u med 0.017 mean 0.053
+joint_w1    t2 ship==zstd 0.988 ==own 0.821 ==perp 0.958 ==u 0.474 | router== ship 0.371 zstd 0.371 own 0.322 perp 0.368 u 0.336 | varshare_u med 0.018 mean 0.050
+joint_w1    t3 ship==zstd 0.990 ==own 0.827 ==perp 0.960 ==u 0.475 | router== ship 0.367 zstd 0.367 own 0.321 perp 0.362 u 0.325 | varshare_u med 0.019 mean 0.052
+joint_w1    t4 ship==zstd 0.989 ==own 0.823 ==perp 0.960 ==u 0.478 | router== ship 0.369 zstd 0.370 own 0.332 perp 0.368 u 0.323 | varshare_u med 0.018 mean 0.052
+joint_w1    t5 ship==zstd 0.987 ==own 0.825 ==perp 0.960 ==u 0.482 | router== ship 0.365 zstd 0.367 own 0.332 perp 0.365 u 0.320 | varshare_u med 0.019 mean 0.052
+joint_w10   t0 ship==zstd 0.981 ==own 0.874 ==perp 0.957 ==u 0.489 | router== ship 0.406 zstd 0.404 own 0.363 perp 0.397 u 0.371 | varshare_u med 0.100 mean 0.168
+joint_w10   t1 ship==zstd 0.977 ==own 0.881 ==perp 0.957 ==u 0.525 | router== ship 0.426 zstd 0.422 own 0.387 perp 0.416 u 0.394 | varshare_u med 0.091 mean 0.149
+joint_w10   t2 ship==zstd 0.979 ==own 0.884 ==perp 0.958 ==u 0.547 | router== ship 0.401 zstd 0.400 own 0.386 perp 0.395 u 0.442 | varshare_u med 0.081 mean 0.135
+joint_w10   t3 ship==zstd 0.979 ==own 0.890 ==perp 0.964 ==u 0.545 | router== ship 0.401 zstd 0.399 own 0.387 perp 0.394 u 0.446 | varshare_u med 0.080 mean 0.132
+joint_w10   t4 ship==zstd 0.980 ==own 0.892 ==perp 0.962 ==u 0.546 | router== ship 0.400 zstd 0.397 own 0.382 perp 0.395 u 0.446 | varshare_u med 0.078 mean 0.129
+joint_w10   t5 ship==zstd 0.980 ==own 0.888 ==perp 0.965 ==u 0.538 | router== ship 0.399 zstd 0.397 own 0.383 perp 0.391 u 0.441 | varshare_u med 0.078 mean 0.129
+== H1 ==
+det_all     head_mean_vs_target_mean_rel=0.03653 head_mean_cos_target_mean=0.9993 residual_coherence=0.002691 residual_share_along_u=0.03675 residual_mse=0.2703 target_var_per_coord=0.455 grad_coherence_winner=0.00414 grad_share_along_v=0.007993 grad_rms_winner=9.051e-07
+det_tf      head_mean_vs_target_mean_rel=0.249 head_mean_cos_target_mean=0.9767 residual_coherence=0.1141 residual_share_along_u=0.06841 residual_mse=0.3602 target_var_per_coord=0.3368 grad_coherence_winner=0.1263 grad_share_along_v=0.0142 grad_rms_winner=3.646e-07
+det_w1      head_mean_vs_target_mean_rel=0.03739 head_mean_cos_target_mean=0.9993 residual_coherence=0.002478 residual_share_along_u=0.021 residual_mse=0.3121 target_var_per_coord=0.4468 grad_coherence_winner=0.005587 grad_share_along_v=0.003179 grad_rms_winner=1.588e-06
+det_w10     head_mean_vs_target_mean_rel=0.03622 head_mean_cos_target_mean=0.9993 residual_coherence=0.003028 residual_share_along_u=0.03434 residual_mse=0.2542 target_var_per_coord=0.4133 grad_coherence_winner=0.00319 grad_share_along_v=0.007688 grad_rms_winner=7.352e-07
+joint_rank  head_mean_vs_target_mean_rel=0.04595 head_mean_cos_target_mean=0.9989 residual_coherence=0.002093 residual_share_along_u=0.01948 residual_mse=0.4316 target_var_per_coord=0.572 grad_coherence_winner=0.0005964 grad_share_along_v=0.006747 grad_rms_winner=7.326e-06
+joint_tf    head_mean_vs_target_mean_rel=0.1773 head_mean_cos_target_mean=0.987 residual_coherence=0.04747 residual_share_along_u=0.05053 residual_mse=0.4093 target_var_per_coord=0.3821 grad_coherence_winner=0.1233 grad_share_along_v=0.0231 grad_rms_winner=4.431e-07
+joint_w1    head_mean_vs_target_mean_rel=0.04939 head_mean_cos_target_mean=0.9988 residual_coherence=0.002173 residual_share_along_u=0.02228 residual_mse=0.4174 target_var_per_coord=0.6281 grad_coherence_winner=0.001278 grad_share_along_v=0.006282 grad_rms_winner=2.227e-06
+joint_w10   head_mean_vs_target_mean_rel=0.02925 head_mean_cos_target_mean=0.9996 residual_coherence=0.002673 residual_share_along_u=0.04618 residual_mse=0.1953 target_var_per_coord=0.3897 grad_coherence_winner=0.003672 grad_share_along_v=0.007106 grad_rms_winner=7.63e-07
+== P per pass: geometry / step / probes ==
+det_all     t0 |c|    35.8 cos_v 0.079 along     7.9 perp   34.9 cen   35.3 betw   10.0 within   33.9  ridgeR2 0.139 headR2std 0.055
+det_all     t1 |c|    42.3 cos_v 0.115 along    16.0 perp   39.2 cen   41.5 betw   11.2 within   40.0 step rel 1.564 along_v 0.110 coh 0.033 ridgeR2 0.145 headR2std 0.066
+det_all     t2 |c|   175.6 cos_v 0.933 along   163.7 perp   63.5 cen   69.4 betw   54.1 within   43.4 step rel 3.701 along_v 0.861 coh 0.832 ridgeR2 0.157 headR2std 0.067
+det_all     t3 |c|   243.6 cos_v 0.944 along   229.7 perp   81.0 cen   88.5 betw   69.0 within   55.4 step rel 0.598 along_v 0.582 coh 0.532 ridgeR2 0.159 headR2std 0.066
+det_all     t4 |c|   279.6 cos_v 0.945 along   263.8 perp   92.5 cen  100.8 betw   78.6 within   63.1 step rel 0.403 along_v 0.356 coh 0.306 ridgeR2 0.159 headR2std 0.070
+det_all     t5 |c|   305.7 cos_v 0.944 along   288.3 perp  101.6 cen  110.3 betw   86.3 within   68.7 step rel 0.366 along_v 0.281 coh 0.236 ridgeR2 0.159 headR2std 0.067
+det_tf      t0 |c|    71.5 cos_v 0.071 along    13.6 perp   70.2 cen   69.5 betw   22.6 within   65.7  ridgeR2 0.107 headR2std -0.048
+det_tf      t1 |c|   100.2 cos_v 0.127 along    50.2 perp   86.7 cen   96.1 betw   30.9 within   91.0 step rel 1.446 along_v 0.204 coh 0.071 ridgeR2 0.109 headR2std -0.048
+det_tf      t2 |c|   584.1 cos_v 0.925 along   542.4 perp  216.8 cen  214.8 betw  190.3 within   99.6 step rel 4.021 along_v 0.882 coh 0.878 ridgeR2 0.108 headR2std -0.066
+det_tf      t3 |c|   794.5 cos_v 0.943 along   752.8 perp  253.9 cen  264.4 betw  246.3 within   96.1 step rel 0.392 along_v 0.690 coh 0.687 ridgeR2 0.109 headR2std -0.100
+det_tf      t4 |c|   943.0 cos_v 0.945 along   895.0 perp  297.1 cen  309.3 betw  294.9 within   93.3 step rel 0.226 along_v 0.554 coh 0.559 ridgeR2 0.107 headR2std -0.121
+det_tf      t5 |c|  1070.2 cos_v 0.944 along  1015.3 perp  338.5 cen  346.6 betw  336.3 within   83.7 step rel 0.161 along_v 0.484 coh 0.518 ridgeR2 0.106 headR2std -0.146
+det_w1      t0 |c|    34.0 cos_v 0.032 along     4.0 perp   33.8 cen   34.0 betw    2.7 within   33.9  ridgeR2 0.063 headR2std -0.001
+det_w1      t1 |c|    26.3 cos_v 0.053 along     3.4 perp   26.1 cen   26.3 betw    2.6 within   26.1 step rel 1.276 along_v 0.011 coh 0.010 ridgeR2 0.077 headR2std 0.012
+det_w1      t2 |c|   125.9 cos_v 0.957 along   121.1 perp   34.4 cen   40.1 betw   33.8 within   21.6 step rel 4.719 along_v 0.927 coh 0.899 ridgeR2 0.091 headR2std 0.025
+det_w1      t3 |c|   168.7 cos_v 0.964 along   163.2 perp   42.7 cen   49.2 betw   42.6 within   24.6 step rel 0.362 along_v 0.581 coh 0.521 ridgeR2 0.091 headR2std 0.026
+det_w1      t4 |c|   193.1 cos_v 0.965 along   187.0 perp   48.5 cen   55.2 betw   48.0 within   27.2 step rel 0.230 along_v 0.305 coh 0.254 ridgeR2 0.092 headR2std 0.024
+det_w1      t5 |c|   216.1 cos_v 0.966 along   209.3 perp   53.8 cen   60.7 betw   52.8 within   30.0 step rel 0.217 along_v 0.261 coh 0.210 ridgeR2 0.092 headR2std 0.023
+det_w10     t0 |c|    37.5 cos_v 0.073 along     8.9 perp   36.4 cen   37.1 betw    9.6 within   35.8  ridgeR2 0.111 headR2std 0.034
+det_w10     t1 |c|    50.4 cos_v 0.104 along    18.2 perp   47.0 cen   49.6 betw   15.5 within   47.1 step rel 1.655 along_v 0.116 coh 0.029 ridgeR2 0.125 headR2std 0.046
+det_w10     t2 |c|   189.4 cos_v 0.935 along   177.6 perp   65.6 cen   72.3 betw   55.8 within   45.9 step rel 3.662 along_v 0.858 coh 0.835 ridgeR2 0.132 headR2std 0.061
+det_w10     t3 |c|   273.3 cos_v 0.945 along   258.7 perp   88.1 cen   96.3 betw   76.0 within   59.1 step rel 0.623 along_v 0.592 coh 0.574 ridgeR2 0.134 headR2std 0.064
+det_w10     t4 |c|   312.5 cos_v 0.947 along   296.3 perp   99.4 cen  108.3 betw   84.8 within   67.3 step rel 0.371 along_v 0.280 coh 0.287 ridgeR2 0.134 headR2std 0.059
+det_w10     t5 |c|   335.7 cos_v 0.947 along   318.3 perp  106.9 cen  116.0 betw   91.0 within   71.9 step rel 0.325 along_v 0.168 coh 0.199 ridgeR2 0.133 headR2std 0.058
+fan         t1 |c|    32.8 cos_v 0.026 along     2.3 perp   32.7 cen   32.8 betw    4.5 within   32.5  ridgeR2 - headR2std -
+fan         t2 |c|    36.5 cos_v 0.035 along     3.2 perp   36.4 cen   36.4 betw    6.0 within   35.9 step rel 0.246 along_v 0.020 coh 0.016 ridgeR2 - headR2std -
+fan         t3 |c|    43.2 cos_v 0.147 along    11.1 perp   41.7 cen   42.6 betw   15.6 within   39.6 step rel 0.556 along_v 0.207 coh 0.079 ridgeR2 - headR2std -
+fan         t4 |c|    54.5 cos_v 0.204 along    19.0 perp   51.0 cen   53.1 betw   25.4 within   46.7 step rel 0.422 along_v 0.197 coh 0.078 ridgeR2 - headR2std -
+fan         t5 |c|    65.8 cos_v 0.235 along    25.3 perp   60.7 cen   63.8 betw   33.4 within   54.4 step rel 0.277 along_v 0.180 coh 0.074 ridgeR2 - headR2std -
+fan         t6 |c|    76.3 cos_v 0.254 along    30.6 perp   69.8 cen   73.8 betw   40.3 within   61.8 step rel 0.197 along_v 0.169 coh 0.072 ridgeR2 - headR2std -
+joint_rank  t0 |c|    30.6 cos_v 0.029 along     1.7 perp   30.5 cen   30.5 betw    3.0 within   30.4  ridgeR2 0.070 headR2std 0.012
+joint_rank  t1 |c|    20.4 cos_v 0.047 along     1.7 perp   20.4 cen   20.4 betw    3.2 within   20.1 step rel 1.144 along_v 0.004 coh 0.010 ridgeR2 0.094 headR2std 0.035
+joint_rank  t2 |c|    42.2 cos_v 0.369 along    17.2 perp   38.5 cen   39.2 betw   36.8 within   13.3 step rel 1.333 along_v 0.210 coh 0.166 ridgeR2 0.093 headR2std 0.058
+joint_rank  t3 |c|    60.4 cos_v 0.400 along    27.0 perp   54.0 cen   55.6 betw   54.4 within   11.5 step rel 0.549 along_v 0.147 coh 0.099 ridgeR2 0.091 headR2std 0.064
+joint_rank  t4 |c|    71.4 cos_v 0.402 along    32.2 perp   63.8 cen   65.9 betw   65.0 within   10.9 step rel 0.298 along_v 0.068 coh 0.052 ridgeR2 0.101 headR2std 0.063
+joint_rank  t5 |c|    79.4 cos_v 0.402 along    35.7 perp   70.9 cen   73.5 betw   72.7 within   10.6 step rel 0.231 along_v 0.041 coh 0.032 ridgeR2 0.101 headR2std 0.061
+joint_tf    t0 |c|    72.8 cos_v 0.058 along    15.2 perp   71.2 cen   71.0 betw   22.3 within   67.4  ridgeR2 0.151 headR2std -0.048
+joint_tf    t1 |c|   109.1 cos_v 0.101 along    51.8 perp   96.1 cen  105.7 betw   38.8 within   98.3 step rel 1.481 along_v 0.177 coh 0.041 ridgeR2 0.156 headR2std -0.041
+joint_tf    t2 |c|   526.0 cos_v 0.878 along   463.0 perp  249.7 cen  251.9 betw  222.0 within  118.9 step rel 3.360 along_v 0.814 coh 0.811 ridgeR2 0.158 headR2std -0.034
+joint_tf    t3 |c|   748.7 cos_v 0.899 along   677.0 perp  319.6 cen  333.2 betw  314.5 within  110.1 step rel 0.427 along_v 0.564 coh 0.599 ridgeR2 0.158 headR2std -0.110
+joint_tf    t4 |c|   909.1 cos_v 0.889 along   813.3 perp  406.2 cen  425.5 betw  410.4 within  112.2 step rel 0.258 along_v 0.454 coh 0.475 ridgeR2 0.158 headR2std -0.129
+joint_tf    t5 |c|  1016.2 cos_v 0.883 along   904.7 perp  462.6 cen  478.6 betw  468.3 within   99.0 step rel 0.199 along_v 0.411 coh 0.455 ridgeR2 0.156 headR2std -0.163
+joint_w1    t0 |c|    31.4 cos_v -0.008 along     3.2 perp   31.2 cen   31.3 betw    3.9 within   31.1  ridgeR2 0.090 headR2std 0.037
+joint_w1    t1 |c|    22.8 cos_v 0.036 along     3.5 perp   22.6 cen   22.8 betw    4.1 within   22.4 step rel 1.197 along_v 0.017 coh 0.010 ridgeR2 0.105 headR2std 0.041
+joint_w1    t2 |c|   100.9 cos_v 0.871 along    88.8 perp   48.1 cen   51.7 betw   45.3 within   24.9 step rel 4.039 along_v 0.786 coh 0.748 ridgeR2 0.121 headR2std 0.071
+joint_w1    t3 |c|   141.7 cos_v 0.880 along   126.0 perp   64.8 cen   70.2 betw   64.2 within   28.3 step rel 0.468 along_v 0.459 coh 0.382 ridgeR2 0.123 headR2std 0.072
+joint_w1    t4 |c|   161.5 cos_v 0.881 along   143.7 perp   73.6 cen   79.6 betw   73.8 within   30.0 step rel 0.287 along_v 0.182 coh 0.129 ridgeR2 0.124 headR2std 0.074
+joint_w1    t5 |c|   175.4 cos_v 0.879 along   155.8 perp   80.5 cen   87.4 betw   81.4 within   31.8 step rel 0.261 along_v 0.122 coh 0.091 ridgeR2 0.123 headR2std 0.072
+joint_w10   t0 |c|    58.2 cos_v 0.043 along    20.0 perp   54.6 cen   57.6 betw   17.4 within   54.9  ridgeR2 0.147 headR2std 0.037
+joint_w10   t1 |c|    73.2 cos_v 0.088 along    30.1 perp   66.8 cen   72.1 betw   21.1 within   69.0 step rel 1.744 along_v 0.191 coh 0.014 ridgeR2 0.148 headR2std 0.041
+joint_w10   t2 |c|   223.4 cos_v 0.927 along   208.5 perp   80.5 cen   88.6 betw   71.7 within   52.0 step rel 3.100 along_v 0.856 coh 0.814 ridgeR2 0.162 headR2std 0.063
+joint_w10   t3 |c|   281.4 cos_v 0.935 along   264.4 perp   96.5 cen  107.8 betw   87.9 within   62.5 step rel 0.457 along_v 0.416 coh 0.384 ridgeR2 0.165 headR2std 0.066
+joint_w10   t4 |c|   312.9 cos_v 0.935 along   294.2 perp  106.7 cen  119.4 betw   97.9 within   68.4 step rel 0.353 along_v 0.249 coh 0.245 ridgeR2 0.164 headR2std 0.062
+joint_w10   t5 |c|   335.7 cos_v 0.934 along   315.2 perp  115.5 cen  128.6 betw  106.1 within   72.6 step rel 0.331 along_v 0.196 coh 0.204 ridgeR2 0.164 headR2std 0.063
+== H2 follow CE ==
+det_w1: rows 96 tokens 101877 ce router=4.3423 teacher_ship=4.3445 teacher_zstd=4.3445 teacher_own=4.3449 teacher_perp=4.3447
+   delta_vs_router: teacher_ship +0.0022 [+0.0010,+0.0034]  teacher_zstd +0.0022 [+0.0011,+0.0034]  teacher_own +0.0025 [+0.0015,+0.0036]  teacher_perp +0.0024 [+0.0012,+0.0035]
+   delta_vs_teacher_ship: teacher_zstd +0.0000 [-0.0002,+0.0003]  teacher_own +0.0004 [-0.0004,+0.0012]  teacher_perp +0.0002 [-0.0001,+0.0005]
+joint_rank: rows 96 tokens 101877 ce router=4.2801 teacher_ship=4.2849 teacher_zstd=4.2850 teacher_own=4.2856 teacher_perp=4.2851
+   delta_vs_router: teacher_ship +0.0048 [+0.0039,+0.0056]  teacher_zstd +0.0049 [+0.0040,+0.0057]  teacher_own +0.0055 [+0.0046,+0.0064]  teacher_perp +0.0050 [+0.0040,+0.0059]
+   delta_vs_teacher_ship: teacher_zstd +0.0001 [-0.0001,+0.0003]  teacher_own +0.0008 [-0.0001,+0.0016]  teacher_perp +0.0002 [-0.0001,+0.0006]
+== v-ablation of the written cells (coda CE, paired, 96 rows) ==
+det_all     K1 ce 4.4222 cos_v 0.224 a_bar     6.3 amp_std    5.2 | mean +0.0001 [-0.0001,+0.0002] zero +0.0003 [+0.0000,+0.0006]
+det_all     K2 ce 4.4108 cos_v 0.249 a_bar     8.3 amp_std    9.1 | mean +0.0002 [+0.0001,+0.0003] zero +0.0001 [-0.0001,+0.0002] | K-K1 ship -0.0114 [-0.0131,-0.0096] mean -0.0113 [-0.0131,-0.0095] zero -0.0117 [-0.0135,-0.0098]
+det_all     K3 ce 4.4073 cos_v 0.879 a_bar   135.6 amp_std   62.1 | mean +0.0001 [-0.0001,+0.0002] zero +0.0028 [+0.0020,+0.0036] | K-K1 ship -0.0148 [-0.0168,-0.0128] mean -0.0149 [-0.0168,-0.0128] zero -0.0124 [-0.0145,-0.0100]
+det_all     K4 ce 4.4063 cos_v 0.887 a_bar   189.7 amp_std   87.5 | mean -0.0000 [-0.0002,+0.0002] zero +0.0041 [+0.0030,+0.0051] | K-K1 ship -0.0159 [-0.0178,-0.0138] mean -0.0160 [-0.0179,-0.0140] zero -0.0121 [-0.0143,-0.0098]
+det_all     K5 ce 4.4063 cos_v 0.887 a_bar   217.8 amp_std  100.8 | mean +0.0000 [-0.0002,+0.0002] zero +0.0053 [+0.0041,+0.0064] | K-K1 ship -0.0158 [-0.0178,-0.0138] mean -0.0159 [-0.0179,-0.0139] zero -0.0109 [-0.0131,-0.0086]
+det_all     K6 ce 4.4063 cos_v 0.887 a_bar   237.8 amp_std  110.5 | mean +0.0001 [-0.0001,+0.0003] zero +0.0064 [+0.0051,+0.0077] | K-K1 ship -0.0159 [-0.0179,-0.0138] mean -0.0158 [-0.0178,-0.0138] zero -0.0098 [-0.0120,-0.0075]
+det_w1      K1 ce 4.3750 cos_v 0.189 a_bar     4.3 amp_std    3.1 | mean +0.0004 [+0.0001,+0.0007] zero +0.0037 [+0.0030,+0.0044]
+det_w1      K2 ce 4.3602 cos_v 0.216 a_bar     3.6 amp_std    2.6 | mean +0.0002 [-0.0000,+0.0003] zero +0.0006 [+0.0001,+0.0010] | K-K1 ship -0.0147 [-0.0165,-0.0131] mean -0.0150 [-0.0167,-0.0134] zero -0.0179 [-0.0196,-0.0161]
+det_w1      K3 ce 4.3427 cos_v 0.887 a_bar   105.9 amp_std   50.4 | mean -0.0002 [-0.0006,+0.0002] zero +0.0123 [+0.0103,+0.0146] | K-K1 ship -0.0323 [-0.0355,-0.0294] mean -0.0330 [-0.0362,-0.0299] zero -0.0237 [-0.0272,-0.0204]
+det_w1      K4 ce 4.3419 cos_v 0.889 a_bar   139.1 amp_std   65.8 | mean -0.0001 [-0.0005,+0.0003] zero +0.0113 [+0.0093,+0.0135] | K-K1 ship -0.0331 [-0.0364,-0.0301] mean -0.0337 [-0.0371,-0.0306] zero -0.0255 [-0.0293,-0.0220]
+det_w1      K5 ce 4.3421 cos_v 0.888 a_bar   158.4 amp_std   74.8 | mean +0.0001 [-0.0003,+0.0005] zero +0.0115 [+0.0097,+0.0137] | K-K1 ship -0.0328 [-0.0362,-0.0298] mean -0.0332 [-0.0367,-0.0300] zero -0.0250 [-0.0287,-0.0214]
+det_w1      K6 ce 4.3423 cos_v 0.889 a_bar   177.6 amp_std   83.7 | mean +0.0001 [-0.0003,+0.0006] zero +0.0117 [+0.0096,+0.0140] | K-K1 ship -0.0326 [-0.0360,-0.0295] mean -0.0329 [-0.0365,-0.0298] zero -0.0246 [-0.0284,-0.0209]
+det_w10     K1 ce 4.3953 cos_v 0.421 a_bar    12.5 amp_std    6.1 | mean -0.0001 [-0.0002,+0.0000] zero +0.0001 [-0.0001,+0.0002]
+det_w10     K2 ce 4.3917 cos_v 0.623 a_bar    24.3 amp_std   16.0 | mean +0.0003 [+0.0000,+0.0006] zero +0.0013 [+0.0009,+0.0016] | K-K1 ship -0.0036 [-0.0049,-0.0022] mean -0.0032 [-0.0046,-0.0018] zero -0.0024 [-0.0038,-0.0010]
+det_w10     K3 ce 4.3866 cos_v 0.887 a_bar   144.7 amp_std   66.4 | mean +0.0002 [-0.0000,+0.0003] zero +0.0048 [+0.0038,+0.0058] | K-K1 ship -0.0087 [-0.0104,-0.0072] mean -0.0085 [-0.0103,-0.0069] zero -0.0040 [-0.0058,-0.0023]
+det_w10     K4 ce 4.3859 cos_v 0.893 a_bar   208.4 amp_std   96.2 | mean +0.0001 [-0.0001,+0.0003] zero +0.0065 [+0.0052,+0.0078] | K-K1 ship -0.0095 [-0.0114,-0.0077] mean -0.0093 [-0.0112,-0.0074] zero -0.0030 [-0.0051,-0.0010]
+det_w10     K5 ce 4.3858 cos_v 0.894 a_bar   238.4 amp_std  110.0 | mean +0.0001 [-0.0001,+0.0002] zero +0.0070 [+0.0056,+0.0083] | K-K1 ship -0.0096 [-0.0115,-0.0078] mean -0.0094 [-0.0114,-0.0076] zero -0.0026 [-0.0048,-0.0006]
+det_w10     K6 ce 4.3859 cos_v 0.894 a_bar   255.3 amp_std  118.0 | mean +0.0001 [-0.0001,+0.0003] zero +0.0069 [+0.0056,+0.0083] | K-K1 ship -0.0094 [-0.0114,-0.0076] mean -0.0092 [-0.0112,-0.0074] zero -0.0026 [-0.0048,-0.0005]
+fan         K1 ce 4.2408 cos_v 0.124 a_bar     1.4 amp_std    1.5 | mean +0.0001 [-0.0001,+0.0002] zero -0.0001 [-0.0003,+0.0001]
+fan         K2 ce 4.2385 cos_v 0.114 a_bar     1.8 amp_std    2.1 | mean -0.0000 [-0.0001,+0.0001] zero -0.0001 [-0.0003,+0.0000] | K-K1 ship -0.0023 [-0.0028,-0.0018] mean -0.0024 [-0.0029,-0.0019] zero -0.0024 [-0.0029,-0.0018]
+fan         K3 ce 4.2371 cos_v 0.110 a_bar     5.7 amp_std    8.3 | mean +0.0001 [-0.0001,+0.0003] zero +0.0012 [+0.0007,+0.0018] | K-K1 ship -0.0037 [-0.0044,-0.0031] mean -0.0037 [-0.0044,-0.0029] zero -0.0024 [-0.0033,-0.0015]
+fan         K4 ce 4.2366 cos_v 0.144 a_bar     9.7 amp_std   14.4 | mean +0.0002 [-0.0001,+0.0004] zero +0.0031 [+0.0023,+0.0039] | K-K1 ship -0.0042 [-0.0049,-0.0035] mean -0.0041 [-0.0048,-0.0033] zero -0.0010 [-0.0021,+0.0001]
+fan         K5 ce 4.2365 cos_v 0.166 a_bar    13.0 amp_std   19.3 | mean +0.0004 [+0.0001,+0.0007] zero +0.0045 [+0.0036,+0.0055] | K-K1 ship -0.0043 [-0.0051,-0.0036] mean -0.0040 [-0.0049,-0.0032] zero +0.0003 [-0.0010,+0.0016]
+fan         K6 ce 4.2365 cos_v 0.180 a_bar    15.7 amp_std   23.5 | mean +0.0006 [+0.0003,+0.0009] zero +0.0056 [+0.0045,+0.0067] | K-K1 ship -0.0044 [-0.0053,-0.0036] mean -0.0038 [-0.0048,-0.0030] zero +0.0013 [-0.0001,+0.0027]
+joint_rank  K1 ce 4.2853 cos_v 0.175 a_bar     3.7 amp_std    2.7 | mean +0.0001 [-0.0001,+0.0004] zero +0.0001 [-0.0003,+0.0006]
+joint_rank  K2 ce 4.2829 cos_v 0.214 a_bar     3.3 amp_std    1.8 | mean +0.0004 [+0.0002,+0.0007] zero +0.0013 [+0.0007,+0.0019] | K-K1 ship -0.0025 [-0.0031,-0.0019] mean -0.0022 [-0.0028,-0.0016] zero -0.0013 [-0.0020,-0.0006]
+joint_rank  K3 ce 4.2803 cos_v 0.394 a_bar    13.8 amp_std    9.3 | mean +0.0019 [+0.0013,+0.0025] zero +0.0144 [+0.0127,+0.0162] | K-K1 ship -0.0051 [-0.0061,-0.0040] mean -0.0033 [-0.0045,-0.0022] zero +0.0092 [+0.0075,+0.0112]
+joint_rank  K4 ce 4.2797 cos_v 0.412 a_bar    20.3 amp_std   15.1 | mean +0.0037 [+0.0029,+0.0046] zero +0.0239 [+0.0219,+0.0261] | K-K1 ship -0.0057 [-0.0068,-0.0047] mean -0.0022 [-0.0034,-0.0009] zero +0.0181 [+0.0160,+0.0204]
+joint_rank  K5 ce 4.2800 cos_v 0.415 a_bar    23.5 amp_std   18.6 | mean +0.0047 [+0.0038,+0.0057] zero +0.0262 [+0.0241,+0.0283] | K-K1 ship -0.0054 [-0.0065,-0.0042] mean -0.0008 [-0.0020,+0.0006] zero +0.0207 [+0.0183,+0.0231]
+joint_rank  K6 ce 4.2801 cos_v 0.416 a_bar    25.7 amp_std   21.3 | mean +0.0057 [+0.0047,+0.0068] zero +0.0270 [+0.0249,+0.0291] | K-K1 ship -0.0052 [-0.0063,-0.0041] mean +0.0003 [-0.0011,+0.0019] zero +0.0216 [+0.0192,+0.0240]
+joint_w1    K1 ce 4.2940 cos_v 0.164 a_bar     3.9 amp_std    2.6 | mean +0.0002 [+0.0001,+0.0004] zero +0.0002 [-0.0002,+0.0005]
+joint_w1    K2 ce 4.2892 cos_v 0.243 a_bar     4.0 amp_std    3.9 | mean +0.0001 [+0.0000,+0.0003] zero +0.0002 [-0.0001,+0.0005] | K-K1 ship -0.0048 [-0.0058,-0.0036] mean -0.0049 [-0.0059,-0.0037] zero -0.0047 [-0.0058,-0.0035]
+joint_w1    K3 ce 4.2852 cos_v 0.871 a_bar    78.0 amp_std   37.1 | mean +0.0001 [-0.0002,+0.0004] zero +0.0095 [+0.0079,+0.0110] | K-K1 ship -0.0088 [-0.0104,-0.0073] mean -0.0090 [-0.0105,-0.0074] zero +0.0005 [-0.0014,+0.0025]
+joint_w1    K4 ce 4.2846 cos_v 0.875 a_bar   107.3 amp_std   52.4 | mean +0.0003 [-0.0000,+0.0006] zero +0.0126 [+0.0110,+0.0141] | K-K1 ship -0.0094 [-0.0110,-0.0078] mean -0.0094 [-0.0110,-0.0077] zero +0.0030 [+0.0010,+0.0050]
+joint_w1    K5 ce 4.2841 cos_v 0.876 a_bar   121.1 amp_std   59.4 | mean +0.0003 [-0.0000,+0.0006] zero +0.0136 [+0.0120,+0.0151] | K-K1 ship -0.0099 [-0.0115,-0.0082] mean -0.0098 [-0.0115,-0.0081] zero +0.0036 [+0.0015,+0.0057]
+joint_w1    K6 ce 4.2843 cos_v 0.875 a_bar   130.4 amp_std   64.8 | mean +0.0005 [+0.0001,+0.0008] zero +0.0140 [+0.0124,+0.0155] | K-K1 ship -0.0097 [-0.0113,-0.0080] mean -0.0095 [-0.0112,-0.0077] zero +0.0041 [+0.0020,+0.0062]
+joint_w10   K1 ce 4.3961 cos_v 0.273 a_bar    11.7 amp_std   15.1 | mean +0.0008 [+0.0003,+0.0013] zero +0.0003 [+0.0001,+0.0006]
+joint_w10   K2 ce 4.3915 cos_v 0.451 a_bar    26.4 amp_std   29.4 | mean +0.0003 [+0.0001,+0.0005] zero +0.0004 [+0.0000,+0.0008] | K-K1 ship -0.0046 [-0.0056,-0.0037] mean -0.0051 [-0.0064,-0.0039] zero -0.0046 [-0.0056,-0.0036]
+joint_w10   K3 ce 4.3898 cos_v 0.902 a_bar   172.5 amp_std   76.9 | mean +0.0001 [-0.0001,+0.0002] zero +0.0056 [+0.0046,+0.0066] | K-K1 ship -0.0063 [-0.0072,-0.0053] mean -0.0070 [-0.0082,-0.0059] zero -0.0011 [-0.0025,+0.0003]
+joint_w10   K4 ce 4.3894 cos_v 0.909 a_bar   213.0 amp_std   97.1 | mean +0.0002 [+0.0001,+0.0004] zero +0.0074 [+0.0063,+0.0086] | K-K1 ship -0.0067 [-0.0077,-0.0056] mean -0.0072 [-0.0083,-0.0061] zero +0.0004 [-0.0011,+0.0019]
+joint_w10   K5 ce 4.3894 cos_v 0.909 a_bar   235.2 amp_std  108.2 | mean +0.0002 [-0.0000,+0.0003] zero +0.0080 [+0.0067,+0.0093] | K-K1 ship -0.0067 [-0.0077,-0.0057] mean -0.0073 [-0.0085,-0.0062] zero +0.0010 [-0.0007,+0.0026]
+joint_w10   K6 ce 4.3896 cos_v 0.908 a_bar   252.1 amp_std  116.5 | mean +0.0001 [-0.0001,+0.0003] zero +0.0086 [+0.0072,+0.0099] | K-K1 ship -0.0065 [-0.0075,-0.0054] mean -0.0072 [-0.0083,-0.0060] zero +0.0017 [-0.0000,+0.0035]
+det_w10 (follow): ce router=4.3859 teacher_ship=4.3893 teacher_zstd=4.3896 teacher_own=4.3900 teacher_perp=4.3895
+   delta_vs_router: teacher_ship +0.0034 [+0.0024,+0.0044]  teacher_zstd +0.0037 [+0.0026,+0.0046]  teacher_own +0.0041 [+0.0030,+0.0051]  teacher_perp +0.0036 [+0.0026,+0.0046]
+   delta_vs_teacher_ship: teacher_zstd +0.0003 [-0.0000,+0.0005]  teacher_own +0.0006 [-0.0000,+0.0014]  teacher_perp +0.0002 [-0.0002,+0.0006]
+joint_w1 (follow): ce router=4.2843 teacher_ship=4.2894 teacher_zstd=4.2896 teacher_own=4.2917 teacher_perp=4.2895
+   delta_vs_router: teacher_ship +0.0051 [+0.0039,+0.0064]  teacher_zstd +0.0053 [+0.0040,+0.0065]  teacher_own +0.0074 [+0.0060,+0.0089]  teacher_perp +0.0052 [+0.0040,+0.0064]
+   delta_vs_teacher_ship: teacher_zstd +0.0001 [-0.0001,+0.0004]  teacher_own +0.0023 [+0.0015,+0.0031]  teacher_perp +0.0001 [-0.0002,+0.0004]
