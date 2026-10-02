@@ -49,3 +49,17 @@ not by itself a sign of a fake contribution, and the lever is elsewhere.
 cache in bf16 with the `~/.venvs/huginn` env, run the recurrence with the state captured
 after each iteration, compute the readings above per k, and the two interventions (rescale,
 v removal) at k = 4, 8, 16 and 32 with a paired bootstrap over rows. GPU under the gpu lock.
+
+**Method amendment, 2026-10-02 15:49 CDT, before any GPU run.** Reading Huginn's
+code (`raven_modeling_minimal.py`, `SandwichBlock.forward`): every block ends in
+`x = norm_4(mlp(norm_3(x)) + x)`, so each token's recurrent state leaves every block
+RMS-normalised (times norm_4's learned gain), and the exit applies `ln_f` per token
+before the coda. Two consequences, recorded before the result: G-1 holds by construction
+(the CPU smoke reads norm 76.37 at k = 1..4), and G-4 holds by construction (a per-token
+rescale is undone by `ln_f`; the CPU smoke reads exactly 0.0). Neither is evidence about
+what the loop learned. They are kept in the output and scored as "architectural". The
+Huginn finding they carry is structural: an earning loop whose state CANNOT use per-token
+magnitude. The readings that test learned behaviour are G-2, G-3, G-5 and G-6. Probe
+built at `lab/huginn/huginn_loop_geometry.py`; CPU faithfulness diff 0.0. Run with
+`/home/wolfe/11-DiffusionBlocks-Testing/.venv/bin/python` (the `~/.venvs/huginn`
+transformers 4.48 cannot load it).
