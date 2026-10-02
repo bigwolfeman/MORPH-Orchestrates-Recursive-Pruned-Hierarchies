@@ -1,0 +1,24 @@
+[10-02 01:50:14] LSELV2 QUEUED full read then latent weight 1 at dba8592
+[10-02 01:50:14] LSELV2 runner started
+[10-02 01:50:17] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all START at dba8592 Latent-selected loop: tul.fan_lsel_read, and two rou cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_all steps=5000
+[10-02 03:03:47] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all TRAIN exit=0 tok/s=9665 peak=15.66GB Final val_loss=4.6496  ppl=104.55  fan/l
+[10-02 03:03:47] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all TRIPWIRE HEALTHY last=4999 max=32.3@220
+[10-02 03:09:12] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all ce_tokens K1-K6: +0.0170 [+0.0161, +0.0180] over 480 rows
+[10-02 03:09:12] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all GAP exit=0  ce_6_minus_ruler_ce6: +0.4220 [+0.4063, +0.4397]
+[10-02 03:12:24] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all SCORE exit=1 
+[10-02 03:12:24] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all PAIR exit=1 
+[10-02 03:13:24] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all zero TOTAL +0.1152 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all shuffle TOTAL +0.1261 
+[10-02 03:13:24] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all DONE steps=5000
+[10-02 03:13:26] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 START at dba8592 Latent-selected loop: tul.fan_lsel_read, and two rou cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1 steps=5000
+[10-02 04:24:45] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 TRAIN exit=0 tok/s=9506 peak=15.69GB Final val_loss=4.5821  ppl=97.72  fan/ls
+[10-02 04:24:46] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 TRIPWIRE HEALTHY last=4999 max=52.5@239
+[10-02 04:30:08] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 ce_tokens K1-K6: +0.0333 [+0.0318, +0.0347] over 480 rows
+[10-02 04:30:08] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 GAP exit=0  ce_6_minus_ruler_ce6: +0.3661 [+0.3498, +0.3836]
+[10-02 04:33:31] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 SCORE exit=1 
+[10-02 04:33:31] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 PAIR exit=1 
+[10-02 04:34:31] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 zero TOTAL +0.1021 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 shuffle TOTAL +0.1084 
+[10-02 04:34:31] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1 DONE steps=5000
+[10-02 04:42:32] LEDGER lsel-det-rf-all exit=0  shipped ce=4.5020 (40s)
+[10-02 04:50:25] LEDGER lsel-det-rf-lam1 exit=0  shipped ce=4.4470 (41s)
+[10-02 04:50:25] V2-EVAL start
+[10-02 05:15:39] V2-EVAL exit=0

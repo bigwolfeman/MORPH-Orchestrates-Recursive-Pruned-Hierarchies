@@ -1,0 +1,1369 @@
+{
+  "arms": {
+    "plain": {
+      "step": 5000,
+      "config": "notul_panel_norm_match_s1r",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/plain-panel-nm-ctrl-s1r/step_5000.pt",
+      "tul": false,
+      "greedy": {
+        "seq_rep_1": 0.855712890625,
+        "seq_rep_2": 0.8211122047244095,
+        "seq_rep_3": 0.8055555555555556,
+        "seq_rep_4": 0.79375,
+        "rep_l": 0.855712890625,
+        "distinct_1": 0.050537109375,
+        "distinct_2": 0.10826771653543307,
+        "distinct_4": 0.18325,
+        "seq_rep_4_ci": [
+          0.76024375,
+          0.82775
+        ],
+        "distinct_4_ci": [
+          0.095725,
+          0.14477499999999996
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 0.969961978495121,
+        "gen_ppl": 2.6378441626427485,
+        "gen_ppl_nll_ci": [
+          0.8687466414179653,
+          1.0719409090932457
+        ],
+        "wall_s": 37.513662338256836,
+        "wall_s_per_row": 1.1723019480705261,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies and the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to remedy the government's ability to re"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government's decision to be a \"dumbing\" of the government's decision to be a \"dumbing\" of the government's decision to be a \"dumbing\" of the government's decision to be a \"dumbing\" of the government's decision to be a \"dumbing\" of the government's decision to be a \"dumbing\" of the government's decision to be a \"dumbing\" of the government's decision to be a \"dumbing\" of the government's decision to be a \"dumbing\" of the government's decision to be a \"dumb"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "ictoria, where the 2014 elections was not aimed at the U.S. District Court.\n\nThe 2014 elections was not aimed at the U.S. District Court.\n\nThe 2014 elections was not aimed at the U.S. District Court.\n\nThe 2014 elections was not aimed at the U.S. District Court.\n\nThe 2014 elections was not aimed at the U.S. District Court.\n\nThe 20"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.240478515625,
+        "seq_rep_2": 0.031496062992125984,
+        "seq_rep_3": 0.007192460317460323,
+        "seq_rep_4": 0.0020000000000000018,
+        "rep_l": 0.240478515625,
+        "distinct_1": 0.394775390625,
+        "distinct_2": 0.8607283464566929,
+        "distinct_4": 0.99175,
+        "seq_rep_4_ci": [
+          0.0002500000000000002,
+          0.004750000000000004
+        ],
+        "distinct_4_ci": [
+          0.5283687499999999,
+          0.74375
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.03606191277504,
+        "gen_ppl": 56.60299577950904,
+        "gen_ppl_nll_ci": [
+          3.8871565809473396,
+          4.178526825271547
+        ],
+        "wall_s": 36.39783692359924,
+        "wall_s_per_row": 1.1374324038624763,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies and disagreement to achieve them. The deer charge is a fair deal where there are the benefits of interference with perverse tensions, and applied violence by realities of corruption and military acceptance, but of Toby Energy to nothing more than would not have an Labour or the subject of risk.\n\n\"The response to substantial evidence suggests that it isn't just about no more,\" said Wilson. \"The perceived weight of the conscience of war is still on housing basis. Now there is no authority to escape. It's never going to be used to be wrong on America,"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": " pledged to defend law enforcement measures by climate violence and with a temporary privacy measurement of refuge and media assistance that would even given accommodation, unperform approval from those would be brought to the demonstrative action.\"\n\nIn agreement with taxefonents and land lengths there would have been a part of economic consideration for the Federal frontier\u2019s efforts, but encourages users to provide pre-order costs all of their taxes. Tea couples believe it could be useful for demonstrating by the company to translate into pollution if they approached candidates.\n\n\"Speaking"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, western states and the United Kingdom, which led to several the lasting decades-olds in America\n\nTys, deeply, tens of thousands of people (the same day of the year yet), buying online exchanges over the summer.\n\nIn 2015, officials said the planned profits of U.S. pollutioned to Hurricane Katrina and the Mayor General later it said that only six years beyond business and the outcomes would have been lower than one.\n\nA judge on the U.S. crisis"
+          }
+        ]
+      }
+    },
+    "a2": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.75048828125,
+        "seq_rep_2": 0.6232775590551181,
+        "seq_rep_3": 0.5560515873015873,
+        "seq_rep_4": 0.51,
+        "rep_l": 0.75048828125,
+        "distinct_1": 0.062255859375,
+        "distinct_2": 0.16707677165354332,
+        "distinct_4": 0.346,
+        "seq_rep_4_ci": [
+          0.44373124999999997,
+          0.5785
+        ],
+        "distinct_4_ci": [
+          0.2052375,
+          0.2839312499999999
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.5178259890526533,
+        "gen_ppl": 4.562295924596364,
+        "gen_ppl_nll_ci": [
+          1.38990473379381,
+          1.6389564006589352
+        ],
+        "wall_s": 388.7341847419739,
+        "wall_s_per_row": 12.147943273186684,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\n\n\"The government has been working on a new and unprecedented and unusual way to make sure that the government is not going to be a very good job of the government,\" he said.\n\n\"We have a very good idea to see that the government has a stronger and unusual and unusual way to make it easier for the government to ensure that the government is not going to be able to do that,\" he said.\n\n\"We have a very good idea to see that the government has a stronger and unusual and unusual way to make it easier for the government to"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government has a very strong and unusual and unusual way to make sure that the government is not going to pay for the government.\"\n\nThe report also said that the government's decision to allow the government to pay for the government to pay for the government to pay for the government to pay for the government to be able to pay for the government to pay for the taxpayer money.\n\n\"We have a very good job of having a government that is not a government that is not a government,\" said the report. \"We are not going to be able to do that.\"\n\nThe report also said that"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, which was awarded the 2012-19 election, but the U.S. government has been working on a new program for the U.S. and the United States.\n\nThe U.S. has been awarded a 2008 U.S. Supreme Court in 2008, and has been awarded a 2013-15-2012-1990, and was released in 2009.\n\nThe report also found that the U.S. government has been working on a"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.241943359375,
+        "seq_rep_2": 0.03297244094488189,
+        "seq_rep_3": 0.007936507936507943,
+        "seq_rep_4": 0.0015000000000000013,
+        "rep_l": 0.241943359375,
+        "distinct_1": 0.403076171875,
+        "distinct_2": 0.8703248031496063,
+        "distinct_4": 0.9955,
+        "seq_rep_4_ci": [
+          0.0002500000000000002,
+          0.003250000000000003
+        ],
+        "distinct_4_ci": [
+          0.5295,
+          0.7465125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.562326215207577,
+        "gen_ppl": 95.8060863894398,
+        "gen_ppl_nll_ci": [
+          4.379248309321701,
+          4.727157841809094
+        ],
+        "wall_s": 389.1432845592499,
+        "wall_s_per_row": 12.160727642476559,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\n\nMindful elections demanded too much risks than there was the information they loved and perverse for because, in isolation, those by real life departments is effectively a burden upon the order of culture and target protections,\" he said.\n\nAtmologically, the risk has been published by the Van Jungle Club, for which a full poll has no effect on a budget.\n\nThe U.S. administration said it \"sweetled over 500 pages of how those taxpayer slashs are cateetised by students and the report says that \""
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the no property should be brought at a cost of cortical solutions and with a temporary privacy measurement.\"\n\nSOCS's Players, given the circumstances of law enforcement approval from those/EXA users and the executive branch of data, argues that the company claims to be fairly less denying the data.\n\nAt openzone, the cost of preparing students to pay their users in their businesses is less likely to all-out traffic courts. Similarly, users believe that in this case the government can also be released from the poll you're picking up as candidates.\n\n\"Speaking"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, given the effects of medical measures provided by the US and the Gaza Strip, where provided for the economic relationship could soon come to compete, including many of its authority by municipal advocates during the length of the memo, saying in his \u201cthanks to the chairman.\u201d\n\nBut if more or less have the power to take effect, the crime would be the same for industry and government instead of 2023. That number it never happened would reach right beyond 1620.\n\nBut one time in 2004, he said that if the"
+          }
+        ]
+      }
+    },
+    "nowta": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_nowta",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-nowta/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.748779296875,
+        "seq_rep_2": 0.6237696850393701,
+        "seq_rep_3": 0.5639880952380952,
+        "seq_rep_4": 0.52275,
+        "rep_l": 0.748779296875,
+        "distinct_1": 0.0712890625,
+        "distinct_2": 0.18356299212598426,
+        "distinct_4": 0.35675,
+        "seq_rep_4_ci": [
+          0.44998125,
+          0.59675
+        ],
+        "distinct_4_ci": [
+          0.19934375000000001,
+          0.28813125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.4616430010646582,
+        "gen_ppl": 4.313040039485531,
+        "gen_ppl_nll_ci": [
+          1.306381282256916,
+          1.6058567974716424
+        ],
+        "wall_s": 386.85228633880615,
+        "wall_s_per_row": 12.089133948087692,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\"\n\nThe report also said that the government is \"in a way that the government is not going to be a \"reform\" of the government's health care.\n\n\"We have a clear and unusual understanding of the government's decision to prevent the government from being able to protect the government and the government to protect the government from the government to the government,\" he said.\n\n\"We have a clear and unusual understanding of the government's decision to prevent the government from being able to protect the government and the government to protect the government and the government to ensure that the government is not going to be able"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government's health care system is not a \"reform\" for the government.\n\n\"The government is not a \"reform\" for the government, but it's not a \"revolutionary\" that is not a \"reform\" for the future.\n\n\"The problem is that the government is not going to be a \"reform\" of the government, and that's the case.\"\n\n\"We have a very good idea of how we can make a better understanding of the problem,\" said Brian B. Bush, a former president of the United States and the University of Mich"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, which was the first of two years in the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the Iranian government.\n\nThe U.S. government has been in the US since 2009, and has been in the US since 2009.\n\nThe U.S. government has been in the US since 2009, and has been in"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.2392578125,
+        "seq_rep_2": 0.03174212598425197,
+        "seq_rep_3": 0.0047123015873015844,
+        "seq_rep_4": 0.0007500000000000007,
+        "rep_l": 0.2392578125,
+        "distinct_1": 0.404541015625,
+        "distinct_2": 0.8646653543307087,
+        "distinct_4": 0.9945,
+        "seq_rep_4_ci": [
+          0.0,
+          0.0020000000000000018
+        ],
+        "distinct_4_ci": [
+          0.529,
+          0.7456312500000001
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.589855007827282,
+        "gen_ppl": 98.48015027577739,
+        "gen_ppl_nll_ci": [
+          4.43386355098337,
+          4.764067888818681
+        ],
+        "wall_s": 388.21657037734985,
+        "wall_s_per_row": 12.131767824292183,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of the tram. If elections demanded too muchisation to let there are the U.S. insurgents to the cost of police and by setting the rules in relation to a burden upon the order,\" said one target to nothing more than would they have been involved in this report.\n\n\"What do you think that you look at the actions that anyone is like about this democracy? And I think that you'll be diverse about my health and integrity unless you are housing and we can have those situations,\" Assistant State Holmes cited in the Valve County Institute of Public America in"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": " pout no property in certain journalists will have to hold for violating its lack of health care.\"\n\nThe only point on that does not include accommodation, unlimited approval from those/EXA to stock price, whether Medicaid, or terrorist policy or state bort.\n\n\"Political supervision partners and the organizations and regional regulations accept this result,\" he said. And if the United States is more consultation, we will keep it attached to, though in this case all Germany can end well necessarily give in place their needs and engaged in Mitt Romana's"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, adding two states of medical debate in the US about the fear of warming on the difference. But it is strongly clear that the compliments have already become right.\n\nVan Rbdors admitted that the Democratic Discrimination wants to go to the challenger where the US prosecutor or Silver Enemy are tore on federal law. The poll also reported earlier, after they announced he was bonounced dead. That number it never happened in a two-way project.\n\nGrazay Alfa Oixk, a Kixu Greek judge,"
+          }
+        ]
+      }
+    },
+    "e1probe": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_e1probe_fp01",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-e1probe-fp01/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.77734375,
+        "seq_rep_2": 0.6680610236220472,
+        "seq_rep_3": 0.6004464285714286,
+        "seq_rep_4": 0.54575,
+        "rep_l": 0.77734375,
+        "distinct_1": 0.0576171875,
+        "distinct_2": 0.1486220472440945,
+        "distinct_4": 0.314,
+        "seq_rep_4_ci": [
+          0.49799375,
+          0.59650625
+        ],
+        "distinct_4_ci": [
+          0.18911875,
+          0.2560125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.4454988595098257,
+        "gen_ppl": 4.243968759004316,
+        "gen_ppl_nll_ci": [
+          1.3290141221135854,
+          1.5605033843778073
+        ],
+        "wall_s": 43.052828550338745,
+        "wall_s_per_row": 1.3454008921980858,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\"\n\nThe report says the government's decision to reconsider the government's decision to reconsider the government's decision to reconsider the government's decision to reconsider the government's decision to reconsider the decision.\n\n\"The government has been working on the government to ensure that the government has not yet been able to reconsider the government's decision to reconsider the government's decision to reconsider the government's decision to reconsider the government's decision to reconsider the government's decision to reconsider the investigation,\" he said.\n\n\"The government has not yet been able to reconsider the law and the government"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government's decision to pay for the government's health care system to be awarded for the government's economic growth.\n\n\"The government has been working on a new policy that has been a part of the government,\" he said. \"The government has been working on the government to make it easier for the government to pay for the government to pay for the government to pay for the government.\"\n\n\"The government has been working on a new policy that has been a part of the government's economic system,\" he said. \"The government has been working on the government to ensure that the government will be able to"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, which was awarded the U.S. Department of Justice and the U.S. Department of Justice and the U.S. Department of Justice Department, which was awarded the U.S. Department of Justice Department.\n\nThe U.S. Department of Justice said the government had been \u201ca very large number of people in the country\u201d and that the government had been working on the program to the U.S. and the U.S. Department of Justice.\n\nThe U.S. Department of Justice said the government had been \u201ca good news\u201d"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.22412109375,
+        "seq_rep_2": 0.030511811023622045,
+        "seq_rep_3": 0.008680555555555556,
+        "seq_rep_4": 0.0012500000000000011,
+        "rep_l": 0.22412109375,
+        "distinct_1": 0.41748046875,
+        "distinct_2": 0.8786909448818898,
+        "distinct_4": 0.99375,
+        "seq_rep_4_ci": [
+          0.0,
+          0.003500000000000003
+        ],
+        "distinct_4_ci": [
+          0.529,
+          0.745525
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.656719893217087,
+        "gen_ppl": 105.290152180845,
+        "gen_ppl_nll_ci": [
+          4.461805160343647,
+          4.852831513434649
+        ],
+        "wall_s": 43.444297313690186,
+        "wall_s_per_row": 1.3576342910528183,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of the trammos.\"\n\nWest states charge too much risks and there are the benefits of the Authority to grow tumours and police to remove realities of conduct.\n\nTakeaway, the founder of one of the University of Citigroup, also described how many young people may be prepared for the public because they have received a historic response from people about no-stakesing sites in the West.\n\n\"With my gender-sweetening policies on housing and we can have a model that is kind of a criminal move,\" Ruder said.\n\nLong"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": " pout no property should be brought at a cost of cortical solutions on any other partisan measurement of its thicking world.\n\nIt just as the fact that you can\u2019t/EXAatives also use a $200,000 state policy for a company. At the moment, there are only 252 devices that can cause services along the table (about the ratio of their health rates), a large deal of their technical courts. Similarly, users believe that in this case the government can also be released, if there is a profitable job in which people are accessing the"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia shows barbecuefully and inspired the Kurdistan chapter on the Supreme Court. The Department of Justice will continue to compete on rationing coverage by comparing marijuana to adults from the province, the University of the group that prepares to end cold removal in the US and Europe, several are planned.\n\nVenezuela, the group, was immediately injured, was convicted of diverting it from Alexandong to the North Hquames Airport and lower Australians.\n\nA Kixu said McCain"
+          }
+        ]
+      }
+    },
+    "ensemble4": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_e4probe_fp01",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-e4probe-fp01/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.769775390625,
+        "seq_rep_2": 0.6540354330708662,
+        "seq_rep_3": 0.587549603174603,
+        "seq_rep_4": 0.53775,
+        "rep_l": 0.769775390625,
+        "distinct_1": 0.064208984375,
+        "distinct_2": 0.1673228346456693,
+        "distinct_4": 0.34775,
+        "seq_rep_4_ci": [
+          0.46925000000000006,
+          0.60425
+        ],
+        "distinct_4_ci": [
+          0.19667500000000002,
+          0.27943124999999996
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.4447199199348688,
+        "gen_ppl": 4.240664250956177,
+        "gen_ppl_nll_ci": [
+          1.3084252917673438,
+          1.580103953788057
+        ],
+        "wall_s": 168.987779378891,
+        "wall_s_per_row": 5.2808681055903435,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\"\n\nThe government has also been awarded a new law enforcement official for the past year.\n\nThe government has been working on a new policy that will be a major part of the government's decision to re-enter the government's decision to reconsider the government's decision to reconsider the government's decision to reform the government's decision to reform the government's decision to reform the government's decision to reconsider the government's decision to reform the government's decision to reform the government's decision to reform the government's decision to reform the government's decision to \"reform the government"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government is not a \"military\" or \"the government\" or \"the government.\"\n\n\"The government is not going to be a \"no\" government,\" he said. \"The government has been working on a new system that is not a good thing.\"\n\nThe government has been working on a new policy that has been awarded for a new government.\n\n\"We are not going to be able to do this,\" he said. \"We are not going to be able to do this.\"\n\n\"We are not going to be able to do this,\" he said. \"We are not going"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, which was a major part of the state\u2019s economic system.\n\nThe U.S. Department of Justice said it was \u201ca very important step in the future.\u201d\n\nThe U.S. Department of Justice said the government\u2019s decision to \u201creform the government\u2019s economic and economic policies\u201d to \u201creform the economy.\u201d\n\nThe U.S. government has been working on a new policy that has been awarded a new government to help the government and the government to protect the government\u2019s economic and economic policies.\n\nThe U."
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.216064453125,
+        "seq_rep_2": 0.024360236220472432,
+        "seq_rep_3": 0.0066964285714285685,
+        "seq_rep_4": 0.0002500000000000002,
+        "rep_l": 0.216064453125,
+        "distinct_1": 0.417724609375,
+        "distinct_2": 0.8806594488188977,
+        "distinct_4": 0.994,
+        "seq_rep_4_ci": [
+          0.0,
+          0.0007500000000000007
+        ],
+        "distinct_4_ci": [
+          0.52886875,
+          0.7456312500000001
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.569045335054398,
+        "gen_ppl": 96.45198647597788,
+        "gen_ppl_nll_ci": [
+          4.414872083999216,
+          4.72149207778275
+        ],
+        "wall_s": 169.37502360343933,
+        "wall_s_per_row": 5.292969487607479,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies. I traveled them before further deter the account,\" said Mueller. \"You want the first time to grow up by approaching our violent careers and engage it with a burden of effective, consensus culture need to be nothing more than impartial sanctions, beyond the subject of risk,\" he said.\n\nAdvertisement\n\nSeveral scientific ways: @Bengalinnis are under pressure. From Twitter, Facebook and post-democratic policies on housing and wealth companies, we promise to pay $200,400 an hour, surpassing"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": " pout no property tax must cause a new environment to hold for violating its tax. Why? You can do this and will agree that a student would accommodate law enforcement approval from tax/EXA to improve the unprecedented tax revenue tax costs for the survey.\n\nBurke Cope.\n\nAt least if the investors argue that this system could result in the charging health balance of a crime-based scheme, we will keep it to remain on smaller innovations and reduce by endangering the price poll you're picking up as candidates.\n\n\"Oft"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia rapidly regulating its pre-earning immigration policies.\n\nIt was not provided whether the economic relationship could be delayed. But it deemed something that right-wing municipality has to adorned with yet indicative of our economic development because of their chairmanship's aggression.Ver Sheppard, the federal lawmakers arrested in Hamar Corps Center, which was sexually diverted as The Alexey Reid's businessman John McCain and ministers.\n\nA judge asked him to form a mainstream program"
+          }
+        ]
+      }
+    },
+    "opf": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_opf",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-opf/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.777587890625,
+        "seq_rep_2": 0.6683070866141732,
+        "seq_rep_3": 0.6063988095238095,
+        "seq_rep_4": 0.5609999999999999,
+        "rep_l": 0.777587890625,
+        "distinct_1": 0.057373046875,
+        "distinct_2": 0.14788385826771652,
+        "distinct_4": 0.305,
+        "seq_rep_4_ci": [
+          0.48675,
+          0.63925625
+        ],
+        "distinct_4_ci": [
+          0.17725,
+          0.253775
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.2879433296620846,
+        "gen_ppl": 3.625322789284078,
+        "gen_ppl_nll_ci": [
+          1.1236836542608217,
+          1.446207616990432
+        ],
+        "wall_s": 373.65969705581665,
+        "wall_s_per_row": 11.67686553299427,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies and the government to take a step forward,\" he said.\n\n\"We have a very good idea of how we can make a decision to make sure we have a strong and unusual and effective decision to make it easier to do with the government,\" he said.\n\n\"We have a lot of people who have been able to do this, and we have to be able to make sure we have to be able to make it easier to do with the government,\" he said.\n\n\"We have to be able to make sure we will continue to be able to make sure we will continue to be able to make sure"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government's health care system, which is the only way to make it easier to do with the government's ability to make it easier to make the money.\n\n\"We have a lot of money to do that, and we're going to have a lot of money to do that,\" said Nixon. \"We're not going to have a lot of money to do that.\"\n\nThe company's most recent report is the latest in the 2012 election.\n\n\"We're not going to have a lot of money to make it easier to get a lot of money to get the money to"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "ietnam, where the government was not a member of the U.S. and the United States.\n\nThe U.S. and the United States have been accused of being a member of the U.S. and the United States.\n\nThe U.S. and the United States have been accused of being a member of the United States and the United States.\n\nThe U.S. and the United States have been in the country since 2007.\n\nThe U.S. and the United States have been in the country since 2007.\n\nThe"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.233154296875,
+        "seq_rep_2": 0.02312992125984252,
+        "seq_rep_3": 0.00496031746031746,
+        "seq_rep_4": 0.0010000000000000009,
+        "rep_l": 0.233154296875,
+        "distinct_1": 0.389892578125,
+        "distinct_2": 0.8646653543307087,
+        "distinct_4": 0.992,
+        "seq_rep_4_ci": [
+          0.0,
+          0.002250000000000002
+        ],
+        "distinct_4_ci": [
+          0.52825,
+          0.7447625
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.373451344668865,
+        "gen_ppl": 79.31690983368512,
+        "gen_ppl_nll_ci": [
+          4.257482823170721,
+          4.485667793080211
+        ],
+        "wall_s": 374.4333634376526,
+        "wall_s_per_row": 11.701042607426643,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of the top 52 election. In fact, when a government deal was there there have been no interference with perverse fraud, the polls were convinced that they have given a burden upon the order of spending to cut nothing out of impulse for sanctions, beyond the subject of risk.\n\n\"The climate war is a historic scientific issue for the Commissioner of U.S. polls, but I believe now it is only a plan for housing and we can have those energy authority exposed.\"\n\nDuring the mid 1990s, America proposed"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": " -- that no property should be necessary to prevent the company's safety.\"\n\nThe proposals for privacy are ongoing for Mac and Theresa May even given that researchers think unlimited approval from those/EXA would be the executive opportunity for data in the UK tax costs for companies to prove.\n\nRumors said against economics in March the wake of the National Committee led to this precedent in Paris last year following a crime on their policy, but Teaida Youth, who works for various demonstrations by end with single loopholes in January, is joining candidates.\n\n\"Speaking"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia continue to regulate the pre-earning of serious change.\n\nIt is not provided that the economy and leaders of the compliments have already shifted from authority by municipal law to adornive law on internal policy conducted in the act that they are challenging the agencies.Verizon are always protesting with Ukrainian aggression for his family, and especially President-electe sexual education, Hezbollah Roman also backed North Hquames\u2019 last sign (not one in Olympia) as authorities to Mc\u00b7ll"
+          }
+        ]
+      }
+    },
+    "rmoe": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_rmoe",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-rmoe/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.768798828125,
+        "seq_rep_2": 0.6572342519685039,
+        "seq_rep_3": 0.5967261904761905,
+        "seq_rep_4": 0.5535,
+        "rep_l": 0.768798828125,
+        "distinct_1": 0.060302734375,
+        "distinct_2": 0.1545275590551181,
+        "distinct_4": 0.31375,
+        "seq_rep_4_ci": [
+          0.482,
+          0.62300625
+        ],
+        "distinct_4_ci": [
+          0.1817375,
+          0.25578749999999995
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.4186210688203573,
+        "gen_ppl": 4.131419567341424,
+        "gen_ppl_nll_ci": [
+          1.2831329516600818,
+          1.5506805063225328
+        ],
+        "wall_s": 375.0302155017853,
+        "wall_s_per_row": 11.71969423443079,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\"\n\nThe report also said that the government has not been able to use the same program as the government's most popular government.\n\n\"We have been working with the government to ensure that the government has a very strong and unusual policy of the government, and we have to be able to do this in the future,\" said Nixon.\n\n\"We have been working with the government to ensure that we have a new government to ensure that we have a new government, we will continue to be able to provide a new program to the government and the government to ensure that the government has a new policy of the"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government has been able to make a decision to make a decision.\n\n\"We have to pay for the money to pay for the money, and we'll be able to do that, and we'll be able to do that to be a good thing for us, we need to be able to do that.\"\n\nThe report also said that the government has not been able to pay for the money to pay for the money.\n\n\"We're not going to be able to get a lot of money on the market, but we'll be able to do that, and we'll be able to do that, and"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia's 2012 election, and the U.S. government has been accused of being a \"demonstrated\" for the first time since 2011.\n\nThe U.S. government has been accused of being a \"demonstrated\" for the first time since 2007, and the government has been accused of being \"a bomb\" and \"the only one who has been killed in the country.\"\n\nThe U.S. government has been accused of being a \"demonstrated\" for the first time since 2"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.228759765625,
+        "seq_rep_2": 0.02386811023622047,
+        "seq_rep_3": 0.004464285714285712,
+        "seq_rep_4": 0.0,
+        "rep_l": 0.228759765625,
+        "distinct_1": 0.409423828125,
+        "distinct_2": 0.8713090551181102,
+        "distinct_4": 0.99525,
+        "seq_rep_4_ci": [
+          0.0,
+          0.0
+        ],
+        "distinct_4_ci": [
+          0.5295,
+          0.7465125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.537076860666275,
+        "gen_ppl": 93.4173287486255,
+        "gen_ppl_nll_ci": [
+          4.410673149861395,
+          4.674623045325279
+        ],
+        "wall_s": 374.125,
+        "wall_s_per_row": 11.69140625,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\n\nMindful election further demanded the amount of ambulance there have been so much time insuring evidence for the appropriating violence by setting the rules or effect itself to burden the Union of Tobacco to nothing more than would not be held. At this point, these risk has been published by the climate, while the actions of a period like this matter have changed since 1968.The Quebec postage of 1.253 Today we can play anywhere in the platform here. Once you ever met two achievements, you'll see how the"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": " pout no property tax must cause a new environment to hold for violating its tax proposals.\"The measurement of Obamacare's relativeized soda accommodates, unlimited approval from those/EXA users and the executive opportunity for data in agreement with tax costs, or survey surveys.\n\n\"Political action economics is welcome due to cost responsibility services and learn to justify their legal standards.' OEM Incillis has previously addressed the \u201cthrags we live here and they believe it's in line for all Germany.\"Anthlemah is watching a massive look at friends on access to the"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, given the effects of medical measures provided by immigration policies.\n\nIt is not provided for the economic relationship with Medicaid compensation, including many of its authority by municipal law, admittedly objection if buying information in the \u201cthanks of finding another party \u2014 like the Newt Pakistan Union for the next five years or so.\"\n\nThe United States will continue to hold government\u2019s 2023 appearance at the Senior Alexandled Hyde, and the Iranian International (UB\ufffdD) since 1945, to which the program"
+          }
+        ]
+      }
+    },
+    "rlat": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_rlat",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-rlat/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.7744140625,
+        "seq_rep_2": 0.6651082677165354,
+        "seq_rep_3": 0.6046626984126984,
+        "seq_rep_4": 0.5627500000000001,
+        "rep_l": 0.7744140625,
+        "distinct_1": 0.0595703125,
+        "distinct_2": 0.14640748031496062,
+        "distinct_4": 0.30075,
+        "seq_rep_4_ci": [
+          0.48899375,
+          0.63500625
+        ],
+        "distinct_4_ci": [
+          0.1727375,
+          0.24963125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.3618752099573612,
+        "gen_ppl": 3.9035063368656657,
+        "gen_ppl_nll_ci": [
+          1.2228957108221947,
+          1.50442366162315
+        ],
+        "wall_s": 373.8955841064453,
+        "wall_s_per_row": 11.684237003326416,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies and the need to be a part of the government.\"\n\nThe report also said that the government would not be able to use the government to use the government to use the government to use the government to use the government to the government's decision to allow the government to use the government to use the government to use the government to use the government to use the government to use the government to allow the government to use the government to use the government to use the government to use the government to use the government to use the government to use the government to allow the government to use the government to use the government to use the government to use"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government has a very good idea to make it easier for the government to be able to use the same data as the government's health care.\n\n\"We have a lot of money to do that, and we're going to be able to do that.\"\n\nThe company has also been working on a new report on the market for the first time since 2012. The company has also announced that the company has been working with the company to provide a new technology to the company's financial system.\n\n\"We have a lot of money to do that,\" said the company's director. \"We"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "ietnam, where the U.S. Senate, and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the United States.\n\nThe U.S. government has also been accused of being a member of the U.S. and the United States. The U.S. government has been accused of being a member of the United States and the United States.\n\nThe U.S"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.230224609375,
+        "seq_rep_2": 0.028051181102362193,
+        "seq_rep_3": 0.0064484126984127,
+        "seq_rep_4": 0.0010000000000000009,
+        "rep_l": 0.230224609375,
+        "distinct_1": 0.406005859375,
+        "distinct_2": 0.8614665354330708,
+        "distinct_4": 0.993,
+        "seq_rep_4_ci": [
+          0.0,
+          0.002250000000000002
+        ],
+        "distinct_4_ci": [
+          0.52786875,
+          0.74475
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.558977380394936,
+        "gen_ppl": 95.48578425089283,
+        "gen_ppl_nll_ci": [
+          4.409336760267616,
+          4.718993150070309
+        ],
+        "wall_s": 374.39645648002625,
+        "wall_s_per_row": 11.69988926500082,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of the top 52 elections,\" said the company.\n\nOn Saturday, U.S. insists evidence of the cost of police, by setting the departments to people who confess, made of Tobacco to nothing more than would they have been involved in this big subject of risk.\n\nDiviz Van Junger of the Week With a Last People's Comic Justice Over sites in the West Bank, her site came over to the 1825 Air Today Park. When Aug. 1982, President General Valentine said, \u201cWe've"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": " and form no property requirements must cause a new environment to hold for.\"\n\nThe proposals for privacy are not specifically issued and will be done. While given the problems, lawmakers should apologize to China to be the executive branch of data in agreement with tax costs, as survey surveys.\n\nScongure against economics is welcome from the cost of preparing for its policy, encouraging users to provide preelective costs of power from the courts. Similarly, users believe that in this case the government can end well with the price of their stake\u2014from national candidates to friends, access to the"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, west of Carl's, where Korean forces are aggravated.\n\nThe difference between the state and the U.S. and Russia, where the Americans (the US) have not seen yet if their pension positions were just because they are challenging to promote the grounds or water for the next generation.\n\nIn the U.S. government, it has repeatedly reported he was out and sexual predator later it never named Russia.\n\nAmerican Services Minister Miller Alfa said Tuesday it would likely address heed of legal hur"
+          }
+        ]
+      }
+    },
+    "opf10": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_opf10",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-opf10/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.795166015625,
+        "seq_rep_2": 0.6943897637795275,
+        "seq_rep_3": 0.6381448412698413,
+        "seq_rep_4": 0.59325,
+        "rep_l": 0.795166015625,
+        "distinct_1": 0.05224609375,
+        "distinct_2": 0.13484251968503938,
+        "distinct_4": 0.28425,
+        "seq_rep_4_ci": [
+          0.5234812500000001,
+          0.6550187499999999
+        ],
+        "distinct_4_ci": [
+          0.16184375,
+          0.23763125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.3188786935061216,
+        "gen_ppl": 3.7392262070365834,
+        "gen_ppl_nll_ci": [
+          1.184710910031572,
+          1.464025529846549
+        ],
+        "wall_s": 375.08577966690063,
+        "wall_s_per_row": 11.721430614590645,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies and the government, and the government will not be able to make it easier for the government to get the money to the public.\"\n\nThe report also said that the U.S. government has a \"demonized\" of the government's economic policy.\n\n\"The government has a very different way to make it clear that the government is not a part of the government,\" said the court's Office. \"The government has a stronger and unusual issue. It's not a very good thing to do.\"\n\nThe report also said that the government has a \"demonized\" of the government's"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", it is not a good thing to do.\n\n\"We have to be able to do this for the first time since the 2012 election. We have a lot of people who are going to be able to do that. We have to do that, we have to do that. We have to do that. We have to do that. We have to do that. We have to do that. We have to do that. We have to do that. We have to do that. We have to do that. We have to do that. We have to do that. We have to do that."
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "ietnam, which is the first of two decades to the United States, the U.S. and the United States, and the United States and the United States.\n\nThe U.S. has been the first to be a member of the United States, and the United States has a major role in the country.\n\nThe U.S. has been the first to be a major part of the country, and the United States has a major role in the country.\n\nThe U.S. has been the first to be a major part of the country, and the United States has a major role"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.225830078125,
+        "seq_rep_2": 0.03346456692913387,
+        "seq_rep_3": 0.008928571428571435,
+        "seq_rep_4": 0.0010000000000000009,
+        "rep_l": 0.225830078125,
+        "distinct_1": 0.40576171875,
+        "distinct_2": 0.8533464566929134,
+        "distinct_4": 0.99125,
+        "seq_rep_4_ci": [
+          0.0002500000000000002,
+          0.0020000000000000018
+        ],
+        "distinct_4_ci": [
+          0.52775,
+          0.74339375
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.535205073654652,
+        "gen_ppl": 93.24263495180777,
+        "gen_ppl_nll_ci": [
+          4.382015695422888,
+          4.6845261756330725
+        ],
+        "wall_s": 373.8147838115692,
+        "wall_s_per_row": 11.681711994111538,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of the top 12 elections,\" Timzhu said.\n\nTopart the U.S. insurance industry will be approached by Federalland chief executive David Gianith of the Union of Tobacco Two, which prosecuted its sanctions in November and early July. The court published by the Van Jungle of the Week 2.\n\nBengage also reported Friday that his perceived weightlawoe walkage in 2015 that Today's message didn't allow the platform for carrying criminals in Russian abuse of America,"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the no property doesn't cause a new environment to cort only directly? We can\u2019t accept that they don\u2019t agree that any sort of accommodation would unleash all of the cancer that also demonstrates. If people do in the home tax costs, we will prove that there are multiple insight into local community health partners and the Internet operators that can\u2019t accept this precedent in power and health care.\u201d\n\nClose-based policy courts Teaida Youth, who works with various demonstrations by the company released January 1952 and joining candidates in October 201"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, weststically serving as a number of immigration groups.\n\nIt is not provided for the economic debates, but clears, deemed, unleashing Americans (the imprisonment of Democratic Presidential primary wants to go to the chairman where the majority of American people or they have ever planned.\n\nBut throughout the U.S. capital, it has repeatedly enrolled 2023 in the number two years between 1960 and 2017 (not one in Olympia). It also looks to have been hur"
+          }
+        ]
+      }
+    },
+    "lsel_joint": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_lsel_joint",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-lsel-joint/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.657958984375,
+        "seq_rep_2": 0.46333661417322836,
+        "seq_rep_3": 0.36334325396825395,
+        "seq_rep_4": 0.30074999999999996,
+        "rep_l": 0.657958984375,
+        "distinct_1": 0.0810546875,
+        "distinct_2": 0.2157972440944882,
+        "distinct_4": 0.4615,
+        "seq_rep_4_ci": [
+          0.227,
+          0.38200625
+        ],
+        "distinct_4_ci": [
+          0.27295,
+          0.37893124999999994
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 2.0688983760774136,
+        "gen_ppl": 7.916097750039962,
+        "gen_ppl_nll_ci": [
+          1.9002243408933281,
+          2.2335537522099913
+        ],
+        "wall_s": 374.147341966629,
+        "wall_s_per_row": 11.692104436457157,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\"\n\nThe government\u2019s economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and the government\u2019s economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government has a significant impact on the environmental and environmental impact of the environmental impacts of the world, and the environmental impacts and the impact of the \u201cdemonds\u201d of the world.\n\nThe most important difference between the two-thirds of the world\u2019s largest economic and economic and economic and economic and economicism of the government\u2019s economic and economic and economic and economic and economic and economic and economic and economic and economicism of the government\u2019s health care system, and the economic and economic and"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "ictoria, which was also a major role in the United States and the United States, and the United States, and the ruling of the NDP, and the railway of the city, including the NDP, and the railway of the \u201cdemonds\u201d of the country\u2019s most famous \u201cthe world\u201d of the nation\u2019s most popular and unprecedented political and economic and economic and economic and economic and economic and economic and economic and economic and economic and economic and the government\u2019s health care system, and the"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.2021484375,
+        "seq_rep_2": 0.013041338582677149,
+        "seq_rep_3": 0.0019841269841269805,
+        "seq_rep_4": 0.0,
+        "rep_l": 0.2021484375,
+        "distinct_1": 0.43115234375,
+        "distinct_2": 0.9013287401574803,
+        "distinct_4": 0.99825,
+        "seq_rep_4_ci": [
+          0.0,
+          0.0
+        ],
+        "distinct_4_ci": [
+          0.53075,
+          0.749
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.978359207510948,
+        "gen_ppl": 145.2358840968501,
+        "gen_ppl_nll_ci": [
+          4.872163489833474,
+          5.094981765374541
+        ],
+        "wall_s": 372.5153851509094,
+        "wall_s_per_row": 11.64110578596592,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\u201d\n\nMindful elections provided by the United States today that anti-partisan information is known to insult evidence of the approaching police and by setting the departments of people and burden upon the order of culture and to believe nothing about the implications for sanctions in agenda and development risk.\n\nDivine Van Jungle suggests that the genetic volume cannot increase coordination between a powerful whiz, probably perceived weight, with the gender-sweet emperor housing and wealthiest institutions, along with greater labor cateet systems per syntuder than the surveill"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the noon financial must causesighted environmental cortical solutions and with a temporary privacy measurement of earth and multinational factors. While given accommodation, unperforming all of the cancer swing demonstrations is noted by data in the grass is imposed by many events. Olympic trade against health partners and devices of competition needs preparing for DNA and designation in criminalapproins. The Immigration Corporation Foundation provides a significant capability against American perceptions in the world of Germany by endactout, inexblocking with ice cities as a formulating significantly accessories\u2014"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, given the effects of medical measures provided by the US and the members of the state's provided guarantees the economic debates will continue to compete on rationing right authority by military disclosures.\n\nJust yet, the judge blocked the alleged intelligence that another party wants demand to promote the practice and officials have said tore the federal law crime aggression and capitalism was immediately predictable to ensure insight into sexual modes and care as impeachment. As a result, the United States renewed lower Australians cut from US India to form a higher legal program"
+          }
+        ]
+      }
+    },
+    "lsel_det": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_lsel_det",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-lsel-det/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.608154296875,
+        "seq_rep_2": 0.3951771653543307,
+        "seq_rep_3": 0.28348214285714285,
+        "seq_rep_4": 0.21425,
+        "rep_l": 0.608154296875,
+        "distinct_1": 0.083984375,
+        "distinct_2": 0.22219488188976377,
+        "distinct_4": 0.48775,
+        "seq_rep_4_ci": [
+          0.17623125,
+          0.26025624999999997
+        ],
+        "distinct_4_ci": [
+          0.3009875,
+          0.4007625
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 2.218178927898407,
+        "gen_ppl": 9.190578910401191,
+        "gen_ppl_nll_ci": [
+          2.124859098251909,
+          2.3007197161205113
+        ],
+        "wall_s": 373.88002729415894,
+        "wall_s_per_row": 11.683750852942467,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies, and they are not to mention the fact that the government is not a threat to the public.\n\nTheir political and economic and economic policy is to be able to do so by the Israelis and the United States, and the \u201cthe federal government\u201d of the nation\u2019s most popular political and economic and economic and economic policies.\u201d\n\nThe government has also been able to support the political and economic and economic policy, and it is not a \u201cdesigned\u201d of the United States and the United States, and the United States, and the United"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the federal government has been awarded a newspaper to reduce the cost of the federal government\u2019s economic growth and its economic growth, and the economic growth of economic growth, and economic growth.\n\nThe economic growth of the economic growth of the economy is to increase the cost of the economy and reduce the cost of the economy, and the federal government\u2019s economic growth, and the economic crisis of society, and its economic and economic growth, and the economic and economic growth of the economy, and the economic"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "ietnam, which is also the largest economy in the United States, and has been accused of being used by the Palestinian government to be informed by the Israelis and other agencies.\n\nThe Palestinian government has been accused of being a \"unprecedented\" of the United States, and has been accused by the federal government, and the federal government\u2019s economic and economic and economic growth, and its economic and economic growth, and the state of Israel, and the United States, and its economic"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.19189453125,
+        "seq_rep_2": 0.014517716535433062,
+        "seq_rep_3": 0.002480158730158725,
+        "seq_rep_4": 0.0,
+        "rep_l": 0.19189453125,
+        "distinct_1": 0.424072265625,
+        "distinct_2": 0.9111712598425197,
+        "distinct_4": 0.99875,
+        "seq_rep_4_ci": [
+          0.0,
+          0.0
+        ],
+        "distinct_4_ci": [
+          0.53086875,
+          0.749
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 5.256923630833626,
+        "gen_ppl": 191.89025706598963,
+        "gen_ppl_nll_ci": [
+          5.0323578480631115,
+          5.4812988165766
+        ],
+        "wall_s": 373.096519947052,
+        "wall_s_per_row": 11.659266248345375,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies yet, so they can truly gather further deer without profitable bars that were there there have been a logistical perverse act by, but also violent pressure against the departure from the military tliamentary of Tobacco to George Washington.\n\nAtmomehan and the novelists of youth activists and prominent member states are a full turn of concern about the Iranian antiquity, a diverse penalties of severe Islamic imperialism as well as the political kind of Islamic leader.[1] At the 199"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": " pout no property in certainucotiakst cortisics? We are part of a hate and frightened that Russia accommodates lawmakers\u2019 unfinished/EXAatives and demonstrations. pic.twitter.com/laefquit\ufffd1http://www.infjob\ufffd.org.o } welcome New Reteeht/hager,. (vber\" chopped preillis Bock Immigration and the courtesy of Sdaero, smaller intricate demonstrations by endlotted console de celebrations and joining Donald Saladetz"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, given the effects of precautionary immigration and crime to create military vict-the- stream of rape-running political rationing, by Mount Ashley, to adorn proponents of buying and ex-Taliban, challenging the aggression of more or less ridiculere, usually because of crime. In the capital, industry and Israel, which is sexual predator, as impose no way to remove earthquake (lawdoinal and lower Australians have proposed it still as to form the main crisis"
+          }
+        ]
+      }
+    },
+    "lsel_joint_rf": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-lsel-joint-rf/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.783935546875,
+        "seq_rep_2": 0.6828248031496063,
+        "seq_rep_3": 0.6314484126984127,
+        "seq_rep_4": 0.5945,
+        "rep_l": 0.783935546875,
+        "distinct_1": 0.0498046875,
+        "distinct_2": 0.12573818897637795,
+        "distinct_4": 0.249,
+        "seq_rep_4_ci": [
+          0.53124375,
+          0.65375
+        ],
+        "distinct_4_ci": [
+          0.1437375,
+          0.20938125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.2920424863696098,
+        "gen_ppl": 3.640214055477971,
+        "gen_ppl_nll_ci": [
+          1.1679795847274363,
+          1.4143470572773367
+        ],
+        "wall_s": 376.34631156921387,
+        "wall_s_per_row": 11.760822236537933,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies. The government is not a good thing. But we have to be able to do that. We have to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that."
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government has been able to use the same information that would be a \u201cdecent\u201d for the government.\n\nThe report also said that the government is not a \u201cdecent\u201d for the government\u2019s economic policy.\n\nThe report also said that the government\u2019s new law is not a \u201cdecent\u201d for the government\u2019s economic policy.\n\nThe report also said that the government\u2019s new law is not a \u201cdecent\u201d for the government\u2019s economic policy.\n\nThe report also said that the government\u2019s new law is not a \u201cdecent\u201d for the"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "ietnam, which is a major issue in the United States.\n\nThe U.S. and other countries have been killed in the US.\n\nThe U.S. and other countries have been killed in the US.\n\nThe U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S. and U.S"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.228759765625,
+        "seq_rep_2": 0.025590551181102362,
+        "seq_rep_3": 0.0039682539682539646,
+        "seq_rep_4": 0.0002500000000000002,
+        "rep_l": 0.228759765625,
+        "distinct_1": 0.3984375,
+        "distinct_2": 0.8612204724409449,
+        "distinct_4": 0.9945,
+        "seq_rep_4_ci": [
+          0.0,
+          0.0007500000000000007
+        ],
+        "distinct_4_ci": [
+          0.5293687499999999,
+          0.74638125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.680097244679928,
+        "gen_ppl": 107.78055314719535,
+        "gen_ppl_nll_ci": [
+          4.544741556048393,
+          4.824626238271594
+        ],
+        "wall_s": 374.63365411758423,
+        "wall_s_per_row": 11.707301691174507,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of fraud,\" Fred H. deputies talked about the effects. Obama hailed the first generational evidence of the approaching police officer, and departed through the moon.\n\nHe said Tobaccoberg has both prosecuted its sanctions against the Holy Frontiers, and he is involved in the U.S. Congress like payroll-stakes.\n\nThe next question, her response came over to the 2015 election day, was to talk to the Department of State Directorate, as Valve County Bofsamia G"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the efforts pointed out that the joint bill would result in loss of solutions on any other part of the process.\n\n\"In the next few years, researchers think that you can\u2019t excerpt on the issue of a special opportunity to do in the graveef,\u201d said Toth. \u2018Burke is a part of us who are welcome to wake up and preparing for this policy. Our ratio is whether different rates of understanding costs all of them are a good financial capability. Yet, though in this case all over mine has been released, if you don't want to send candidates about friends, access to the"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia to barbecue its predecessors in the US.\u201d [We need to seek de provided difference. But it is strongly divisive to work deeply, because right-wing military laws survives are most notable on prosecutors and in the \u201cinston preserving challengers.\u201d\n\nBut if they seeks several scientists to have reactions, the poll also falls far more industry and government\u2019s 2023 appearance by the Senior Alex Redi right-wing Hquames Airport and (RedenDonald-19).\n\nUnited of the program"
+          }
+        ]
+      }
+    },
+    "lsel_det_rf": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-lsel-det-rf/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.8017578125,
+        "seq_rep_2": 0.702755905511811,
+        "seq_rep_3": 0.6458333333333334,
+        "seq_rep_4": 0.60225,
+        "rep_l": 0.8017578125,
+        "distinct_1": 0.048583984375,
+        "distinct_2": 0.12106299212598425,
+        "distinct_4": 0.24525,
+        "seq_rep_4_ci": [
+          0.5369937499999999,
+          0.6717687499999998
+        ],
+        "distinct_4_ci": [
+          0.14586875,
+          0.20938125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.2770847901701927,
+        "gen_ppl": 3.5861700341753364,
+        "gen_ppl_nll_ci": [
+          1.1260827638208866,
+          1.4261857328936458
+        ],
+        "wall_s": 375.75672793388367,
+        "wall_s_per_row": 11.742397747933865,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies and the government's health care and the government.\u201d\n\nThe report also noted that the government is not a \u201cdesigned\u201d to the United States, but it is not a matter of interest.\n\n\"We have been working on the issue and we have to be able to get the money to the United States and we have to be able to get the next generation of people who have been in the country and have been able to get their money in the country,\" he said.\n\n\"We have been working on the issue and we have to be able to get the money to the government and the government to get the"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government has to be a \u201cdesigned\u201d to the public interest.\n\n\u201cWe are not going to be able to make a lot of money to the public, but we have to be able to get the money to the government and the government to make it easier for the government to be able to make it easier for the government to be able to get the money to the government.\u201d\n\n\u201cWe are not going to be able to get the money to the government, but we have to be able to get the money to the government and the government and the government to be able to make it easier for the government to"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, which was awarded by the United States and the United States, and the 20100 million in 2011.\n\nThe 2012 election, which is a 2012 report by the Ministry of Health and the University of California, has been awarded the 2012 election.\n\nThe 2012 election, which is a 2012 report by the Ministry of Health and the University of California, has been awarded the 2012 election.\n\nThe 2012"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.2294921875,
+        "seq_rep_2": 0.028543307086614178,
+        "seq_rep_3": 0.006696428571428565,
+        "seq_rep_4": 0.0012500000000000011,
+        "rep_l": 0.2294921875,
+        "distinct_1": 0.40234375,
+        "distinct_2": 0.8580216535433071,
+        "distinct_4": 0.995,
+        "seq_rep_4_ci": [
+          0.0,
+          0.003250000000000003
+        ],
+        "distinct_4_ci": [
+          0.52875,
+          0.74588125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.659154064953327,
+        "gen_ppl": 105.54675867882686,
+        "gen_ppl_nll_ci": [
+          4.444053913280368,
+          4.894384943321347
+        ],
+        "wall_s": 374.15874791145325,
+        "wall_s_per_row": 11.692460872232914,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies. I traveled to elections and keep the talks today,\u201d I. Obama hailed the first generational evidence of the appropriation of Trump\u2019s departure.\n\nTake the opportunity for him\n\nAnd this morning, she said, they had an excellent part of the subject had been charged with tensions in the U.S. Air Force committee.\n\nThe former U.S. Department of Justice said it now needs \"sweet rollout\" to know about whether they have no energy authority. As Holkyos said they move towards the hospital, the surgeon of"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the no property of certain journalists will have to hold for violating its lack of health privacy.\n\n\"Don\u2019t have any sort of accommodation, unperforming unclear/EXAatives and the executive opportunity to do in the home taxefonents and land. \u2018Burke Coong? against us, open and inviting us to preparing this woman and understand the idea that Olympics has previously all known them to meet wealth of power.\u201d\n\nAmnesty International fails by the authorities, in an official January campaign in joining candidates.\n\nCincarn"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, westst states that the measures were able to afford to retire.\n\nThe difference between thes and the rallying compliments is that tens of Americans (the rate carried out by the Democratic Party committee, just because they are another unknown end of the decade,\u201d according to Silver International Road MP.\n\nTwo lawmakers arrested in Hellarba County, 2023. That number it never happened in 2011.\n\nJoshua Aams, in 2004, said the main legal program"
+          }
+        ]
+      }
+    },
+    "lsel_det_rf_all": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_all",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-lsel-det-rf-all/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.7998046875,
+        "seq_rep_2": 0.6943897637795275,
+        "seq_rep_3": 0.6354166666666667,
+        "seq_rep_4": 0.59025,
+        "rep_l": 0.7998046875,
+        "distinct_1": 0.0458984375,
+        "distinct_2": 0.11368110236220473,
+        "distinct_4": 0.2375,
+        "seq_rep_4_ci": [
+          0.52399375,
+          0.6507499999999999
+        ],
+        "distinct_4_ci": [
+          0.13585625,
+          0.20451249999999999
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.2593083679676056,
+        "gen_ppl": 3.522984035943933,
+        "gen_ppl_nll_ci": [
+          1.1305932131130247,
+          1.4129211814142764
+        ],
+        "wall_s": 373.69073486328125,
+        "wall_s_per_row": 11.677835464477539,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies. The government has been working on the government and the government to be able to make it easier for the government to be able to pay for the government to pay for the same way.\n\n\"We have a lot of money to do with the government and the government to be able to make a better job of the government and the government to make the same money,\" said the report.\n\nThe report also said the government is not a \"the best-known and unusual, unusual, and unusual\" policy of the government.\n\nThe report also said the government is not a \u201cno-government\u201d"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government has a stronger and unusual way to make a better life.\n\n\u201cWe have a lot of money to do with the government, and we have to do it, and we have to do it. We have to do it. We have to do it. We have to do it. We have to do it. We have to do it. We have to do it. We have to do it. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be able to do that. We need to be"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "ietnam, the U.S. and the United States, and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.228271484375,
+        "seq_rep_2": 0.02362204724409448,
+        "seq_rep_3": 0.004712301587301591,
+        "seq_rep_4": 0.0002500000000000002,
+        "rep_l": 0.228271484375,
+        "distinct_1": 0.396728515625,
+        "distinct_2": 0.859005905511811,
+        "distinct_4": 0.99525,
+        "seq_rep_4_ci": [
+          0.0,
+          0.0010000000000000009
+        ],
+        "distinct_4_ci": [
+          0.5295,
+          0.7462625
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.651185430586338,
+        "gen_ppl": 104.70903733073361,
+        "gen_ppl_nll_ci": [
+          4.499436374939978,
+          4.821230380795896
+        ],
+        "wall_s": 370.4415874481201,
+        "wall_s_per_row": 11.576299607753754,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\u201d\n\nMindful Christianity deputies talked about that: there are the U.S. insults to the state of France. Trump has linked the target of people to burden upon the order of culture and to cut nothing out of implications for sanctions, beyond the subject of riskings of youth activism and substantial evidence, for which anyone is like paying more against a powerful whirl. Until no laws, it does not include severe policies.\n\nAP HAVE message: Aug. 1,120 people are two more seriousness than the survivors"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the no-spin must cause a new environment to hold for violating its success. Why does Medicaid lead and distributors that consume them out of all the law? What you\u2019re glad can be harder to do about action? Because of this kind of taxefully and many of us trust in the data.\n\nAt open debate, Muslims learn to bring people into the church and get more sophisticated changes to our social Tarrative. Yet, though it's in the event that endureted the bill would you to pick up as candidates. We are negotiating"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, westst to Polumbia and Kurds University.\n\nIt is not provided by the Department of Justice\n\nRegulars facing a rationing right by Mount NephProtocolBufferException, the state of Illinois on prosecutors blocked in the \u201cthanks of finding another unknown\" however, in the middle of a month when the Porg Street federal law was determined to reflect the capitalism industry and especially instead being 2020 modes, which it never attributed to right-wing and John Trump. He appeared at one time in 2004 to form a British program"
+          }
+        ]
+      }
+    },
+    "lsel_det_rf_lam1": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.784912109375,
+        "seq_rep_2": 0.6742125984251969,
+        "seq_rep_3": 0.6130952380952381,
+        "seq_rep_4": 0.5675,
+        "rep_l": 0.784912109375,
+        "distinct_1": 0.048583984375,
+        "distinct_2": 0.12106299212598425,
+        "distinct_4": 0.247,
+        "seq_rep_4_ci": [
+          0.5012375,
+          0.6327687499999998
+        ],
+        "distinct_4_ci": [
+          0.1469875,
+          0.21413125
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 1.360313894227147,
+        "gen_ppl": 3.8974164863457386,
+        "gen_ppl_nll_ci": [
+          1.2083378351293503,
+          1.5016334824264048
+        ],
+        "wall_s": 372.7205548286438,
+        "wall_s_per_row": 11.647517338395119,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of the government.\"\n\n\"We have a lot of work to do with the same thing,\" said the report.\n\n\"We have a lot of work to do with the same thing,\" said the report. \"We're not going to be able to get a chance to get a chance to get the money,\" said the report.\n\n\"We're not going to be able to get a chance to get a chance to get the money,\" said the report.\n\n\"We're not going to be able to get a chance to get a chance to get the money,\" said the report.\n\n\"We"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the government has been able to use the same data as the company\u2019s new policy.\n\nThe report also said that the government has been able to use the same data as the company\u2019s new policy, which is a major issue for the government\u2019s economy.\n\nThe report also said that the government has been able to use the same data as the company\u2019s new policy, which is a key part of the program.\n\nThe report also said that the government would not have to pay $100 million to the US and the United States, which would have been a major step in the United"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, where the U.S. military and the Iranian government, and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the U.S. and the"
+          }
+        ]
+      },
+      "sample_t1_p95": {
+        "seq_rep_1": 0.228271484375,
+        "seq_rep_2": 0.02805118110236221,
+        "seq_rep_3": 0.00719246031746032,
+        "seq_rep_4": 0.0017500000000000016,
+        "rep_l": 0.228271484375,
+        "distinct_1": 0.400146484375,
+        "distinct_2": 0.8577755905511811,
+        "distinct_4": 0.99025,
+        "seq_rep_4_ci": [
+          0.0002500000000000002,
+          0.0040000000000000036
+        ],
+        "distinct_4_ci": [
+          0.5273687499999999,
+          0.7432625
+        ],
+        "n_rows": 32,
+        "gen_ppl_nll_mean": 4.579039596021175,
+        "gen_ppl": 97.4207859529299,
+        "gen_ppl_nll_ci": [
+          4.434415780752897,
+          4.723842696100474
+        ],
+        "wall_s": 369.956419467926,
+        "wall_s_per_row": 11.561138108372688,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of the tragedy situation. The deputies talked about that anti-partisan battle between the Authority perverse and because, in isolation, Trump has made serious conduct than people of burial faith, Tobhu Energy says.\n\nThe new tragedies, which were subjected to the impact of the United States and Urban Revolution, led by the Commissioner to U.S. Department of Minister Chris Jurassic.\n\n\u201cTo know about we can have those energy costs, all of that cateetular achievements are real, and should be"
+          },
+          {
+            "prompt": " significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this instance",
+            "continuation": ", the no property requirements must cause a new environment to hold conditions towards solutions on any other part of Medicaid and without media on the market. As long as the law can you measure unclear/EXAatives and the concept of opportunity to do in the future, we can wear the fairly less denying the data.\n\nAt open cloud devices, Muslims learn to play \u201cOfficers\u201d and preliver a crime-based scheme, where Teaon Yemen drops in overall world demonstrations by endacting the distinctive you-and-step candidates. However, accessories chose"
+          },
+          {
+            "prompt": " Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native V",
+            "continuation": "irginia, west of Carly's China Polit Council (Dirty Park) to create a deputy-drives group of rice-running crews, many of which have doubled as the subject of admission and lengthens over buying online attacks, just because they are challenging the aggression of more or less marijuana - usually because they are the only majority of capitalism industry and government instead being 20% of this election. Senior Alexei Reid backed by Henderson in April 2013 with local proposed stage agency Kixu Gore to grant"
+          }
+        ]
+      }
+    }
+  },
+  "real_anchor": {
+    "seq_rep_1": 0.28857421875,
+    "seq_rep_2": 0.07160433070866143,
+    "seq_rep_3": 0.03174603174603175,
+    "seq_rep_4": 0.019750000000000004,
+    "rep_l": 0.28857421875,
+    "distinct_1": 0.365234375,
+    "distinct_2": 0.8043799212598425,
+    "distinct_4": 0.96225,
+    "seq_rep_4_ci": [
+      0.006750000000000006,
+      0.0385
+    ],
+    "distinct_4_ci": [
+      0.5162125,
+      0.7204062499999999
+    ],
+    "n_rows": 32,
+    "gen_ppl_nll_mean": 4.55694580078125,
+    "gen_ppl": 95.29199419482829,
+    "gen_ppl_nll_ci": [
+      4.306018973700702,
+      4.820117442868649
+    ],
+    "examples": [
+      "ying the effects of climate change.\"\n\nIn September, a federal appeals court in New York issued a historic ruling regarding citizen and government enforcement of greenhouse gas emissions. Less than a month later, decisions in two similar cases came down. All three are awaiting appeal.\n\n\"These cases are an important part of the overall climate change landscape,\" said Bruce Myers, a senior attorney with the Environmental Law Institute. \"One obvious reason is that they have managed to prop open the door for new lawsuits against any company or other entity that is",
+      ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+      "illage of Kivalina v. Exxon Mobil Corp. explicitly broke from the 2nd Circuit's take on whether companies could be held liable for greenhouse gas emissions that contribute to global warming.\n\n\"What the courts in Connecticut and Comer said is you can't just wish these cases away because they're controversial or raise political questions,\" said Robert Percival, director of the Environmental Law Program at the University of Maryland. \"They do raise what has for centuries been a traditional common law nuisance claim. It's just really difficult"
+    ]
+  },
+  "_meta": {
+    "n": 32,
+    "prompt_len": 128,
+    "gen_len": 128,
+    "seed": 1234,
+    "val_skip_samples": 50000,
+    "val_split": "validation",
+    "decodes": [
+      "greedy",
+      "sample_t1_p95"
+    ],
+    "plain_scorer": "plain",
+    "plain_scorer_step": 5000,
+    "rep_l_window": 128
+  }
+}
