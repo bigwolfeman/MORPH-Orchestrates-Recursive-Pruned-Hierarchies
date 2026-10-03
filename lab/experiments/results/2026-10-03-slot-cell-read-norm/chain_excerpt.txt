@@ -1,0 +1,15 @@
+[10-03 09:37:27] === cnorm-read queued at 59bd74e (3k) ===
+[10-03 09:37:27] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read START at 59bd74e3 Prereg: read-state norm on the detached arm, 3k. cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1_cnorm_read steps=3000
+[10-03 10:20:26] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read TRAIN exit=0 tok/s=9826 peak=15.97GB Final val_loss=4.6135  ppl=100.84  fan/l
+[10-03 10:20:26] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read TRIPWIRE EXCURSION last=2999 max=1.07e+04@2521 (one-step outliers at [2521], recovered)
+[10-03 10:25:45] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read ce_tokens K1-K6: +0.0063 [+0.0053, +0.0072] over 480 rows
+[10-03 10:25:45] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read GAP exit=0  ce_6_minus_ruler_ce6: +0.5301 [+0.5134, +0.5484]
+[10-03 10:28:53] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read SCORE exit=1 
+[10-03 10:28:53] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read PAIR exit=1 
+[10-03 10:29:52] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read zero TOTAL +0.0880 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read shuffle TOTAL +0.0858 
+[10-03 10:29:52] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read DONE steps=3000
+[10-03 10:39:22] LEDGER cnr-det-rf-lam1 exit=0  shipped ce=4.6109 (40s)
+[10-03 10:39:45] LNPROBE cnr-det-rf-lam1 exit=0
+[10-03 10:41:27] VABLATE cnr-det-rf-lam1 exit=0
+[10-03 10:41:27] CNORMREAD-EVAL start
+[10-03 10:54:03] CNORMREAD-EVAL exit=0
