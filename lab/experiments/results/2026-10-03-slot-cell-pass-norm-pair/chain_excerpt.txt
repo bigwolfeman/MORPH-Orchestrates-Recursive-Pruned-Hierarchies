@@ -1,0 +1,27 @@
+[10-03 02:20:37] === cnorm pair queued at top (at d699450) ===
+[10-03 02:21:50] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm START at d6994505 Prereg: per-pass cell norm pair. cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1_cnorm steps=5000
+[10-03 03:33:45] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm TRAIN exit=0 tok/s=9809 peak=16.06GB Final val_loss=4.5380  ppl=93.51  fan/ls
+[10-03 03:33:45] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm TRIPWIRE EXCURSION last=4999 max=5.59e+04@2654 (one-step outliers at [2654], recovered)
+[10-03 03:39:13] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm ce_tokens K1-K6: +0.0119 [+0.0109, +0.0130] over 480 rows
+[10-03 03:39:14] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm GAP exit=0  ce_6_minus_ruler_ce6: +0.3248 [+0.3084, +0.3428]
+[10-03 03:42:29] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm SCORE exit=1 
+[10-03 03:42:29] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm PAIR exit=1 
+[10-03 03:43:33] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm zero TOTAL +0.0964 slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm shuffle TOTAL +0.1103 
+[10-03 03:43:33] slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm DONE steps=5000
+[10-03 03:43:35] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm START at d6994505 Prereg: per-pass cell norm pair. cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm steps=5000
+[10-03 04:54:43] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm TRAIN exit=0 tok/s=9800 peak=16.06GB Final val_loss=4.4799  ppl=88.23  fan/ls
+[10-03 04:54:43] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm TRIPWIRE HEALTHY last=4999 max=678@860
+[10-03 05:00:04] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm ce_tokens K1-K6: +0.0215 [+0.0205, +0.0225] over 480 rows
+[10-03 05:00:04] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm GAP exit=0  ce_6_minus_ruler_ce6: +0.2723 [+0.2567, +0.2903]
+[10-03 05:03:13] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm SCORE exit=1 
+[10-03 05:03:13] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm PAIR exit=1 
+[10-03 05:04:12] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm zero TOTAL +0.1764 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm shuffle TOTAL +0.1660 
+[10-03 05:04:12] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm DONE steps=5000
+[10-03 05:33:32] LEDGER cn-det-rf-lam1 exit=0  shipped ce=4.4052 (40s)
+[10-03 05:34:03] LNPROBE cn-det-rf-lam1 exit=0
+[10-03 05:38:51] VABLATE cn-det-rf-lam1 exit=0
+[10-03 05:46:41] LEDGER cn-joint-rf-lam1-rank exit=0  shipped ce=4.3529 (40s)
+[10-03 06:15:18] LNPROBE cn-joint-rf-lam1-rank exit=0
+[10-03 06:17:08] VABLATE cn-joint-rf-lam1-rank exit=0
+[10-03 06:17:08] CNORM-EVAL start
+[10-03 06:45:25] CNORM-EVAL exit=0
