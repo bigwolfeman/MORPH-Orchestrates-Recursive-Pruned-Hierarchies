@@ -2824,9 +2824,13 @@ class MORPHTransformer(nn.Module):
         # and an RMSNorm is not an nn.Linear, so ternary QAT never selects it
         # (`ternary_qat._categorize`). TULConfig refuses the tul-level modes with no slot
         # loop; the model-level ones are refused here.
+        # "rms_read" (2026-10-03, second build) uses the SAME module and the same `g`, on
+        # the READ state instead of on each stream: see `_slot_cell_norm`.
         self.tul_cell_norm: RMSNorm | None = None
         self._cell_norm_stats: dict | None = None
-        if cfg.tul is not None and str(cfg.tul.slot_cell_pass_norm) == "rms":
+        self._cell_norm_mode: str = ("off" if cfg.tul is None
+                                     else str(cfg.tul.slot_cell_pass_norm))
+        if self._cell_norm_mode != "off":
             _cn_bad = [
                 (getattr(cfg, "fm", None) is not None,
                  "an FM planner (cfg.fm): the planner replaces the slot loop"),
@@ -2840,10 +2844,14 @@ class MORPHTransformer(nn.Module):
                 (float(cfg.core_gain_clip) > 0.0,
                  "model.core_gain_clip > 0: RMSNorm divides out any rescale of the step, so "
                  "the clip would be a silent no-op"),
+                (self._cell_norm_mode == "rms_read" and not self._is_hc,
+                 "a plain (non Hyper-Connection) carrier: the read state is the stream "
+                 "mean, and a carrier without streams has nothing to combine (use 'rms')"),
             ]
             for _bad, _why in _cn_bad:
                 if _bad:
-                    raise NotImplementedError(f"tul.slot_cell_pass_norm='rms' with {_why}.")
+                    raise NotImplementedError(
+                        f"tul.slot_cell_pass_norm={self._cell_norm_mode!r} with {_why}.")
             self.tul_cell_norm = RMSNorm(d)
 
         # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
@@ -3746,9 +3754,11 @@ class MORPHTransformer(nn.Module):
 
     def _slot_cell_norm(self, h: Tensor, t: int, active: Tensor, layout: SlotLayout,
                         no_grad: bool = False, cut: Tensor | None = None) -> Tensor:
-        """``tul.slot_cell_pass_norm: rms``: the carried cell after pass ``t``, normed.
+        """``tul.slot_cell_pass_norm``: the carried cell after pass ``t``, normed.
 
-        ``RMSNorm(h) * g`` over the channel axis, per Hyper-Connection stream, with the ONE
+        ``rms``: ``RMSNorm(h) * g`` over the channel axis, per Hyper-Connection stream;
+        ``rms_read``: the stream mean (the read state) becomes ``RMSNorm(mean) * g``
+        (`_cell_norm_apply`). Both use the ONE
         gain ``g = self.tul_cell_norm.weight`` every pass shares; the output is cast back to
         the carrier's dtype (RMSNorm's fp32 weight would otherwise promote it). Every cell
         is normed, pads included: pads were never zero after pass 0 (the core step moves
@@ -3779,13 +3789,15 @@ class MORPHTransformer(nn.Module):
           * ``loop/core_gain`` (the probe's ||out|| / ||in||) reads ~1 after pass 0 by
             construction.
 
-        At eval it records ``slot_cell_rms_t{t}`` and ``slot_cell_mean_rms_t{t}`` over the
-        valid cells whose depth reaches pass ``t`` (``_cell_rms_reading``)."""
+        At eval it records ``slot_cell_rms_t{t}`` (the carrier over streams and channels)
+        and ``slot_cell_mean_rms_t{t}`` (the READ state, the stream mean: ``RMSNorm(mean) * g``
+        under ``rms_read``, so 1 at init; free under ``rms``) over the valid cells whose depth reaches
+        pass ``t`` (``_cell_rms_reading``)."""
         if no_grad:
             with torch.no_grad():
-                out = self.tul_cell_norm(h).to(h.dtype)
+                out = self._cell_norm_apply(h)
         else:
-            out = self.tul_cell_norm(h).to(h.dtype)
+            out = self._cell_norm_apply(h)
         if cut is not None:
             out = torch.where(cut, out.detach(), out)
         if self._cell_norm_stats is not None:
@@ -3793,6 +3805,42 @@ class MORPHTransformer(nn.Module):
             self._cell_norm_stats[f"slot_cell_rms_t{t}"] = r
             self._cell_norm_stats[f"slot_cell_mean_rms_t{t}"] = rm
         return out
+
+    def _cell_norm_apply(self, h: Tensor) -> Tensor:
+        """The norm itself, for the two modes (a Python-level constant picks one).
+
+        ``rms``: ``RMSNorm(h) * g`` per stream, exactly as built first.
+
+        ``rms_read`` (``h`` ``[B, S, n, C]``, the Hyper-Connection carrier): two steps.
+          1. Every stream to unit RMS over C, no gain (``u_i = h_i / rms(h_i)``, the same
+             formula and eps as ``attention.RMSNorm``).
+          2. The READ state ``m = mean_i u_i`` (the stream mean: ``_readout``, the coda
+             blocks' pre-map at its uniform init, `_cell_readout` for the latent head,
+             teacher, router and the fan's diversity term, and the probes all read it) is
+             swapped for ``RMSNorm(m) * g``: ``out_i = u_i + (RMSNorm(m) * g - m)``, ONE
+             single-stream term broadcast into every stream (`_apply_injection`, the
+             carrier's rule for every injection).
+        So ``mean_i out_i = RMSNorm(m) * g`` EXACTLY: the read's scale does not depend on
+        the streams' size or on how they align (identical streams give ``m`` RMS 1,
+        orthogonal ones RMS 0.5; the read is the same RMSNorm of either). It is rms(g) for a
+        constant ``g`` (1 at init); for a non-constant ``g`` it is ``rms(m_hat * g)``, set
+        by ``g`` and the read's direction. Each stream stays bounded: ``out_i - read =
+        u_i - m``, RMS <= 2.
+
+        Why not one scalar per cell (``out = h * rms(g) / rms(mean_i h_i)``)? It also fixes
+        the read, but it divides every stream by the read's RMS, so streams that disagree
+        are blown up without bound (a mean near 0 means streams near infinity), and the
+        coda reads the streams one by one through ``W_prefix`` and the Hyper-Connection
+        pre-map. Step 1 here bounds the streams first; step 2 only shifts their common
+        part. ``g`` is the same ``tul_cell_norm.weight``: one gain, every pass."""
+        if self._cell_norm_mode == "rms":
+            return self.tul_cell_norm(h).to(h.dtype)
+        eps = self.tul_cell_norm.eps
+        hf = h.float()
+        u = hf * hf.pow(2).mean(-1, keepdim=True).add(eps).rsqrt()           # [B, S, n, C]
+        m = u.mean(dim=2)                                                    # [B, S, C]
+        read = self.tul_cell_norm(m)                                         # fp32
+        return self._apply_injection(u, read - m).to(h.dtype)
 
     def _fold_cell_norm_stats(self, out: dict, stats: dict | None) -> dict:
         """Fold one forward's `_slot_cell_norm` readings and the gain's mean / std into the

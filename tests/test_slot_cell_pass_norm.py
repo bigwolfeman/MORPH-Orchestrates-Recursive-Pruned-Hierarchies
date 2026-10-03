@@ -26,6 +26,14 @@ What each test pins:
   * Refusals, tul-level and model-level.
   * The two configs differ from their parents by this key and the run name only, and the
     key reaches MORPHConfig and the manifest.
+  * "rms_read" (second build): "rms" is pinned bit-identical to its first build (master
+    bac34a9). Under "rms_read" the READ state (the stream mean) is RMSNorm(mean of the
+    unit streams) * g: identical and orthogonal streams give the same read RMS at every
+    input scale (and "rms" does not), the read matches an fp64 reference, every pass's
+    read divided by g has RMS 1 with one gain, streams stay bounded, pass 0 is the read
+    norm of the off model's step, and the 3000-step config differs from its parent by the
+    key, the run length and the name. The build, gradient, fixed-point, hinge and
+    grad-context tests run under both modes.
 
 CPU, fp32, the tests/test_tul_fan.py / test_tul_lxfan.py / test_tul_fan_lsel.py fixtures.
 """
@@ -76,6 +84,8 @@ _ARMS = {
 # per-stream RMS sits 0.05+ away from 1 on these fixtures, checked below).
 _RMS_TOL = 1e-4
 
+_MODES = ("rms", "rms_read")
+
 
 def _arm(name: str, dropout: float = 0.0, model_kw: dict | None = None, **kw):
     mode, akw = _ARMS[name]
@@ -88,6 +98,26 @@ def _arm(name: str, dropout: float = 0.0, model_kw: dict | None = None, **kw):
 def _stream_rms(h: torch.Tensor) -> torch.Tensor:
     """Per (row, cell, stream) RMS over the channel axis, fp64."""
     return h.double().pow(2).mean(-1).sqrt()
+
+
+def _read_rms(h: torch.Tensor) -> torch.Tensor:
+    """Per (row, cell) RMS over C of the READ state, the Hyper-Connection stream mean."""
+    return h.double().mean(dim=-2).pow(2).mean(-1).sqrt()
+
+
+def _normed_rms(h: torch.Tensor, mode: str) -> torch.Tensor:
+    """What each mode pins: every stream's RMS ("rms") or the read's ("rms_read")."""
+    return _stream_rms(h) if mode == "rms" else _read_rms(h)
+
+
+def _ref_read_norm(h: torch.Tensor, g: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """An independent fp64 reference of "rms_read" on ``h`` ``[..., n, C]``: streams to
+    unit RMS, then the stream mean swapped for RMSNorm(mean) * g."""
+    hd = h.double()
+    u = hd / hd.pow(2).mean(-1, keepdim=True).add(eps).sqrt()
+    m = u.mean(dim=-2, keepdim=True)
+    read = m / m.pow(2).mean(-1, keepdim=True).add(eps).sqrt() * g.double()
+    return u - m + read
 
 
 def _capture_eval(m: MORPHTransformer, inp, lab, layout):
@@ -127,10 +157,11 @@ def test_off_is_bit_identical_to_the_pre_key_tree(name, dropout, explicit):
 # ── 2. the build ────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("mode", _MODES)
 @pytest.mark.parametrize("name", sorted(_ARMS))
-def test_rms_builds_one_shared_gain_and_draws_no_rng(name):
+def test_rms_builds_one_shared_gain_and_draws_no_rng(name, mode):
     off = _arm(name)
-    on = _arm(name, slot_cell_pass_norm="rms")
+    on = _arm(name, slot_cell_pass_norm=mode)
     assert isinstance(on.tul_cell_norm, RMSNorm)
     assert on.tul_cell_norm.eps == 1e-6
     assert torch.equal(on.tul_cell_norm.weight, torch.ones(on.cfg.d_model))
@@ -227,12 +258,13 @@ def test_every_pass_is_normed_by_the_same_gain(name):
 # ── 4. g trains ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("mode", _MODES)
 @pytest.mark.parametrize("name", sorted(_ARMS))
-def test_the_gain_gets_a_gradient_and_sits_in_the_no_decay_group(name):
+def test_the_gain_gets_a_gradient_and_sits_in_the_no_decay_group(name, mode):
     from morph.training.optimizer import _split_by_decay
 
     _ids0, inp, lab, layout = _batch(M)
-    m = _arm(name, slot_cell_pass_norm="rms").train()
+    m = _arm(name, slot_cell_pass_norm=mode).train()
     torch.manual_seed(3)
     out = m(inp, labels=lab, slot_layout=layout)
     out["loss"].backward()
@@ -259,13 +291,14 @@ def test_the_gain_is_never_ternarized():
 # ── 5. the fixed-point term reads the NORMED states ─────────────────────────────────
 
 
-def test_fixed_point_term_compares_the_normed_states(monkeypatch):
+@pytest.mark.parametrize("mode", _MODES)
+def test_fixed_point_term_compares_the_normed_states(monkeypatch, mode):
     """Train forward, strict ruler (fixed-point 0.1, full BPTT): the term equals
     mean over finishing slots of ||h_T - h_{T-1}||^2 / (||h_T||^2 + 1e-6) with h_T the
     normed exit and h_{T-1} the carried state entering the last pass (normed, or the
     un-normed entry at depth 1)."""
     _ids0, inp, lab, layout = _batch(M)
-    m = _arm("strict_ruler_fp01", slot_cell_pass_norm="rms").train()
+    m = _arm("strict_ruler_fp01", slot_cell_pass_norm=mode).train()
     assert m.cfg.core_fixed_point_lambda > 0.0 and m.cfg.bptt_depth >= m.cfg.max_depth
     seen: dict = {}
     real = m._tul_core
@@ -296,31 +329,33 @@ def test_fixed_point_term_compares_the_normed_states(monkeypatch):
     assert abs(float(out["fixed_point"]) - want) < 1e-5 * max(1.0, want), \
         (float(out["fixed_point"]), want)
     # the exit is normed (so the recomputation above used normed states)
-    assert float((_stream_rms(h)[valid] - 1.0).abs().max()) < _RMS_TOL
+    assert float((_normed_rms(h, mode)[valid] - 1.0).abs().max()) < _RMS_TOL
 
 
-def test_the_gain_hinge_still_reads_the_raw_map():
+@pytest.mark.parametrize("mode", _MODES)
+def test_the_gain_hinge_still_reads_the_raw_map(mode):
     """The hinge was NOT changed: it re-runs `_core_step`, which does not contain the norm.
     At depth 1 the hinge probes pass 0, whose operating point (the entry) is identical in
     the off and rms models, so both read the SAME gain and penalty. A norm moved inside
     `_core_step` (so the hinge would difference RMSNorm(f)) fails this."""
     _ids0, inp, lab, layout = _batch(M)
     res = {}
-    for v in ("off", "rms"):
+    for v in ("off", mode):
         m = _arm("strict_ruler_fp01", slot_depth_fixed=1, slot_cell_pass_norm=v).train()
         assert m.cfg.slot_gain_lambda > 0.0
         torch.manual_seed(4)
         out = m(inp, labels=lab, slot_layout=layout)
         res[v] = (float(out["gain_est"]), float(out["gain_reg_weighted"]))
-    assert res["off"] == res["rms"], res
+    assert res["off"] == res[mode], res
 
 
-def test_the_norm_takes_the_pass_grad_context(monkeypatch):
+@pytest.mark.parametrize("mode", _MODES)
+def test_the_norm_takes_the_pass_grad_context(monkeypatch, mode):
     """Truncated BPTT (bptt_depth 1, fixed depth 3): passes 0 and 1 run under no_grad, so
     their norm must too (no gradient into g from passes the objective cut away)."""
     _ids0, inp, lab, layout = _batch(M)
     m = _arm("strict_ruler_fp01", model_kw={"bptt_depth": 1}, slot_depth_fixed=3,
-             slot_cell_pass_norm="rms").train()
+             slot_cell_pass_norm=mode).train()
     calls: list[bool] = []
     real = m.tul_cell_norm.forward
 
@@ -369,6 +404,158 @@ def test_eval_readings_exist_at_eval_only_and_reach_evaluate():
              extra=extra)
     assert abs(extra["val/slot_cell_rms_t0"] - 1.0) < _RMS_TOL
     assert "val/slot_cell_norm_g_std" in extra and "val/slot_cell_rms_entry" in extra
+
+
+# ── 6b. "rms" is unchanged by the "rms_read" build ──────────────────────────────────
+
+# Measured 2026-10-03 at master bac34a9 (the "rms" build, before "rms_read" existed) by
+# `_fan_pin_run` on the same fixtures with `slot_cell_pass_norm="rms"`, one CPU thread.
+PINS_RMS = {
+    ("lsel_det_rf_lam1", 0.0): (12.297736167907715, 1130.3376108596349, 12.335134506225586,
+                                1917.0879882631566, 204),
+    ("lsel_det_rf_lam1", 0.1): (12.245047569274902, 1130.3376108596349, 12.335134506225586,
+                                1921.995338165514, 204),
+    ("lsel_joint_rf_lam1_rank", 0.0): (12.297736167907715, 1130.3376108596349,
+                                       12.335134506225586, 2004.2820279630232, 204),
+    ("lsel_joint_rf_lam1_rank", 0.1): (12.245047569274902, 1130.3376108596349,
+                                       12.335134506225586, 2025.0867464061557, 204),
+    ("strict_ruler_fp01", 0.0): (5.1131978034973145, 1431.6614863937502, 5.110530853271484,
+                                 708.4497167284923, 175),
+    ("strict_ruler_fp01", 0.1): (5.098525047302246, 1431.6614863937502, 5.110530853271484,
+                                 709.0838517424509, 175),
+}
+
+
+@pytest.mark.parametrize("name,dropout", sorted(PINS_RMS))
+def test_rms_is_bit_identical_to_its_first_build(name, dropout):
+    m = _arm(name, dropout, slot_cell_pass_norm="rms")
+    assert _fan_pin_run(m) == PINS_RMS[(name, dropout)]
+
+
+# ── 6c. "rms_read": the READ state (the stream mean) has a fixed scale ──────────────
+
+
+def _streams(kind: str, C: int, scale: float, gen: torch.Generator) -> torch.Tensor:
+    """``[4, C]`` streams, each of per-stream RMS ``scale`` (times a per-stream factor
+    for "identical_scaled"): four copies of one vector, or four orthogonal vectors."""
+    if kind.startswith("identical"):
+        v = torch.randn(C, generator=gen, dtype=torch.float64)
+        x = v.expand(4, C).clone()
+    else:
+        q, _ = torch.linalg.qr(torch.randn(C, 4, generator=gen, dtype=torch.float64))
+        x = q.T.clone()                                                 # orthonormal rows
+    x = x / x.pow(2).mean(-1, keepdim=True).sqrt() * scale
+    if kind == "identical_scaled":
+        x = x * torch.tensor([0.5, 1.0, 3.0, 20.0], dtype=torch.float64).view(4, 1)
+    return x
+
+
+@pytest.mark.parametrize("scale", [0.1, 1.0, 100.0])
+def test_read_rms_is_the_same_for_identical_and_orthogonal_streams(scale):
+    """The point of "rms_read": the read state's scale cannot grow when the streams align.
+    Identical streams (their mean has RMS 1 after a per-stream norm) and orthogonal streams
+    (RMS 0.5) give the SAME read RMS, 1 = rms(g) at init, at every input scale; the read is
+    exactly RMSNorm(mean of the unit streams) * g for a non-constant g too; every stream
+    stays bounded. Under "rms" the same inputs give read RMS 1 vs 0.5 (the defect)."""
+    m = _arm("strict_ruler_fp01", slot_cell_pass_norm="rms_read")
+    m_rms = _arm("strict_ruler_fp01", slot_cell_pass_norm="rms")
+    C = m.cfg.d_model
+    gen = torch.Generator().manual_seed(17)
+    kinds = ("identical", "identical_scaled", "orthogonal")
+    h = torch.stack([_streams(k, C, scale, gen) for k in kinds]).unsqueeze(0).float()
+    with torch.no_grad():
+        out = m._cell_norm_apply(h)                                     # [1, 3, 4, C]
+        out_rms = m_rms._cell_norm_apply(h)
+    r = _read_rms(out)[0]
+    assert float((r - 1.0).abs().max()) < _RMS_TOL, r
+    r_old = _read_rms(out_rms)[0]
+    assert abs(float(r_old[0]) - 1.0) < _RMS_TOL and abs(float(r_old[2]) - 0.5) < 1e-3, r_old
+    assert float(_stream_rms(out).max()) <= 3.0 + _RMS_TOL
+    torch.testing.assert_close(out.double(), _ref_read_norm(h, m.tul_cell_norm.weight.detach()),
+                               rtol=1e-5, atol=1e-5)
+    # a non-constant g: the read is RMSNorm(mean of the unit streams) * g, identical and
+    # orthogonal alike (its RMS then depends on g and the read's direction, never on scale
+    # or alignment)
+    with torch.no_grad():
+        m.tul_cell_norm.weight.copy_(0.3 + 2.0 * torch.rand(C, generator=gen))
+        out = m._cell_norm_apply(h)
+    g = m.tul_cell_norm.weight.detach()
+    torch.testing.assert_close(out.double(), _ref_read_norm(h, g), rtol=1e-5, atol=1e-5)
+    rd = out.double().mean(dim=-2)
+    rd_hat = rd / g.double()
+    assert float((rd_hat.pow(2).mean(-1).sqrt() - 1.0).abs().max()) < _RMS_TOL
+
+
+def test_rms_read_pass0_is_the_read_norm_of_the_off_step():
+    """Strict ruler, eval, depth 3: the off and rms_read models share every weight and the
+    entry; pass 0's carried cell is exactly the read norm of the off model's pass-0
+    output (the fp64 reference), so the injection is inside the pass and the norm at its
+    end, and the entry is untouched."""
+    _ids0, inp, lab, layout = _batch(M)
+    off = _arm("strict_ruler_fp01", slot_mean_depth=3).eval()
+    on = _arm("strict_ruler_fp01", slot_mean_depth=3, slot_cell_pass_norm="rms_read").eval()
+    w_in = 0.3 + 2.0 * torch.rand(off.cfg.d_model, generator=torch.Generator().manual_seed(9))
+    with torch.no_grad():
+        off.input_norm.weight.copy_(w_in)
+        on.input_norm.weight.copy_(w_in)
+    _o, jac_off, _ = _capture_eval(off, inp, lab, layout)
+    _o, jac_on, _ = _capture_eval(on, inp, lab, layout)
+    valid = jac_on[0]["active"]
+    assert torch.equal(jac_on[0]["h"], jac_off[0]["h"])
+    assert float((_read_rms(jac_on[0]["h"])[valid] - 1.0).abs().max()) > 0.05
+    want = _ref_read_norm(jac_off[1]["h"], on.tul_cell_norm.weight.detach())
+    torch.testing.assert_close(jac_on[1]["h"][valid].double(), want[valid],
+                               rtol=1e-5, atol=1e-5)
+    assert float((_read_rms(jac_off[1]["h"])[valid] - 1.0).abs().max()) > 0.05
+
+
+@pytest.mark.parametrize("name", sorted(_ARMS))
+def test_rms_read_every_pass_reads_a_fixed_scale_with_one_gain(name):
+    """Every pass's carried cell (entering passes 1 and 2; on the latent-selected loop every
+    pass's candidates and the exit): at init the read has RMS 1; with g random the read
+    divided by g has RMS 1 (one gain, every pass); every stream stays bounded."""
+    _ids0, inp, lab, layout = _batch(M)
+    for random_g in (False, True):
+        m = _arm(name, slot_mean_depth=3, slot_cell_pass_norm="rms_read").eval()
+        if random_g:
+            with torch.no_grad():
+                m.tul_cell_norm.weight.copy_(
+                    0.3 + 2.0 * torch.rand(m.cfg.d_model,
+                                           generator=torch.Generator().manual_seed(5)))
+        g = m.tul_cell_norm.weight.detach().double()
+        _out, jac, pre = _capture_eval(m, inp, lab, layout)
+        states = [(f"enter{t}", c["h"], c["active"]) for t, c in enumerate(jac) if t >= 1]
+        if pre is not None:
+            states += [(f"pre{c['t']}", c["pre"], jac[0]["active"]) for c in pre]
+            assert len(pre) == 3
+        for tag, h, act in states:
+            rd = h.double().mean(dim=-2) / g
+            r = rd.pow(2).mean(-1).sqrt()[act]
+            assert r.numel() > 0, tag
+            assert float((r - 1.0).abs().max()) < _RMS_TOL, (tag, random_g,
+                                                            float((r - 1.0).abs().max()))
+            assert float(_stream_rms(h)[act].max()) <= 2.0 + float(g.abs().max()) + 1e-3
+
+
+def test_rms_read_eval_reading_is_the_read_rms():
+    _ids0, inp, lab, layout = _batch(M)
+    m = _arm("lsel_det_rf_lam1", slot_mean_depth=3, slot_cell_pass_norm="rms_read").eval()
+    with torch.no_grad():
+        out = m(inp, labels=lab, slot_layout=layout)
+    for t in range(3):
+        assert abs(float(out[f"slot_cell_mean_rms_t{t}"]) - 1.0) < _RMS_TOL
+
+
+def test_rms_read_refusals():
+    with pytest.raises(NotImplementedError, match="slot_cell_pass_norm='rms_read' with .*gram"):
+        _tul(slot_cell_pass_norm="rms_read", gram=True)
+    with pytest.raises(NotImplementedError,
+                       match="slot_cell_pass_norm='rms_read' with .*tokens_through_core"):
+        _tul(slot_cell_pass_norm="rms_read", tokens_through_core=True, tg_restrict=False,
+             tg_geometry="none")
+    with pytest.raises(NotImplementedError,
+                       match="slot_cell_pass_norm='rms_read' with .*scse_enabled"):
+        MORPHTransformer(_tiny(tul=_tul(slot_cell_pass_norm="rms_read"), scse_enabled=True))
 
 
 # ── 7. refusals ─────────────────────────────────────────────────────────────────────
@@ -450,3 +637,32 @@ def test_cnorm_configs_change_one_key_and_reach_the_model(name, parent, monkeypa
     assert mc.tul.slot_cell_pass_norm == "rms" and pmc.tul.slot_cell_pass_norm == "off"
     assert rt.manifest.get("slot_cell_pass_norm") == "rms"
     assert prt.manifest.get("slot_cell_pass_norm") == "off"
+
+
+def test_cnorm_read_config_changes_one_key_and_the_run_length(monkeypatch):
+    from omegaconf import OmegaConf
+    from test_slot_gain_tail import _leaves, _MISSING
+    from test_tul_strict_geometry import _runtime
+
+    from morph.training.train import build_morph_config
+
+    name = "tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1_cnorm_read"
+    parent = "tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1_cnorm"
+    cfg, rt = _runtime(name, monkeypatch)
+    pcfg, prt = _runtime(parent, monkeypatch)
+    c = _leaves(OmegaConf.to_container(cfg, resolve=True))
+    p = _leaves(OmegaConf.to_container(pcfg, resolve=True))
+    diff = {k for k in c.keys() | p.keys() if c.get(k, _MISSING) != p.get(k, _MISSING)}
+    assert diff == {"tul.slot_cell_pass_norm", "training.steps", "wandb.name"}, sorted(diff)
+    assert c["training.steps"] == 3000 and p["training.steps"] == 5000
+    assert c["wandb.name"] == "slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read"
+    # the schedules the 3000 steps share with the parent's first 3000 (the config's note)
+    assert c["training.min_lr"] == c["training.lr"]
+    assert c["training.ademamix_t_beta3"] is not None
+    mc = build_morph_config(cfg, tul=rt.model_cfg)
+    pmc = build_morph_config(pcfg, tul=prt.model_cfg)
+    tdiff = {f.name for f in dataclasses.fields(mc.tul)
+             if getattr(mc.tul, f.name) != getattr(pmc.tul, f.name)}
+    assert tdiff == {"slot_cell_pass_norm"}
+    assert mc.tul.slot_cell_pass_norm == "rms_read" and pmc.tul.slot_cell_pass_norm == "rms"
+    assert rt.manifest.get("slot_cell_pass_norm") == "rms_read"

@@ -1,0 +1,30 @@
+# The detached, router-followed latent-selected loop at weight 1 with the READ-state norm
+# (2026-10-03). Composes `tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1_cnorm` and
+# changes ONE model key plus the run length and the run name:
+#
+#   tul.slot_cell_pass_norm   rms -> rms_read
+#   training.steps            5000 -> 3000 (Wolfe, 2026-10-03)
+#
+# Change: the parent pins each Hyper-Connection stream's RMS, but the READ state (the
+# stream mean: the coda's readout, the latent head, teacher and router, the diversity term)
+# can still grow when the streams align, and on the parent it did (the LN probe: cells
+# jump onto one shared direction at pass index 2, cosine 0.02 -> 0.92, 1.41 -> 3.24 in
+# probe units). Here every stream goes to unit RMS and the stream mean is replaced by
+# RMSNorm(mean) * g after every pass, so the read's scale is fixed whatever the streams do.
+# Compare at step 3000 against the parent's step-3000 numbers: the LR is flat after the
+# 1000-step ramp and ademamix_t_beta3 is pinned at 3500, so the two runs share their
+# schedules over these 3000 steps (the beta3 warmup does not finish in either).
+# Note: .agents/notes/proposed/architecture/2026-10-03-slot-cell-pass-norm.md
+# Filing of the parent pair: lab/experiments/failures/2026-10-03-slot-cell-pass-norm-pair.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1_cnorm
+  - _self_
+
+tul:
+  slot_cell_pass_norm: rms_read
+
+training:
+  steps: 3000
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm-read

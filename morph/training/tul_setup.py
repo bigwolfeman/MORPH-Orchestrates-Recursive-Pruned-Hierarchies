@@ -1602,16 +1602,22 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               flush=True)
     if model_cfg.slot_cell_pass_norm != "off":
         _gl = float(getattr(cfg.model, "slot_gain_lambda", 0.0) or 0.0)
-        print("  TUL SLOT-CELL PASS NORM 'rms' ON: after EVERY slot-loop pass each carried "
-              "cell is RMSNorm(h) * g (per Hyper-Connection stream over the channels, eps "
-              "1e-6, ONE learned gain g shared by every pass, init 1.0, no-decay, never "
+        _cnm = model_cfg.slot_cell_pass_norm
+        print(f"  TUL SLOT-CELL PASS NORM {_cnm!r} ON: after EVERY slot-loop pass "
+              + ("each carried cell is RMSNorm(h) * g (per Hyper-Connection stream over the "
+                 "channels, eps 1e-6, " if _cnm == "rms" else
+                 "each stream goes to unit RMS and the READ state (the stream mean) is "
+                 "replaced by RMSNorm(mean) * g, one broadcast term, so the read's scale "
+                 "cannot grow when the streams align (eps 1e-6, ")
+              + "ONE learned gain g shared by every pass, init 1.0, no-decay, never "
               "ternary); the entry state is NOT normed. The fixed-point term compares "
               "normed states; the latent head, the teacher, the diversity term and the "
               "prefix write read the normed cell"
               + (f". NOTE the gain hinge (model.slot_gain_lambda={_gl}) still reads the RAW "
                  "map f, not the normed map the loop carries: it bounds f, not the carried "
                  "gain" if _gl > 0.0 else "")
-              + " - read val/slot_cell_rms_t{t} (should sit at rms(g)) and "
-                "val/slot_cell_norm_g_mean / _std", flush=True)
+              + (" - read val/slot_cell_rms_t{t} (should sit at rms(g))" if _cnm == "rms"
+                 else " - read val/slot_cell_mean_rms_t{t}, the read state (1.000 at init)")
+              + " and val/slot_cell_norm_g_mean / _std", flush=True)
     return TulRuntime(model_cfg=model_cfg, data_cfg=data_cfg,
                       activate_at=activate_at, manifest=manifest)

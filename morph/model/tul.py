@@ -26,8 +26,9 @@ from .tul_latent_pre import LATENT_PRE_LOSSES, LATENT_PRE_TARGET_NORMS, LATENT_P
 from .tul_layout import SlotLayout
 
 # `tul.slot_cell_pass_norm`: "off" builds nothing; "rms" norms every carried slot cell
-# after every slot-loop pass (TULConfig's comment block, `MORPHTransformer._slot_cell_norm`).
-SLOT_CELL_PASS_NORMS = ("off", "rms")
+# after every slot-loop pass, per stream; "rms_read" fixes the RMS of the READ state (the
+# stream mean) instead (TULConfig's comment block, `MORPHTransformer._slot_cell_norm`).
+SLOT_CELL_PASS_NORMS = ("off", "rms", "rms_read")
 
 __all__ =["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass",
            "TULRowContrast", "TULSlotChain", "TULSlots", "bag_mean",
@@ -2439,7 +2440,13 @@ class TULConfig:
     # placement against every other per-pass mechanism. Refused where no slot loop runs
     # and where the carried cell would not be the normed one (`_check_slot_cell_pass_norm`
     # here; the model-level refusals in `MORPHTransformer.__init__`).
-    slot_cell_pass_norm: str = "off"             # "off" | "rms"
+    # "rms_read" (2026-10-03, second build): under "rms" each stream is pinned but the
+    # stream MEAN, which the coda's readout, the latent head, teacher and router, the fan's
+    # diversity term and the probes read, still grew when the streams aligned (the
+    # detached arm's cells jumped onto one direction at pass index 2, probe units 1.41 ->
+    # 3.24). "rms_read" makes the read itself `RMSNorm(stream mean) * g` after every pass;
+    # `MORPHTransformer._slot_cell_norm` says how and why.
+    slot_cell_pass_norm: str = "off"             # "off" | "rms" | "rms_read"
 
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
@@ -4842,7 +4849,8 @@ class TULConfig:
         ]
         for bad, why in _refused:
             if bad:
-                raise NotImplementedError(f"tul.slot_cell_pass_norm='rms' with {why}.")
+                raise NotImplementedError(
+                    f"tul.slot_cell_pass_norm={self.slot_cell_pass_norm!r} with {why}.")
 
     def _check_gram(self) -> None:
         """``tul.gram`` — LXTUL-G, the stochastic slot loop (morph/model/tul_gram.py).
