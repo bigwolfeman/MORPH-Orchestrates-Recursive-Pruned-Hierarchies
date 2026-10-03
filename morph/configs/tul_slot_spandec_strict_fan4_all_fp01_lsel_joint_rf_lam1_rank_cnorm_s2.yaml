@@ -1,0 +1,12 @@
+# Seed twin of the rank-only head + per-stream cell norm (`..._lsel_joint_rf_lam1_rank_cnorm`,
+# seed 1: K1-K6 +0.0215, ledger CE 4.353). Identical except training seed 2.
+# Record: lab/experiments/planned/2026-10-03-rank-only-cell-norm-seed-twin.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm
+  - _self_
+
+training:
+  seed: 2
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-s2
