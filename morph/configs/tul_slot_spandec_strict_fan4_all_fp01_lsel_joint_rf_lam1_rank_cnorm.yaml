@@ -1,0 +1,26 @@
+# The router-followed latent-selected loop, joint, with the rank-only latent head, with the
+# slot-cell pass norm (2026-10-03). Composes
+# `tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank` and changes ONE key plus
+# the run name:
+#
+#   tul.slot_cell_pass_norm   off -> rms
+#
+# Change: after every slot-loop pass each carried cell is RMSNorm(h) * g (one learned
+# per-channel gain shared by every pass), so the loop can rotate its cells but not grow
+# them. Why: in the parent (no latent pull) the whole K1-K6 rides on ONE per-cell
+# amplitude along the cells' shared direction (mean-ablating that amplitude takes K6 - K1
+# from -0.0052 to +0.0003). Under the norm each stream's amplitude is fixed (the stream
+# mean's can still move, through how the four streams align), so this arm asks whether the
+# loop finds depth in direction instead. Note:
+# .agents/notes/proposed/architecture/2026-10-03-slot-cell-pass-norm.md
+# The gain hinge and the cotangent clip are inherited unchanged; under the norm the hinge
+# bounds the raw map f, not the map the loop carries (the note says what each term reads).
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank
+  - _self_
+
+tul:
+  slot_cell_pass_norm: rms
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm

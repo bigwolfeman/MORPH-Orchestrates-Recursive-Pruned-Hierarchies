@@ -78,6 +78,8 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_lsel_enc_gamma", "fan_lsel_router_lambda", "fan_lsel_router_rank",
     "fan_lsel_hidden", "fan_lsel_train_follow", "fan_lsel_read",
     "fan_lsel_head_input",
+    # the slot-cell pass norm (2026-10-03): morph/model/transformer.py `_slot_cell_norm`
+    "slot_cell_pass_norm",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -435,6 +437,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         fan_lsel_train_follow=str(tc.get("fan_lsel_train_follow", "teacher")),
         fan_lsel_read=str(tc.get("fan_lsel_read", "winner")),
         fan_lsel_head_input=str(tc.get("fan_lsel_head_input", "live")),
+        slot_cell_pass_norm=str(tc.get("slot_cell_pass_norm", "off")),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -745,6 +748,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "fan_lsel_train_follow": model_cfg.fan_lsel_train_follow,
         "fan_lsel_read": model_cfg.fan_lsel_read,
         "fan_lsel_head_input": model_cfg.fan_lsel_head_input,
+        "slot_cell_pass_norm": model_cfg.slot_cell_pass_norm,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1596,5 +1600,18 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  if model_cfg.latent_pre_target_norm == "standard" else "")
               + " - read val/latent_pre_retr_same_t{t} against val/latent_pre_chance_same",
               flush=True)
+    if model_cfg.slot_cell_pass_norm != "off":
+        _gl = float(getattr(cfg.model, "slot_gain_lambda", 0.0) or 0.0)
+        print("  TUL SLOT-CELL PASS NORM 'rms' ON: after EVERY slot-loop pass each carried "
+              "cell is RMSNorm(h) * g (per Hyper-Connection stream over the channels, eps "
+              "1e-6, ONE learned gain g shared by every pass, init 1.0, no-decay, never "
+              "ternary); the entry state is NOT normed. The fixed-point term compares "
+              "normed states; the latent head, the teacher, the diversity term and the "
+              "prefix write read the normed cell"
+              + (f". NOTE the gain hinge (model.slot_gain_lambda={_gl}) still reads the RAW "
+                 "map f, not the normed map the loop carries: it bounds f, not the carried "
+                 "gain" if _gl > 0.0 else "")
+              + " - read val/slot_cell_rms_t{t} (should sit at rms(g)) and "
+                "val/slot_cell_norm_g_mean / _std", flush=True)
     return TulRuntime(model_cfg=model_cfg, data_cfg=data_cfg,
                       activate_at=activate_at, manifest=manifest)

@@ -25,7 +25,11 @@ from .tul_denoise import LOOP_DENOISE_GRIDS
 from .tul_latent_pre import LATENT_PRE_LOSSES, LATENT_PRE_TARGET_NORMS, LATENT_PRE_TARGETS
 from .tul_layout import SlotLayout
 
-__all__ = ["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass",
+# `tul.slot_cell_pass_norm`: "off" builds nothing; "rms" norms every carried slot cell
+# after every slot-loop pass (TULConfig's comment block, `MORPHTransformer._slot_cell_norm`).
+SLOT_CELL_PASS_NORMS = ("off", "rms")
+
+__all__ =["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass",
            "TULRowContrast", "TULSlotChain", "TULSlots", "bag_mean",
            "bound_seed", "build_bound_rotations", "mux_span_targets",
            "compact_index", "cw2_retain_mask", "gather_positions", "next_span_pool",
@@ -2422,6 +2426,21 @@ class TULConfig:
     latent_pre_cal_batches: int = 64             # calibration batches (standard only)
     latent_pre_cal_doc_offset: int = 40_000      # first calibration document (standard only)
 
+    # ── tul.slot_cell_pass_norm (2026-10-03): the slot loop may ROTATE its cells, not grow
+    # them. "off" (default) builds nothing and `_tul_core` traces the graph from before the
+    # key. "rms": after EVERY slot-loop pass each carried cell is replaced by
+    # `RMSNorm(h) * g`, per Hyper-Connection stream over the channel axis (the tree's
+    # `attention.RMSNorm`, eps 1e-6), with ONE learned per-channel gain `g` shared by every
+    # pass (`MORPHTransformer.tul_cell_norm`, init 1.0). The entry state is NOT normed.
+    # Why: Huginn-0125 ends every block with an RMSNorm and its looped state rotates at a
+    # fixed scale; MORPH's latent-pulled slot-loop arms instead take a step 3-5x the cell
+    # norm at pass index 2, mostly along one shared direction. The note
+    # .agents/notes/proposed/architecture/2026-10-03-slot-cell-pass-norm.md holds the
+    # placement against every other per-pass mechanism. Refused where no slot loop runs
+    # and where the carried cell would not be the normed one (`_check_slot_cell_pass_norm`
+    # here; the model-level refusals in `MORPHTransformer.__init__`).
+    slot_cell_pass_norm: str = "off"             # "off" | "rms"
+
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
         # and not about a rule of the refused mode it never meant to run.
@@ -2433,6 +2452,8 @@ class TULConfig:
         # unconditionally. An earlier builder's refusals at the tail of this method never
         # fired (`test_tul_explore_wiring.py` caught it), so a new knob's rules go first.
         self._check_code_policy()
+        # The slot-cell pass norm: the same rule, near the top and unconditional.
+        self._check_slot_cell_pass_norm()
         # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
         # Checked FIRST, unconditionally: every other block below this point guards an
         # OFF-by-default feature with its own early `return` (see `tul.vq_codes` at the
@@ -4781,6 +4802,47 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.slot_source_once with {why}.")
+
+    def _check_slot_cell_pass_norm(self) -> None:
+        """``tul.slot_cell_pass_norm``: the per-pass RMSNorm on the slot loop's cells.
+
+        "rms" is refused where no slot loop runs (`_tul_core` never executes) and where a
+        mechanism changes the carried cell AFTER the norm, so the state the next pass, the
+        exit and every per-pass reader see would not be ``RMSNorm(h) * g``. The model-level
+        refusals (n_core 0, the FM planner, SCSE, the two other scale pins) are in
+        ``MORPHTransformer.__init__``, which owns those keys."""
+        if self.slot_cell_pass_norm not in SLOT_CELL_PASS_NORMS:
+            raise ValueError(f"tul.slot_cell_pass_norm must be one of {SLOT_CELL_PASS_NORMS}, "
+                             f"got {self.slot_cell_pass_norm!r}")
+        if self.slot_cell_pass_norm == "off":
+            return
+        _refused = [
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop): the core runs `_core_region`, not the "
+             "slot loop"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens (the token path): the core runs `_core_region`, not the "
+             "slot loop"),
+            (self.code, "tul.code: no slot loop runs (the cells are the sampled code)"),
+            (self.core_stage_cond != "none",
+             f"tul.core_stage_cond={self.core_stage_cond!r}: the 'sigma' arms run the db1 "
+             f"step and the Euler ladder, which bypass `_tul_core`, and 'iter' was not "
+             f"built or tested with the norm"),
+            (self.gram,
+             "tul.gram: the Gaussian step is added AFTER the deterministic map, so the "
+             "carried cell would be the normed cell plus noise"),
+            (self.loop_carry == "persist",
+             "tul.loop_carry='persist': the carry is added to the exit AFTER the last pass, "
+             "so the cell the coda reads would not be the normed one"),
+            (self.loop_denoise,
+             "tul.loop_denoise: every pass enters at a noised code, not at the carried cell"),
+            (self.xhc_streams > 0,
+             "tul.xhc_streams > 0: the expanded streams start at exactly 0, where RMSNorm's "
+             "Jacobian is g / sqrt(eps) (1000x at eps 1e-6); not built or tested"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"tul.slot_cell_pass_norm='rms' with {why}.")
 
     def _check_gram(self) -> None:
         """``tul.gram`` — LXTUL-G, the stochastic slot loop (morph/model/tul_gram.py).

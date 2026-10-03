@@ -92,6 +92,12 @@ from morph.training.pruning import PruningSchedule
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
+# The eval readings of `tul.slot_cell_pass_norm` (`MORPHTransformer._fold_cell_norm_stats`).
+# Explicit prefixes, not "slot_cell_": the register's `slot_cell_eff_rank` /
+# `slot_cell_pairwise_cos` have their own home and must not be logged twice.
+_CELL_NORM_KEYS = ("slot_cell_rms", "slot_cell_mean_rms", "slot_cell_norm_g")
+
+
 @torch.no_grad()
 def evaluate(
     model: nn.Module,
@@ -131,6 +137,14 @@ def evaluate(
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 _m = getattr(model, "_orig_mod", model)
                 out = _m.tul_forward_with_plan_nats(x, y, layout)
+            # tul.slot_cell_pass_norm (eval only): the per-pass carried-cell RMS
+            # (`slot_cell_rms_t{t}`, `slot_cell_mean_rms_t{t}`, `slot_cell_rms_entry`) and
+            # the shared gain's `slot_cell_norm_g_{mean,std,rms}`. A scan: the number of
+            # passes is the batch's realised max depth. Before the stage-1 `continue`, so a
+            # normed latent_pre model logs them too.
+            for _sk in [k for k in out if str(k).startswith(_CELL_NORM_KEYS)]:
+                if torch.is_tensor(out[_sk]):
+                    acc.setdefault(f"val/{_sk}", []).append(float(out[_sk]))
             if out.get("latent_pre") is not None:
                 # Stage-1 latent pretraining (tul.latent_pre_target): NO coda ran, so there
                 # is no token CE and none of the coda readings below exist. The val loss of
@@ -4471,6 +4485,18 @@ def main(cfg: DictConfig) -> None:
                         f" (Δ vs fixed {_d:+.4f})"
                         f" depth={_val_extra.get('val/halt_depth_mean', float('nan')):.2f}"
                         f" lp/tok={_val_extra.get('val/halt_layer_passes_per_token', float('nan')):.2f}")
+            if "val/slot_cell_rms_t0" in _val_extra:
+                # tul.slot_cell_pass_norm: the per-pass carried-cell RMS must sit at rms(g)
+                # (the scale is fixed); the stream mean's RMS is free to move.
+                def _cn(k: str) -> float:
+                    return _val_extra.get(f"val/slot_cell_{k}", float("nan"))
+                _ts = [t for t in range(0, 17) if f"val/slot_cell_rms_t{t}" in _val_extra]
+                _tul_msg += (
+                    f"\n              cell-norm: entry={_cn('rms_entry'):.3f} rms "
+                    + " ".join(f"t{t}:{_cn(f'rms_t{t}'):.3f}" for t in _ts)
+                    + " | mean-rms " + " ".join(f"t{t}:{_cn(f'mean_rms_t{t}'):.3f}" for t in _ts)
+                    + f" | g mean={_cn('norm_g_mean'):.4f} std={_cn('norm_g_std'):.4f}"
+                      f" rms={_cn('norm_g_rms'):.4f}")
             if "val/ce_tf" in _val_extra:
                 _tul_msg += (f"  ce_tf={_val_extra['val/ce_tf']:.4f}"
                              + (f" ce_marginal={_val_extra['val/ce_marginal']:.4f}"

@@ -1,0 +1,24 @@
+# The router-followed latent-selected loop, detached, latent loss at weight 1, with the
+# slot-cell pass norm (2026-10-03). Composes
+# `tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1` and changes ONE key plus the
+# run name:
+#
+#   tul.slot_cell_pass_norm   off -> rms
+#
+# Change: after every slot-loop pass each carried cell is RMSNorm(h) * g (one learned
+# per-channel gain shared by every pass), so the loop can rotate its cells but not grow
+# them. Why: in the parent the cells take a step 3-5x their norm at pass index 2, 79-93 %
+# along one shared direction, and grow 26 -> 216 in norm; Huginn-0125, a looped LM that
+# earns depth on our web text, keeps its state at a fixed scale and every step is almost
+# perpendicular to it. Note: .agents/notes/proposed/architecture/2026-10-03-slot-cell-pass-norm.md
+# The gain hinge and the cotangent clip are inherited unchanged; under the norm the hinge
+# bounds the raw map f, not the map the loop carries (the note says what each term reads).
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_det_rf_lam1
+  - _self_
+
+tul:
+  slot_cell_pass_norm: rms
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-det-rf-lam1-cnorm

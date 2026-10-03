@@ -2814,6 +2814,38 @@ class MORPHTransformer(nn.Module):
                 raise ValueError("tul.latent_pre_target with n_core=0: there is no loop.")
             self.tul_latent_pre_head = FanLatentHead(d, int(cfg.tul.latent_pre_hidden))
 
+        # ── the slot-cell pass norm (tul.slot_cell_pass_norm) ───────────────────────
+        # "off" (default) builds nothing: `tul_cell_norm` stays None and the one site in
+        # `_tul_core` (`_slot_cell_norm`) traces out, so the graph and the state dict are
+        # the ones from before the key. "rms": ONE `attention.RMSNorm` (the tree's, eps
+        # 1e-6, weight init ones, no RNG drawn) whose weight is the per-channel gain `g`
+        # shared by every pass. fp32 master like every parameter; the name contains
+        # "norm", so the optimizer puts it in the no-decay group (`_NO_DECAY_KEYWORDS`),
+        # and an RMSNorm is not an nn.Linear, so ternary QAT never selects it
+        # (`ternary_qat._categorize`). TULConfig refuses the tul-level modes with no slot
+        # loop; the model-level ones are refused here.
+        self.tul_cell_norm: RMSNorm | None = None
+        self._cell_norm_stats: dict | None = None
+        if cfg.tul is not None and str(cfg.tul.slot_cell_pass_norm) == "rms":
+            _cn_bad = [
+                (getattr(cfg, "fm", None) is not None,
+                 "an FM planner (cfg.fm): the planner replaces the slot loop"),
+                (int(cfg.n_core) == 0, "n_core=0: a coreless TUL model has no slot loop"),
+                (bool(cfg.scse_enabled),
+                 "model.scse_enabled: the loop carries the DEVIATION from h*, so a norm on "
+                 "the carrier would not norm the cell"),
+                (bool(cfg.slot_state_renorm),
+                 "model.slot_state_renorm: a second per-pass scale pin (to the entry norm) "
+                 "that the RMSNorm would overwrite"),
+                (float(cfg.core_gain_clip) > 0.0,
+                 "model.core_gain_clip > 0: RMSNorm divides out any rescale of the step, so "
+                 "the clip would be a silent no-op"),
+            ]
+            for _bad, _why in _cn_bad:
+                if _bad:
+                    raise NotImplementedError(f"tul.slot_cell_pass_norm='rms' with {_why}.")
+            self.tul_cell_norm = RMSNorm(d)
+
         # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
         # K codes per span instead of one continuous vector, lifted into the K prefix
         # cells the coda already reads. RNG-neutral (private generator, global stream
@@ -3697,6 +3729,86 @@ class MORPHTransformer(nn.Module):
         _hn = h.flatten(2).float().norm(dim=2)                                    # [B, S]
         _rs_ = (n0 / (_hn + 1e-6)).to(h.dtype)
         return h * _rs_.view(*_rs_.shape, *([1] * (h.dim() - 2)))
+
+    def _cell_rms_reading(self, h: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
+        """Two detached 0-dim readings of the slot cells ``h`` ``[B, S, (n,) C]`` over the
+        cells in ``mask`` ``[B, S]``: the mean per-cell RMS over (streams, channels), which is
+        the carrier the loop iterates, and the mean per-cell RMS of the stream MEAN (the space
+        `_cell_readout` and the 2026-10-02 common-mode note read). Empty mask: both 0."""
+        with torch.no_grad():
+            hf = h.detach().float()
+            rms = hf.flatten(2).pow(2).mean(-1).sqrt()                         # [B, S]
+            hm = hf.mean(dim=2) if self._is_hc else hf
+            rms_m = hm.pow(2).mean(-1).sqrt()                                  # [B, S]
+            mf = mask.float()
+            n = mf.sum().clamp_min(1.0)
+            return (rms * mf).sum() / n, (rms_m * mf).sum() / n
+
+    def _slot_cell_norm(self, h: Tensor, t: int, active: Tensor, layout: SlotLayout,
+                        no_grad: bool = False, cut: Tensor | None = None) -> Tensor:
+        """``tul.slot_cell_pass_norm: rms``: the carried cell after pass ``t``, normed.
+
+        ``RMSNorm(h) * g`` over the channel axis, per Hyper-Connection stream, with the ONE
+        gain ``g = self.tul_cell_norm.weight`` every pass shares; the output is cast back to
+        the carrier's dtype (RMSNorm's fp32 weight would otherwise promote it). Every cell
+        is normed, pads included: pads were never zero after pass 0 (the core step moves
+        them) and every reader masks them by ``slot_valid``, as before.
+
+        The norm is part of the pass's MAP, so it takes the pass's grad context: under
+        ``no_grad`` (a pass outside the truncated-BPTT window) nothing reaches ``g``, and
+        ``cut`` (``tul.progressive_p``'s per-slot prefix mask, broadcastable to ``h``)
+        detaches the normed output where the pass's own output was detached. Without
+        both, ``g`` would collect gradient from passes the objective has cut away (the
+        recurrence gate's rule).
+
+        What the slot-loop constraint terms mean under the norm (stated here because they
+        were NOT changed):
+          * the gain hinge (``model.slot_gain_lambda``) re-runs ``_core_step`` at the
+            normed operating point and reads the gain of the RAW map f. The loop now
+            applies N(f): along the cell the norm removes the radial part, and across it
+            N's Jacobian scales by rms(g) / rms(f(h)) per stream. So the hinge still
+            bounds f's local amplification in absolute units, but it does NOT bound the
+            gain of the map the loop carries, and the forward cannot grow whatever it
+            reads. It stays on in the configs that inherit it, unchanged, as a constraint
+            on f.
+          * the cotangent clip (``model.slot_cot_clip``) hooks the NORMED pass outputs
+            and the normed exit, so it compares the cotangents at the states the loop
+            carries, as before; the backward through each pass now includes N's Jacobian.
+          * the fixed-point and pass-residual terms read ``_h_det`` (normed) against the
+            previous carried state (normed, or the un-normed entry at a depth-1 slot).
+          * ``loop/core_gain`` (the probe's ||out|| / ||in||) reads ~1 after pass 0 by
+            construction.
+
+        At eval it records ``slot_cell_rms_t{t}`` and ``slot_cell_mean_rms_t{t}`` over the
+        valid cells whose depth reaches pass ``t`` (``_cell_rms_reading``)."""
+        if no_grad:
+            with torch.no_grad():
+                out = self.tul_cell_norm(h).to(h.dtype)
+        else:
+            out = self.tul_cell_norm(h).to(h.dtype)
+        if cut is not None:
+            out = torch.where(cut, out.detach(), out)
+        if self._cell_norm_stats is not None:
+            r, rm = self._cell_rms_reading(out, active & layout.slot_valid)
+            self._cell_norm_stats[f"slot_cell_rms_t{t}"] = r
+            self._cell_norm_stats[f"slot_cell_mean_rms_t{t}"] = rm
+        return out
+
+    def _fold_cell_norm_stats(self, out: dict, stats: dict | None) -> dict:
+        """Fold one forward's `_slot_cell_norm` readings and the gain's mean / std into the
+        output dict (detached, eval only: ``stats`` is None on a train forward). train.py's
+        `evaluate` logs every ``slot_cell_*`` key under ``val/``."""
+        if not stats or out is None:
+            return out
+        out = dict(out)
+        for k, v in stats.items():
+            out[k] = v.detach()
+        with torch.no_grad():
+            g = self.tul_cell_norm.weight.detach().float()
+            out["slot_cell_norm_g_mean"] = g.mean()
+            out["slot_cell_norm_g_std"] = g.std()
+            out["slot_cell_norm_g_rms"] = g.pow(2).mean().sqrt()
+        return out
 
     @staticmethod
     def _apply_injection(h: Tensor, term: Tensor) -> Tensor:
@@ -5955,6 +6067,14 @@ class MORPHTransformer(nn.Module):
         _fp_lam = float(self.cfg.core_fixed_point_lambda) if self.training else 0.0
         _fp_terms: list[Tensor] = []
         _gain_reg: dict | None = None
+        # tul.slot_cell_pass_norm's eval readings: reset at EVERY forward of a normed
+        # model (a train forward leaves None, so a stale eval dict never reaches a train
+        # step's outputs), filled per pass by `_slot_cell_norm` at eval only.
+        if self.tul_cell_norm is not None:
+            self._cell_norm_stats = None
+            if not self.training:
+                self._cell_norm_stats = {"slot_cell_rms_entry": self._cell_rms_reading(
+                    h, layout.slot_valid)[0]}
 
         # Loop-invariant injection, built ON THE COMPACT SEQUENCE (the x0/bigram hoist
         # of the token path, applied to 9-19× fewer positions). Value-embeds never fire
@@ -6810,6 +6930,21 @@ class MORPHTransformer(nn.Module):
                 h_new = self._apply_injection(
                     h_new, self.tul_code_policy.codes.term_per_slot(
                         h_new, layout.slot_valid, _pol_codes))
+            # ── tul.slot_cell_pass_norm: THE NORM, the last step of every pass ─────────
+            # The ONE site (`_slot_cell_norm`). AFTER everything the pass applies (the core
+            # step (DiagonalInjection is inside it), the recurrence gate and the LX / policy
+            # code), so the carried cell after every pass is RMSNorm(h) * g. BEFORE `_h_det`,
+            # so the fixed-point term and the pass residual compare NORMED states (the
+            # previous state `h` is the last pass's normed cell, or the un-normed entry at
+            # t == 0), and before the freeze, `db_traj`, the latent-selected reset, the gate
+            # readout and the cotangent hooks, so every per-pass reader and the exit see the
+            # normed cell. The eval-only `_slot_pass_hook` reads and edits the NORMED cell.
+            # NOT inside `_core_step`: the gain hinge (`_slot_gain_penalty`) re-runs
+            # `_core_step` and so still measures the raw map f, not RMSNorm(f); see
+            # `_slot_cell_norm` for what the hinge means under the norm. None: no-op.
+            if self.tul_cell_norm is not None:
+                h_new = self._slot_cell_norm(h_new, t, active, layout,
+                                             no_grad=t < n_nograd, cut=_pv)
             if self._slot_pass_hook is not None:
                 # EVAL-ONLY instrument seam (see the class attribute). None: no-op.
                 h_new = self._slot_pass_hook(t, h, h_new, layout)
@@ -9151,6 +9286,7 @@ class MORPHTransformer(nn.Module):
         z, ok = self._latent_pre_target(input_ids, labels, layout, front_kw, front_reset, x)
         _xn, h, _depths, _g, db_traj, gain_reg, _mep = self._tul_core(
             x, x0, bigram_emb, layout, input_ids=input_ids, slot_depths=slot_depths)
+        _cn_stats = self._cell_norm_stats if self.tul_cell_norm is not None else None
         B, S = layout.slot_valid.shape
         pred = self._latent_pre_predict(h, B, S)                          # [B, S, M, C]
         M = int(pred.shape[2])
@@ -9182,6 +9318,7 @@ class MORPHTransformer(nn.Module):
                      "n_tokens": ((~layout.slot_mask) & (labels >= 0)).sum()}
         for k, v in stats.items():
             out[f"latent_pre_{k}"] = v
+        out = self._fold_cell_norm_stats(out, _cn_stats)
         if gain_reg is not None:
             out = self._fold_gain_reg(out, gain_reg)
         if self._core_aux is not None:
@@ -12605,6 +12742,9 @@ class MORPHTransformer(nn.Module):
         # tul.fan_loop_select: the exit's latent loss (graph), folded as `fan_lsel_weighted`.
         fan_lsel_loss = None
         fan_stats: dict[str, float] = {}
+        # tul.slot_cell_pass_norm's eval readings, taken right after the slot loop (only
+        # the slot-loop branch below can produce them; TULConfig refuses the others).
+        _cn_stats: dict | None = None
         _fan_cells = None
         # LX efficient-exploration knobs 3/4/6 (2026-09-29). Bound here for the same
         # reason as `fan_repel_loss` above: the fold sits AFTER the branch dispatch, and
@@ -12823,6 +12963,10 @@ class MORPHTransformer(nn.Module):
                 xn, h_slots, depths, g_traj, db_traj, gain_reg, mep_keep = self._tul_core(
                     x, x0, bigram_emb, layout, halt=halt, input_ids=input_ids,
                     slot_depths=slot_depths, code_x0=_ct_z, code_ok=_ct_ok, **_gram_kw)
+                if self.tul_cell_norm is not None:
+                    # Taken NOW: a later `_tul_core` call in this forward (an ablation
+                    # replay) would overwrite the stash with its own readings.
+                    _cn_stats = self._cell_norm_stats
                 if self._lsel_mode == "detached":
                     # ── THE DETACHED VARIANT: no token-driven gradient into the loop ──
                     # ONE cut, at the loop's output and upstream of EVERY reader of it:
@@ -14078,6 +14222,10 @@ class MORPHTransformer(nn.Module):
             groups = dict(groups)
             for _k, _v in self._loop_carry_stats.items():
                 groups[f"carry_{_k}"] = _v.detach().to(groups["loss"].dtype)
+        if _cn_stats and groups is not None:
+            # tul.slot_cell_pass_norm (eval only): the per-pass cell RMS and the gain's
+            # mean / std. No loss term. A scan in train.py's `evaluate` (`slot_cell_*`).
+            groups = self._fold_cell_norm_stats(groups, _cn_stats)
 
         if fan_stats and groups is not None:
             # Every fan reading travels as a `fan_*` key so train.py can scan for the
