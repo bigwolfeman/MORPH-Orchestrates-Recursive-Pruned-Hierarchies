@@ -1,6 +1,6 @@
 # Planned: does a loop that earns depth rotate its state or grow it?
 
-Status: planned
+Status: success
 
 Date: 2026-10-02 15:18 CDT. Predictions frozen before the probe exists.
 
@@ -63,3 +63,68 @@ magnitude. The readings that test learned behaviour are G-2, G-3, G-5 and G-6. P
 built at `lab/huginn/huginn_loop_geometry.py`; CPU faithfulness diff 0.0. Run with
 `/home/wolfe/11-DiffusionBlocks-Testing/.venv/bin/python` (the `~/.venvs/huginn`
 transformers 4.48 cannot load it).
+
+## Results
+
+Run 2026-10-03 01:39 CDT at cd97bd4, 64 rows x 1024 tokens, 167 s on the 5090.
+Faithfulness: max abs logit difference 0 at k = 32 on 8 rows. Artifacts:
+[`../results/2026-10-02-huginn-loop-geometry/`](../results/2026-10-02-huginn-loop-geometry/).
+
+| k | state norm | cos to v | RMS along v | RMS perp | step / norm | step share along v | PR (centred, normalised) | CE |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 76.37 | 0.188 | 2.73 | 70.68 | | | 215 | 4.629 |
+| 2 | 76.37 | 0.137 | 3.06 | 72.97 | 0.907 | 0.004 | 374 | 3.773 |
+| 4 | 76.37 | 0.135 | 3.24 | 75.27 | 0.602 | 0.001 | 604 | 3.015 |
+| 6 | 76.37 | 0.135 | 3.29 | 75.55 | 0.393 | 0.001 | 649 | 2.734 |
+| 8 | 76.37 | 0.136 | 3.30 | 75.56 | 0.262 | 0.001 | 646 | 2.617 |
+| 16 | 76.37 | 0.138 | 3.30 | 75.55 | 0.061 | 0.001 | 638 | 2.520 |
+| 32 | 76.37 | 0.138 | 3.29 | 75.55 | 0.017 | 0.002 | 638 | 2.515 |
+
+Interventions (CE delta vs the unmodified state at the same k, 95 % paired CI over rows):
+
+| k | rescale to the k = 4 norm | remove v | remove a random direction |
+| --- | --- | --- | --- |
+| 4 | +0.00000 [+0.00000, +0.00000] | +1.188 [+1.040, +1.337] | +0.00014 [-0.00006, +0.00033] |
+| 8 | +0.00000 [-0.00005, +0.00005] | +1.304 [+1.134, +1.479] | -0.00005 [-0.00023, +0.00012] |
+| 16 | +0.00000 [-0.00005, +0.00005] | +1.305 [+1.134, +1.484] | -0.00003 [-0.00022, +0.00016] |
+| 32 | +0.00003 [-0.00002, +0.00009] | +1.297 [+1.125, +1.477] | +0.00002 [-0.00015, +0.00020] |
+
+| prediction | reading | held |
+| --- | --- | --- |
+| G-1 norm at 32 within 1.5x of 4 | 1.00001 | yes, architectural |
+| G-2 step share along v < 30 % from k = 8 | max 0.0015 | yes |
+| G-3 cos to v < 0.7 from k = 4 | max 0.138 | yes |
+| G-4 rescale at 32 costs < 0.01 | +0.00003 | yes, architectural |
+| G-5 removing v costs > 0.05 | +1.297 | yes (see reading 3) |
+| G-6 PR grows > 10 % from k = 4 to 16 | +5.5 % | no |
+
+## Verdict
+
+Success on the hypothesis, with one prediction missed. Huginn's loop rotates at a fixed
+per-token scale: every step from k = 2 on is 99.6 % to 99.9 % perpendicular to the shared
+direction, and the step size falls about 0.8x per iteration (0.91 at k = 2, 0.017 at
+k = 32), a contraction toward a fixed point. G-6 missed because the diversity growth comes
+earlier than I placed it: the participation ratio triples from k = 1 to k = 4 (215 to 604),
+peaks at k = 6 (649), then eases to 638. It grows exactly where CE falls fastest (4.63 to
+2.73 over k = 1..6).
+
+Readings:
+
+1. **The earning loop moves only in direction.** Scale is fixed by `norm_4` at the end of
+   every block. The shared direction holds 0.2 % of the state's energy (RMS 3.3 of 76).
+2. **Its diversity is real and early.** PR 215 -> 649 of 5280 dimensions in six passes.
+3. **The shared direction is a load-bearing bias, not where the earning happens.** Removing
+   it costs 1.2 to 1.3 nats at every k, while removing a random direction costs nothing.
+   This is a zero-ablation of a bias (the Sun et al. pattern), so it says the coda needs
+   the bias; it does not say the loop's depth gain lives along it. Every step is
+   perpendicular to it, so the gain is elsewhere. A mean-ablation was not run.
+
+## Updated hypothesis
+
+Contrast with MORPH's pulled slot-loop arms
+([note](../../../.agents/notes/proposed/architecture/2026-10-02-layernorm-common-mode-in-latent-targets.md)):
+there, pass index 2 takes a step 3.1x to 4.7x the cell norm with 79 % to 93 % of it along
+the shared direction, the cells grow 26 -> 216 in norm, and the rank-only arm's whole
+K1-K6 rides on one amplitude. Huginn's architecture forbids both. The next arm puts a
+per-pass RMSNorm on the slot cells (Huginn's `norm_4` placement) on the detached
+weight-1 arm, so the slot loop can only rotate.
