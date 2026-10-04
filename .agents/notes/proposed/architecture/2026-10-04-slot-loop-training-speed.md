@@ -1,8 +1,9 @@
-# Agent Note: slot-loop training speed, pass 1
+# Agent Note: slot-loop training speed, passes 1 and 2
 
 Status: proposed
 
-Date: 2026-10-04. Branch `wt-perf` from master `3f107d0`. Arm:
+Date: 2026-10-04. Pass 1: branch `wt-perf` from master `3f107d0`, committed as `83c7df8`.
+Pass 2: the same worktree from `83c7df8` (section "Pass 2" below). Arm:
 `tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm` (batch 6, seq 1024,
 the lead slot-loop arm). Scratch tools, logs and profiles: `/home/wolfe/morph-scratch/perf/`
 (private, not in the repo).
@@ -164,10 +165,134 @@ Profiled at row 3 (4 steps, `prof/cur.json`): GPU busy 442 ms per step, 76 % of 
 profiled wall; idle in gaps over 1 ms fell from 53 to 1.5 ms per step; kernels per step
 fell from 35 000 to 28 700 (the lazy fan readings). Rows 4 to 6 then removed GPU work.
 
+## Pass 2 (2026-10-04, from `83c7df8`)
+
+Pass 2 had three asks, in order: a memory curve so the run can leave at least 4 GB free on
+a desktop card; the launch overhead; and the ranked items left by pass 1. Same protocol
+(420-step bench, 20-step deterministic gate, 300-step deterministic overlay for anything
+that is not bit-identical).
+
+### Memory: the `ckpt_grad_iters` curve
+
+`model.ckpt_grad_iters=k` checkpoints the first `k` of the eight loop passes. The slot loop
+runs every pass on the full cell axis (inactive slots are masked, not dropped), so every
+pass holds the same memory: each checkpointed pass frees about 1.02 GiB and costs about
+7 to 8 ms. Bit-identical at every `k` (checkpointing is exact; gate g0_ck0 and pass 1).
+
+Bit-identical recipe (`training.ademamix_fused_fp32=true`, plus the pass-2 probe change at
+`k = 0` only, worth 1.5 ms):
+
+| k | ms/step | tok/s | peak alloc GiB | peak reserved GiB |
+|---|---|---|---|---|
+| 0 | 468.7 | 13110 | 23.99 | 24.33 |
+| 1 | 477.4 | 12870 | 22.96 | 23.29 |
+| 2 | 484.9 | 12671 | 21.94 | 22.27 |
+| 3 | 491.4 | 12502 | 20.92 | 21.23 |
+| 4 | 501.2 | 12258 | 19.90 | 20.22 |
+
+Opt-in recipe (the above plus `training.compile_blocks=true`,
+`training.compile_core_dynamic=false`, `model.ce_softmax_kernel=true`,
+`model.ce_compact_rows=true`; not bit-identical, see below):
+
+| k | ms/step | tok/s | peak alloc GiB | peak reserved GiB |
+|---|---|---|---|---|
+| 0 | 388.1 | 15831 | 21.66 | 21.85 |
+| 1 | 395.3 | 15541 | 20.74 | 20.93 |
+| 2 | 402.0 | 15283 | 19.81 | 20.00 |
+
+Free memory = 31.84 GiB (the card) - 0.69 GiB (the process's non-PyTorch memory, read off
+the pass-1 OOM message) - the desktop - peak reserved. For at least 4 GiB free:
+
+- desktop at 4.5 GiB (its idle reading today): bit-identical `k = 2` (4.38 GiB free,
+  484.9 ms), or the opt-in recipe at `k = 0` (4.80 GiB free, 388.1 ms);
+- desktop at 6.0 GiB: bit-identical `k = 4` (4.93 GiB free, 501.2 ms; `k = 3` leaves 3.92),
+  or the opt-in recipe at `k = 1` (4.22 GiB free, 395.3 ms).
+
+### Changes
+
+| # | Change | Files | Parity | ms/step | Note |
+|---|---|---|---|---|---|
+| 7 | The gradient probe reads its ~45 device scalars in one copy (`train._host_floats`) | `train.py`, `tests/test_host_floats.py` | gate identical; the probe log (146 keys x 20 steps) is byte-identical to the `83c7df8` tree's | 470.2 -> 468.7 | inside the noise |
+| 8 | `training.compile_core_dynamic` (default true = the tree): false compiles the core's modules with static shapes | `train.py`, `base.yaml` | gate identical on the bit-identical recipe | 468.7 -> 465.9 | the win is with compile_blocks: 407.6 -> 388.1 with every opt-in on |
+| 9 | `model.ce_compact_rows` (default false): the CE's vocab GEMMs run on labelled rows only, one host sync per CE call | `fused_ce.py`, `transformer.py` (`self._ce_kw` at all 11 CE calls), `train.py`, `base.yaml` | NOT bit-identical; fp64 bounds in `tests/test_ce_softmax_grad.py` | 435.5 -> 422.0 (on top of row 6) | 50.5 % of the span decoder's 12288 rows and 84 % of the token CE's 7680 carry loss |
+| - | `training.compile_blocks=true` (existing key), re-measured on this tree | none | NOT bit-identical | 468.7 -> 456.5, and 2.15 GiB less memory | inductor keeps fewer saved activations |
+
+All opt-ins together at `k = 0`: 388.1 ms, 15831 tok/s, 1.60x over master's 620.9 ms. The
+bit-identical recipe at `k = 0`: 468.7 ms, 1.32x.
+
+Overlays (300 steps, deterministic, each against the bit-identical recipe `ov_a`):
+
+| Run | first differing step | step-0 loss rel. diff | step-0 grad-norm rel. diff | mean loss diff, steps 200-299 | steps 280-299 |
+|---|---|---|---|---|---|
+| CE kernel (`ov_b2`) | 2 | 0 | 4.3e-4 | +0.0053 | -0.0060 |
+| CE kernel + compact rows (`ov_c`) | 2 | 0 | 4.3e-4 | +0.0251 | +0.0114 |
+| compile_blocks (`ov_d`) | 0 | 1.2e-4 | 1.8e-3 | +0.0283 | -0.0204 |
+| all opt-ins, static core (`ov_e`) | 0 | 1.2e-4 | 1.6e-3 | +0.0262 | -0.0070 |
+| noise: the bit-identical recipe, non-deterministic (`ov_n1`) | 2 | 0 | 7.4e-8 | +0.0109 | +0.0031 |
+| noise, second draw (`ov_n2`) | 2 | 0 | 7.4e-8 | +0.0191 | +0.0139 |
+
+How to read it: the two noise rows run the SAME code as `ov_a` without deterministic
+algorithms, so they show how far a run drifts from `ov_a` by chaos alone: +0.011 and +0.019
+over steps 200-299. The opt-in rows sit at +0.005 to +0.028, with the 280-299 window
+changing sign for three of the four. So no opt-in moves the loss by more than about
+0.01-0.02 nats beyond what chaos alone does, and a 300-step overlay cannot resolve a
+smaller bias. A paired long run is the open check (Risks). compile_blocks starts differing
+at step 0 (loss 1.2e-4 relative): inductor fuses the block's elementwise chain, so its
+roundings differ from eager's. The CE paths start at step 2.
+
+### Launch overhead
+
+Kernels per step and GPU idle, torch.profiler over 4 steps (the profiler inflates host
+time, so the idle numbers are upper bounds):
+
+| Profile | wall/step (profiled) | GPU busy | kernels/step | idle in gaps 50 us to 1 ms | idle in gaps < 50 us |
+|---|---|---|---|---|---|
+| master (`prof/base`) | 767 | 496 | 35 000 | 50 | 167 |
+| pass 1, row 3 (`prof/cur`) | 584 | 442 | 28 660 | 26 | 113 |
+| bit-identical recipe (`prof/exact2`) | 523 | 418 | 28 500 | 16 | 88 |
+| + compile_blocks, dynamic core (`prof/cb`) | 507 | 388 | 21 840 | 69 | 48 |
+
+Where the launches are on the bit-identical recipe (per step): the backward 15 800 (55 %),
+the forward blocks 7 700 (27 %; 72 block calls: prelude 4, EMA twin 4, core 6 x 8, hinge
+6 x 2, coda 4), and the slot loop's own per-pass tail (`_tul_core` body, `_lsel_pass`,
+the cell norm, the fixed-point term) about 1 500 (5 %, about 190 per pass). A cast census
+(profile with shapes, `prof/shapes.json`) finds 4 080 `_to_copy` per step, mostly
+fp32 -> bf16 activations inside the eager attention ([6, 8, 256, 64] q/k/v, [6, 256, 1024]),
+not weights.
+
+What this means for the three options the coordinator listed:
+
+- **Compile the per-pass small-op tail.** Not built: the tail is 5 % of the launches, so
+  removing all of it is worth at most a few ms.
+- **CUDA-graph the per-pass core step.** The slot loop needs no bucketing (its pass shapes
+  are already static). Tried as `mode="reduce-overhead"` on the compiled core blocks
+  (scratch patch `core_ro_patch.py`): it fails with
+  `torch.utils.checkpoint.CheckpointError: Recomputed values ... different metadata` in
+  the gain hinge's checkpoint, and cudagraph trees warn "pending, uninvoked backwards"
+  (re-recording, no fast path) because the same block is replayed ten times in one
+  forward. A graph of the per-pass step needs a hand-built static-buffer capture with the
+  hinge's checkpoint restructured. Not done; it is the main item left.
+- **Compile the blocks with static core shapes.** Done (rows 8 and compile_blocks): with
+  the dynamic guards gone the compiled core stops being host-bound, -22 ms.
+
+### Tried and dropped in pass 2
+
+- **Ternary STE once per step** via `torch.nn.utils.parametrize.cached()` around the forward
+  (scratch `pcache_patch.py`): -16 ms but +0.92 GiB peak (the cached weights live through
+  the backward), and NOT bit-identical. The grad norm matched master for all 20 gate steps,
+  but the loss differs from step 2 on and the final state hash differs. The cause was not
+  found, so it is not shipped.
+- **CUDA graphs** (reduce-overhead): see above.
+- **HC fused backward / compiled MLP backward tuning**: not started (time).
+
 ## Alternatives considered
 
-- **Compile the transformer blocks** (`compile_blocks`) on top of row 1: 524 ms against
-  530 ms, inside the noise, and not bit-identical. Dropped.
+Pass 1:
+
+- **Compile the transformer blocks** (`compile_blocks`) on top of row 1, on master: 524 ms
+  against 530 ms, inside the noise, and not bit-identical. Dropped in pass 1. Pass 2
+  re-measured it on the sync-free tree, where it IS worth 12 ms and 2.15 GiB (the host was
+  no longer the bottleneck), and 22 ms more with static core shapes.
 - **Run the gain hinge's two extra core applications without checkpointing** (a key
   `model.slot_gain_ckpt` was built and gated bit-identical): it saves about 20 ms but adds
   about 2 GB, and on top of row 1 the run went out of memory at 25.6 GB allocated. It buys
@@ -176,37 +301,46 @@ fell from 35 000 to 28 700 (the lazy fan readings). Rows 4 to 6 then removed GPU
 - **Make the per-step gradient probe lazy** (read its numbers one step late). It would let
   the host queue the optimizer before the probe's reads, but the takeover guard saves its
   emergency checkpoint BEFORE the optimizer step, and a late read would change what that
-  checkpoint holds. Not done.
+  checkpoint holds. Not done; pass 2 batched the reads instead (row 7).
 - **Drop the GradScaler under bf16.** Not done: it changes the skip-on-inf behaviour and
   the scale path, so it is not the same training.
-- **Compact the CE rows to the labelled ones.** About half of the span decoder's 12288 rows
-  are ignored but still pay three GEMMs. Not done in this pass; ranked below.
+
+Pass 2: the parametrize cache, CUDA graphs and the per-pass tail compile ("Tried and
+dropped in pass 2" and "Launch overhead" above). For the CE row count, a host-known count
+from the layout (no sync) was considered and not built: it must reproduce the span
+decoder's valid mask exactly on the host, and the one sync it would save sits in front of
+a GEMM-bound loop where it costs little.
 
 ## Acceptance criteria
 
-- Rows 1 to 5 are bit-identical to master: gate files byte-identical over 20 steps
-  (met for each row).
-- Row 6 is at least as close to fp64 as the eager body on every test case, and a 300-step
-  deterministic overlay shows no loss shift beyond the run-to-run noise (met at 300 steps;
-  a longer paired run is the open check, see Risks).
-- The off path of each new key is master: `training.ademamix_fused_fp32` and
-  `model.ce_softmax_kernel` default to false, and `tests/test_fused_ce_sync_free.py`
-  pins the eager CE body bit for bit with and without autocast.
-- The recommended run line for this arm is:
-  `python -m morph.training.train --config-name tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm model.ckpt_grad_iters=0 training.ademamix_fused_fp32=true model.ce_softmax_kernel=true`
-  (drop the last override for a bit-identical run).
+- Rows 1 to 5, 7 and 8 are bit-identical to master: gate files byte-identical over 20
+  steps (met for each row; row 7 also has a byte-identical probe log).
+- Rows 6 and 9 are at least as close to fp64 as the eager CE body on every test case
+  (met), and every opt-in's 300-step overlay sits within about 0.01-0.02 nats of the noise
+  runs (met at 300 steps; a longer paired run is the open check).
+- The off path of each new key is master: `training.ademamix_fused_fp32`,
+  `model.ce_softmax_kernel`, `model.ce_compact_rows` default to false and
+  `training.compile_core_dynamic` to true; `tests/test_fused_ce_sync_free.py` pins the
+  eager CE body bit for bit with and without autocast.
+- Run lines for this arm (pick `k` from the memory tables for the desktop's load):
+  - bit-identical: `python -m morph.training.train --config-name tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm model.ckpt_grad_iters=<k> training.ademamix_fused_fp32=true`
+  - fastest (not bit-identical): add `training.compile_blocks=true training.compile_core_dynamic=false model.ce_softmax_kernel=true model.ce_compact_rows=true`.
 
 ## Risks
 
-- **Memory.** Row 1 takes reserved memory from about 16 to 24.3 GiB on a 31.4 GiB card that
-  the desktop uses about 4.5 GiB of. That leaves about 2.5 GiB. A desktop that grows, or a
-  second GPU job, will OOM the run. `ckpt_grad_iters=k` checkpoints the first `k` passes
-  and is the dial if this bites; it was not measured at intermediate `k`.
+- **Memory.** At `k = 0` the bit-identical recipe reserves 24.33 GiB, which leaves about
+  2.3 GiB with the desktop at 4.5 GiB. The tables above give the `k` for a 4 GiB margin.
+  They are 420-step peaks; a longer run draws the same depth (Poisson mean 6, max 8, the
+  table's max is 8 on almost every batch), so the peak should not grow, but a 10k run was
+  not watched.
 - **Host shadows** rely on the autograd version counter to notice an in-place write. A
   write through `.data` or through a numpy view would not bump it. No code in the tree
   does that to a layout mask today; a future one would read a stale shadow.
-- **CE kernel numerics** were checked over 300 steps only. A long paired run (a 5k-step
-  pair at two seeds) is the real test; it was not run.
+- **Opt-in numerics** (CE kernel, compact rows, compile_blocks) were checked over 300 steps
+  only. A paired run of 5k steps at two seeds is the real test; it was not run.
+- **compile_core_dynamic=false on a shrinking core.** A core that changes its batch per
+  pass (the plain Parcae path) would see one static graph per shape; under the trainer's
+  `eager_on_recompile` stance new shapes run eager. Keep the default there.
 - **fp32 optimizer kernel and NaN.** On a NaN input `clamp` in ATen returns NaN and Triton's
   `maximum` may not. A NaN in the optimizer state means the run is already dead, but the
   two paths could then write different garbage.
@@ -215,21 +349,19 @@ fell from 35 000 to 28 700 (the lazy fan readings). Rows 4 to 6 then removed GPU
 
 ## What is left, ranked by estimated payoff
 
-Estimates are from the row-3 profile; none of these was built.
+None of these was built.
 
-1. **Fused HC backward kernels** (`_FusedHCPreMapBackward` 30 ms, `_FusedHCPostBackward`
-   22 ms per step) and the compiled MLP backward (41 ms): kernel tuning, perhaps 15 to
-   25 ms. Not bit-identical.
-2. **CE row compaction**: run the span decoder's CE only on labelled rows (about 50 % of
-   12288) and the token CE without its ignored rows. About 10 to 12 ms. The labelled count
-   is host-known from the layout, so it can stay sync-free. Not bit-identical (chunking
-   changes the sum order).
-3. **Ternary STE once per step for the shared core weights.** The eight loop passes and
-   the two hinge applications each re-quantise the same core weights. Unmeasured; measure
-   the STE's share first. Bit-identity depends on whether the compiled MLP graph changes.
-4. **Gain hinge without checkpointing** when memory allows: about 20 ms for about 2 GB
-   (see Alternatives).
-5. **Batch the gradient probe's 60 host reads into one** (`torch.stack(...).tolist()`):
-   about 2 ms. Bit-identical in the logged values.
-6. **Launch overhead.** About 28 700 kernels per step; the gaps under 50 us are most of the
-   remaining idle time. Graph capture is blocked by the dynamic depth draw.
+1. **A captured per-pass core step** (static buffers, one CUDA graph per pass shape, the
+   hinge's checkpoint restructured so it does not recompute inside a graph). The core's
+   forward and backward are 6 x 10 block calls per step, and with compile_blocks the
+   profiled idle in `_tul_core` and the hinge is about 57 ms per step (profiler-inflated).
+   Estimate 15 to 30 ms. Bit-identity depends on the dropout RNG under capture.
+2. **Fused HC backward kernels** (`_FusedHCPreMapBackward` and `_FusedHCPostBackward`,
+   about 52 ms of GPU per step together on the bit-identical recipe) and the compiled MLP
+   backward: block-size tuning, perhaps 10 to 20 ms. Not bit-identical if a reduction
+   order changes.
+3. **Why the parametrize cache diverges.** If the cause is benign, caching the ternary
+   weights is -16 ms; it also costs +0.9 GiB, so it competes with the memory margin.
+4. **Gain hinge without checkpointing** when memory allows: about 20 ms for about 2 GB.
+5. **The eager attention's fp32 <-> bf16 activation casts** (4 080 `_to_copy` per step):
+   keep q/k/v in bf16 through the TG-restricted branches. Not bit-identical.

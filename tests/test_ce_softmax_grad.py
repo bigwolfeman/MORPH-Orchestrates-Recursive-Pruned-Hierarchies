@@ -30,7 +30,7 @@ def _case(n=2500, d=192, V=49169, frac_valid=0.7, weights=False, seed=0):
     return x, w, lab.cuda(), wt
 
 
-def _run(x, w, lab, wt, kernel, mask, autocast=False):
+def _run(x, w, lab, wt, kernel, mask, autocast=False, compact=False):
     """``autocast``: the model's real call, fp32 activations under bf16 autocast (the
     bf16 ``x`` upcast to fp32 is exact, so the GEMMs see the same bf16 operands and the
     fp64 reference is the same)."""
@@ -38,7 +38,8 @@ def _run(x, w, lab, wt, kernel, mask, autocast=False):
     wr = w.clone().requires_grad_(True)
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=autocast):
         loss = fused_linear_cross_entropy(xr, wr, lab, chunk_size=1000, mask_token_id=mask,
-                                          weights=wt, softmax_kernel=kernel)
+                                          weights=wt, softmax_kernel=kernel,
+                                          compact_rows=compact)
     loss.backward()
     return loss.detach().double(), xr.grad.double(), wr.grad.double()
 
@@ -135,3 +136,37 @@ def test_the_key_reaches_the_model():
         off = compose(config_name="base")
     assert build_morph_config(on).ce_softmax_kernel is True
     assert build_morph_config(off).ce_softmax_kernel is False
+
+
+@pytest.mark.parametrize("kernel", [False, True])
+@pytest.mark.parametrize("weights", [False, True])
+@pytest.mark.parametrize("autocast", [False, True])
+def test_compact_rows_is_as_accurate_as_all_rows(kernel, weights, autocast):
+    """`model.ce_compact_rows`: the rows with no loss are dropped before the GEMMs. Against
+    fp64 it must be as close as the all-rows path, and the dropped rows' grad_x is 0."""
+    x, w, lab, wt = _case(V=49169, weights=weights, seed=11, frac_valid=0.5)
+    if wt is not None:
+        wt[::7] = 0.0                                    # zero-weight rows are dropped too
+    rl, rgx, rgw, _ = _ref(x, w, lab, wt, 7)
+    al, agx, agw = _run(x, w, lab, wt, kernel, 7, autocast, compact=False)
+    cl, cgx, cgw = _run(x, w, lab, wt, kernel, 7, autocast, compact=True)
+    for name, c, a, r, floor in (("loss", cl, al, rl, 1e-6), ("grad_x", cgx, agx, rgx, 1e-7),
+                                 ("grad_w", cgw, agw, rgw, 1e-7)):
+        assert _err(c, r) <= 1.25 * _err(a, r) + floor, (name, _err(c, r), _err(a, r))
+    dropped = lab == -100
+    if wt is not None:
+        dropped = dropped | (wt == 0)
+    assert float(cgx[dropped].abs().max()) == 0.0
+    assert float(cgx[~dropped].abs().min(dim=-1).values.max()) > 0.0   # kept rows train
+
+
+def test_compact_key_reaches_the_model():
+    import pathlib
+    from hydra import compose, initialize_config_dir
+    from morph.training.train import build_morph_config
+    cdir = str(pathlib.Path(__file__).resolve().parents[1] / "morph" / "configs")
+    with initialize_config_dir(config_dir=cdir, version_base=None):
+        on = compose(config_name="base", overrides=["model.ce_compact_rows=true"])
+        off = compose(config_name="base")
+    assert build_morph_config(on).ce_compact_rows is True
+    assert build_morph_config(off).ce_compact_rows is False

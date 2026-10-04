@@ -704,6 +704,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         n_ve=int(m.n_ve) if getattr(m, "n_ve", None) is not None else None,
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         ce_softmax_kernel=bool(getattr(m, "ce_softmax_kernel", False)),
+        ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         tg_scoped_kernels=bool(getattr(m, "tg_scoped_kernels", False)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
@@ -1310,6 +1311,29 @@ def check_init_from_keys(missing: list[str], unexpected: list[str], model: nn.Mo
 
 
 @torch.no_grad()
+def _host_floats(xs: list) -> list[float]:
+    """``[float(x) for x in xs]`` with ONE device-to-host copy for all the tensors.
+
+    Each ``float()`` of a CUDA scalar is its own copy and stream sync; the per-step probe
+    read about 45 of them after the backward while the GPU sat idle (2026-10-04 speed
+    pass). The values are the same: every tensor is widened to fp32 on the device (exact
+    for fp32 / bf16 / fp16 sources) and fp32 converts to a Python float exactly, as
+    ``float()`` does. Python numbers pass through. Tensors are flattened in order, so a
+    multi-element tensor contributes one float per element (``t.tolist()`` order)."""
+    tens = [x for x in xs if torch.is_tensor(x)]
+    flat = (torch.cat([t.detach().reshape(-1).float() for t in tens]).tolist()
+            if tens else [])
+    out, i = [], 0
+    for x in xs:
+        if torch.is_tensor(x):
+            n = x.numel()
+            out.extend(flat[i:i + n])
+            i += n
+        else:
+            out.append(float(x))
+    return out
+
+
 def _block_gain(acc: dict[str, float], region: str) -> dict[str, float]:
     """Per-block backward gain of a stacked region, from its per-block squared grad norms.
 
@@ -1458,10 +1482,12 @@ def _preclip_probe(model) -> dict[str, float]:
     # loop, with a forget gate biased to alpha near 1, and nothing has ever watched it.
     lp = getattr(getattr(model, "_orig_mod", model), "_loop_probe", None)
     if lp:
-        for key, t in lp.items():
-            if t is None:
-                continue
-            seq = t.float().tolist()
+        _lp_items = [(key, t) for key, t in lp.items() if t is not None]
+        _lp_flat = _host_floats([t.reshape(-1) for _, t in _lp_items])   # one copy
+        _lp_at = 0
+        for key, t in _lp_items:
+            seq = _lp_flat[_lp_at:_lp_at + t.numel()]
+            _lp_at += t.numel()
             out[f"loop/{key}_max"] = max(seq)
             out[f"loop/{key}_last"] = seq[-1]
             # The per-iteration profile itself: a gain that COMPOUNDS with the iteration
@@ -1498,21 +1524,29 @@ def _preclip_probe(model) -> dict[str, float]:
     cot = getattr(root, "_loop_cot", None)
     if cot:
         ts = sorted(cot)
-        for t in ts:
-            out[f"loop/cot_norm_t{t}"] = float(cot[t])
-        # The product through the loop in one number: first grad iteration over the last.
-        out["loop/cot_ratio"] = float(cot[ts[0]]) / (float(cot[ts[-1]]) + 1e-12)
         # Clip-through-time (model.slot_cot_clip): what the backward actually carried after
         # the clip, and the fraction of rows the cap shrank, per iteration.
         post = getattr(root, "_loop_cot_post", None) or {}
         bind = getattr(root, "_loop_cot_bind", None) or {}
-        for t in sorted(post):
-            out[f"loop/cot_post_t{t}"] = float(post[t])
-            out[f"loop/cot_bind_t{t}"] = float(bind[t])
+        pts = sorted(post)
+        # Every reading below in ONE device-to-host copy (`_host_floats`), same values.
+        _v = _host_floats([cot[t] for t in ts] + [post[t] for t in pts]
+                          + [bind[t] for t in pts] + list(bind.values()))
+        _n, _m = len(ts), len(pts)
+        cot_h = dict(zip(ts, _v[:_n]))
+        post_h = dict(zip(pts, _v[_n:_n + _m]))
+        bind_h = dict(zip(pts, _v[_n + _m:_n + 2 * _m]))
+        bind_all = _v[_n + 2 * _m:]
+        for t in ts:
+            out[f"loop/cot_norm_t{t}"] = cot_h[t]
+        # The product through the loop in one number: first grad iteration over the last.
+        out["loop/cot_ratio"] = cot_h[ts[0]] / (cot_h[ts[-1]] + 1e-12)
+        for t in pts:
+            out[f"loop/cot_post_t{t}"] = post_h[t]
+            out[f"loop/cot_bind_t{t}"] = bind_h[t]
         if post:
-            pts = sorted(post)
-            out["loop/cot_post_ratio"] = float(post[pts[0]]) / (float(cot[ts[-1]]) + 1e-12)
-            out["loop/cot_bind_max"] = max(float(v) for v in bind.values())
+            out["loop/cot_post_ratio"] = post_h[pts[0]] / (cot_h[ts[-1]] + 1e-12)
+            out["loop/cot_bind_max"] = max(bind_all)
     return out
 
 
@@ -2482,13 +2516,20 @@ def main(cfg: DictConfig) -> None:
     # which are incompatible with fullgraph compile).
     compile_attention = bool(getattr(tr, "compile_attention", False))
     compile_blocks = bool(getattr(tr, "compile_blocks", False))
+    # training.compile_core_dynamic (default true = the tree before the key): compile the
+    # core's modules with a dynamic batch. The slot loop runs every pass on the FULL cell
+    # axis (inactive slots are masked by `torch.where`, not dropped), so its shapes are
+    # static and dynamic guards only cost host time per call: 22 ms per step on the lead
+    # slot-loop arm with compile_blocks (2026-10-04). A model whose core shrinks its
+    # active set (the plain Parcae path) wants the default.
+    core_dynamic = bool(getattr(tr, "compile_core_dynamic", True))
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
             # Core MLPs see a VARIABLE batch each loop iteration (active-set
             # shrinking processes the still-active prefix), so compile them with
             # dynamic batch to avoid a recompile per distinct sub-batch size.
             # Prelude/coda see a fixed batch → let Dynamo auto-decide (None).
-            dyn = True if group is model.core else None
+            dyn = (True if core_dynamic else False) if group is model.core else None
             for i in range(len(group)):
                 layer = group[i]
                 if compile_blocks:
@@ -3822,6 +3863,7 @@ def main(cfg: DictConfig) -> None:
                 # whether the forward on that batch was itself abnormal (a forward
                 # explosion moves the loss; a backward-only blow-up does not).
                 _probe_log["loss/total"] = float(loss.detach())
+                _probe_lk: list[str] = []
                 for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_est_raw", "gain_reg_weighted", "gain_n_iters",
                             "gain_slot_p50", "gain_slot_p90", "gain_slot_max", "gain_slot_frac_gt1",
                             "gain_tail_pen", "gain_floor_pen", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted",
@@ -3843,7 +3885,10 @@ def main(cfg: DictConfig) -> None:
                             "critic_gap_traj",
                             "horizon", "horizon_weighted", "horizon_terms"):
                     if _lk in out and out[_lk] is not None:
-                        _probe_log[f"loss/{_lk}"] = float(out[_lk].detach())
+                        _probe_lk.append(_lk)
+                # One device-to-host copy for all of them (`_host_floats`), same values.
+                for _lk, _lv in zip(_probe_lk, _host_floats([out[k] for k in _probe_lk])):
+                    _probe_log[f"loss/{_lk}"] = _lv
                 wandb.log(_probe_log, step=step)
                 if _gprobe_path is not None:
                     # Local mirror. wandb is the record of truth, but a per-step probe is

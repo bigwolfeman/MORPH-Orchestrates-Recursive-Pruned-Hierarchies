@@ -81,9 +81,11 @@ class _FusedLinearCE(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor,
                 ignore_index: int, chunk_size: int, mask_token_id: int = -1,
-                weights: Tensor | None = None, softmax_kernel: bool = False) -> Tensor:
+                weights: Tensor | None = None, softmax_kernel: bool = False,
+                compact_rows: bool = False) -> Tensor:
         # x: [N, d], w: [V, d], labels: [N]
         N, d = x.shape
+        x_full = x
         compute_dtype = x.dtype  # match eager autocast matmul precision
 
         valid = labels != ignore_index
@@ -106,6 +108,23 @@ class _FusedLinearCE(torch.autograd.Function):
         # keeps the old host scalar: there is no queue to drain, and the CPU kernel divides
         # where the CUDA kernel multiplies by the reciprocal.
         inv_n = torch.reciprocal(n_valid_t) if x.is_cuda else float(n_valid_t.item())
+
+        # `compact_rows` (model.ce_compact_rows): drop every row that carries no loss (an
+        # ignored label, or a zero row weight) BEFORE the vocab GEMMs. Their loss and their
+        # gradient are exactly zero on the full path too, so only the summation order of
+        # the loss and of grad_w changes (the chunks hold different rows). The row count is
+        # needed on the host to size the loop: ONE sync per call, placed in front of the
+        # GEMM-bound chunk loop where the GPU has the most queued work to drain.
+        keep_idx = None
+        if compact_rows:
+            keep = valid if row_w is None else row_w != 0
+            keep_idx = keep.nonzero().squeeze(1)
+            x = x.index_select(0, keep_idx)
+            labels = labels.index_select(0, keep_idx)
+            valid = valid.index_select(0, keep_idx)
+            if row_w is not None:
+                row_w = row_w.index_select(0, keep_idx)
+            N = x.shape[0]
 
         # Cast the weight to compute dtype ONCE, in its natural [V, d] layout, and reuse
         # it for both matmuls. The logits matmul wants [d, V]; instead of materialising a
@@ -198,6 +217,8 @@ class _FusedLinearCE(torch.autograd.Function):
 
         loss = loss_sum * inv_n if torch.is_tensor(inv_n) else loss_sum / inv_n
         _scale_inv(grad_x, inv_n)
+        if keep_idx is not None:
+            grad_x = torch.zeros_like(x_full).index_copy_(0, keep_idx, grad_x)
         grad_w = grad_w[:V] if V_pad != V else grad_w
         _scale_inv(grad_w, inv_n)
 
@@ -212,7 +233,7 @@ class _FusedLinearCE(torch.autograd.Function):
         go = grad_output  # scalar
         gx = (grad_x * go).to(ctx.x_dtype)
         gw = (grad_w * go).to(ctx.w_dtype)
-        return gx, gw, None, None, None, None, None, None
+        return gx, gw, None, None, None, None, None, None, None
 
 
 def fused_linear_cross_entropy(
@@ -224,6 +245,7 @@ def fused_linear_cross_entropy(
     mask_token_id: int = -1,
     weights: Tensor | None = None,
     softmax_kernel: bool = False,
+    compact_rows: bool = False,
 ) -> Tensor:
     """Memory-efficient ``mean`` cross-entropy of a weight-tied linear head.
 
@@ -241,9 +263,12 @@ def fused_linear_cross_entropy(
     ``softmax_kernel`` (default False = the eager chunk body, unchanged): the per-chunk
     softmax gradient in one Triton pass over the bf16 logits tile (CUDA bf16/fp16 only;
     a few fp32 ulps from the eager body, see ``morph/kernels/triton/ce_softmax_grad.py``).
+
+    ``compact_rows`` (default False = every row): the vocab GEMMs run on the rows that
+    carry loss only; one host sync per call; not bit-identical (summation order).
     """
     return _FusedLinearCE.apply(x, w, labels, ignore_index, chunk_size, mask_token_id,
-                                weights, softmax_kernel)
+                                weights, softmax_kernel, compact_rows)
 
 
 # ── Spectral decoupling: an L2 penalty on the coda's TOKEN logits ───────────

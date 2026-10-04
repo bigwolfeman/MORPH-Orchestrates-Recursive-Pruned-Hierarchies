@@ -206,6 +206,10 @@ model:
   #   fp32 ulps before the bf16 rounding of the gradient; accuracy pinned against fp64 in
   #   tests/test_ce_softmax_grad.py). false = the eager body.
   ce_softmax_kernel: false
+  # ce_compact_rows: run the CE's vocab GEMMs on the labelled rows only (about half the span
+  #   decoder's rows are pads). One host sync per CE call; NOT bit-identical (sum order),
+  #   pinned against fp64 in tests/test_ce_softmax_grad.py. false = every row.
+  ce_compact_rows: false
   # Parallel multi-token prediction on the coda readout (arc E8, 2026-09-07). 1 = the plain
   # next-token head only (bit-identical; no module built). k > 1 adds k-1 heads (RMSNorm ->
   # identity-init Linear -> the tied LM head) trained on labels shifted by 1..k-1, loss
@@ -341,6 +345,11 @@ training:
   compile_attention: false  # opt-in: also torch.compile the eager attention (TUL/TG path; benchmarked 2026-08-30)
   compile_blocks: false        # opt-in: torch.compile whole MORPHBlocks (GLA graph-broken); 1.84x eager fwd+bwd, see lab/perf/compile_coverage_bench.py
   compile_mode: default
+  compile_core_dynamic: true  # false = compile the core's modules with STATIC shapes. The slot
+                              # loop's shapes are static (masking, not shrinking), so dynamic
+                              # guards only cost host time (22 ms/step on the lead slot-loop arm
+                              # with compile_blocks, 2026-10-04). Keep true for a core that
+                              # shrinks its active set (the plain Parcae path).
   checkpointing: true
 
   # Pruning → MORTAR carve → routing schedule (Phases 2→3→4)

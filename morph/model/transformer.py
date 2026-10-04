@@ -393,6 +393,11 @@ class MORPHConfig:
     # of the model. False = the eager body (the tree before the key). Not bit-identical: a
     # few fp32 ulps before the gradient's bf16 rounding (tests/test_ce_softmax_grad.py).
     ce_softmax_kernel: bool = False
+    # Run the chunked CE on the labelled rows only (ignored and zero-weight rows are
+    # dropped before the vocab GEMMs; their gradient is exactly zero either way). One host
+    # sync per CE call for the row count. Not bit-identical (the loss and grad_w sums run
+    # over different chunks); about half the span decoder's rows are pads. False = all rows.
+    ce_compact_rows: bool = False
 
     # Parallel multi-token prediction on the coda readout (Gloeckle et al. 2024, arXiv
     # 2404.19737; arc E8, 2026-09-07 [W]). mtp_heads = the number of future tokens each
@@ -1858,6 +1863,10 @@ class MORPHTransformer(nn.Module):
     def __init__(self, cfg: MORPHConfig):
         super().__init__()
         self.cfg = cfg
+        # The chunked CE's opt-in speed paths, passed at every `fused_linear_cross_entropy`
+        # call of the model (2026-10-04 speed passes; both off = the eager CE body).
+        self._ce_kw = dict(softmax_kernel=bool(cfg.ce_softmax_kernel),
+                           compact_rows=bool(cfg.ce_compact_rows))
         if bool(cfg.depth_fixed) and int(cfg.mean_depth) != int(cfg.max_depth):
             raise ValueError(
                 f"model.depth_fixed needs mean_depth == max_depth (got {cfg.mean_depth} / "
@@ -4653,7 +4662,7 @@ class MORPHTransformer(nn.Module):
                 ce_j = fused_linear_cross_entropy(
                     hx.reshape(-1, hx.shape[-1]), w_full, lab.reshape(-1),
                     ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
-                    softmax_kernel=self.cfg.ce_softmax_kernel)
+                    **self._ce_kw)
             else:
                 ce_j = F.cross_entropy(
                     self.embed.attend(hx).reshape(-1, self.cfg.vocab_size),
@@ -10798,7 +10807,7 @@ class MORPHTransformer(nn.Module):
                 loss_t = fused_linear_cross_entropy(
                     st.reshape(-1, st.shape[-1]), w_tied, lab.reshape(-1),
                     ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
-                    mask_token_id=tc.slot_id, softmax_kernel=self.cfg.ce_softmax_kernel)
+                    mask_token_id=tc.slot_id, **self._ce_kw)
                 g, = torch.autograd.grad(loss_t, zr, create_graph=False)
             with torch.no_grad():
                 losses.append(float(loss_t.detach()))
@@ -10919,7 +10928,7 @@ class MORPHTransformer(nn.Module):
         loss = fused_linear_cross_entropy(
             st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
             chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
-            softmax_kernel=self.cfg.ce_softmax_kernel)
+            **self._ce_kw)
         if stats is not None:
             # THE DECODE-CHEAP READOUT. `spandec_ce` is a per-TOKEN conditional CE over the
             # next span, so it is directly comparable with the model's own token CE — which
@@ -10952,7 +10961,7 @@ class MORPHTransformer(nn.Module):
                 stats["spandec_ce"] = float(fused_linear_cross_entropy(
                     st.reshape(-1, C), w_head, _lab0.reshape(-1), ignore_index=-100,
                     chunk_size=self.cfg.ce_chunk_size,
-                    mask_token_id=tc.slot_id, softmax_kernel=self.cfg.ce_softmax_kernel).detach())
+                    mask_token_id=tc.slot_id, **self._ce_kw).detach())
                 stats["spandec_n_tokens_h1"] = float(valid[:, :, :dec.per_span_tokens].sum())
         return loss
 
@@ -11266,7 +11275,7 @@ class MORPHTransformer(nn.Module):
             loss_t = fused_linear_cross_entropy(
                 st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
                 chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
-                softmax_kernel=self.cfg.ce_softmax_kernel)
+                **self._ce_kw)
             terms.append(loss_t)
             if stats is not None:
                 stats[f"spandec_pass_t{t}"] = float(loss_t.detach())
@@ -11416,7 +11425,7 @@ class MORPHTransformer(nn.Module):
         loss = fused_linear_cross_entropy(
             hs.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
             chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
-            softmax_kernel=self.cfg.ce_softmax_kernel)
+            **self._ce_kw)
         if stats is not None:
             # A per-TOKEN conditional-free CE over the next span, directly comparable with
             # the model's own token CE and with `spandec_ce` — except that this reader has
@@ -12135,7 +12144,7 @@ class MORPHTransformer(nn.Module):
                     "kernel. Raises rather than silently running without the penalty.")
             ce = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
                                             chunk_size=chunk, mask_token_id=mask_id,
-                                            softmax_kernel=self.cfg.ce_softmax_kernel)
+                                            **self._ce_kw)
             return {"loss": ce, "ce_main": ce, "ce_tokens": ce,
                     "n_targets": (lab != -100).sum().to(ce.dtype)}
 
@@ -12153,7 +12162,7 @@ class MORPHTransformer(nn.Module):
             loss = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
                                               chunk_size=chunk, mask_token_id=mask_id,
                                               weights=row_w,
-                                              softmax_kernel=self.cfg.ce_softmax_kernel)
+                                              **self._ce_kw)
         valid = (lab != -100).to(row_w.dtype)
         out = {"loss": loss, "n_targets": (row_w * valid).sum()}
         if logit_l2 != 0.0:
@@ -12172,14 +12181,14 @@ class MORPHTransformer(nn.Module):
         main_lab = lab_pad.scatter(0, torch.cat([p_idx, z_idx], dim=0), -100)[:BL]
         ce_main = fused_linear_cross_entropy(flat, w_head, main_lab, ignore_index=-100,
                                              chunk_size=chunk, mask_token_id=mask_id,
-                                             softmax_kernel=self.cfg.ce_softmax_kernel)
+                                             **self._ce_kw)
         out["ce_main"] = ce_main
         out["n_main"] = (main_lab != -100).sum().to(ce_main.dtype)
         for tag, idx in (("plast", p_idx), ("emit", z_idx)):
             labs = lab_pad[idx]
             ce = fused_linear_cross_entropy(flat_pad[idx], w_head, labs, ignore_index=-100,
                                             chunk_size=chunk, mask_token_id=mask_id,
-                                            softmax_kernel=self.cfg.ce_softmax_kernel)
+                                            **self._ce_kw)
             out[f"ce_{tag}"] = ce
             out[f"n_{tag}"] = (labs != -100).sum().to(ce.dtype)
         # val/ppl_tokens is over TOKEN positions only (ordinary + t_last), which keeps it
@@ -15755,7 +15764,7 @@ class MORPHTransformer(nn.Module):
                 ce_loss = fused_linear_cross_entropy(
                     x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
                     ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
-                    softmax_kernel=self.cfg.ce_softmax_kernel,
+                    **self._ce_kw,
                 )
             loss = ce_loss
             out = {"logits": None, "loss": loss}
