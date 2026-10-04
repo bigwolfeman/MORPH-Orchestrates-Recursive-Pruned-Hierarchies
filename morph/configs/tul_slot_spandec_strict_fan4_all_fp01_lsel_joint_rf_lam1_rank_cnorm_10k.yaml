@@ -1,0 +1,20 @@
+# The lead arm (rank-only head + per-stream cell norm) at 10k steps, seed 1.
+# Same model and recipe as `..._lsel_joint_rf_lam1_rank_cnorm`; the two speed keys below are
+# byte-identical to master by the 20-step gate (training-speed passes 1-2, 2026-10-04):
+#   ademamix_fused_fp32  one Triton pass for the fp32 group
+#   ckpt_grad_iters 4    checkpoint 4 loop passes: ~20.2 GiB reserved, ~4.9 GiB free with
+#                        a 6 GiB desktop (k=0 is faster but reserves 24.3 GiB)
+# Record: lab/experiments/planned/2026-10-04-rank-only-cell-norm-10k.md
+defaults:
+  - tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm
+  - _self_
+
+model:
+  ckpt_grad_iters: 4
+
+training:
+  steps: 10000
+  ademamix_fused_fp32: true
+
+wandb:
+  name: slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k

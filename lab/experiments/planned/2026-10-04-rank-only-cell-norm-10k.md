@@ -33,3 +33,10 @@ Pass rule: L-2 and L-5.
 runner_steps.sh, 10000 steps. Readouts at 10000: the depth sweep, gap and worth; the
 exploration ledger; the LayerNorm probe (geometry, --vablate); the repetition eval. The 5k
 checkpoint of this run (ckpt_every 2500) gives a same-run 5k reading for the K-curve.
+
+**Method amendment, 2026-10-04 07:41 CDT, before the run.** Config
+`tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm_10k`: `model.ckpt_grad_iters: 4`
+(20.2 GiB reserved; chosen over k = 0 for daytime desktop slack) and
+`training.ademamix_fused_fp32: true`, both byte-identical to master by gate (passes 1 and 2,
+993dc50). No opt-in key that changes numerics is on. Expected step about 501 ms
+(12258 tok/s); L-6's 1.25x bar is 12250.
