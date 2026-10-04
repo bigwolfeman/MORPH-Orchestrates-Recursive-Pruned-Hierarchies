@@ -102,6 +102,15 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 > it holds one seed of two, doubles the time to failure (step 1150 -> 2225) and reaches 0.78
 > and 0.46 nats better val CE on the two seeds.
 
+## ⭐ LXTUL PRIMARY CANDIDATE (locked 2026-10-04): `morph/configs/lxtul.yaml`
+
+Strict slot loop + 4-cell fan (all cells written) + fixed-point 0.1 + latent-selected loop
+(router-followed, rank-only latent head) + per-pass cell RMSNorm (`tul.slot_cell_pass_norm: rms`).
+K1-K6 +0.0215 / +0.0172 (two seeds, 5k), +0.0236 at 10k, directional; 12.4k tok/s. Open
+problems: CE (gap to plain 10k +0.356) and decode speed (cached decode refuses the fan).
+Start new loop work from it. Decision record:
+[`2026-10-04-lxtul-primary-candidate.md`](.agents/notes/implemented/architecture/2026-10-04-lxtul-primary-candidate.md).
+
 ## ⭐ TUL — Thought Unpack Loop — TWO FORWARDS, ONE TREE (paid loop shipped 2026-09-03; slot loop back with its constraint 2026-09-04)
 
 > **Before any loop-contribution work, read [docs/tul-loop-contribution-history.md](docs/tul-loop-contribution-history.md)** (2026-09-23): every TUL attempt to make the loop contribute, 2026-08-16 to LXTUL-GK, with each number's source, the 48 retractions, and the docs that still state a retracted number. Positives ledger: [docs/9-26-TUL-run-history-IMPORTANT.md](docs/9-26-TUL-run-history-IMPORTANT.md).
