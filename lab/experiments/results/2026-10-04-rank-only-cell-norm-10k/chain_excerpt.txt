@@ -1,0 +1,14 @@
+[10-04 07:41:39] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k START at b3f2f2e4 Config for the lead arm at 10k; prereg Method amend cfg=tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm_10k steps=10000
+[10-04 09:41:37] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k TRAIN exit=0 tok/s=12402 peak=20.08GB Final val_loss=4.0112  ppl=55.21  fan/ls
+[10-04 09:41:37] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k TRIPWIRE DETONATED step=3829 max=3.89e+05@3829 (single row > 1e5)
+[10-04 09:46:37] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k SWEEP exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k ce_tokens K1-K6: +0.0236 [+0.0225, +0.0246] over 480 rows
+[10-04 09:46:38] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k GAP exit=0  ce_6_minus_ruler_ce6: +0.0172 [+0.0018, +0.0332]
+[10-04 09:49:47] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k SCORE exit=1 
+[10-04 09:49:47] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k PAIR exit=1 
+[10-04 09:50:45] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k WORTH exit=0 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k zero TOTAL +0.2327 slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k shuffle TOTAL +0.1923 
+[10-04 09:50:45] slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm-10k DONE steps=10000
+[10-04 09:58:55] LEDGER cn10k-joint-rf-lam1-rank exit=0  shipped ce=4.0975 (38s)
+[10-04 09:59:17] LNPROBE cn10k-joint-rf-lam1-rank exit=0
+[10-04 10:00:52] VABLATE cn10k-joint-rf-lam1-rank exit=0
+[10-04 10:00:52] CNORM10K-EVAL start
+[10-04 10:13:25] CNORM10K-EVAL exit=0
