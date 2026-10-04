@@ -7,6 +7,9 @@ defaults:
   - lxtul
   - _self_
 
+model:
+  ckpt_grad_iters: -1   # checkpoint every pass: 8 cells OOM at 4 (smoke 2026-10-04: 25.2 GiB at step 1). Exact.
+
 tul:
   fan_k: 8
   prefix_k: 8

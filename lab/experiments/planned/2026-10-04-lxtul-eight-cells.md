@@ -46,3 +46,10 @@ Pass rule: E-2 and E-6 hold.
 rows), gap vs plain 5k, worth, the exploration ledger, the LayerNorm probe (geometry and
 `--vablate`), the repetition eval. A 60-step smoke with a val pass precedes the run, to
 read memory and step time.
+
+Method amendment, 2026-10-04 14:12 CDT, before the run: `model.ckpt_grad_iters` -1 (checkpoint every
+pass) instead of lxtul's 4. The first smoke ran out of memory at step 1 (25.2 GiB in use)
+with 4 eager passes. Checkpointing is exact (gradients unchanged), so the arm is the same;
+only its speed is. The 5k LXTUL seeds this pairs with also ran at -1 (9800 / 8876 tok/s),
+so E-8 is read against those, not the 12402 of the 10k run. Smoke at -1: 60 steps and a val
+pass, peak 18.46 GB, about 8.1k tok/s by step 40.
