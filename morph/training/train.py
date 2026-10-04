@@ -703,6 +703,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         bigram_hash_vocab=int(m.bigram_hash_vocab),
         n_ve=int(m.n_ve) if getattr(m, "n_ve", None) is not None else None,
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
+        ce_softmax_kernel=bool(getattr(m, "ce_softmax_kernel", False)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         tg_scoped_kernels=bool(getattr(m, "tg_scoped_kernels", False)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
@@ -2159,7 +2160,15 @@ def main(cfg: DictConfig) -> None:
                 "training.deterministic=true requires CUBLAS_WORKSPACE_CONFIG=:4096:8 to be "
                 "exported BEFORE the process starts; setting it here would be too late and "
                 "would give wrong results instead of an error.")
-        torch.use_deterministic_algorithms(True, warn_only=True)
+        # warn_only=False, not True (2026-10-04): under warn_only=True SDPA's memory-
+        # efficient and flash backward KEEP their non-deterministic algorithms and only
+        # warn. On the strict slot-loop arm (the span decoder's causal SDPA and the
+        # register core) two identical 20-step runs then split at step 2. With
+        # warn_only=False they select the deterministic backward and the two runs are
+        # bit-identical (loss, grad norm, final state hash). An op with no deterministic
+        # implementation now RAISES, which is the honest outcome for a mode whose whole
+        # contract is reproducibility.
+        torch.use_deterministic_algorithms(True, warn_only=False)
         torch.backends.cudnn.benchmark = False
         _uk = bool(getattr(cfg.model, "use_kernels", True))
         print(f"  [determinism] use_deterministic_algorithms(True), cudnn.benchmark=False"
@@ -2799,7 +2808,8 @@ def main(cfg: DictConfig) -> None:
         # abandons the old stream wholesale, so no consumed batch ever differs.
         # prefetch_batches=0 (data_runtime / MORPH_DATA_PREFETCH) → synchronous as before.
         if _data_rt.prefetch_batches > 0:
-            it = Prefetcher(it, depth=_data_rt.prefetch_batches, name=f"owt-train(bag={bag})")
+            it = Prefetcher(it, depth=_data_rt.prefetch_batches, name=f"owt-train(bag={bag})",
+                            pin=torch.cuda.is_available())
         return it
 
     # val/gen ALWAYS use standard NTP (bag_size=0) so val ppl is comparable to the
@@ -3395,6 +3405,10 @@ def main(cfg: DictConfig) -> None:
         print(f"  [fan] select write anneals oracle -> gate over the first "
               f"{int(getattr(_tulc, 'fan_select_write_anneal', 1500))} steps", flush=True)
     for step in range(start_step, total_steps):
+        # The model's train-only readings (the fan's per-pass instrument passes) are read
+        # only by the 20-step log block below, so they are computed on those steps alone
+        # (MORPHTransformer._train_instruments, 2026-10-04). Same cadence test as the block.
+        _mdl._train_instruments = (step % 20 == 0)
         if _tulc is not None and hasattr(_mdl, "mux_gate"):
             _mdl.mux_gate.fill_(1.0 if step >= _mux_on_at else 0.0)
             _mdl.sigreg_gate.fill_(1.0 if step >= _sig_on_at else 0.0)
@@ -3600,7 +3614,10 @@ def main(cfg: DictConfig) -> None:
                     _layout = _layout.to(device)
                 else:
                     (x, y), _layout = batch, None
-                x, y = x.to(device), y.to(device)
+                # non_blocking: the prefetcher pins every batch (data_placement.pin_batch),
+                # so the copy is queued behind the previous optimizer step instead of a
+                # pageable copy that waited for it (a host sync per step, 2026-10-04).
+                x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
                 _sg_shape = x.shape          # static-graph build uses the live shape
 
             if _gate_pending and _layout is not None and _layout.span_len is not None:
@@ -3662,7 +3679,10 @@ def main(cfg: DictConfig) -> None:
                 # `cap` (bit-exact); only fires on σ_max runaway. Loss-side → optimizer-agnostic.
                 if _spec_pen is not None:
                     _sp = _spec_pen.penalty()
-                    _sp_value = float(_sp.detach())
+                    # At lam == 0 `penalty()` returns an exact zero, so the value is known on
+                    # the host; `float()` there was a host sync at the end of every forward
+                    # that kept the CPU from queueing the backward (2026-10-04).
+                    _sp_value = float(_sp.detach()) if _spec_pen.lam != 0.0 else 0.0
                     loss = loss + _sp.to(loss.dtype)
 
             with _rt.region("bwd"):
@@ -3911,7 +3931,9 @@ def main(cfg: DictConfig) -> None:
 
         # ── Timing ────────────────────────────────────────────────────────
         if _exact_trace is not None:
-            _exact_trace.write(f"{step} {float(loss.item()).hex()}\n")
+            # loss, then the pre-clip global grad norm: both must match for a step to be
+            # bit-identical (the grad norm sees every gradient, the loss only the forward).
+            _exact_trace.write(f"{step} {float(loss.item()).hex()} {float(_gnorm).hex()}\n")
             _exact_trace.flush()
 
         t_now = time.perf_counter()

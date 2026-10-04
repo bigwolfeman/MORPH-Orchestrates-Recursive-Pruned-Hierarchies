@@ -42,6 +42,7 @@ except ImportError:
 # value-shift) in one Triton kernel. Public fn falls back to a pure-PyTorch
 # reference when Triton is unavailable, so a direct import is always safe.
 from morph.kernels.triton.fused_cca_prologue import fused_cca_prologue
+from morph.model.host_shadow import shadow as _host_shadow
 # Fused causal conv pair (depthwise + head-grouped), replacing the cuDNN convs
 # whose grouped wgrad backward is slow on sm_120. Verified fwd/grad-exact.
 from morph.kernels.triton.fused_cca_conv import fused_cca_conv
@@ -658,7 +659,12 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
     # masked to -inf gets softmax weight exactly 0 and therefore contributes no
     # gradient to its K/V, so restricting to the gathered columns is the same
     # function, not an approximation.
-    M = int(slot_mask.sum(-1).max())
+    # The batch's largest per-row slot count. From the layout's host copy when it has one
+    # (`morph.model.host_shadow`): on the device tensor this was a host sync at every
+    # prelude / coda layer of every forward (2026-10-04). Same integer either way.
+    _sm_host = _host_shadow(slot_mask)
+    M = (int(_sm_host.sum(-1).max()) if _sm_host is not None
+         else int(slot_mask.sum(-1).max()))
     # M == 0 needs no special case: empty gathers and an [B,H,S,0] score tensor
     # compose fine, the softmax runs over the sink alone, and the final einsum
     # over a zero-length j returns zeros — with the SAME zero-not-None gradient

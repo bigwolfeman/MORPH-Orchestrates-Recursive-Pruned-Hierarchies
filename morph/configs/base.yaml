@@ -201,6 +201,11 @@ model:
   # LM head fused cross-entropy chunk size (rows of B·T per chunk).
   # Smaller = less peak VRAM, more launch overhead. Tune per target.
   ce_chunk_size: 1024
+  # ce_softmax_kernel: the chunk's softmax-gradient body as one Triton pass over the bf16
+  #   logits tile instead of ~10 eager passes over an fp32 copy. NOT bit-identical (a few
+  #   fp32 ulps before the bf16 rounding of the gradient; accuracy pinned against fp64 in
+  #   tests/test_ce_softmax_grad.py). false = the eager body.
+  ce_softmax_kernel: false
   # Parallel multi-token prediction on the coda readout (arc E8, 2026-09-07). 1 = the plain
   # next-token head only (bit-identical; no module built). k > 1 adds k-1 heads (RMSNorm ->
   # identity-init Linear -> the tied LM head) trained on labels shifted by 1..k-1, loss
@@ -495,6 +500,10 @@ training:
   ademamix_fused_nu_floor: true  # (b1zero, LINEAR fused only) legacy code-1 floor on sqrt(ν)
                                  # (prevents int8 underflow→0). Exposed only to A/B-attribute the
                                  # linear tax (floor-bias vs resolution). Ignored when dynamic_qmap.
+  ademamix_fused_fp32: false     # (b1zero, fused only) true = the fp32-state params (the
+                                 # 32-bit no-decay group, every sub-4096 tensor) update in ONE
+                                 # Triton pass instead of ~25 _foreach passes. Bit-identical
+                                 # (tests/test_ademamix_fp32_kernel.py, gate 2026-10-04).
   ademamix_eps_inside: false     # (b1zero) false = √(ν/bc2)+ε true-Adam normalization (default).
                                  # true = √(ν/bc2+ε) safety floor (floored at √ε≈1e-4) —
                                  # required for the fused linear-int8 kernel where ν can underflow

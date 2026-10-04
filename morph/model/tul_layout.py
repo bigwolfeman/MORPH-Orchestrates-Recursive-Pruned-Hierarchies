@@ -37,6 +37,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from torch import Tensor
+from morph.model import host_shadow
 
 __all__ = [
     "BOUNDARY_SUFFIX_CHARS",
@@ -611,13 +612,27 @@ class SlotLayout:
     def l_total(self) -> int:
         return int(self.slot_mask.shape[1])
 
+    def pin_memory(self) -> "SlotLayout":
+        """The same layout with every tensor in page-locked host memory (the trainer's
+        prefetcher pins on its producer thread so ``to(device)`` is a queued copy)."""
+        def _pm(t):
+            return None if t is None else t.pin_memory()
+        return SlotLayout(slot_mask=_pm(self.slot_mask), bag_id=_pm(self.bag_id),
+                          slot_index=_pm(self.slot_index), slot_valid=_pm(self.slot_valid),
+                          prefix_k=self.prefix_k, stats=self.stats,
+                          span_len=_pm(self.span_len),
+                          len_supervised=_pm(self.len_supervised))
+
     def to(self, device) -> "SlotLayout":
         _mv = lambda t: None if t is None else t.to(device, non_blocking=True)
+        # `slot_mask` and `slot_valid` carry their HOST value with them
+        # (`morph.model.host_shadow`): the forward reads counts and masks off them, which
+        # on a device tensor is a host sync each time (2026-10-04).
         return SlotLayout(
-            slot_mask=self.slot_mask.to(device, non_blocking=True),
+            slot_mask=host_shadow.to_device(self.slot_mask, device),
             bag_id=self.bag_id.to(device, non_blocking=True),
             slot_index=self.slot_index.to(device, non_blocking=True),
-            slot_valid=self.slot_valid.to(device, non_blocking=True),
+            slot_valid=host_shadow.to_device(self.slot_valid, device),
             prefix_k=self.prefix_k,
             stats=self.stats,
             span_len=_mv(self.span_len),

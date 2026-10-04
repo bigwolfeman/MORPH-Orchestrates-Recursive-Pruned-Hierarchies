@@ -362,6 +362,9 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
         # Both no-op when ademamix_fused=false.
         fused_dynamic_qmap = bool(getattr(tr, "ademamix_fused_dynamic_qmap", True))
         fused_nu_floor = bool(getattr(tr, "ademamix_fused_nu_floor", True))
+        # One-pass Triton update for the fp32-state params (bit-identical to the
+        # `_foreach` path; ademamix_fp32_kernel.py). Default false: the tree before it.
+        fused_fp32 = bool(getattr(tr, "ademamix_fused_fp32", False))
         # Keep the no-decay group (which holds nn.Embedding tables) in 32-bit state —
         # bnb's 8-bit is unstable on sparse/large-range embedding grads. The no-decay group
         # otherwise holds only sub-4096 tensors (already fp32), so this mirrors AdamW8bit.
@@ -374,7 +377,8 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
             update_clip=update_clip, stale_push_cap_coord=stale_push_cap_coord,
             g_coef=g_coef, g_snr_gate_kappa=g_snr_gate_kappa,
             g_snr_gate_floor=g_snr_gate_floor, track_diag=track_diag,
-            fused_dynamic_qmap=fused_dynamic_qmap, fused_nu_floor=fused_nu_floor)
+            fused_dynamic_qmap=fused_dynamic_qmap, fused_nu_floor=fused_nu_floor,
+            fused_fp32=fused_fp32)
     elif use_8bit:
         try:
             import bitsandbytes as bnb

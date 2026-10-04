@@ -334,6 +334,20 @@ def _fmt_s(s: float) -> str:
 
 
 # ── Prefetcher (tier D) ─────────────────────────────────────────────────────
+def pin_batch(item):
+    """``item`` with every CPU tensor in page-locked memory (tuples recursed, objects with
+    a ``pin_memory()`` method such as ``SlotLayout`` asked to pin themselves). Values are
+    unchanged; only the host allocation differs, which lets the trainer's
+    ``.to(device, non_blocking=True)`` queue the copy instead of waiting for the stream."""
+    if isinstance(item, tuple):
+        return tuple(pin_batch(e) for e in item)
+    if isinstance(item, list):
+        return [pin_batch(e) for e in item]
+    if hasattr(item, "pin_memory"):
+        return item.pin_memory()
+    return item
+
+
 class Prefetcher:
     """ONE producer thread running the wrapped generator into a bounded queue.
 
@@ -347,16 +361,20 @@ class Prefetcher:
     draw. Bit-exact repro across switches ⇒ `prefetch_batches: 0`.
 
     Producer exceptions are re-raised in the consumer on the next `next()`.
+
+    ``pin=True`` pins every batch on the producer thread (:func:`pin_batch`), off the
+    training thread. The stream of values is unchanged.
     """
     _SENTINEL = object()
 
-    def __init__(self, gen: Iterator, depth: int, name: str = ""):
+    def __init__(self, gen: Iterator, depth: int, name: str = "", pin: bool = False):
         if depth < 1:
             raise ValueError(f"prefetch depth must be >= 1, got {depth}")
         self._q: queue.Queue = queue.Queue(maxsize=depth)
         self._stop = threading.Event()
         self._exc: Optional[BaseException] = None
         self._closed = False
+        self._pin = bool(pin)
         self._thread = threading.Thread(
             target=self._produce, args=(gen,), daemon=True,
             name=f"data-prefetch{('-' + name) if name else ''}")
@@ -365,6 +383,8 @@ class Prefetcher:
     def _produce(self, gen: Iterator):
         try:
             for item in gen:
+                if self._pin:
+                    item = pin_batch(item)
                 while not self._stop.is_set():
                     try:
                         self._q.put(item, timeout=0.1)

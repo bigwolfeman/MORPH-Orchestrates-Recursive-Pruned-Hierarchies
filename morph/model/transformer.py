@@ -55,6 +55,7 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
                           swor_uniform)
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
+from .host_shadow import any_true, derive as derive_shadow, masked_rows, shadow as host_shadow
 from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_repel_term,
                       fan_stream_rank, fan_vol_term, select_gate_loss, select_streams,
                       select_winners, fan_stream_stats, plan_streams)
@@ -387,6 +388,11 @@ class MORPHConfig:
     # Tune per target: large on high-VRAM (Pro 6000) for speed, small on tight
     # memory / very long context.
     ce_chunk_size: int = 1024
+    # The chunk's softmax-gradient body as ONE Triton kernel over the bf16 logits tile
+    # (morph/kernels/triton/ce_softmax_grad.py) at every `fused_linear_cross_entropy` call
+    # of the model. False = the eager body (the tree before the key). Not bit-identical: a
+    # few fp32 ulps before the gradient's bf16 rounding (tests/test_ce_softmax_grad.py).
+    ce_softmax_kernel: bool = False
 
     # Parallel multi-token prediction on the coda readout (Gloeckle et al. 2024, arXiv
     # 2404.19737; arc E8, 2026-09-07 [W]). mtp_heads = the number of future tokens each
@@ -1770,6 +1776,13 @@ class MORPHTransformer(nn.Module):
     # add: the injected carrier is consumed by `_core_step` and never returned. None by
     # default — a Python-level branch, so the shipped graph never sees it.
     _trigger_capture: list | None = None
+
+    # Whether a TRAINING forward computes the per-pass readings no loss term reads (the
+    # fan's `stream_cos_t{t}` and the no-grad `epi_t{t}` / `vol_t{t}`). True by default, so
+    # every caller but the trainer sees them on every forward; train.py sets it to
+    # `step % 20 == 0`, the steps whose train readings it logs. Read at trace time, a plain
+    # Python bool (the `_probe_rank` rule). Eval forwards always compute them.
+    _train_instruments: bool = True
 
     # `tul.loop_denoise`'s per-pass term, written by `_tul_core` at train:
     # ``{"loss": the sum over realised passes, "stats": {loop_denoise_l2_t{t},
@@ -4476,7 +4489,7 @@ class MORPHTransformer(nn.Module):
         groups["gain_est"] = gain_reg["gain"]
         groups["gain_est_max"] = gain_reg["gain_max"]
         if "n_iters" in gain_reg:
-            groups["gain_n_iters"] = gain_reg["gain"].new_tensor(gain_reg["n_iters"])
+            groups["gain_n_iters"] = gain_reg["gain"].new_full((), gain_reg["n_iters"])
         groups["gain_reg_weighted"] = gain_reg["penalty"].detach()
         # Per-slot readings of the same finite difference (`slot_gain_tail_*`); the
         # weighted tail term is inside `gain_reg_weighted` and reported apart as well.
@@ -4639,7 +4652,8 @@ class MORPHTransformer(nn.Module):
             if w_full is not None:
                 ce_j = fused_linear_cross_entropy(
                     hx.reshape(-1, hx.shape[-1]), w_full, lab.reshape(-1),
-                    ignore_index=-100, chunk_size=self.cfg.ce_chunk_size)
+                    ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
+                    softmax_kernel=self.cfg.ce_softmax_kernel)
             else:
                 ce_j = F.cross_entropy(
                     self.embed.attend(hx).reshape(-1, self.cfg.vocab_size),
@@ -5776,6 +5790,11 @@ class MORPHTransformer(nn.Module):
                     B, _n_slots * _m_cells),
                 slot_valid=layout.slot_valid.repeat_interleave(_m_cells, dim=1),
                 prefix_k=layout.prefix_k)
+            # The per-cell validity's host value, when the per-slot one has one
+            # (`morph.model.host_shadow`): the fixed-point term below reads masks of it.
+            _vh_slots = host_shadow(_layout_slots.slot_valid)
+            if _vh_slots is not None:
+                derive_shadow(layout.slot_valid, np.repeat(_vh_slots, _m_cells, axis=1))
         gidx, gvalid = layout.slot_index, layout.slot_valid
 
         xn = self.input_norm(x)
@@ -6190,7 +6209,13 @@ class MORPHTransformer(nn.Module):
                         "within a slot. Raises rather than silently using cell 0's value.")
                 depths = _dv[:, :, :1].expand(B, _n_slots, _m_cells).reshape(
                     B, _n_slots * _m_cells).contiguous()
-            total_iters = int(depths.max().item())
+            # THE one host sync the loop needs: its Python pass count is the table's max.
+            # The whole [B, S] table comes across in that same sync and rides on `depths`
+            # as its host shadow, so every per-pass mask below is known on the host and
+            # costs no further sync (2026-10-04).
+            _dh = depths.cpu().numpy()
+            derive_shadow(depths, _dh)
+            total_iters = int(_dh.max())
         # ── tul.fan_loop_select: the latent-selected loop's per-forward state ──────
         # A Python-level constant: "off" (every other model) binds None and the three
         # `_ls` sites below trace out. Built after the depth draw because the reset mask of
@@ -7080,15 +7105,21 @@ class MORPHTransformer(nn.Module):
                     # pass in the grad window) and kept explicit so the invariant is
                     # stated where it is relied on, not only where the draw is made.
                     _fin = _fin & ~_pfx
-                if bool(_fin.any()):
+                else:
+                    # The same mask's host value from the depth table's and the validity's
+                    # shadows, so the test and the two gathers below run without a sync.
+                    _dhs, _vhs = host_shadow(depths), host_shadow(layout.slot_valid)
+                    if _dhs is not None and _vhs is not None:
+                        derive_shadow(_fin, (_dhs > t) & _vhs & ~(_dhs > t + 1))
+                if any_true(_fin):
                     # `_h_det`: u_T, the deterministic part (tul.gram; `h_new` itself on
                     # every other arm) — ||u_T - h_{T-1}||^2 / ||u_T||^2.
                     # Gathered to the FINISHING slots before the fp32 casts (the pass
                     # residual's rule above): each slot finishes once, so the saved fp32
                     # difference and denominator over the whole loop are one carrier, not
                     # one per pass (2.3 GB of fp32 at the lxfan6 panel shape).
-                    _fn = _h_det[_fin].flatten(1).float()
-                    _fo = h[_fin].flatten(1).float()
+                    _fn = masked_rows(_h_det, _fin).flatten(1).float()
+                    _fo = masked_rows(h, _fin).flatten(1).float()
                     _fd = _fn if _scse is None else _fn + h_star[_fin].flatten(1).float()
                     _rel = (_fn - _fo).pow(2).sum(-1) / (_fd.pow(2).sum(-1) + 1e-6)   # [N_fin]
                     _fp_terms.append(_rel)
@@ -9951,8 +9982,11 @@ class MORPHTransformer(nn.Module):
         p_idx = torch.where(layout.slot_valid, base - 1, BL).reshape(-1)
         z_idx = torch.where(layout.slot_valid, base + layout.prefix_k - 1, BL).reshape(-1)
         w = labels.new_ones(BL + 1, dtype=torch.float32)
-        w[p_idx] = self.cfg.tul.plast_weight
-        w[z_idx] = self.cfg.tul.emit_weight
+        # `index_fill_` takes the weight as a kernel scalar; `w[idx] = float` built a CPU
+        # tensor and copied it in, a host sync per call (2026-10-04). Same writes, same
+        # order, same values.
+        w.index_fill_(0, p_idx, self.cfg.tul.plast_weight)
+        w.index_fill_(0, z_idx, self.cfg.tul.emit_weight)
         return w[:BL], p_idx, z_idx
 
     @staticmethod
@@ -10764,7 +10798,7 @@ class MORPHTransformer(nn.Module):
                 loss_t = fused_linear_cross_entropy(
                     st.reshape(-1, st.shape[-1]), w_tied, lab.reshape(-1),
                     ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
-                    mask_token_id=tc.slot_id)
+                    mask_token_id=tc.slot_id, softmax_kernel=self.cfg.ce_softmax_kernel)
                 g, = torch.autograd.grad(loss_t, zr, create_graph=False)
             with torch.no_grad():
                 losses.append(float(loss_t.detach()))
@@ -10884,7 +10918,8 @@ class MORPHTransformer(nn.Module):
         lab = torch.where(valid, ids, torch.full_like(ids, -100))
         loss = fused_linear_cross_entropy(
             st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
-            chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id)
+            chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
+            softmax_kernel=self.cfg.ce_softmax_kernel)
         if stats is not None:
             # THE DECODE-CHEAP READOUT. `spandec_ce` is a per-TOKEN conditional CE over the
             # next span, so it is directly comparable with the model's own token CE — which
@@ -10894,16 +10929,19 @@ class MORPHTransformer(nn.Module):
             # over whatever horizon the arm runs. `spandec_ce` is the H = 1 PART of it, so
             # a horizon arm's sweep column stays comparable with every earlier arm's and
             # with the model's own token CE.
-            stats["spandec_ce_h"] = float(loss.detach())
+            # 0-dim device tensors, not floats (2026-10-04): each `float()` here was a host
+            # sync in the middle of every training forward. `_forward_tul` folds them into
+            # `groups` as fp32 tensors either way, the same values.
+            stats["spandec_ce_h"] = loss.detach()
             stats["spandec_horizon"] = float(dec.horizon)
             # WHICH span the column above is a CE over. At offset > 1 a `spandec_ce` is
             # NOT comparable with any earlier arm's: it grades a span two or three
             # boundaries away, which is a harder job than the next span. The offset is
             # logged beside it so a scorer can never read the two as the same number.
             stats["spandec_target_offset"] = float(dec.target_offset)
-            stats["spandec_n_tokens"] = float(valid.sum())
+            stats["spandec_n_tokens"] = valid.sum().to(torch.float32)
             if dec.horizon == 1:
-                stats["spandec_ce"] = float(loss.detach())
+                stats["spandec_ce"] = loss.detach()
             elif not self.training:
                 # A SECOND chunked CE over block 0 alone. Eval only: it is a full extra
                 # [B, S, J, V] readout, the sweep and the val pass are where the column is
@@ -10914,7 +10952,7 @@ class MORPHTransformer(nn.Module):
                 stats["spandec_ce"] = float(fused_linear_cross_entropy(
                     st.reshape(-1, C), w_head, _lab0.reshape(-1), ignore_index=-100,
                     chunk_size=self.cfg.ce_chunk_size,
-                    mask_token_id=tc.slot_id).detach())
+                    mask_token_id=tc.slot_id, softmax_kernel=self.cfg.ce_softmax_kernel).detach())
                 stats["spandec_n_tokens_h1"] = float(valid[:, :, :dec.per_span_tokens].sum())
         return loss
 
@@ -11227,7 +11265,8 @@ class MORPHTransformer(nn.Module):
             lab = torch.where(valid, ids, torch.full_like(ids, -100))
             loss_t = fused_linear_cross_entropy(
                 st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
-                chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id)
+                chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
+                softmax_kernel=self.cfg.ce_softmax_kernel)
             terms.append(loss_t)
             if stats is not None:
                 stats[f"spandec_pass_t{t}"] = float(loss_t.detach())
@@ -11376,7 +11415,8 @@ class MORPHTransformer(nn.Module):
         w_head = w_tied.detach() if tc.mux_detach_head else w_tied
         loss = fused_linear_cross_entropy(
             hs.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
-            chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id)
+            chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
+            softmax_kernel=self.cfg.ce_softmax_kernel)
         if stats is not None:
             # A per-TOKEN conditional-free CE over the next span, directly comparable with
             # the model's own token CE and with `spandec_ce` — except that this reader has
@@ -12094,7 +12134,8 @@ class MORPHTransformer(nn.Module):
                     "weighted-CE branch (a real SlotLayout) has the fused logit_l2 "
                     "kernel. Raises rather than silently running without the penalty.")
             ce = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
-                                            chunk_size=chunk, mask_token_id=mask_id)
+                                            chunk_size=chunk, mask_token_id=mask_id,
+                                            softmax_kernel=self.cfg.ce_softmax_kernel)
             return {"loss": ce, "ce_main": ce, "ce_tokens": ce,
                     "n_targets": (lab != -100).sum().to(ce.dtype)}
 
@@ -12111,7 +12152,8 @@ class MORPHTransformer(nn.Module):
         else:
             loss = fused_linear_cross_entropy(flat, w_head, lab, ignore_index=-100,
                                               chunk_size=chunk, mask_token_id=mask_id,
-                                              weights=row_w)
+                                              weights=row_w,
+                                              softmax_kernel=self.cfg.ce_softmax_kernel)
         valid = (lab != -100).to(row_w.dtype)
         out = {"loss": loss, "n_targets": (row_w * valid).sum()}
         if logit_l2 != 0.0:
@@ -12129,13 +12171,15 @@ class MORPHTransformer(nn.Module):
         flat_pad = torch.cat([flat, flat.new_zeros(1, C)], dim=0)
         main_lab = lab_pad.scatter(0, torch.cat([p_idx, z_idx], dim=0), -100)[:BL]
         ce_main = fused_linear_cross_entropy(flat, w_head, main_lab, ignore_index=-100,
-                                             chunk_size=chunk, mask_token_id=mask_id)
+                                             chunk_size=chunk, mask_token_id=mask_id,
+                                             softmax_kernel=self.cfg.ce_softmax_kernel)
         out["ce_main"] = ce_main
         out["n_main"] = (main_lab != -100).sum().to(ce_main.dtype)
         for tag, idx in (("plast", p_idx), ("emit", z_idx)):
             labs = lab_pad[idx]
             ce = fused_linear_cross_entropy(flat_pad[idx], w_head, labs, ignore_index=-100,
-                                            chunk_size=chunk, mask_token_id=mask_id)
+                                            chunk_size=chunk, mask_token_id=mask_id,
+                                            softmax_kernel=self.cfg.ce_softmax_kernel)
             out[f"ce_{tag}"] = ce
             out[f"n_{tag}"] = (labs != -100).sum().to(ce.dtype)
         # val/ppl_tokens is over TOKEN positions only (ordinary + t_last), which keeps it
@@ -13162,8 +13206,8 @@ class MORPHTransformer(nn.Module):
                     fan_stats["mix_entropy"] = TULFanMix.entropy(
                         _fan_w, layout.slot_valid).detach()
                     fan_stats["mix_w_max"] = (
-                        _fan_w[layout.slot_valid].amax(dim=-1).mean().detach()
-                        if bool(layout.slot_valid.any()) else _fan_w.new_zeros(()))
+                        masked_rows(_fan_w, layout.slot_valid).amax(dim=-1).mean().detach()
+                        if any_true(layout.slot_valid) else _fan_w.new_zeros(()))
                     _fan_cells = _reg_cells
                     # ── the repulsion (tul.fan_repel_lambda, tul.fan_repel_passes) ──
                     # Read off the SAME live-carry trajectory every per-pass reader uses,
@@ -13184,28 +13228,40 @@ class MORPHTransformer(nn.Module):
                         _epi_ridge = (float(tc.fan_epi_ridge) * _iw_k if self._code_enum_k
                                       else float(tc.fan_epi_ridge))
                         _h = self._fan_history_streams
+                        # The per-pass readings no loss term reads (`fan_stream_cos_t{t}`,
+                        # and `fan_epi_t{t}` / `fan_vol_t{t}` outside the penalised
+                        # passes) are skipped on a training step the trainer does not log
+                        # (`_train_instruments`, 2026-10-04): they are detached, draw no
+                        # RNG, and train.py reads them only on its 20-step log line, so
+                        # the logged values are the same. Eval always computes them.
+                        _inst = bool(self._train_instruments) or not self.training
                         if _h == 0:
                             if _mode == "cos":
                                 _rp = fan_repel_term(db_traj, layout.slot_valid, _m,
-                                                     int(tc.fan_repel_passes), stats=fan_stats)
+                                                     int(tc.fan_repel_passes), stats=fan_stats,
+                                                     instruments=_inst)
                             else:
                                 # `epi` / `vol` / `epivol`: the cosines stay INSTRUMENTS
                                 # (every pass, no gradient); the charged term is minus the
                                 # epiplexity of the streams' deviations (`fan_epi_t{t}`),
                                 # minus the within-slot volume (`fan_vol_t{t}`), or their sum.
-                                with torch.no_grad():
-                                    fan_repel_term(db_traj, layout.slot_valid, _m,
-                                                   int(tc.fan_repel_passes), stats=fan_stats)
+                                if _inst:
+                                    with torch.no_grad():
+                                        fan_repel_term(db_traj, layout.slot_valid, _m,
+                                                       int(tc.fan_repel_passes),
+                                                       stats=fan_stats)
                                 _parts = []
                                 if _mode in ("epi", "epivol"):
                                     _parts.append(fan_epi_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         self.tul_fan_epi, _epi_ridge,
-                                        float(tc.fan_epi_eta), stats=fan_stats))
+                                        float(tc.fan_epi_eta), stats=fan_stats,
+                                        instruments=_inst))
                                 if _mode in ("vol", "epivol"):
                                     _parts.append(fan_vol_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
-                                        float(tc.fan_epi_eta), stats=fan_stats))
+                                        float(tc.fan_epi_eta), stats=fan_stats,
+                                        instruments=_inst))
                                 _parts = [p for p in _parts if p is not None]
                                 _rp = torch.stack(_parts).sum() if _parts else None
                         else:
@@ -13946,7 +14002,8 @@ class MORPHTransformer(nn.Module):
             groups = dict(groups)
             groups["spandec"] = spandec_loss.detach()
             for _k, _v in spandec_stats.items():
-                groups[_k] = spandec_loss.new_tensor(_v)
+                groups[_k] = (_v.detach().to(spandec_loss.dtype) if torch.is_tensor(_v)
+                              else spandec_loss.new_full((), _v))
             _dw = tc.spandec_weight * spandec_loss
             groups["spandec_weighted"] = _dw.detach()
             groups["loss"] = groups["loss"] + _dw
@@ -14290,7 +14347,7 @@ class MORPHTransformer(nn.Module):
             groups = dict(groups)
             for _k, _v in fan_stats.items():
                 groups[f"fan_{_k}"] = (_v.detach().to(groups["loss"].dtype)
-                                       if torch.is_tensor(_v) else groups["loss"].new_tensor(_v))
+                                       if torch.is_tensor(_v) else groups["loss"].new_full((), _v))
 
         if spandec_pass_loss is not None and groups is not None:
             # Same contract as `spandec_weighted`: the WEIGHTED term is exposed so train.py
@@ -15389,8 +15446,10 @@ class MORPHTransformer(nn.Module):
         cfg = self.cfg
         L = layout.l_total
         B = layout.slot_mask.shape[0]
-        passes = torch.tensor(float(cfg.n_prelude * L * B + cfg.n_coda * coda_positions * B),
-                              device=layout.slot_mask.device)
+        # `torch.full`, not `torch.tensor(float, device=...)`: the latter is a pageable
+        # host-to-device copy, i.e. a host sync at the end of every forward (2026-10-04).
+        passes = torch.full((), float(cfg.n_prelude * L * B + cfg.n_coda * coda_positions * B),
+                            device=layout.slot_mask.device)
         if self.tul_code_enc is not None:
             # TUL-Code: the thinker runs `_code_last_passes` core passes over the doubled
             # slot sequence (2·M positions per slot, pads included — a fixed shape), set by
@@ -15696,6 +15755,7 @@ class MORPHTransformer(nn.Module):
                 ce_loss = fused_linear_cross_entropy(
                     x.reshape(-1, x.shape[-1]), w_full, labels.reshape(-1),
                     ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
+                    softmax_kernel=self.cfg.ce_softmax_kernel,
                 )
             loss = ce_loss
             out = {"logits": None, "loss": loss}

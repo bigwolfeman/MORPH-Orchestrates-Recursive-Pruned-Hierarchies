@@ -59,6 +59,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from morph.model.host_shadow import masked_rows
+
 __all__ = ["TULFanMix", "select_streams", "select_winners", "select_gate_loss", "fan_stream_stats", "fan_stream_cos", "fan_repel_term",
            "FanReservoir", "ridge_map", "epi_score", "fan_epi_term", "fan_vol_term", "plan_streams"]
 
@@ -128,7 +130,7 @@ def fan_stream_cos(state: Tensor, valid: Tensor, m_cells: int) -> Tensor:
         raise ValueError(
             f"fan_stream_cos: compact axis {sm} != S*M = {s}*{m_cells}")
     z = _cell_readout(state.reshape(b, s, m_cells, *state.shape[2:]))   # [B, S, M, C]
-    sel = z[valid]                                                     # [N, M, C]
+    sel = masked_rows(z, valid)                                        # [N, M, C]
     if sel.shape[0] == 0:
         return z.sum() * 0.0
     n = F.normalize(sel.float(), dim=-1)
@@ -165,7 +167,8 @@ def plan_streams(traj: Tensor, m_cells: int, h: int) -> tuple[Tensor, int]:
 
 
 def fan_repel_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
-                   stats: dict[str, float] | None = None) -> Tensor | None:
+                   stats: dict[str, float] | None = None,
+                   instruments: bool = True) -> Tensor | None:
     """``tul.fan_repel_lambda``'s raw term, plus the per-pass cosine of EVERY pass.
 
     ``traj`` is ``_tul_core``'s per-pass trajectory: ``traj[0]`` is the SEED state (the
@@ -179,6 +182,10 @@ def fan_repel_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: in
     Returns the MEAN of the penalised passes' cosines, so ``fan_repel_lambda`` keeps its
     meaning whatever the batch's depth draw was, or ``None`` when the batch is shallower
     than one pass.
+
+    ``instruments=False`` skips the no_grad passes (their ``stats`` keys are then absent):
+    the trainer sets it on the steps it does not log (``_train_instruments``), and the
+    penalised passes, the only ones the loss reads, run either way.
     """
     if not traj:
         return None
@@ -186,6 +193,8 @@ def fan_repel_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: in
         raise ValueError(f"fan_repel_passes must be >= 1, got {n_passes}")
     live: list[Tensor] = []
     for t in range(len(traj)):
+        if not instruments and not (1 <= t <= n_passes):
+            continue
         if 1 <= t <= n_passes:
             c = fan_stream_cos(traj[t], valid, m_cells)
             live.append(c)
@@ -294,7 +303,7 @@ class TULFanMix(nn.Module):
     @staticmethod
     def entropy(weights: Tensor, valid: Tensor) -> Tensor:
         """Mean entropy in NATS of the mixture weights over VALID slots (max ``ln K``)."""
-        w = weights[valid].float().clamp_min(1e-12)
+        w = masked_rows(weights, valid).float().clamp_min(1e-12)
         if w.shape[0] == 0:
             return weights.sum() * 0.0
         return (-(w * w.log()).sum(-1)).mean()
@@ -466,7 +475,7 @@ def _fan_epi_pass(state: Tensor, valid: Tensor, m_cells: int, a: Tensor,
     if sm != s * m_cells:
         raise ValueError(f"fan_epi_term: compact axis {sm} != S*M = {s}*{m_cells}")
     z = _cell_readout(state.reshape(b, s, m_cells, *state.shape[2:]))   # [B, S, M, C]
-    sel = z[valid].float()                                             # [N, M, C]
+    sel = masked_rows(z, valid).float()                                # [N, M, C]
     n = sel.shape[0]
     if n < 2:
         return z.sum() * 0.0
@@ -480,14 +489,16 @@ def _fan_epi_pass(state: Tensor, valid: Tensor, m_cells: int, a: Tensor,
 
 def fan_epi_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
                  reservoir: FanReservoir, ridge: float, eta: float,
-                 stats: dict[str, float] | None = None) -> Tensor | None:
+                 stats: dict[str, float] | None = None,
+                 instruments: bool = True) -> Tensor | None:
     """``tul.fan_repel_mode: "epi"``'s raw term: MINUS the mean epiplexity (bits per
     reservoir feature) of the streams' deviations over passes ``1 .. n_passes``.
 
     Same contract as :func:`fan_repel_term`: ``traj[0]`` is the seed, passes ``1..n``
     carry gradient, every pass is reported (``fan_epi_t{t}``), ``None`` when the batch is
     shallower than one pass. Minimising the term maximises the score, so
-    ``fan_repel_lambda`` keeps its sign and its meaning.
+    ``fan_repel_lambda`` keeps its sign and its meaning. ``instruments``: as in
+    :func:`fan_repel_term` (the ridge readout ``a`` is fitted either way).
     """
     if not traj:
         return None
@@ -499,13 +510,15 @@ def fan_epi_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
         raise ValueError(f"fan_epi_term: compact axis {sm} != S*M = {s}*{m_cells}")
     with torch.no_grad():
         seed = _cell_readout(traj[0].reshape(b, s, m_cells, *traj[0].shape[2:]))
-        seed = seed.mean(dim=2)[valid]                                 # [N, C], detached
+        seed = masked_rows(seed.mean(dim=2), valid)                    # [N, C], detached
         if seed.shape[0] < 2:
             a = None
         else:
             a = ridge_map(reservoir(seed), ridge)                      # [F, N]
     live: list[Tensor] = []
     for t in range(len(traj)):
+        if not instruments and not (1 <= t <= n_passes):
+            continue
         if a is None:
             e = traj[t].sum() * 0.0
         elif 1 <= t <= n_passes:
@@ -550,7 +563,7 @@ def _fan_vol_pass(state: Tensor, valid: Tensor, m_cells: int, eta: float) -> Ten
     if sm != s * m_cells:
         raise ValueError(f"fan_vol_term: compact axis {sm} != S*M = {s}*{m_cells}")
     z = _cell_readout(state.reshape(b, s, m_cells, *state.shape[2:]))   # [B, S, M, C]
-    sel = z[valid].float()                                             # [N, M, C]
+    sel = masked_rows(z, valid).float()                                # [N, M, C]
     if sel.shape[0] == 0:
         return z.sum() * 0.0
     dev = sel - sel.mean(dim=1, keepdim=True)
@@ -568,11 +581,13 @@ def _fan_vol_pass(state: Tensor, valid: Tensor, m_cells: int, eta: float) -> Ten
 
 
 def fan_vol_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int, eta: float,
-                 stats: dict[str, float] | None = None) -> Tensor | None:
+                 stats: dict[str, float] | None = None,
+                 instruments: bool = True) -> Tensor | None:
     """``"vol"``'s raw term: MINUS the mean within-slot volume over passes ``1..n_passes``.
 
     Same contract as :func:`fan_repel_term`: passes ``1..n`` carry gradient, every pass is
     reported (``fan_vol_t{t}``), ``None`` when the batch is shallower than one pass.
+    ``instruments``: as in :func:`fan_repel_term`.
     """
     if not traj:
         return None
@@ -580,6 +595,8 @@ def fan_vol_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
         raise ValueError(f"fan_repel_passes must be >= 1, got {n_passes}")
     live: list[Tensor] = []
     for t in range(len(traj)):
+        if not instruments and not (1 <= t <= n_passes):
+            continue
         if 1 <= t <= n_passes:
             v = _fan_vol_pass(traj[t], valid, m_cells, eta)
             live.append(v)

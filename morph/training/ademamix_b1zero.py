@@ -93,6 +93,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         track_diag: bool = False,
         fused_dynamic_qmap: bool = False,
         fused_nu_floor: bool = True,
+        fused_fp32: bool = False,
     ):
         if betas[0] != 0.0:
             raise ValueError(f"AdEMAMixB1Zero requires β1=0, got betas={betas}")
@@ -113,6 +114,12 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         self.min_8bit_size = min_8bit_size
         self.blocksize = blocksize
         self.fused = fused
+        # fused_fp32: the fp32-state params (the 32-bit group and every sub-min_8bit_size
+        # tensor) go through ONE Triton pass (ademamix_fp32_kernel.py) instead of ~25
+        # `_foreach` passes. Bit-identical (tests/test_ademamix_fp32_kernel.py); only with
+        # `fused` (so none of those params has 8-bit state) and never with the diagnostics,
+        # which read the `_foreach` intermediates. False = the `_foreach` path, unchanged.
+        self.fused_fp32 = bool(fused_fp32)
         # eps_inside: True = √(ν/bc2 + ε) (denom floored at √ε≈1e-4); False = √(ν/bc2) + ε
         # (true-Adam normalization). Honored by BOTH paths — the de-fused step and the fused
         # kernel (EPS_INSIDE constexpr). The floor exists because the LINEAR-int8 fused path can
@@ -547,6 +554,34 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         lr, beta2, beta3_t, alpha_t, eps, bc2, wd = scalars
         self._fused_step(params, lr, beta2, beta3_t, alpha_t, eps, bc2, wd, sched=sched)
 
+    def _fp32_kernel_step(self, params, lr, beta2, beta3_t, alpha_t, eps, bc2, wd) -> list:
+        """``fused_fp32``: update every eligible fp32-state param with the one-pass kernel
+        and return the ones it cannot take (left to the ``_foreach`` path below, which is
+        elementwise per param, so the split changes no bit). Eligible: a contiguous fp32
+        CUDA param with a contiguous grad (fp32, or any float dtype, which the ``_foreach``
+        path upcasts into a COPY: then the gated g must not be written back)."""
+        from morph.training.ademamix_fp32_kernel import ademamix_fp32_step
+        rest = []
+        for p in params:
+            g = p.grad
+            if not (p.is_cuda and p.dtype == torch.float32 and p.is_contiguous()
+                    and g.is_contiguous()):
+                rest.append(p)
+                continue
+            st = self.state[p]
+            if len(st) == 0 or st.get("init"):
+                st["m2"] = torch.zeros_like(p, dtype=torch.float32)
+                st["nu"] = torch.zeros_like(p, dtype=torch.float32)
+            st.pop("init", None)
+            g32 = g if g.dtype == torch.float32 else g.float()
+            ademamix_fp32_step(
+                p, g32, st["m2"], st["nu"], beta3=beta3_t, beta2=beta2, bc2=bc2, eps=eps,
+                eps_inside=self.eps_inside, g_snr_gate_kappa=self.g_snr_gate_kappa,
+                g_snr_gate_floor=self.g_snr_gate_floor, g_coef=self.g_coef, alpha=alpha_t,
+                stale_push_cap_coord=self.stale_push_cap_coord, update_clip=self.update_clip,
+                wd=wd, lr=lr, write_g=g.dtype == torch.float32)
+        return rest
+
     def _graphed_fused_step(self, gidx, params, scalars) -> None:
         """Warm → capture → replay lifecycle for one group's fused params.
 
@@ -678,6 +713,13 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                     params = fallback_params
                     if not params:
                         continue
+
+            if self.fused and self.fused_fp32 and not self.track_diag \
+                    and not self._diag_capture:
+                params = self._fp32_kernel_step(params, lr, beta2, beta3_t, alpha_t, eps,
+                                                bc2, wd)
+                if not params:
+                    continue
 
             # ── Dequant / init (per-param: bnb blockwise quant is per-tensor) ──
             # Init holds zero state as fp32 transiently — we never QUANTIZE an all-zero

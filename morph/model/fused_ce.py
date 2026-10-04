@@ -57,19 +57,38 @@ def _pad_vocab(w_cast: Tensor) -> tuple[Tensor, int, int]:
     return F.pad(w_cast, (0, 0, 0, V_pad - V)), V, V_pad
 
 
+def _scale_inv(t: Tensor, inv: Tensor) -> None:
+    """``t`` in place times the 0-dim fp32 DEVICE scalar ``inv``, bit-identical to the
+    old ``t.div_(n)`` by a Python number. A Python ``inv`` (the CPU path) is the old
+    divisor ``n`` itself and divides as before.
+
+    ATen divides a CUDA tensor by a CPU scalar as ``a * (1/b)``, the reciprocal taken in
+    fp32 (``div_true_kernel_cuda``'s CPU-scalar branch), and the product in fp32 before
+    rounding to ``t``'s dtype. ``inv = torch.reciprocal(n)`` is the same IEEE fp32
+    reciprocal on the device. An fp32 ``t`` then multiplies in fp32 directly; a bf16
+    ``t`` must NOT multiply by a 0-dim fp32 tensor directly (the operand would be cast
+    to bf16 first), so it goes through fp32 and rounds once on the copy back, which is
+    the old kernel's rounding. Pinned by ``tests/test_fused_ce_sync_free.py``."""
+    if not torch.is_tensor(inv):
+        t.div_(inv)                 # CPU: the old host-scalar division, unchanged
+    elif t.dtype == torch.float32:
+        t.mul_(inv)
+    else:
+        t.copy_(t.float().mul_(inv))
+
+
 class _FusedLinearCE(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor,
                 ignore_index: int, chunk_size: int, mask_token_id: int = -1,
-                weights: Tensor | None = None) -> Tensor:
+                weights: Tensor | None = None, softmax_kernel: bool = False) -> Tensor:
         # x: [N, d], w: [V, d], labels: [N]
         N, d = x.shape
         compute_dtype = x.dtype  # match eager autocast matmul precision
 
         valid = labels != ignore_index
         if weights is None:
-            n_valid = int(valid.sum().item())
-            n_valid_f = float(max(n_valid, 1))
+            n_valid_t = valid.sum().clamp_min(1).to(torch.float32)
             row_w = None
         else:
             # Per-row loss weights (TUL spec §5: the first token of a span is predicted
@@ -79,7 +98,14 @@ class _FusedLinearCE(torch.autograd.Function):
             # is 1. Folding it into this kernel keeps the loss to ONE vocab GEMM and one
             # [V, d] grad accumulator instead of one per label group.
             row_w = weights.to(torch.float32) * valid.to(torch.float32)
-            n_valid_f = float(max(float(row_w.sum().item()), 1e-6))
+            n_valid_t = row_w.sum().clamp_min(1e-6)
+        # The normaliser stays ON THE DEVICE on CUDA (2026-10-04): the old
+        # `int(valid.sum().item())` was a host sync at the head of every CE call, which
+        # drained the queue in the middle of the forward. `_scale_inv` reproduces the old
+        # CUDA division by a Python number bit for bit (see its docstring). A CPU tensor
+        # keeps the old host scalar: there is no queue to drain, and the CPU kernel divides
+        # where the CUDA kernel multiplies by the reciprocal.
+        inv_n = torch.reciprocal(n_valid_t) if x.is_cuda else float(n_valid_t.item())
 
         # Cast the weight to compute dtype ONCE, in its natural [V, d] layout, and reuse
         # it for both matmuls. The logits matmul wants [d, V]; instead of materialising a
@@ -89,6 +115,23 @@ class _FusedLinearCE(torch.autograd.Function):
         # then-cast (cast is per-element, transpose only reindexes).
         w_cast, V, V_pad = _pad_vocab(w.to(compute_dtype))  # [V′, d]
         neg_inf = torch.finfo(torch.float32).min
+        # The GEMM operands, cast ONCE (2026-10-04). Under CUDA autocast every chunk's three
+        # matmuls cast their fp32 operands to the autocast dtype again: the [V′, d] weight
+        # twice per chunk, 20 chunks a step on the slot-loop arm. Casting here is the same
+        # round-to-nearest cast, so the GEMMs see the same inputs and the result is
+        # bit-identical; without autocast both are `compute_dtype` and nothing changes.
+        gemm_dtype = (torch.get_autocast_dtype("cuda")
+                      if x.is_cuda and torch.is_autocast_enabled("cuda") else compute_dtype)
+        w_g = w_cast.to(gemm_dtype)
+        x_g = x.to(gemm_dtype)
+        # `softmax_kernel` (model.ce_softmax_kernel): the chunk's elementwise body runs as
+        # ONE Triton kernel over the low-precision logits tile (morph/kernels/triton/
+        # ce_softmax_grad.py). Not bit-identical to the eager body (a few fp32 ulps before
+        # the gradient's bf16 rounding); only when the GEMMs run in bf16/fp16 on CUDA.
+        use_kernel = bool(softmax_kernel) and x.is_cuda and gemm_dtype in (
+            torch.bfloat16, torch.float16)
+        if use_kernel:
+            from morph.kernels.triton.ce_softmax_grad import ce_softmax_grad_
 
         # Accumulators sized by the inputs, NOT by [N, V].
         grad_x = torch.empty_like(x)
@@ -97,11 +140,22 @@ class _FusedLinearCE(torch.autograd.Function):
 
         for start in range(0, N, chunk_size):
             end = min(start + chunk_size, N)
-            x_c = x[start:end]                       # [c, d]
+            x_c = x_g[start:end]                     # [c, d] in the GEMM dtype
             lab_c = labels[start:end]                # [c]
             valid_c = valid[start:end].float().unsqueeze(-1)  # [c, 1]
 
-            logits_c = (x_c @ w_cast.t()).float()    # [c, V′] fp32 (freed each iter)
+            if use_kernel:
+                w_c = valid_c if row_w is None else row_w[start:end].unsqueeze(-1)
+                probs_c = x_c @ w_g.t()                  # [c, V′] bf16 logits
+                loss_c = ce_softmax_grad_(probs_c, lab_c.clamp(min=0), w_c.squeeze(-1),
+                                          V, mask_token_id)   # tile := weighted grad
+                loss_sum = loss_sum + loss_c.sum()
+                grad_x[start:end] = probs_c @ w_g
+                grad_w.add_(probs_c.t() @ x_c)
+                del probs_c
+                continue
+
+            logits_c = (x_c @ w_g.t()).float()       # [c, V′] fp32 (freed each iter)
             if V_pad != V:
                 logits_c[:, V:] = neg_inf            # pad cols → prob exactly 0
             if mask_token_id >= 0:
@@ -128,7 +182,7 @@ class _FusedLinearCE(torch.autograd.Function):
                 -1, lab_safe.unsqueeze(-1),
                 -torch.ones_like(lab_safe, dtype=probs.dtype).unsqueeze(-1),
             )
-            probs = probs * w_c                      # zero ignored rows; scale by wᵢ
+            probs.mul_(w_c)                          # zero ignored rows; scale by wᵢ
             del logits_c
 
             # Grad matmuls in compute_dtype (bf16 → tensor cores; matches the
@@ -136,14 +190,16 @@ class _FusedLinearCE(torch.autograd.Function):
             # fp32 across chunks to avoid cancellation. Pad probs are 0 → pad
             # grad_w rows stay 0, grad_x unaffected (0 · w_pad_row = 0).
             probs_c = probs.to(compute_dtype)        # [c, V′]
-            grad_x[start:end] = probs_c @ w_cast     # [c, d]
-            grad_w += (probs_c.t() @ x_c).float()    # [V′, d] fp32 accumulate
+            grad_x[start:end] = probs_c @ w_g        # [c, d]
+            # `add_` of the bf16 product promotes it to fp32 inside the add (exact), the
+            # same value as `+= (...).float()` without the [V′, d] fp32 temporary.
+            grad_w.add_(probs_c.t() @ x_c)           # [V′, d] fp32 accumulate
             del probs, probs_c
 
-        loss = loss_sum / n_valid_f
-        grad_x.div_(n_valid_f)
+        loss = loss_sum * inv_n if torch.is_tensor(inv_n) else loss_sum / inv_n
+        _scale_inv(grad_x, inv_n)
         grad_w = grad_w[:V] if V_pad != V else grad_w
-        grad_w.div_(n_valid_f)
+        _scale_inv(grad_w, inv_n)
 
         ctx.save_for_backward(grad_x, grad_w)
         ctx.x_dtype = x.dtype
@@ -156,7 +212,7 @@ class _FusedLinearCE(torch.autograd.Function):
         go = grad_output  # scalar
         gx = (grad_x * go).to(ctx.x_dtype)
         gw = (grad_w * go).to(ctx.w_dtype)
-        return gx, gw, None, None, None, None, None
+        return gx, gw, None, None, None, None, None, None
 
 
 def fused_linear_cross_entropy(
@@ -167,6 +223,7 @@ def fused_linear_cross_entropy(
     chunk_size: int = 1024,
     mask_token_id: int = -1,
     weights: Tensor | None = None,
+    softmax_kernel: bool = False,
 ) -> Tensor:
     """Memory-efficient ``mean`` cross-entropy of a weight-tied linear head.
 
@@ -180,9 +237,13 @@ def fused_linear_cross_entropy(
     ``weights`` (default None = off, bit-identical to before): ``[N]`` per-row loss
     weights; the reduction becomes ``Σ wᵢ·CEᵢ / Σ wᵢ``. Used for TUL's half-weight
     double label (spec §5).
+
+    ``softmax_kernel`` (default False = the eager chunk body, unchanged): the per-chunk
+    softmax gradient in one Triton pass over the bf16 logits tile (CUDA bf16/fp16 only;
+    a few fp32 ulps from the eager body, see ``morph/kernels/triton/ce_softmax_grad.py``).
     """
     return _FusedLinearCE.apply(x, w, labels, ignore_index, chunk_size, mask_token_id,
-                                weights)
+                                weights, softmax_kernel)
 
 
 # ── Spectral decoupling: an L2 penalty on the coda's TOKEN logits ───────────
