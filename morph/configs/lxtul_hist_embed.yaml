@@ -1,0 +1,23 @@
+# lxtul_hist.yaml + tul.coda_token_input "prelude" -> "embed" (2026-10-05). With a
+# causal prelude, a coda TOKEN carrier that still held the prelude's own-position output
+# ("prelude") would carry the row's full history into the coda at every token, by
+# construction — the attention relation is not the only route a token's OWN carrier can
+# open. "embed" swaps that carrier for the prelude's INPUT (the token's own embedding
+# after embed dropout, x0 — computed BEFORE the prelude runs, so it is unaffected by
+# tg_strict_prelude), the Block-Transformer contract already documented on
+# tul.coda_token_input: a token then carries only itself into the coda, and the ONLY
+# cross-span route left, under tg_geometry=strict, is the slot loop through the prefix
+# cells (and, at tg_coda_token_reach>0, the token window this arm leaves at its default
+# 0). This is the arm that tests the loop channel in isolation: with every slot cell
+# zeroed (plan_mode="all_slots" / "zero"), a perturbation to an EARLIER span's tokens
+# must change nothing in the coda's logits at a later span. See
+# tests/test_tg_strict_prelude.py condition 4. 5000 steps, pairs with lxtul_hist.yaml.
+defaults:
+  - lxtul_hist
+  - _self_
+
+tul:
+  coda_token_input: embed
+
+wandb:
+  name: lxtul-hist-embed

@@ -902,7 +902,8 @@ def strict_span_ordinal(layout: "SlotLayout") -> Tensor:
 
 def tg_strict_allow(layout: "SlotLayout", stage: str,
                     coda_prefix_reach: str = "all",
-                    coda_token_reach: int = 0) -> Tensor:
+                    coda_token_reach: int = 0,
+                    prelude_history: str = "span") -> Tensor:
     """``[B, 1, L, L]`` bool — the STRICT allow relation (``tul.tg_geometry="strict"``).
 
     ``tg_restrict``'s relation is ``causal AND (same span OR j is ANY slot cell)``, in the
@@ -951,6 +952,20 @@ def tg_strict_allow(layout: "SlotLayout", stage: str,
     ``s-2``, so through the token path alone a coda of ``n`` layers reaches ``r * n``
     spans back (``tests/test_tul_arms_ab.py`` measures it on the model).
 
+    ``prelude_history`` (``tul.tg_strict_prelude``, 2026-10-05; PRELUDE only): ``"span"``
+    is the relation above, bit for bit. ``"causal"`` replaces a TOKEN query's relation
+    (slot-cell queries are UNCHANGED — see below) with ``causal AND NOT slot_mask[j]``:
+    every earlier TOKEN position of the whole row, not only its own span's. Why only
+    token queries: the loop's seed is pooled from a span's own prelude TOKEN states
+    (``TULSlots.slot_input``, ``TULSlotRegister``), so widening what a token reads is
+    what carries the row's history into the loop's seed with no second route added; a
+    slot cell's own prelude read stays ``bag_id[i] == bag_id[j]`` — its own span's tokens
+    and its own earlier cells, the same summary it always computed. The caller must ALSO
+    drop the prelude's ``tg_seg`` / ``ret_reset_mask`` to ``None`` under ``"causal"``
+    (``MORPHTransformer._tul_tg_kwargs``): a conv or a retention state that still reset
+    at every span boundary would not be a causal model of the row, whatever this
+    relation said.
+
     This relation is only PART of the strict geometry: the conv / value shift
     (:func:`tg_segment_ids`), the retention carry (:func:`tg_reset_from_ids`) and the
     coda's per-layer injections at the slot cells are cut in ``_forward_tul``, and the
@@ -969,6 +984,15 @@ def tg_strict_allow(layout: "SlotLayout", stage: str,
         raise ValueError(
             "tg_strict_allow: coda_token_reach is a CODA relation; the strict prelude is "
             f"same-span only (got coda_token_reach={coda_token_reach} at stage='prelude').")
+    if prelude_history not in ("span", "causal"):
+        raise ValueError(
+            f"tg_strict_allow prelude_history must be 'span' or 'causal', got "
+            f"{prelude_history!r}")
+    if stage == "coda" and prelude_history != "span":
+        raise ValueError(
+            "tg_strict_allow: prelude_history is a PRELUDE relation; the strict coda "
+            f"relation does not change with it (got prelude_history={prelude_history!r} "
+            "at stage='coda').")
     bag_id = layout.bag_id                                      # [B, L] int64
     slot_mask = layout.slot_mask                                # [B, L] bool
     device = bag_id.device
@@ -981,7 +1005,15 @@ def tg_strict_allow(layout: "SlotLayout", stage: str,
     bag_j = bag_id.unsqueeze(1)                                 # [B, 1, L]
     same = (bag_i == bag_j)                                     # [B, L, L]
     if stage == "prelude":
-        allow = same
+        if prelude_history == "causal":
+            # Token queries read every earlier TOKEN (any span); a slot-cell query's own
+            # relation is untouched (`same`, its own span only) — `torch.where` on the
+            # QUERY's own mask picks the row, not the key's, so a slot-cell ROW of the
+            # mask is exactly what it was at "span" regardless of what token ROWS become.
+            tok_history = (~slot_mask).unsqueeze(1)             # [B, 1, L], j is a token
+            allow = torch.where(slot_mask.unsqueeze(2), same, tok_history)
+        else:
+            allow = same
     else:
         if coda_prefix_reach == "all":
             reach = bag_j < bag_i
