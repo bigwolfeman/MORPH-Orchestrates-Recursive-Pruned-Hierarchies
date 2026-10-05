@@ -214,6 +214,108 @@ class PassLoRA(nn.Module):
                 f"targets={self.targets}")
 
 
+# ── LoopAttnCenter ────────────────────────────────────────────────────────────
+
+class LoopAttnCenter(nn.Module):
+    """The slot loop's centered core attention (``tul.loop_attn_center: ema``, 2026-10-05).
+
+    Attached to ONE core block (``MORPHBlock.attach_attn_center``). The block's attention
+    sublayer then reads ``x_bar - mu`` instead of ``x_bar`` (``x_bar`` = what the
+    attention Hyper-Connection hands its sublayer, before ``norm_attn``). ``mu`` is a
+    buffer, never a parameter: it cannot learn to switch itself off.
+
+    THE RULE. ``mu`` is the bias-corrected EMA of ``m``, the mean of ``x_bar`` over the
+    VALID slot cells (pads excluded), averaged over every pass of one training forward
+    (the mean of the per-pass means; every pass runs the full cell sequence, so this is
+    also the pooled mean). With ``n`` the update count after this update and ``d`` the
+    decay::
+
+        alpha = (1 - d) / (1 - d ** n)          # bias correction: alpha = 1 at n = 1
+        mu   <- mu + alpha * (m - mu)
+
+    which is ``r_n / (1 - d ** n)`` for the plain EMA ``r_n = d r_{n-1} + (1 - d) m_n``
+    started at 0. So the FIRST training forward sets ``mu`` to its own mean exactly, and
+    no step runs half-centered against a zero-biased estimate.
+
+    THE LIFE CYCLE, driven by ``MORPHTransformer._tul_core`` (the slot loop is the ONE
+    caller of these methods; every other forward never arms a recorder):
+      * ``snapshot()`` at the start of EVERY slot loop (train and eval): ``mu_used <-
+        mu``. The forward subtracts ``mu_used``, never ``mu``. The EMA update lands on
+        ``mu`` after the loop but BEFORE the backward, and the checkpointed passes are
+        RECOMPUTED in the backward: reading ``mu`` there would recompute the passes at
+        the updated value and silently give the gradient of a different function.
+      * ``arm(w)`` / ``disarm()`` around each pass's step call, in a TRAINING forward with
+        grad only (``w`` = valid / n_valid, ``[B, S]``). Armed, ``forward`` records ``m``
+        of this pass. The backward recompute of a checkpointed pass runs after the loop
+        has disarmed, so it records nothing; the gain hinge's two extra applications of
+        the map run outside the armed window, so they record nothing either.
+      * ``apply(frozen)`` once after the loop: the update above (``frozen`` discards the
+        record instead, e.g. the trainer's compile warmup on random tokens).
+
+    Buffers: ``mu`` [C] fp32 and ``n_updates`` (int64 scalar) are PERSISTENT (a resume
+    continues the EMA); ``mu_used`` is not (it is rebuilt at every loop).
+    """
+
+    def __init__(self, d_model: int, decay: float):
+        super().__init__()
+        if not 0.0 < float(decay) < 1.0:
+            raise ValueError(f"LoopAttnCenter decay must be in (0, 1), got {decay}")
+        self.decay = float(decay)
+        self.register_buffer("mu", torch.zeros(d_model, dtype=torch.float32))
+        self.register_buffer("n_updates", torch.zeros((), dtype=torch.long))
+        self.register_buffer("mu_used", torch.zeros(d_model, dtype=torch.float32),
+                             persistent=False)
+        self._w: Tensor | None = None          # [B, S] valid / n_valid while armed
+        self._acc: list[Tensor] = []           # per-pass valid means, [C] fp32 each
+
+    def forward(self, x: Tensor) -> Tensor:
+        """``x`` [B, S, C] = ``x_bar``. Returns ``x - mu_used`` in ``x``'s dtype."""
+        if self._w is not None:
+            self._record(x)
+        return (x.float() - self.mu_used.float()).to(x.dtype)
+
+    @torch.compiler.disable
+    def _record(self, x: Tensor) -> None:
+        with torch.no_grad():
+            self._acc.append(torch.einsum("bs,bsc->c", self._w, x.detach().float()))
+
+    @torch.no_grad()
+    def snapshot(self) -> None:
+        """Start of a slot loop: freeze the subtracted value, drop any stale record."""
+        self.mu_used.copy_(self.mu)
+        self._w = None
+        self._acc = []
+
+    def arm(self, w: Tensor) -> None:
+        self._w = w
+
+    def disarm(self) -> None:
+        self._w = None
+
+    @torch.no_grad()
+    def apply(self, frozen: bool = False) -> Tensor | None:
+        """Fold this forward's record into ``mu`` (or discard it when ``frozen``).
+
+        Returns the forward's mean ``m`` (fp32 [C]) or None when nothing was recorded."""
+        self._w = None
+        if not self._acc:
+            return None
+        m = torch.stack(self._acc).mean(dim=0)
+        self._acc = []
+        if frozen:
+            return m
+        self.n_updates.add_(1)
+        # On-device scalar math (a Python base, no host-to-device copy, no sync), fp64 so
+        # alpha is exactly 1 at n = 1.
+        alpha = (1.0 - self.decay) / (1.0 - torch.pow(
+            self.decay, self.n_updates.to(torch.float64)))
+        self.mu.add_((m - self.mu.float()).mul_(alpha.to(torch.float32)).to(self.mu.dtype))
+        return m
+
+    def extra_repr(self) -> str:
+        return f"d_model={self.mu.shape[0]}, decay={self.decay}, bias-corrected EMA"
+
+
 # ── MORPHBlock ────────────────────────────────────────────────────────────────
 
 class MORPHBlock(nn.Module):
@@ -280,6 +382,15 @@ class MORPHBlock(nn.Module):
         # attaching it last leaves every other weight of the model byte-identical.
         # None — the default — makes both call sites below Python-level no-ops.
         self.pass_lora: PassLoRA | None = None
+
+        # The slot loop's centered attention (tul.loop_attn_center). Attached
+        # post-construction to the CORE blocks only; it has no parameters and draws no
+        # RNG. None — the default — makes the one call site below a Python-level no-op.
+        self.attn_center: LoopAttnCenter | None = None
+
+    def attach_attn_center(self, center: "LoopAttnCenter") -> None:
+        """Make this block's attention sublayer read ``x_bar - mu`` (``LoopAttnCenter``)."""
+        self.attn_center = center
 
     def attach_retention(self, gla: nn.Module, norm: nn.Module, gate_init: float) -> None:
         """Add a gated GLA branch in PARALLEL to the attention sublayer.
@@ -353,6 +464,9 @@ class MORPHBlock(nn.Module):
         # Python-level constant per module instance (it is set once at construction and
         # never rebound), so both branches below trace out on a model without the knob.
         lora = self.pass_lora
+        # tul.loop_attn_center: the same per-instance constant (None on every block of
+        # every model without the key, so the `if` in `_attn_fn` traces out).
+        center = self.attn_center
 
         # ── tul.loop_carry="persist" on a Thought Register — the READER FIX ────────
         # (2026-09-22 correction; `morph/model/transformer.py::_tul_core`, "THE READER
@@ -372,6 +486,11 @@ class MORPHBlock(nn.Module):
             _persist_capture = attn_kwargs.pop("tg_persist_capture")
 
         def _attn_fn(x: Tensor) -> Tensor:
+            if center is not None:
+                # `x` is `x_bar`, the attention residual's own read of the streams. The
+                # whole attention sublayer (norm, attention, retention, the persist
+                # capture) reads the CENTERED input; the MLP sublayer is untouched.
+                x = center(x)
             xa = self.norm_attn(x)
             if _persist_capture is not None:
                 # ONE extra core-layer-0 attention application, on the EXACT SAME `xa`

@@ -83,6 +83,8 @@ KNOWN_TUL_KEYS = frozenset({
     "fan_lsel_head_input",
     # the slot-cell pass norm (2026-10-03): morph/model/transformer.py `_slot_cell_norm`
     "slot_cell_pass_norm",
+    # the slot loop's carrier constant (2026-10-05): the core attention's input / residual
+    "loop_attn_center", "loop_attn_center_decay", "loop_attn_hc",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -456,6 +458,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         pseudo_scale_init=float(tc.get("pseudo_scale_init", 0.0)),
         pseudo_gate_init=float(tc.get("pseudo_gate_init", 0.0)),
         slot_cell_pass_norm=str(tc.get("slot_cell_pass_norm", "off")),
+        loop_attn_center=str(tc.get("loop_attn_center", "off")),
+        loop_attn_center_decay=float(tc.get("loop_attn_center_decay", 0.99)),
+        loop_attn_hc=str(tc.get("loop_attn_hc", "cayley")),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -773,6 +778,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "pseudo_scale_init": model_cfg.pseudo_scale_init,
         "pseudo_gate_init": model_cfg.pseudo_gate_init,
         "slot_cell_pass_norm": model_cfg.slot_cell_pass_norm,
+        "loop_attn_center": model_cfg.loop_attn_center,
+        "loop_attn_center_decay": model_cfg.loop_attn_center_decay,
+        "loop_attn_hc": model_cfg.loop_attn_hc,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,
@@ -1657,5 +1665,27 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               + (" - read val/slot_cell_rms_t{t} (should sit at rms(g))" if _cnm == "rms"
                  else " - read val/slot_cell_mean_rms_t{t}, the read state (1.000 at init)")
               + " and val/slot_cell_norm_g_mean / _std", flush=True)
+    if model_cfg.loop_attn_center != "off" or model_cfg.loop_attn_hc != "cayley":
+        # The core then runs ONLY in the slot loop (`_core_region` raises on such a model),
+        # so a run that starts without a slot layout would die at its first forward. Say
+        # so at setup, with the reason, instead.
+        if activate_at != 0.0:
+            raise ValueError(
+                f"tul.loop_attn_center={model_cfg.loop_attn_center!r} / tul.loop_attn_hc="
+                f"{model_cfg.loop_attn_hc!r} needs tul.activate_at: 0 (got {activate_at!r}): "
+                f"they act on the slot loop's core blocks, and before activation the core "
+                f"would run over the token positions.")
+        print(f"  TUL LOOP ATTN: center={model_cfg.loop_attn_center!r}"
+              + (f" (decay {model_cfg.loop_attn_center_decay})"
+                 if model_cfg.loop_attn_center != "off" else "")
+              + f", hc={model_cfg.loop_attn_hc!r} - the slot loop's core ATTENTION reads "
+              + ("x_bar - mu_l (bias-corrected EMA buffer of the valid slot cells' mean, "
+                 "frozen at eval)" if model_cfg.loop_attn_center == "ema" else "x_bar")
+              + (" through a parameter-free plain residual (stream mean in, the same write "
+                 "to every stream)" if model_cfg.loop_attn_hc == "uniform"
+                 else " through the Cayley Hyper-Connection")
+              + "; the MLP sublayer is unchanged "
+              "(.agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md)",
+              flush=True)
     return TulRuntime(model_cfg=model_cfg, data_cfg=data_cfg,
                       activate_at=activate_at, manifest=manifest)

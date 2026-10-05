@@ -227,3 +227,52 @@ class HyperConnectionResidual(nn.Module):
         # post_inject term (carrier-engine) is broadcast-added to every output stream in
         # the SAME write, folding the next layer's _apply_injection into this kernel.
         return self._hc_post(Hres, Hpost_row, h, y, post_inject)  # [B,S,n,C]
+
+
+class UniformResidual(nn.Module):
+    """A plain residual on the ``[B, S, n, C]`` carrier: ``tul.loop_attn_hc: uniform``.
+
+    The Hyper-Connection residual with its three mappings fixed to the identity choices,
+    ``Hpre = 1/n`` (read the stream MEAN), ``Hpost_row = 1`` (write the SAME output into
+    every stream), ``Hres = I`` (no stream mixing)::
+
+        x_bar = mean_n(h)                         # [B, S, C]
+        y     = F(x_bar)
+        out   = h + y (+ post_inject), broadcast over the n streams
+
+    It has NO parameters, so nothing dead reaches the optimizer, the ternary QAT walk or
+    the checkpoint. Same call signature as :class:`HyperConnectionResidual`, so
+    ``MORPHBlock.forward`` calls it unchanged (resolved at build: the core blocks'
+    ``mrr_attn`` is swapped for one of these, the forward has no flag).
+
+    Why it exists (2026-10-05, the slot loop's carrier constant): the data-flow probe
+    found the slot loop's core attention writes a large slot-independent vector through
+    ONE stream (Hpost row about [0, 0, 3.9, 0]) with a per-stream sign pattern that
+    cancels in the stream mean. With a uniform write the attention cannot route a write
+    into one stream, and with a mean read it cannot read a stream the mean cancels.
+
+    Eager by design: ``h + y`` is exact, where the fused ``hc_post`` kernel fed an
+    expanded identity is untested on the shapes this runs and cannot be checked on CPU.
+    """
+
+    def __init__(self, n_streams: int):
+        super().__init__()
+        self.n = int(n_streams)
+
+    def forward(
+        self,
+        h: Tensor,
+        sublayer_fn: Callable[..., Tensor],
+        *args,
+        post_inject: Tensor | None = None,
+        **kwargs,
+    ) -> Tensor:
+        x_bar = h.mean(dim=-2)                                  # Hpre = 1/n
+        y = sublayer_fn(x_bar, *args, **kwargs)                 # [B, S, C]
+        out = h + y.to(h.dtype).unsqueeze(-2)                   # Hres = I, Hpost_row = 1
+        if post_inject is not None:
+            out = out + post_inject.to(h.dtype).unsqueeze(-2)
+        return out
+
+    def extra_repr(self) -> str:
+        return f"n_streams={self.n}, Hpre=1/n, Hpost_row=1, Hres=I, no parameters"

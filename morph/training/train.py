@@ -2077,16 +2077,22 @@ def warmup_compile_all_shapes(
               flush=True)
         t0 = time.perf_counter()
         g = torch.Generator().manual_seed(0)
-        for _ in range(passes_per_size):
-            need = batch_size * (spec.l_total + 1)
-            buf = torch.randint(0, model.cfg.vocab_size, (need + 8,), generator=g).tolist()
-            ids, labs, layout = pack_tul_batch(buf, rule, spec, batch_size)
-            ids, labs, layout = ids.to(device), labs.to(device), layout.to(device)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(ids, labels=labs, slot_layout=layout)
-            out["loss"].backward()
-            model.zero_grad(set_to_none=True)
-            del ids, labs, layout, out
+        # tul.loop_attn_center: these are train-mode forwards with grad on RANDOM token rows,
+        # so the EMA of the slot loop's attention input must not learn from them (the
+        # first update would set every mu_l to a random-token mean). Frozen = recorded and
+        # discarded; a no-op on every model without the key.
+        with model.loop_attn_center_frozen():
+            for _ in range(passes_per_size):
+                need = batch_size * (spec.l_total + 1)
+                buf = torch.randint(0, model.cfg.vocab_size, (need + 8,),
+                                    generator=g).tolist()
+                ids, labs, layout = pack_tul_batch(buf, rule, spec, batch_size)
+                ids, labs, layout = ids.to(device), labs.to(device), layout.to(device)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    out = model(ids, labels=labs, slot_layout=layout)
+                out["loss"].backward()
+                model.zero_grad(set_to_none=True)
+                del ids, labs, layout, out
         torch.cuda.synchronize()
         print(f"  Warmup compile [{tag}] done in {time.perf_counter()-t0:.1f}s "
               f"({passes_per_size} TG passes)", flush=True)

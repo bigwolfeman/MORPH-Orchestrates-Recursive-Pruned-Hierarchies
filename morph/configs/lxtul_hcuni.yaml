@@ -1,0 +1,20 @@
+# LXTUL with the slot loop's core ATTENTION residual made a plain residual (2026-10-05,
+# the carrier-constant twin). One factor from lxtul.yaml: tul.loop_attn_hc cayley ->
+# uniform. Each slot-loop core block's attention Hyper-Connection reads the stream mean
+# (Hpre = 1/n), writes the same output to every stream (Hpost_row = 1) and does not mix
+# streams (Hres = I); no parameters. The core MLP's Hyper-Connection stays Cayley. 5000
+# steps, to pair with lxtul's 5k seeds.
+# Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+# Prereg: lab/experiments/planned/2026-10-05-carrier-constant-twin.md
+defaults:
+  - lxtul
+  - _self_
+
+tul:
+  loop_attn_hc: uniform
+
+training:
+  steps: 5000
+
+wandb:
+  name: lxtul-hcuni

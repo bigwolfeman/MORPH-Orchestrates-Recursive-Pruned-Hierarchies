@@ -119,6 +119,13 @@ def _check_supported(model) -> None:
     # the previous spans' TOKENS, which this decoder drops at every boundary.
     need(int(tc.tg_coda_token_reach) == 0, "tul.tg_coda_token_reach (previous-span token read)")
     need(int(tc.xhc_streams) == 0, "tul.xhc_streams (the 16-stream xHC slot loop)")
+    # Transitively covered by the fan_k==0 line above (both arms are LXTUL, a fan model),
+    # named so the refusal says what is missing: `_block` below builds its own attention
+    # sublayer and would drop the centering.
+    need(getattr(tc, "loop_attn_center", "off") == "off",
+         "tul.loop_attn_center (the centered slot-loop attention)")
+    need(getattr(tc, "loop_attn_hc", "cayley") == "cayley",
+         "tul.loop_attn_hc (the uniform slot-loop attention residual)")
     need(not tc.slot_source_once, "tul.slot_source_once")
     need(not tc.tg_span_comp, "tul.tg_span_comp")
     need(not tc.center_bag_mean, "tul.center_bag_mean")

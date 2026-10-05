@@ -29,6 +29,12 @@ from .tul_layout import SlotLayout
 # after every slot-loop pass, per stream; "rms_read" fixes the RMS of the READ state (the
 # stream mean) instead (TULConfig's comment block, `MORPHTransformer._slot_cell_norm`).
 SLOT_CELL_PASS_NORMS = ("off", "rms", "rms_read")
+# The slot loop's carrier constant (2026-10-05): what the slot loop's core ATTENTION
+# sublayer reads (`tul.loop_attn_center`) and how its residual mixes the streams
+# (`tul.loop_attn_hc`). Note .agents/notes/proposed/architecture/
+# 2026-10-05-slot-loop-carrier-constant.md.
+LOOP_ATTN_CENTERS = ("off", "ema")
+LOOP_ATTN_HCS = ("cayley", "uniform")
 
 __all__ =["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass",
            "TULRowContrast", "TULSlotChain", "TULSlots", "bag_mean",
@@ -2602,6 +2608,34 @@ class TULConfig:
     # `MORPHTransformer._slot_cell_norm` says how and why.
     slot_cell_pass_norm: str = "off"             # "off" | "rms" | "rms_read"
 
+    # ── the slot loop's carrier constant (2026-10-05) ──────────────────────────────────
+    # The data-flow probe found that after the loop's first pass ~99.7 % of the cell
+    # carrier is ONE vector shared by every slot, built by the core ATTENTION from layer 2
+    # on: the Hyper-Connection pre-map hands the attention an input that is 99.9 % shared,
+    # and the attention writes a large shared output through one stream. Two cuts, both
+    # applied to the core blocks, which on a model that sets either key run ONLY inside
+    # the slot loop (`_tul_core`): every other core path is refused here or in
+    # `MORPHTransformer.__init__`, and `_core_region` raises on such a model.
+    # Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+    #
+    # loop_attn_center: "off" (default, builds nothing, bit-identical) | "ema". Under "ema"
+    #   each core block's attention sublayer reads `x_bar - mu_l` instead of `x_bar`
+    #   (`x_bar` = what the attention Hyper-Connection hands its sublayer, before the
+    #   block's own `norm_attn`). `mu_l` is a per-core-layer fp32 BUFFER (no parameter, so
+    #   it cannot learn to switch itself off; no batch statistic in the forward, so no slot
+    #   reads a later slot): the bias-corrected EMA (decay `loop_attn_center_decay`) of the
+    #   mean of `x_bar` over the VALID slot cells, averaged over every pass of a TRAINING
+    #   forward. Updated once per training forward, after the loop, under no_grad; frozen
+    #   at eval and in any no-grad forward. `mhc.LoopAttnCenter` holds the rule.
+    # loop_attn_hc: "cayley" (default, the tree) | "uniform". Under "uniform" each core
+    #   block's ATTENTION Hyper-Connection is replaced by a plain residual (Hpre = 1/n,
+    #   Hpost_row = 1, Hres = I: read the stream mean, write the same output to every
+    #   stream) with NO parameters (`hyper_connections.UniformResidual`). The MLP's
+    #   Hyper-Connection stays Cayley.
+    loop_attn_center: str = "off"                # "off" | "ema"
+    loop_attn_center_decay: float = 0.99
+    loop_attn_hc: str = "cayley"                 # "cayley" | "uniform"
+
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
         # and not about a rule of the refused mode it never meant to run.
@@ -2619,6 +2653,8 @@ class TULConfig:
         # 10, 2026-10-05): the same rule, near the top and unconditional.
         self._check_slot_pool_heads()
         self._check_recon()
+        # The slot loop's carrier constant (2026-10-05): the same rule, near the top.
+        self._check_loop_attn()
         # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
         # Checked FIRST, unconditionally: every other block below this point guards an
         # OFF-by-default feature with its own early `return` (see `tul.vq_codes` at the
@@ -5061,6 +5097,56 @@ class TULConfig:
                 f"`fan_k` aliases `slot_cells`, so a fan model is covered too), so the "
                 f"knob would be silently ignored. Set tul.slot_cells > 1 (or tul.fan_k > "
                 f"0) or drop it.")
+
+    def _check_loop_attn(self) -> None:
+        """``tul.loop_attn_center`` / ``tul.loop_attn_hc``: the slot loop's core attention.
+
+        Both act on the core blocks, and only the slot loop (`_tul_core`) may run them on
+        a model that sets either key: every config path that runs the core somewhere else
+        is refused here, so a key can never reach a core pass the note did not intend. The
+        model-level refusals (n_core 0, the Parcae core, SCSE, the FM planner) are in
+        ``MORPHTransformer.__init__``, which owns those keys, and ``_core_region`` raises at
+        runtime on such a model (a forward without a slot layout)."""
+        if self.loop_attn_center not in LOOP_ATTN_CENTERS:
+            raise ValueError(f"tul.loop_attn_center must be one of {LOOP_ATTN_CENTERS}, "
+                             f"got {self.loop_attn_center!r}")
+        if self.loop_attn_hc not in LOOP_ATTN_HCS:
+            raise ValueError(f"tul.loop_attn_hc must be one of {LOOP_ATTN_HCS}, "
+                             f"got {self.loop_attn_hc!r}")
+        if not 0.0 < float(self.loop_attn_center_decay) < 1.0:
+            raise ValueError(f"tul.loop_attn_center_decay must be in (0, 1), got "
+                             f"{self.loop_attn_center_decay}")
+        if self.loop_attn_center == "off" and float(self.loop_attn_center_decay) != 0.99:
+            raise ValueError(
+                f"tul.loop_attn_center_decay={self.loop_attn_center_decay} set with "
+                f"tul.loop_attn_center='off': no EMA is built, so the decay would be "
+                f"silently ignored.")
+        if self.loop_attn_center == "off" and self.loop_attn_hc == "cayley":
+            return
+        _what = (f"tul.loop_attn_center={self.loop_attn_center!r} / "
+                 f"tul.loop_attn_hc={self.loop_attn_hc!r}")
+        _refused = [
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop): the core runs `_core_region` over "
+             "every token position, not the slot loop"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens (the token path): the core runs `_core_region`"),
+            (self.core_token_aux,
+             "tul.core_token_aux: the auxiliary core pass runs `_core_region` over the "
+             "token positions"),
+            (self.code,
+             "tul.code: the LCTUL thinker runs the core blocks as a velocity field, not "
+             "as the slot loop"),
+            (self.core_stage_cond != "none",
+             f"tul.core_stage_cond={self.core_stage_cond!r}: the db1 step and the Euler "
+             f"ladder run the core outside `_tul_core`"),
+            (self.xhc_streams > 0,
+             "tul.xhc_streams > 0: the core's residuals are already replaced by "
+             "`XHCResidual`"),
+        ]
+        for bad, why in _refused:
+            if bad:
+                raise NotImplementedError(f"{_what} with {why}.")
 
     def _check_recon(self) -> None:
         """``tul.recon_weight`` — the own-span reconstruction decoder (CE queue item 10).

@@ -15,7 +15,7 @@ import copy
 import math
 import functools
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 import numpy as np
@@ -3675,6 +3675,58 @@ class MORPHTransformer(nn.Module):
                   f"{_tx.prefix_k} cells x {cfg.hc_streams} streams -> {_n_x:,} params "
                   f"(bf16, never ternarised)", flush=True)
 
+        # ── The slot loop's carrier constant (tul.loop_attn_center / tul.loop_attn_hc) ──
+        # Both act on the CORE blocks' attention sublayer, built after every other module:
+        # neither draws RNG (the uniform residual and the center have no parameters), and
+        # the Cayley `mrr_attn` the uniform arm replaces was already drawn, so every other
+        # weight is byte-identical to the same-seed model without the keys. On a model with
+        # either key the core runs ONLY inside `_tul_core` (`TULConfig._check_loop_attn`
+        # refuses the config paths that run it elsewhere; `_core_region` raises).
+        # Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+        self._loop_attn_centers: tuple = ()
+        self._loop_attn_center_frozen = False
+        self._loop_attn_on = False
+        if cfg.tul is not None and (cfg.tul.loop_attn_center != "off"
+                                    or cfg.tul.loop_attn_hc != "cayley"):
+            _tl = cfg.tul
+            _why_not = [
+                (cfg.n_core == 0, "n_core=0 (no core loop)"),
+                (self._core_is_parcae, "model.core_impl='parcae' (no Hyper-Connection "
+                                       "attention residual)"),
+                (cfg.scse_enabled or cfg.core_init_scale > 0.0,
+                 "SCSE / core_init_scale (the loop carries a deviation through a "
+                 "source-free core)"),
+                (cfg.fm is not None, "an FM planner (no slot loop)"),
+                (not self._is_hc, "a non-HC residual"),
+            ]
+            for _bad, _why in _why_not:
+                if _bad:
+                    raise NotImplementedError(
+                        f"tul.loop_attn_center={_tl.loop_attn_center!r} / tul.loop_attn_hc="
+                        f"{_tl.loop_attn_hc!r} with {_why}.")
+            self._loop_attn_on = True
+            if _tl.loop_attn_hc == "uniform":
+                from .hyper_connections import UniformResidual
+                for _blk in self.core:
+                    _blk.mrr_attn = UniformResidual(self._n_streams)
+                print(f"  TUL LOOP ATTN HC = UNIFORM: the {cfg.n_core} slot-loop core blocks' "
+                      f"ATTENTION residual is a plain residual (Hpre=1/n, Hpost_row=1, Hres=I "
+                      f"over {self._n_streams} streams, no parameters); the MLP residual "
+                      f"stays Cayley", flush=True)
+            if _tl.loop_attn_center == "ema":
+                from .mhc import LoopAttnCenter
+                _cs = []
+                for _blk in self.core:
+                    _c = LoopAttnCenter(d, float(_tl.loop_attn_center_decay))
+                    _blk.attach_attn_center(_c)
+                    _cs.append(_c)
+                self._loop_attn_centers = tuple(_cs)
+                print(f"  TUL LOOP ATTN CENTER = EMA: each of the {cfg.n_core} slot-loop core "
+                      f"blocks' attention reads x_bar - mu_l; mu_l a persistent fp32 buffer, "
+                      f"the bias-corrected EMA (decay {_tl.loop_attn_center_decay}) of x_bar's "
+                      f"mean over valid slot cells and every pass of a training forward; "
+                      f"frozen at eval; no parameter", flush=True)
+
         # ── Per-depth persistent state (model.core_depth_state) ────────────────────
         # Built LAST (after SCSE / PassLoRA / xHC), for the same RNG-neutrality reason
         # those are: `nn.Linear`'s default kaiming draw (discarded by the zero_ below)
@@ -4932,6 +4984,16 @@ class MORPHTransformer(nn.Module):
                 "tul.xhc_streams > 0: the core runs inside `_tul_core` only (the expanded "
                 "slot-loop carrier); `_core_region` was reached, i.e. a forward without a "
                 "slot layout. Set tul.activate_at: 0 and pass `slot_layout`.")
+        if self._loop_attn_on:
+            # tul.loop_attn_center / tul.loop_attn_hc act on the core blocks for the SLOT
+            # loop. A token-position core pass here (a forward without a slot layout, a
+            # TUL model before `activate_at`) would run them where the note never meant
+            # them to, so it raises, the xHC rule above.
+            raise RuntimeError(
+                f"tul.loop_attn_center={self.cfg.tul.loop_attn_center!r} / "
+                f"tul.loop_attn_hc={self.cfg.tul.loop_attn_hc!r}: the core runs inside "
+                f"`_tul_core` only; `_core_region` was reached, i.e. a core pass over token "
+                f"positions. Set tul.activate_at: 0 and pass `slot_layout`.")
         B = x.shape[0]
         # LoopMTP: a Python-level constant set at build, so with both knobs off every
         # branch below traces out and the loop is bit-identical to the pre-LoopMTP tree.
@@ -6716,6 +6778,24 @@ class MORPHTransformer(nn.Module):
         # and the loop below is the one from before the key. See `_gram_ctx`.
         _gctx = (self._gram_ctx(xn, layout, gram_mode, gram_seed, n_nograd, iw_rollouts)
                  if self.tul_gram is not None else None)
+        # ── tul.loop_attn_center: the per-forward life cycle (mhc.LoopAttnCenter) ────
+        # `()` on every other model, so nothing below exists. EVERY loop (train or eval)
+        # first freezes the value its passes subtract (`mu_used`): the EMA lands on `mu`
+        # after the loop and BEFORE the backward, whose recompute of a checkpointed pass
+        # must subtract the value the forward did. The recorder is armed ONLY around the
+        # pass's own step call in a training forward with grad, so the backward recompute
+        # (after the loop), the gain hinge's two applications and every eval / no-grad
+        # forward record nothing; the update is applied once, after the loop.
+        _ctrs = self._loop_attn_centers
+        _ctr_w = None
+        if _ctrs:
+            for _c in _ctrs:
+                _c.snapshot()
+            if self.training and torch.is_grad_enabled():
+                # Valid cells only (pads excluded), each pass weighted 1 / n_valid, so one
+                # record is that pass's mean of x_bar over the valid cells. [B, S*M]
+                _vf = layout.slot_valid.float()
+                _ctr_w = _vf / _vf.sum().clamp(min=1.0)
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
@@ -6888,6 +6968,11 @@ class MORPHTransformer(nn.Module):
             # has to be captured so the accumulator still grows (morph/model/tul_carry.py).
             _cy = _carry_state if (_carry_reinjects and t > 0) else None
             _want_carry = _carry is not None
+            if _ctr_w is not None:
+                # tul.loop_attn_center: record THIS pass's valid mean of x_bar (the forward
+                # of the step only; see the life-cycle block above the loop).
+                for _c in _ctrs:
+                    _c.arm(_ctr_w)
             if t < n_nograd:
                 with torch.no_grad():
                     _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
@@ -6902,6 +6987,9 @@ class MORPHTransformer(nn.Module):
                 _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
                                        iter_idx=t, stage_cond=_sc,
                                        carry=_cy, want_carry=_want_carry)
+            if _ctr_w is not None:
+                for _c in _ctrs:
+                    _c.disarm()
             if _want_carry:
                 h_new, rs_new, _read = _step_out
             else:
@@ -7279,6 +7367,15 @@ class MORPHTransformer(nn.Module):
         if halt:
             depths = torch.where(depths > 0, depths, torch.full_like(depths, total_iters))
             depths = torch.where(layout.slot_valid, depths, torch.ones_like(depths))
+        if _ctr_w is not None:
+            # tul.loop_attn_center: ONE update per training forward, after every pass has
+            # run (the backward recompute reads the `mu_used` snapshot, not `mu`). With no
+            # valid cell in the batch the record is a mean of nothing: discard it rather
+            # than pull mu toward 0. `_loop_attn_center_frozen` is the trainer's compile
+            # warmup on random tokens: it records (the same code runs) and discards.
+            _ctr_skip = self._loop_attn_center_frozen or not any_true(layout.slot_valid)
+            for _c in _ctrs:
+                _c.apply(frozen=_ctr_skip)
         if _cot_hooks and _cot_clip > 0.0 and h.requires_grad:
             # The reference for every iteration's clip: the cotangent that reaches the
             # loop's exit carrier. Registered on the carrier itself (not on the last
@@ -9936,6 +10033,22 @@ class MORPHTransformer(nn.Module):
         """The twin's ``state_dict`` for the checkpoint (key ``fan_target``), or None."""
         twin = self.__dict__.get("_fan_target")
         return None if twin is None else twin.state_dict()
+
+    @contextmanager
+    def loop_attn_center_frozen(self):
+        """Context manager: training forwards inside it do NOT move ``tul.loop_attn_center``'s
+        EMA (they still record, so the same code runs, and the record is discarded).
+
+        For the trainer's compile warmup (`warmup_compile_all_shapes`): its forwards are
+        train-mode with grad on RANDOM token rows, and without this they would seed every
+        ``mu_l`` with a random-token mean (the first update sets ``mu`` exactly, by the bias
+        correction). A no-op on a model without the key."""
+        prev = self._loop_attn_center_frozen
+        self._loop_attn_center_frozen = True
+        try:
+            yield
+        finally:
+            self._loop_attn_center_frozen = prev
 
     def tul_fan_after_step(self) -> None:
         """The fan arms' post-optimizer-step updates, in this order: the EMA twin moves
