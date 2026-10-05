@@ -1,0 +1,23 @@
+# LXTUL with an own-span reconstruction decoder on the winner cell (2026-10-05, CE queue
+# item 10). One factor from lxtul.yaml: tul.recon_weight 0.0 -> 1.0 (plus tul.recon_layers,
+# left at its default 2, named here for the record). A third, independent SpanDecoder
+# (morph/model/tul_spandec.py, the same machinery tul.spandec already uses) reconstructs
+# span s's OWN tokens from the cell that actually reaches the coda for slot s — the
+# latent-selected loop's final winner, read AFTER its route and BEFORE W_prefix. Unlike
+# tul.spandec (which grades the PRE-route mean of every cell so every cell gets
+# gradient), this term asks the one cell that wins whether it kept its own span's exact
+# wording — the hypothesis being that nothing today charges that penalty. 5000 steps, to
+# pair with lxtul's 5k seeds.
+defaults:
+  - lxtul
+  - _self_
+
+tul:
+  recon_weight: 1.0
+  recon_layers: 2
+
+training:
+  steps: 5000
+
+wandb:
+  name: lxtul-recon

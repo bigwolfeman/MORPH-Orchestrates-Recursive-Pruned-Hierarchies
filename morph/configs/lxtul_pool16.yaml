@@ -1,0 +1,19 @@
+# LXTUL with the register's seeding pool split into 16 heads instead of 1 (2026-10-05,
+# CE queue item 9). One factor from lxtul.yaml: tul.slot_pool_heads 1 -> 16. The pool's
+# parameters (Q_i / W_k / W_v / W_o, all [d_model, d_model] or [fan_k, d_model]) are
+# UNCHANGED — only the reshape into H heads of d_model/H and the per-head softmax
+# change. d_model is 1024 here, so 16 heads are 64-wide each. Isolates "can a cell
+# commit to an exact token instead of averaging the span" from everything else lxtul.yaml
+# already runs. 5000 steps, to pair with lxtul's 5k seeds.
+defaults:
+  - lxtul
+  - _self_
+
+tul:
+  slot_pool_heads: 16
+
+training:
+  steps: 5000
+
+wandb:
+  name: lxtul-pool16

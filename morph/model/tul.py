@@ -284,6 +284,62 @@ class TULConfig:
     # the control that separates "M cells of capacity" from "M cells that start out
     # looking at different things".
     slot_cell_init: str = "distinct"     # "distinct" | "same"
+    # `tul.slot_pool_heads` (2026-10-05, CE queue item 9): the register's seeding pool
+    # (`TULSlotRegister`) is a SINGLE-HEAD softmax attention over the span's own prelude
+    # states — one weighted AVERAGE per cell. The exact-recall probe measured 65% of the
+    # LXTUL CE gap as exact bigram copies from earlier spans, and one head cannot keep an
+    # exact token: a softmax average blurs. `H > 1` splits the SAME `Q_i` / `W_k` / `W_v` /
+    # `W_o` the register already has into `H` heads of `d_model / H` each (no new
+    # parameter, no shape change — only the reshape and the per-head softmax change), so a
+    # cell can let different heads commit to different single tokens instead of one head
+    # averaging all of them. `H = 1` (default) is BIT-IDENTICAL to the tree before this
+    # key: the per-head split is a no-op reshape at `H = 1` (`d_head = d_model`), so the
+    # forward traces the exact arithmetic it always did.
+    #
+    # Refused (`__post_init__`) with `slot_cells == 1`: no register is built there, so the
+    # knob would be silently ignored. `d_model % H == 0` is checked at construction
+    # (`TULSlotRegister.__init__`, the `tul.reread_heads` precedent), because `TULConfig`
+    # does not know `d_model`.
+    slot_pool_heads: int = 1             # H heads in the register's pooling attention
+    # ── own-span reconstruction (2026-10-05, CE queue item 10) ───────────────────────
+    # 0.0 (default) builds no decoder, draws no RNG and adds no term: BIT-IDENTICAL to
+    # the tree before this key.
+    #
+    # WHY. `tul.spandec` grades the slot on the NEXT span; nothing grades whether the
+    # cell that actually reaches the coda still carries ITS OWN span's exact tokens. The
+    # register's `W_o` is zero-init (the seed starts as a pure average, no commitment),
+    # and the loop + the latent-selected route can move a cell anywhere a softer
+    # objective (the mixture CE, the latent WTA loss) rewards — none of which charges a
+    # penalty for losing the span's own wording.
+    #
+    # WHAT IT IS. A second, OWN-span teacher-forced causal decoder
+    # (`morph.model.tul_spandec.SpanDecoder`, the same machinery `tul.spandec` and
+    # `tul.grad_pass_energy='recon'` already use, built as a THIRD independent instance
+    # with its own private init stream) reconstructs span `s`'s OWN tokens from the
+    # vector that slot `s`'s winner cell actually sends to the coda — read AFTER the
+    # latent-selected loop's route (`_fan_route_cells`'s one-hot write), summed over the
+    # cell axis (losers are EXACTLY zero there, so the sum is the live winner, undiluted)
+    # and BEFORE `W_prefix`'s per-position matmul. This is deliberately NOT the seam
+    # `tul.spandec` / `tul.spandec_parallel` / `tul.nextlat_weight` read (the PRE-route
+    # mean of every cell, so every cell gets gradient, `_fan_route_cells`'s documented
+    # choice) — recon's whole point is to ask the cell that WINS whether it kept the
+    # span, so grading the losers-diluted mean would mostly grade cells the coda never
+    # reads. Gradient flows into the loop and the winner cell on purpose (unlike
+    # `grad_pass_energy='recon'`'s twin, whose own loss runs on a DETACHED `z` and reaches
+    # the loop only through `W_g`): that is the mechanism, not a bug to detach away.
+    #
+    # Refused (`__post_init__`) unless `fan_k > 0`, `fan_mix == "all"`,
+    # `fan_loop_select != "off"` and `fan_lsel_read == "winner"`: only that geometry
+    # produces a single, well-defined per-slot winner cell (`_fan_route_cells`'s one-hot
+    # multiply) with everything else EXACTLY zero. Every other TUL geometry (no register,
+    # a mixing fan, the read-all latent-selected loop) has no one cell that "is" what the
+    # coda reads, so this raises rather than silently reading an arbitrary cell.
+    #
+    # TRAIN ONLY. Eval and generation never run it (`self.training` gates the call site),
+    # unlike `tul.spandec`, which runs at eval too — recon is a training signal for the
+    # loop, not a monitoring column the val pass is expected to hold steady.
+    recon_weight: float = 0.0            # weight of the own-span reconstruction CE; 0 = off
+    recon_layers: int = 2                # decoder blocks (ignored at recon_weight == 0)
     # ── LXTUL: THE FAN (arm `slot-spandec-strict-fan4`, 2026-09-19) ───────────────
     # 0 is OFF and is the default on every model: nothing is built, no key enters the
     # state dict, and the forward is bit-identical to the tree before this key.
@@ -2485,6 +2541,10 @@ class TULConfig:
         self._check_code_policy()
         # The slot-cell pass norm: the same rule, near the top and unconditional.
         self._check_slot_cell_pass_norm()
+        # The register's multi-head pool and own-span reconstruction (CE queue items 9 /
+        # 10, 2026-10-05): the same rule, near the top and unconditional.
+        self._check_slot_pool_heads()
+        self._check_recon()
         # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
         # Checked FIRST, unconditionally: every other block below this point guards an
         # OFF-by-default feature with its own early `return` (see `tul.vq_codes` at the
@@ -4848,6 +4908,55 @@ class TULConfig:
             if bad:
                 raise NotImplementedError(f"tul.slot_source_once with {why}.")
 
+    def _check_slot_pool_heads(self) -> None:
+        """``tul.slot_pool_heads``: the register's seeding pool, split into H heads.
+
+        ``d_model % H == 0`` is checked at CONSTRUCTION (``TULSlotRegister.__init__``,
+        the ``tul.reread_heads`` precedent) because this dataclass does not know
+        ``d_model``. Here we only refuse the orphan case: the knob set with no register
+        to put it on."""
+        if self.slot_pool_heads < 1:
+            raise ValueError(
+                f"tul.slot_pool_heads must be >= 1, got {self.slot_pool_heads}")
+        if self.slot_pool_heads > 1 and self.slot_cells <= 1:
+            raise ValueError(
+                f"tul.slot_pool_heads={self.slot_pool_heads} set with tul.slot_cells="
+                f"{self.slot_cells}: no `TULSlotRegister` is built there (the fan's "
+                f"`fan_k` aliases `slot_cells`, so a fan model is covered too), so the "
+                f"knob would be silently ignored. Set tul.slot_cells > 1 (or tul.fan_k > "
+                f"0) or drop it.")
+
+    def _check_recon(self) -> None:
+        """``tul.recon_weight`` — the own-span reconstruction decoder (CE queue item 10).
+
+        Restricted to the ONE geometry that produces a single, well-defined per-slot
+        winner cell with every other cell EXACTLY zero (`_fan_route_cells`'s one-hot
+        write): the write-all fan's latent-selected loop, hard-read. Every other TUL
+        geometry — no register, a mixing fan (mean/softmax/select), the route arms
+        (reader/latent), or `fan_lsel_read='all'` — has no single cell that "is" what the
+        coda reads, so this raises rather than silently summing an arbitrary stack."""
+        if self.recon_weight < 0.0:
+            raise ValueError(f"tul.recon_weight must be >= 0, got {self.recon_weight}")
+        if self.recon_weight == 0.0:
+            if self.recon_layers != 2:
+                raise ValueError(
+                    "tul.recon_layers set with tul.recon_weight=0: no decoder is built, "
+                    "so the knob would be silently ignored. Set tul.recon_weight > 0 or "
+                    "drop it.")
+            return
+        if self.recon_layers < 1:
+            raise ValueError(f"tul.recon_layers must be >= 1, got {self.recon_layers}")
+        if not (self.fan_k > 0 and self.fan_mix == "all"
+                and self.fan_loop_select != "off" and self.fan_lsel_read == "winner"):
+            raise NotImplementedError(
+                f"tul.recon_weight={self.recon_weight} needs the write-all fan's "
+                f"latent-selected loop with a hard winner: tul.fan_k > 0, "
+                f"tul.fan_mix='all', tul.fan_loop_select != 'off' and "
+                f"tul.fan_lsel_read='winner'. Got fan_k={self.fan_k}, "
+                f"fan_mix={self.fan_mix!r}, fan_loop_select={self.fan_loop_select!r}, "
+                f"fan_lsel_read={self.fan_lsel_read!r}. Recon's whole job is to grade the "
+                f"ONE cell that reaches the coda, and only that geometry gives it one.")
+
     def _check_slot_cell_pass_norm(self) -> None:
         """``tul.slot_cell_pass_norm``: the per-pass RMSNorm on the slot loop's cells.
 
@@ -5798,9 +5907,21 @@ class TULSlotRegister(nn.Module):
 
         A_i = W_o( sum_j softmax_j( <Q_i, W_k x_j> / sqrt(d) ) W_v x_j )   over j in span s
 
-    plus a per-cell embedding ``P_cell[i]``. The pooling is single-head, softmax over the
-    span's OWN token states only, and causal to the boundary — a cell may not read a token
-    that comes after the span it summarises.
+    plus a per-cell embedding ``P_cell[i]``. The pooling is causal to the boundary — a
+    cell may not read a token that comes after the span it summarises.
+
+    ``tul.slot_pool_heads`` (2026-10-05, CE queue item 9): at ``H = 1`` (the default) the
+    pooling above is SINGLE-HEAD — one softmax weighted average per cell, which can only
+    blend tokens, never commit to one of them exactly. The exact-recall probe measured
+    65% of the LXTUL CE gap as missed exact bigram copies. At ``H > 1`` the SAME ``Q_i`` /
+    ``W_k`` / ``W_v`` / ``W_o`` ``[d, d]`` parameters are split into ``H`` heads of
+    ``d / H`` each (no new parameter, no shape change — only the reshape, the per-head
+    softmax and the scale, which becomes ``d_head ** -0.5`` the way every multi-head
+    attention in this tree scales, the ``TULReread`` precedent): different heads can
+    commit to different single tokens of the span instead of one head averaging all of
+    them. ``H = 1`` makes ``d_head == d_model``, so the reshape is a no-op view and the
+    arithmetic is the exact single-head formula above — BIT-IDENTICAL to the tree before
+    this key.
 
     ``W_o`` is ZERO-INIT and ``P_cell`` is zeros, so at step 0 EVERY cell's seed is exactly
     today's `slot_seed` value and the register arm starts from the shipped arm rather than
@@ -5816,13 +5937,22 @@ class TULSlotRegister(nn.Module):
     Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
     """
 
-    def __init__(self, d_model: int, m_cells: int, distinct: bool = True):
+    def __init__(self, d_model: int, m_cells: int, distinct: bool = True, n_heads: int = 1):
         super().__init__()
         if m_cells < 2:
             raise ValueError(f"TULSlotRegister needs m_cells >= 2, got {m_cells}")
+        if d_model % n_heads:
+            raise ValueError(
+                f"tul.slot_pool_heads={n_heads} must divide d_model={d_model}")
         self.m = int(m_cells)
         self.distinct = bool(distinct)
-        self.scale = d_model ** -0.5
+        self.n_heads = int(n_heads)
+        self.d_head = d_model // self.n_heads
+        # `d_head ** -0.5`, not `d_model ** -0.5`: at H=1, d_head == d_model and the two
+        # are the same number, so this is the exact scale the tree always used there —
+        # the change only has an effect at H > 1, where it is the ordinary per-head scale
+        # every other multi-head attention in this file (`TULReread`) uses.
+        self.scale = self.d_head ** -0.5
         # RNG-NEUTRAL CONSTRUCTION. The private generator below is what makes the register's
         # own weights reproducible, but `nn.Linear` still runs a kaiming draw on the GLOBAL
         # stream before the weight is overwritten. Three Linears = three draws, and anything
@@ -5858,12 +5988,15 @@ class TULSlotRegister(nn.Module):
         B, L, C = xn.shape
         S = layout.slot_index.shape[1]
         M = self.m
+        H, Dh = self.n_heads, self.d_head
         # keys/values over TOKEN positions only, restricted to the querying slot's span.
-        k = self.W_k(xn)                                                  # [B, L, C]
-        v = self.W_v(xn)
+        # Split into H heads of Dh = C / H each — at H=1, Dh=C and this view is a no-op.
+        k = self.W_k(xn).view(B, L, H, Dh)                                # [B, L, H, Dh]
+        v = self.W_v(xn).view(B, L, H, Dh)
         q = self.Q if self.distinct else self.Q.expand(M, C)              # [M, C]
-        # [B, M, L] scores, then masked per slot: a slot's keys are its own span's tokens.
-        sc = torch.einsum("mc,blc->bml", q.to(xn.dtype), k) * self.scale
+        q = q.view(M, H, Dh)
+        # [B, H, M, L] scores, then masked per slot: a slot's keys are its own span's tokens.
+        sc = torch.einsum("mhd,blhd->bhml", q.to(xn.dtype), k) * self.scale
         tok = ~layout.slot_mask                                           # [B, L]
         own = (layout.bag_id.unsqueeze(1) == torch.arange(
             S, device=xn.device).view(1, S, 1)) & tok.unsqueeze(1)        # [B, S, L]
@@ -5878,10 +6011,16 @@ class TULSlotRegister(nn.Module):
         # result is zeroed by `slot_valid` below — no `-inf` row is ever built.
         _has = own.any(dim=-1, keepdim=True)                              # [B, S, 1]
         own = torch.where(_has, own, torch.ones_like(own))
+        # own [B, S, L] broadcasts against sc.unsqueeze(1) [B, 1, H, M, L] through the
+        # [B, S, 1, 1, L] view below, giving every head the SAME per-slot key mask.
         logits = sc.unsqueeze(1) + torch.where(
-            own.unsqueeze(2), sc.new_zeros(()), sc.new_full((), float("-inf")))
-        a = torch.softmax(logits, dim=-1)                                 # [B, S, M, L]
-        pooled = torch.einsum("bsml,blc->bsmc", a, v)
+            own.view(B, S, 1, 1, L), sc.new_zeros(()), sc.new_full((), float("-inf")))
+        a = torch.softmax(logits, dim=-1)                                 # [B, S, H, M, L]
+        pooled = torch.einsum("bshml,blhd->bshmd", a, v)                  # [B, S, H, M, Dh]
+        # Concatenate the H heads along the channel axis — the TULReread precedent
+        # (`o.transpose(1, 2).reshape(...)`) — before W_o's [d, d] projection. At H=1 this
+        # permute+reshape is the identity view and the result is the single-head formula.
+        pooled = pooled.permute(0, 1, 3, 2, 4).reshape(B, S, M, C)
         out = self.W_o(pooled) + self.P_cell.to(xn.dtype).view(1, 1, M, C)
         out = out * layout.slot_valid.view(B, S, 1, 1).to(out.dtype)
         return out.reshape(B, S * M, C)

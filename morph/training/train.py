@@ -225,7 +225,12 @@ def evaluate(
                           # tul.latent_pre_target (stage 1, 2026-10-02): the latent term.
                           # A stage-1 forward never reaches this line (no CE; see the
                           # branch above); listed for the both-tuples rule.
-                          "latent_pre_weighted"):
+                          "latent_pre_weighted",
+                          # tul.recon_weight (CE queue item 10, 2026-10-05): own-span
+                          # reconstruction. TRAIN ONLY — a val forward (model.eval())
+                          # never builds this term, so it is never actually present here;
+                          # listed for the both-tuples rule, the same as latent_pre above.
+                          "recon_weighted"):
                 if out.get(_aux2) is not None:
                     _l -= float(out[_aux2])   # 2026-09-12 energy / bounded-residual arms
             # FM1: val loss is the MODEL's CE, so the ppl divergence guard fires on the
@@ -246,6 +251,10 @@ def evaluate(
                 acc.setdefault("val/sigreg", []).append(float(out["sigreg"]))
             for _mk in ("mux_local", "mux_kl", "mux_entropy", "mux_null", "mux_rel",
                         "mux_n_supervised", "spandec", "spandec_ce", "spandec_n_tokens",
+                        # tul.recon_weight (CE queue item 10): TRAIN ONLY, so this never
+                        # actually fires in a val forward (model.eval()) — listed for the
+                        # both-tuples rule beside spandec above.
+                        "recon", "recon_ce", "recon_n_tokens",
                         # tul.row_contrast_lambda: `row_contrast_acc` is the distinctness
                         # reading (1/n_valid is chance) and `row_contrast` its term
                         # (log n_valid at chance). Both belong beside val/slot_pairwise_cos.
@@ -3883,7 +3892,8 @@ def main(cfg: DictConfig) -> None:
                             "vq_perplexity", "vq_used",
                             "critic", "critic_weighted", "critic_agree",
                             "critic_gap_traj",
-                            "horizon", "horizon_weighted", "horizon_terms"):
+                            "horizon", "horizon_weighted", "horizon_terms",
+                            "recon", "recon_ce", "recon_weighted"):
                     if _lk in out and out[_lk] is not None:
                         _probe_lk.append(_lk)
                 # One device-to-host copy for all of them (`_host_floats`), same values.
@@ -4061,9 +4071,11 @@ def main(cfg: DictConfig) -> None:
                         "explore_set_weighted",    # tul.latent_set_loss (knob 4)
                         "explore_extra_weighted",  # tul.hyp_score_head / hyp_merge (3, 6)
                         "code_policy_weighted",    # arm B, tul.code_policy_k (2026-09-29)
-                        "coda_logit_l2_weighted"):  # tul.coda_logit_l2 (spectral
+                        "coda_logit_l2_weighted",  # tul.coda_logit_l2 (spectral
                                                      # decoupling, 2026-09-23): folded
                                                      # into the fused CE kernel
+                        "recon_weighted"):   # tul.recon_weight: own-span reconstruction
+                                              # (CE queue item 10, 2026-10-05)
                 if isinstance(out, dict) and out.get(_ak) is not None:
                     _lv = _lv - float(out[_ak])
             # ── Non-finite self-abort (no-theater: the αcap35 run spewed 600 steps of NaN
@@ -4288,6 +4300,12 @@ def main(cfg: DictConfig) -> None:
                 # the parallel head, `nextlat_draft_ce` / `_true_ce` / `_draft_gap`.
                 for _k in (list(out.keys()) if isinstance(out, dict) else []):
                     if _k.startswith("nextlat") and torch.is_tensor(out[_k]):
+                        log[f"tul/{_k}"] = float(out[_k].detach())
+                # tul.recon_weight (CE queue item 10, 2026-10-05): `recon` / `_weighted`,
+                # `recon_ce` (the term itself — unweighted), `recon_n_tokens`. Train only,
+                # so this scan only ever fires on a training step's `out`.
+                for _k in (list(out.keys()) if isinstance(out, dict) else []):
+                    if _k.startswith("recon") and torch.is_tensor(out[_k]):
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # arm B, the code policy (tul.code_policy_k): `code_policy_weighted`, the raw
                 # REINFORCE term `code_policy_pg`, `_entropy` (normalised by log C),

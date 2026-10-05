@@ -1,0 +1,20 @@
+# LXTUL with BOTH the 16-head seeding pool (CE queue item 9) and the own-span
+# reconstruction decoder (CE queue item 10), 2026-10-05. Two factors from lxtul.yaml:
+# tul.slot_pool_heads 1 -> 16 and tul.recon_weight 0.0 -> 1.0 (tul.recon_layers at its
+# default 2). Tests whether a multi-head seed that can commit to exact tokens (item 9)
+# and a penalty for losing them (item 10) compound, against lxtul_pool16.yaml and
+# lxtul_recon.yaml each alone. 5000 steps, to pair with lxtul's 5k seeds.
+defaults:
+  - lxtul
+  - _self_
+
+tul:
+  slot_pool_heads: 16
+  recon_weight: 1.0
+  recon_layers: 2
+
+training:
+  steps: 5000
+
+wandb:
+  name: lxtul-pool16-recon

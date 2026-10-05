@@ -65,7 +65,8 @@ from .tul_fan_route import (FanLatentHead, FanOPF, FanRouter, FanTargetFront, Fa
                             pooled_span_states, reset_to_winner)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
-from .tul_spandec import SpanDecoder, horizon_span_slots, next_span_slots, span_slots
+from .tul_spandec import (SpanDecoder, horizon_span_slots, next_span_slots,
+                          own_span_slots, span_slots)
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
 from .tul_nextlat import SpanTransition, nextlat_pairs, span_token_embeddings
 from .tul_code_enum import TULCodeEnum
@@ -2538,6 +2539,44 @@ class MORPHTransformer(nn.Module):
                     "tul.spandec_per_pass needs a core loop (model.n_core > 0): it grades "
                     "the state after EVERY pass, and a coreless TUL model has no passes.")
 
+        # ── The own-span reconstruction decoder (TULConfig.recon_weight, CE queue item
+        # 10) ───────────────────────────────────────────────────────────────────────
+        # A THIRD independent `SpanDecoder` instance (the `tul.spandec` target decoder
+        # above is the first, `tul_egrad.ReconEnergy`'s own-span decoder under
+        # `grad_pass_energy='recon'` is the second) — its own private init stream
+        # (`seed_offset=0x5EC0`, distinct from spandec's 0 and the egrad energy's 0x11),
+        # so this arm's base weights never collide with either. `recon_weight == 0.0`
+        # (default) leaves this `None` and the forward never calls it: BIT-IDENTICAL to
+        # the tree before this key. `TULConfig._check_recon` already refused every
+        # geometry where "the winner cell" is undefined, so the only models that reach
+        # here have the write-all fan's latent-selected loop with a hard winner.
+        # `target_offset=1` is UNUSED by this decoder's own call site (`_tul_recon_loss`
+        # builds its targets with `own_span_slots`, not `horizon_span_slots`, so the
+        # field this argument sets is never read for recon) — passed only because
+        # `SpanDecoder.__init__` requires a value >= 1.
+        #
+        # RNG-NEUTRAL CONSTRUCTION (the `TULSlotRegister` precedent). `SpanDecoder`'s
+        # `nn.Linear` sub-modules kaiming-draw on the GLOBAL stream before
+        # `tul_spandec.py`'s `_init_linear` overwrites them from a private generator, so
+        # building one — like building a register — would otherwise shift every
+        # parameter constructed AFTER it in this method. Snapshot and restore here, so
+        # whether `self.tul_recon` is `None` or built, every weight constructed later in
+        # `__init__` is unmoved.
+        self.tul_recon: SpanDecoder | None = None
+        if cfg.tul is not None and cfg.tul.recon_weight > 0.0:
+            _rng0 = torch.random.get_rng_state()
+            self.tul_recon = SpanDecoder(
+                d_model=d,
+                n_heads=int(cfg.tul.spandec_heads or cfg.n_heads),
+                d_ff=int(cfg.d_ff),
+                n_layers=int(cfg.tul.recon_layers),
+                max_tokens=int(cfg.tul.spandec_max_tokens or cfg.tul.bound_span_cap),
+                seed_offset=0x5EC0,
+                horizon=1,
+                target_offset=1,
+            )
+            torch.random.set_rng_state(_rng0)
+
         # ── The parallel span head (TULConfig.spandec_parallel; LXTUL-E) ──────────
         # A COMMITTED product reader of the span decoder's own target: J input-free queries
         # read z (and, at K > 1, one of K enumerated codes). TRAINING-ONLY target and
@@ -2690,7 +2729,8 @@ class MORPHTransformer(nn.Module):
                     "tul.slot_cells>1 with an FM planner (tul.fm / cfg.fm): the planner "
                     "REPLACES the core loop and writes ONE plan per slot through W_prefix.")
             self.tul_register = TULSlotRegister(d, cfg.tul.slot_cells,
-                                                cfg.tul.slot_cell_init == "distinct")
+                                                cfg.tul.slot_cell_init == "distinct",
+                                                n_heads=cfg.tul.slot_pool_heads)
 
         # ── LXTUL: the fan's exit mixture (TULConfig.fan_k; morph/model/tul_fan.py) ──
         # `fan_k: 0` builds nothing and the attribute stays None, so every branch that
@@ -10965,6 +11005,51 @@ class MORPHTransformer(nn.Module):
                 stats["spandec_n_tokens_h1"] = float(valid[:, :, :dec.per_span_tokens].sum())
         return loss
 
+    def _tul_recon_loss(self, winner_state: Tensor, input_ids: Tensor,
+                        layout: SlotLayout, stats: dict | None = None) -> Tensor:
+        """``tul.recon_weight`` — reconstruct a slot's OWN span from the cell it actually
+        hands the coda (CE queue item 10).
+
+        ``winner_state`` is the per-slot carrier the caller reads right after the
+        latent-selected loop's route (`_fan_route_cells`'s one-hot write) and BEFORE
+        `TULSlots.prefix_project`'s per-position matmul — i.e. the `[B, S, (n,) C]` cell
+        that is actually the live, undiluted winner (every loser is exactly 0 there, so
+        `_cells.sum(dim=2)` at the call site is that one cell, not an average of M). This
+        is the SAME readout rule :meth:`_tul_spandec_loss` applies (`self._readout`:
+        Hyper-Connection stream mean, `lm_mixer`, `final_norm`), so the decoder's input
+        lives in the same conditioning space as the target decoder's.
+
+        DELIBERATELY NOT the seam :meth:`_tul_spandec_loss` / :meth:`_tul_spandec_par_loss`
+        / :meth:`_tul_nextlat_loss` read (`h_slots` at the PRE-route mean of every cell,
+        so every cell gets gradient — `_fan_route_cells`'s documented choice). This term's
+        whole point is to grade the cell that WINS, so it reads post-route.
+
+        Reuses :class:`~morph.model.tul_spandec.SpanDecoder` and
+        :func:`~morph.model.tul_spandec.own_span_slots` — the same machinery
+        :meth:`_tul_spandec_loss` and `tul_egrad.ReconEnergy` use, pointed at span ``s``
+        (the slot's OWN span, shift=0) instead of span ``s+1``. No cross-attention memory
+        (`tul.spandec_reads_cells`'s mechanism): a single cell is already the one state
+        this term is about.
+        """
+        tc = self.cfg.tul
+        dec = self.tul_recon
+        assert dec is not None
+        z = self._readout(winner_state)                               # [B, S, C]
+        w_tied = self.embed.lm_weight()                                # [V, C]
+        w_head = w_tied.detach() if tc.mux_detach_head else w_tied
+        ids, valid = own_span_slots(input_ids, layout, dec.max_tokens)
+        st = dec.decode(z, ids, valid, w_tied.detach())                # [B, S, J, C]
+        C = st.shape[-1]
+        lab = torch.where(valid, ids, torch.full_like(ids, -100))
+        loss = fused_linear_cross_entropy(
+            st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
+            chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
+            **self._ce_kw)
+        if stats is not None:
+            stats["recon_ce"] = loss.detach()
+            stats["recon_n_tokens"] = valid.sum().to(torch.float32)
+        return loss
+
     def _tul_spandec_par_loss(self, h_slots: Tensor, input_ids: Tensor,
                               layout: SlotLayout, stats: dict | None = None,
                               n_rollouts: int = 1) -> Tensor:
@@ -12861,6 +12946,10 @@ class MORPHTransformer(nn.Module):
         # term (a path that silently skipped the head would read as its own ruler).
         par_loss, par_stats, enum_stats = None, {}, {}
         nextlat_loss, nextlat_stats = None, {}
+        # tul.recon_weight (CE queue item 10): the own-span reconstruction CE. Bound here
+        # for the same reason as `nextlat_loss` beside it: only the register/fan write
+        # branch below (the one `_check_recon` restricts this key to) can produce it.
+        recon_loss, recon_stats = None, {}
         if tc.tokens_through_core:
             # Arm A2 (slots-as-memory): tokens AND slots run the ordinary per-SAMPLE core.
             # RESOLVED SPEC AMBIGUITY — §7.1's A2 row says "Poisson/slot" in the depth
@@ -13628,6 +13717,17 @@ class MORPHTransformer(nn.Module):
                         else self._fan_route_cells(_reg_cells, _fan_route))
                 _cells = self._tul_plan_ablate(_src, layout, plan_mode)
                 h_slots = _cells.mean(dim=2)
+                # ── tul.recon_weight (CE queue item 10): own-span reconstruction ──────
+                # TRAIN ONLY (`self.training`), unlike `spandec_loss` above which also
+                # runs at eval — recon is a training signal for the loop, not a
+                # monitoring column the val pass holds steady. `_check_recon` already
+                # restricted this key to the write-all fan's latent-selected loop with a
+                # hard winner, so `_fan_route` is never None here and `_fan_route_cells`
+                # zeroed every loser exactly: summing over the cell axis (instead of the
+                # mean two lines up) recovers the single live winner UNDILUTED.
+                if self.tul_recon is not None and self.training:
+                    recon_loss = self._tul_recon_loss(
+                        _cells.sum(dim=2), input_ids, layout, stats=recon_stats)
             elif _vq_cells is not None:
                 # The K lifted codes go 1:1 into the K prefix cells. The ablation runs on
                 # the STACK and the dequantized mean is read back off it, so a `shuffle`
@@ -14048,6 +14148,26 @@ class MORPHTransformer(nn.Module):
             _nlw = self.cfg.tul.nextlat_weight * nextlat_loss
             groups["nextlat_weighted"] = _nlw.detach()
             groups["loss"] = groups["loss"] + _nlw
+        if self.tul_recon is not None and groups is not None:
+            # tul.recon_weight (CE queue item 10): own-span reconstruction. TRAIN ONLY
+            # (see the call site's comment) — at eval `recon_loss` stays None and this
+            # block adds nothing, which is exactly "eval never runs it": val loss is the
+            # MODEL's CE with no term to subtract in the first place. Same contract as
+            # `nextlat_weighted` on the training path: the WEIGHTED term is exposed so
+            # train.py can subtract it and keep train/loss on the MODEL's CE.
+            if recon_loss is None and self.training:
+                raise RuntimeError(
+                    "tul.recon_weight built the decoder but this forward path never "
+                    "computed the term (it is wired inside the register/fan write branch "
+                    "only, which `TULConfig._check_recon` restricts this key to). "
+                    "Refusing to return a loss without it.")
+            if recon_loss is not None:
+                groups = dict(groups)
+                groups["recon"] = recon_loss.detach()
+                groups.update(recon_stats)
+                _rw = self.cfg.tul.recon_weight * recon_loss
+                groups["recon_weighted"] = _rw.detach()
+                groups["loss"] = groups["loss"] + _rw
         # ── tul.code_policy_k (arm B): score the entry-time choice on the ONE coda pass ──
         # Consumed and CLEARED here on every forward (it holds the policy logits' graph;
         # the `_loop_denoise` contract). With labels, the readings are reported at train
