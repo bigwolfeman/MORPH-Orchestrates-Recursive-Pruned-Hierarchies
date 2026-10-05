@@ -111,6 +111,16 @@ problems: CE (gap to plain 10k +0.356) and decode speed (cached decode refuses t
 Start new loop work from it. Decision record:
 [`2026-10-04-lxtul-primary-candidate.md`](.agents/notes/implemented/architecture/2026-10-04-lxtul-primary-candidate.md).
 
+> **REMIND WOLFE (until this note leaves `proposed/`): variable cell count.** His idea,
+> 2026-10-05: Poisson-sample LXTUL's cell count at train and test whether it generalizes,
+> e.g. "can I train at 4 and inference at 128 fine? a variable cell count at inference
+> would be huge." Under the latent-selected loop the cell count is the search breadth per
+> pass, so this would be a test-time compute knob. Raise it whenever cell count, the fan
+> or test-time compute comes up and this has not already been discussed in the session.
+> Note: [`2026-10-05-lxtul-variable-cell-count.md`](.agents/notes/proposed/architecture/2026-10-05-lxtul-variable-cell-count.md).
+>
+> CE work list (status kept there): [`2026-10-04-lxtul-ce-test-queue.md`](.agents/notes/proposed/architecture/2026-10-04-lxtul-ce-test-queue.md).
+
 ## ⭐ TUL — Thought Unpack Loop — TWO FORWARDS, ONE TREE (paid loop shipped 2026-09-03; slot loop back with its constraint 2026-09-04)
 
 > **Before any loop-contribution work, read [docs/tul-loop-contribution-history.md](docs/tul-loop-contribution-history.md)** (2026-09-23): every TUL attempt to make the loop contribute, 2026-08-16 to LXTUL-GK, with each number's source, the 48 retractions, and the docs that still state a retracted number. Positives ledger: [docs/9-26-TUL-run-history-IMPORTANT.md](docs/9-26-TUL-run-history-IMPORTANT.md).
