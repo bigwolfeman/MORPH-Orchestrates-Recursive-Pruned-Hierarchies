@@ -57,6 +57,15 @@ Wolfe: "Testing the A line there needs to be very careful to measure loop contri
 may kill it." Every A arm reports K1-K6 with its CI, the mean-ablation of the shared
 direction, and the exact-recall buckets, at 5k and 10k, before any CE claim.
 
+### Overnight queue, 2026-10-05 (each smoked and mechanism-checked before it queues)
+
+1. `lxtul_fan4x2` (wider write, item 2): training.
+2. `lxtul_snap`, `lxtul_snap_entry` (A2, prereg `2026-10-05-lxtul-snap-pair`).
+3. `lxtul_hist_embed`, `lxtul_hist` (full token history, prereg `2026-10-05-lxtul-full-history-pair`).
+4. `lxtul_pool16`, `lxtul_recon`, `lxtul_pool16_recon` (B, prereg `2026-10-05-lxtul-cell-packing-panel`).
+
+`lxtul_fan8` (item 1) is trained and read; its filing is pending its repetition eval.
+
 Readouts for every training arm: the depth sweep (K1-K6), the gap to plain at the SAME
 step, the cells' zero-ablation worth and its share, the mean-ablation of the shared
 direction, the exploration ledger, the repetition eval, tok/s. Loop contribution is
