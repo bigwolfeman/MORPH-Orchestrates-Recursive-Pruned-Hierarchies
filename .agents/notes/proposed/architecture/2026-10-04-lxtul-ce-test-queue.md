@@ -39,6 +39,24 @@ The queue. Each item gets its own prereg before it runs. Status is kept here.
 | 10 | **Own-span reconstruction** (make the cell KEEP it) | an auxiliary head decodes the slot's OWN span from the written cell (teacher-forced, like `spandec`, which decodes the NEXT span) | copying later needs the current span's exact tokens in the cell; the shipped targets (coda CE through the winner, next-span decoder, latent rank) do not ask for them | one small decoder per slot at train only | proposed 2026-10-05 |
 | 11 | **Wider read-out, m = 4 / 8** (get it OUT of the cell) | item 2 at larger m | if item 2 helps, find where positions stop paying | coda reads m positions per slot | after item 2 |
 
+### Order (Wolfe, 2026-10-05)
+
+After the queued arms (item 1 filed, item 2 running): **A2, then B, then A3, then A1.**
+
+- **A2, pseudo-token write**: the loop emits N pseudo tokens per span in token-embedding
+  space (PonderLM-style probability-weighted embedding mixtures) instead of one vector. It
+  must be trained WITHOUT thinking traces. An Opus agent is working the training signal out
+  in Lean (`lab/theory/tul_pseudotoken/`), seeded by CODI and PonderLM.
+- **B, pack more into cells**: items 9 (multi-head pool), 10 (own-span reconstruction) and
+  2 / 11 (wider read-out).
+- **A3, extractive cells**: the loop selects k of the span's own tokens and carries their
+  raw embeddings forward.
+- **A1, raw local window** (item 4): last.
+
+Wolfe: "Testing the A line there needs to be very careful to measure loop contribution, we
+may kill it." Every A arm reports K1-K6 with its CI, the mean-ablation of the shared
+direction, and the exact-recall buckets, at 5k and 10k, before any CE claim.
+
 Readouts for every training arm: the depth sweep (K1-K6), the gap to plain at the SAME
 step, the cells' zero-ablation worth and its share, the mean-ablation of the shared
 direction, the exploration ledger, the repetition eval, tok/s. Loop contribution is
