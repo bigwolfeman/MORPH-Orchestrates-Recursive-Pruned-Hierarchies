@@ -107,3 +107,35 @@ spends about 98 % of the carrier on a slot-independent vector, so the content th
 refines is a 2 % ripple. Removing the constant before the per-pass norm (or locating and
 removing its source) should raise the per-slot share and, if the hypothesis holds, the
 loop's contribution.
+
+## Follow-up: where the constant comes from (2026-10-05, no separate prereg)
+
+Run after the verdict above, to locate the source; it had no predictions of its own, so it
+is evidence for the next prereg, not a test. Probe `lab/divergence/carrier_constant_probe.py`
+(3070 at f649ac6, 96 rows per arm; hooks bit-equal; the per-source decomposition sums to the
+carrier exactly; reproduces 0.43 % / 0.19 % after pass 1). Artifacts beside the ones above
+(`carrier_constant_*`).
+
+- **Source: the core ATTENTION, not the norm, the injection, the MLPs or the reset.** The
+  constant's direction is already 47-49 % of the entry state (cosine +0.91 / +0.94 to the
+  final constant). In pass 1 the HC pre-map feeds the core attention an input that is
+  67-94 % shared by layers 1-2 and about 99.9 % shared by layer 3, while the MLPs are fed
+  the per-slot part (4-30 % shared). Core attention then writes a large, 99.8-99.9 %
+  shared output (LXTUL layer 2: RMS 51; snap layers 2-3: RMS 3 and 24), concentrated into
+  one HC stream (Hpost row about [0, 0, 3.9, 0]). The per-pass norm divides the 25-50x
+  blow-up back out. Norm gain g is about 1.00; DiagonalInjection, x0 terms, MLP writes and
+  the reset are small or per-slot. It is rebuilt every pass by the same layers.
+- **Same vector:** cosine 0.97-0.98 between pass 1 and the exit; identical across the 4
+  cells; one channel direction with a fixed sign per stream (+,-,-,+ / +,-,+,-), spread over
+  many channels (top-32 channels 34-44 % of its energy), not one massive channel.
+- **Content survives:** row-held-out ridge R^2 for the slot's own span (mean embedding):
+  seed 0.397 / 0.385, after pass 1 0.350 / 0.355, exit 0.333 / 0.349. Next span: seed
+  0.044 / 0.043, exit 0.054 / 0.055: the loop adds about +0.01 R^2 of next-span content.
+- **Load-bearing in the trained models:** removing it before the per-pass norm costs
+  +0.114 / +0.127 nats and turns K1-K6 negative; a same-size constant with permuted
+  channels costs as much; keeping it out of the norm only (N(f-c)+c) costs +0.096 / +0.065.
+
+Reading: from core layer 2 on, the loop's attention reads a near-constant input and writes
+a near-constant output: a no-op the downstream has learned to rely on. Cross-slot retrieval
+in the loop is therefore mostly a blur, and the per-slot work happens in the MLPs. Any fix
+must be trained in (post-hoc removal breaks the trained model).

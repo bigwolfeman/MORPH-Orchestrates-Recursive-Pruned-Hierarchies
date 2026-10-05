@@ -1,0 +1,618 @@
+=== snap  (lxtul_snap, step 5000, 96 rows, depth 6, carrier torch.float32)
+sanity: {"hook_vs_plain_bit_equal": true, "hook_vs_plain_max_abs_ce_diff": 0.0, "winner_eq_written_nonzero": true, "ctrl_max_abs_ce_diff": 0.9873042106628418, "selftest_max_rel_err": {"entry_eq_injection_input": 0.0, "attn_parts_sum": 0.003159348852932453, "continuity/attn_in": 0.0, "hc_split/attn": 0.0029235784895718098, "continuity/mlp_in": 0.0, "hc_split/mlp": 0.00310997711494565, "continuity/block_out": 0.0, "continuity/norm_in": 0.0, "norm_formula": 0.0}}
+repro per-slot share: entry 0.5729  pass1 0.0043  exit 0.0184
+-- Q1 t0: entry proj share +0.676; sum of shares 1.000000; pre-norm sum 1.000000; unit-no-g shared 0.9961
+source                rms  shared  cos c*  proj c* proj pre diff-sub
+inject              0.293   0.300  +0.473   +0.073   +0.002    0.977
+x0_l0               0.010   0.652  +0.000   +0.000   +0.000    0.000
+attn_mix_l0         1.431   0.408  -0.458   -0.402   -0.013    0.395
+attn_write_l0       0.301   0.287  +0.232   +0.036   +0.001    0.248
+mlp_mix_l0          0.953   0.085  -0.107   -0.028   -0.000    0.994
+mlp_write_l0        0.280   0.370  +0.287   +0.047   +0.001    0.307
+x0_l1               0.013   0.686  +0.000   +0.000   -0.000    0.000
+attn_mix_l1         1.138   0.336  +0.102   +0.065   -0.002    0.927
+attn_write_l1       0.248   0.772  +0.339   +0.071   +0.000    0.328
+mlp_mix_l1          1.863   0.714  -0.052   -0.079   -0.001    0.924
+mlp_write_l1        0.328   0.176  +0.156   +0.021   +0.000    0.263
+x0_l2               0.004   0.652  -0.000   -0.000   -0.000    0.000
+attn_mix_l2         1.332   0.358  -0.168   -0.128   -0.012    0.775
+attn_write_l2       2.968   0.974  +0.483   +1.357   +0.017    0.741
+mlp_mix_l2          3.088   0.819  -0.748   -2.007   -0.057    0.759
+mlp_write_l2        0.385   0.123  -0.123   -0.016   -0.001    0.320
+x0_l3               0.002   0.610  +0.000   +0.000   -0.000    0.000
+attn_mix_l3         5.915   0.909  +0.575   +3.112   +0.155    0.590
+attn_write_l3      24.334   0.998  +0.384   +8.953   +0.130    0.287
+mlp_mix_l3         21.569   0.994  +0.131   +2.709   +0.369    0.696
+mlp_write_l3        0.494   0.814  -0.041   -0.017   +0.000    0.347
+x0_l4               0.003   0.558  +0.000   +0.000   -0.000    0.000
+attn_mix_l4        48.645   0.998  -0.759  -35.403   -1.423    0.999
+attn_write_l4       7.118   1.000  +0.000   +0.001   -0.059    0.000
+mlp_mix_l4         56.918   0.998  +0.736  +40.145   +1.701    0.888
+mlp_write_l4        0.394   0.748  -0.016   -0.005   +0.000    0.499
+x0_l5               0.006   0.564  +0.000   +0.000   -0.000    0.000
+attn_mix_l5        58.846   0.998  -0.693  -39.072   -1.718    0.957
+attn_write_l5       2.991   0.999  -0.691   -1.983   -0.077    0.508
+mlp_mix_l5         63.661   0.998  +0.787  +48.049   +1.968    0.899
+mlp_write_l5        0.101   0.375  +0.149   +0.009   +0.000    0.754
+norm               31.214   0.998  -0.841  -25.182             0.923
+reset               0.078   0.026  -0.032   -0.000             0.846
+states (per-slot share, rms, cos to c*, stream-diff share of the mean):
+  entry:0.528/1.13  inj:0.576/1.33  x0:0.576/1.33  a0:0.549/1.42  m0:0.511/1.52  x1:0.511/1.52  a1:0.462/1.64  m1:0.442/1.69  x2:0.442/1.69  a2:0.086/4.14  m2:0.092/4.20  x3:0.092/4.20  a3:0.004/26.59  m3:0.003/26.58  x4:0.003/26.58  a4:0.002/29.78  m4:0.002/29.77  x5:0.002/29.77  a5:0.002/32.10  m5:0.002/32.10  NORM:0.004/1.04  reset:0.004/1.04
+attention parts and inputs (shared share, rms):
+  attn_part/l0/comp          shared 0.543 rms    0.055 per-slot 0.037
+  attn_part/l0/res           shared 0.625 rms    0.070 per-slot 0.043
+  attn_part/l0/win           shared 0.286 rms    0.224 per-slot 0.189
+  attn_part/l0/x             shared 0.303 rms    0.996 per-slot 0.832
+  attn_part/l1/comp          shared 0.610 rms    0.088 per-slot 0.055
+  attn_part/l1/res           shared 0.759 rms    0.100 per-slot 0.049
+  attn_part/l1/win           shared 0.526 rms    0.061 per-slot 0.042
+  attn_part/l1/x             shared 0.666 rms    0.992 per-slot 0.573
+  attn_part/l2/comp          shared 0.594 rms    0.060 per-slot 0.038
+  attn_part/l2/res           shared 0.971 rms    0.862 per-slot 0.146
+  attn_part/l2/win           shared 0.960 rms    0.690 per-slot 0.137
+  attn_part/l2/x             shared 0.780 rms    1.003 per-slot 0.471
+  attn_part/l3/comp          shared 0.996 rms    7.868 per-slot 0.490
+  attn_part/l3/res           shared 0.996 rms    0.778 per-slot 0.052
+  attn_part/l3/win           shared 0.998 rms   12.060 per-slot 0.597
+  attn_part/l3/x             shared 0.973 rms    1.010 per-slot 0.167
+  attn_part/l4/comp          shared 0.996 rms    0.131 per-slot 0.008
+  attn_part/l4/res           shared 1.000 rms    0.685 per-slot 0.007
+  attn_part/l4/win           shared 1.000 rms    6.530 per-slot 0.043
+  attn_part/l4/x             shared 0.998 rms    1.000 per-slot 0.048
+  attn_part/l5/comp          shared 0.998 rms    0.001 per-slot 0.000
+  attn_part/l5/res           shared 1.000 rms    2.095 per-slot 0.007
+  attn_part/l5/win           shared 0.998 rms    0.001 per-slot 0.000
+  attn_part/l5/x             shared 0.999 rms    1.010 per-slot 0.031
+  xin/attn_l0/normed         shared 0.303 rms    0.996 per-slot 0.832
+  xin/attn_l0/xbar           shared 0.293 rms    0.967 per-slot 0.813
+  xin/attn_l1/normed         shared 0.666 rms    0.992 per-slot 0.573
+  xin/attn_l1/xbar           shared 0.669 rms    1.866 per-slot 1.074
+  xin/attn_l2/normed         shared 0.780 rms    1.003 per-slot 0.471
+  xin/attn_l2/xbar           shared 0.773 rms    2.014 per-slot 0.959
+  xin/attn_l3/normed         shared 0.973 rms    1.010 per-slot 0.167
+  xin/attn_l3/xbar           shared 0.961 rms    4.672 per-slot 0.921
+  xin/attn_l4/normed         shared 0.998 rms    1.000 per-slot 0.048
+  xin/attn_l4/xbar           shared 0.997 rms   15.355 per-slot 0.823
+  xin/attn_l5/normed         shared 0.999 rms    1.010 per-slot 0.031
+  xin/attn_l5/xbar           shared 0.998 rms   31.511 per-slot 1.288
+  xin/mlp_l0/normed          shared 0.299 rms    0.935 per-slot 0.783
+  xin/mlp_l0/xbar            shared 0.280 rms    1.024 per-slot 0.869
+  xin/mlp_l1/normed          shared 0.096 rms    0.933 per-slot 0.887
+  xin/mlp_l1/xbar            shared 0.102 rms    1.042 per-slot 0.988
+  xin/mlp_l2/normed          shared 0.041 rms    0.969 per-slot 0.949
+  xin/mlp_l2/xbar            shared 0.038 rms    0.974 per-slot 0.955
+  xin/mlp_l3/normed          shared 0.925 rms    0.998 per-slot 0.273
+  xin/mlp_l3/xbar            shared 0.857 rms    3.840 per-slot 1.451
+  xin/mlp_l4/normed          shared 0.792 rms    0.966 per-slot 0.441
+  xin/mlp_l4/xbar            shared 0.784 rms    1.492 per-slot 0.694
+  xin/mlp_l5/normed          shared 0.999 rms    0.931 per-slot 0.021
+  xin/mlp_l5/xbar            shared 0.999 rms   56.818 per-slot 1.855
+HC write rows (Hpost_row mean per stream), attention / mlp:
+  attn: l0[0.07,1.53,1.40,0.99]  l1[0.98,1.98,1.04,0.00]  l2[0.02,0.02,3.93,0.03]  l3[0.12,1.00,1.91,0.97]  l4[1.00,1.00,1.00,1.00]  l5[2.23,0.00,0.00,1.77]
+  mlp: l0[0.01,1.13,1.87,0.99]  l1[1.00,1.64,1.31,0.05]  l2[1.98,0.04,1.02,0.96]  l3[1.27,0.71,2.00,0.02]  l4[2.00,2.00,0.00,0.00]  l5[4.00,0.00,0.00,0.00]
+  gates comp/win: l0 0.05/0.24  l1 0.02/0.02  l2 0.01/0.16  l3 0.41/0.80  l4 0.02/0.67  l5 0.00/0.00
+-- Q1 t1: entry proj share +0.990; sum of shares 1.000000; pre-norm sum 1.000000; unit-no-g shared 0.9913
+source                rms  shared  cos c*  proj c* proj pre diff-sub
+inject              0.633   0.151  -0.238   -0.056   -0.003    0.944
+x0_l0               0.010   0.652  +0.000   +0.000   +0.000    0.000
+attn_mix_l0         1.361   0.720  -0.533   -0.590   -0.029    0.440
+attn_write_l0       0.274   0.228  +0.147   +0.018   +0.000    0.196
+mlp_mix_l0          0.692   0.242  +0.007   +0.002   +0.000    0.997
+mlp_write_l0        0.278   0.535  +0.240   +0.047   +0.001    0.326
+x0_l1               0.013   0.686  +0.000   +0.000   -0.000    0.000
+attn_mix_l1         1.094   0.529  +0.156   +0.120   -0.006    0.913
+attn_write_l1       0.172   0.942  +0.332   +0.053   -0.000    0.324
+mlp_mix_l1          1.847   0.836  -0.093   -0.151   -0.005    0.942
+mlp_write_l1        0.348   0.146  +0.123   +0.016   -0.000    0.314
+x0_l2               0.004   0.652  -0.000   -0.000   -0.000    0.000
+attn_mix_l2         1.203   0.542  -0.144   -0.122   -0.020    0.812
+attn_write_l2       5.267   0.982  +0.482   +2.418   +0.033    0.738
+mlp_mix_l2          3.886   0.934  -0.575   -2.074   -0.093    0.640
+mlp_write_l2        0.375   0.215  -0.096   -0.016   -0.002    0.306
+x0_l3               0.002   0.610  +0.000   +0.000   +0.000    0.000
+attn_mix_l3        10.283   0.969  +0.298   +2.894   +0.378    0.364
+attn_write_l3      13.665   0.997  +0.035   +0.459   -0.192    0.003
+mlp_mix_l3          7.014   0.945  +0.622   +4.073   +0.307    0.534
+mlp_write_l3        0.393   0.745  -0.081   -0.027   +0.003    0.381
+x0_l4               0.003   0.558  +0.000   +0.000   +0.000    0.000
+attn_mix_l4        24.632   0.993  -0.814  -19.198   -1.043    0.939
+attn_write_l4       9.239   1.000  -0.004   -0.035   -0.148    0.000
+mlp_mix_l4         31.455   0.995  +0.738  +22.248   +1.556    0.835
+mlp_write_l4        0.376   0.594  +0.001   +0.000   -0.001    0.500
+x0_l5               0.006   0.564  +0.000   +0.000   -0.000    0.000
+attn_mix_l5        32.383   0.995  -0.711  -22.068   -1.589    0.926
+attn_write_l5       3.837   0.999  -0.624   -2.298   -0.174    0.594
+mlp_mix_l5         39.351   0.997  +0.760  +28.694   +1.983    0.865
+mlp_write_l5        0.078   0.564  +0.172   +0.010   +0.001    0.751
+norm               18.926   0.997  -0.794  -14.406             0.892
+reset               0.116   0.066  -0.031   -0.001             0.952
+states (per-slot share, rms, cos to c*, stream-diff share of the mean):
+  entry:0.004/1.04  inj:0.252/1.19  x0:0.252/1.19  a0:0.279/1.28  m0:0.259/1.40  x1:0.259/1.40  a1:0.269/1.51  m1:0.266/1.56  x2:0.266/1.56  a2:0.028/6.34  m2:0.031/6.38  x3:0.031/6.38  a3:0.013/13.12  m3:0.009/13.07  x4:0.009/13.07  a4:0.005/16.34  m4:0.005/16.32  x5:0.005/16.32  a5:0.003/19.76  m5:0.003/19.76  NORM:0.008/1.05  reset:0.009/1.05
+attention parts and inputs (shared share, rms):
+  attn_part/l0/comp          shared 0.560 rms    0.031 per-slot 0.021
+  attn_part/l0/res           shared 0.795 rms    0.085 per-slot 0.039
+  attn_part/l0/win           shared 0.267 rms    0.236 per-slot 0.202
+  attn_part/l0/x             shared 0.535 rms    0.994 per-slot 0.677
+  attn_part/l1/comp          shared 0.837 rms    0.023 per-slot 0.009
+  attn_part/l1/res           shared 0.917 rms    0.125 per-slot 0.036
+  attn_part/l1/win           shared 0.760 rms    0.010 per-slot 0.005
+  attn_part/l1/x             shared 0.881 rms    0.990 per-slot 0.342
+  attn_part/l2/comp          shared 0.827 rms    0.018 per-slot 0.008
+  attn_part/l2/res           shared 0.981 rms    1.213 per-slot 0.165
+  attn_part/l2/win           shared 0.976 rms    1.507 per-slot 0.233
+  attn_part/l2/x             shared 0.887 rms    1.003 per-slot 0.337
+  attn_part/l3/comp          shared 0.834 rms    1.119 per-slot 0.456
+  attn_part/l3/res           shared 0.999 rms    1.064 per-slot 0.030
+  attn_part/l3/win           shared 1.000 rms   11.907 per-slot 0.192
+  attn_part/l3/x             shared 0.994 rms    1.010 per-slot 0.076
+  attn_part/l4/comp          shared 0.798 rms    0.013 per-slot 0.006
+  attn_part/l4/res           shared 0.998 rms    0.942 per-slot 0.041
+  attn_part/l4/win           shared 1.000 rms    8.335 per-slot 0.107
+  attn_part/l4/x             shared 0.997 rms    1.001 per-slot 0.051
+  attn_part/l5/comp          shared 0.945 rms    0.000 per-slot 0.000
+  attn_part/l5/res           shared 1.000 rms    2.439 per-slot 0.049
+  attn_part/l5/win           shared 0.941 rms    0.000 per-slot 0.000
+  attn_part/l5/x             shared 0.998 rms    1.012 per-slot 0.051
+  xin/attn_l0/normed         shared 0.535 rms    0.994 per-slot 0.677
+  xin/attn_l0/xbar           shared 0.531 rms    0.710 per-slot 0.486
+  xin/attn_l1/normed         shared 0.881 rms    0.990 per-slot 0.342
+  xin/attn_l1/xbar           shared 0.880 rms    1.969 per-slot 0.683
+  xin/attn_l2/normed         shared 0.887 rms    1.003 per-slot 0.337
+  xin/attn_l2/xbar           shared 0.877 rms    1.985 per-slot 0.697
+  xin/attn_l3/normed         shared 0.994 rms    1.010 per-slot 0.076
+  xin/attn_l3/xbar           shared 0.982 rms    7.301 per-slot 0.990
+  xin/attn_l4/normed         shared 0.997 rms    1.001 per-slot 0.051
+  xin/attn_l4/xbar           shared 0.997 rms   13.236 per-slot 0.747
+  xin/attn_l5/normed         shared 0.998 rms    1.012 per-slot 0.051
+  xin/attn_l5/xbar           shared 0.995 rms   15.859 per-slot 1.108
+  xin/mlp_l0/normed          shared 0.524 rms    0.921 per-slot 0.635
+  xin/mlp_l0/xbar            shared 0.478 rms    0.621 per-slot 0.449
+  xin/mlp_l1/normed          shared 0.119 rms    0.905 per-slot 0.850
+  xin/mlp_l1/xbar            shared 0.118 rms    0.669 per-slot 0.628
+  xin/mlp_l2/normed          shared 0.461 rms    0.950 per-slot 0.698
+  xin/mlp_l2/xbar            shared 0.457 rms    0.857 per-slot 0.631
+  xin/mlp_l3/normed          shared 0.959 rms    0.994 per-slot 0.201
+  xin/mlp_l3/xbar            shared 0.889 rms    4.345 per-slot 1.446
+  xin/mlp_l4/normed          shared 0.838 rms    0.969 per-slot 0.390
+  xin/mlp_l4/xbar            shared 0.827 rms    1.295 per-slot 0.539
+  xin/mlp_l5/normed          shared 0.999 rms    0.932 per-slot 0.025
+  xin/mlp_l5/xbar            shared 0.998 rms   36.623 per-slot 1.480
+HC write rows (Hpost_row mean per stream), attention / mlp:
+  attn: l0[0.18,1.54,1.27,1.01]  l1[1.00,1.96,1.04,0.00]  l2[0.02,0.02,3.91,0.05]  l3[0.93,1.00,1.07,1.00]  l4[1.01,0.99,1.00,1.00]  l5[2.96,0.00,0.00,1.04]
+  mlp: l0[0.00,1.03,1.97,1.00]  l1[1.00,1.83,1.14,0.03]  l2[1.99,0.12,1.01,0.88]  l3[1.48,0.51,2.00,0.01]  l4[2.00,2.00,0.00,0.00]  l5[4.00,0.00,0.00,0.00]
+  gates comp/win: l0 0.02/0.23  l1 0.01/0.00  l2 0.00/0.17  l3 0.04/0.76  l4 0.00/0.63  l5 0.00/0.00
+-- Q1 t5: entry proj share +0.999; sum of shares 1.000000; pre-norm sum 1.000000; unit-no-g shared 0.9825
+source                rms  shared  cos c*  proj c* proj pre diff-sub
+inject              0.659   0.244  -0.296   -0.093   -0.005    0.975
+x0_l0               0.010   0.652  +0.014   +0.000   +0.000    0.000
+attn_mix_l0         1.434   0.697  -0.572   -0.661   -0.034    0.496
+attn_write_l0       0.289   0.181  +0.031   +0.004   -0.000    0.123
+mlp_mix_l0          0.753   0.207  -0.629   -0.208   -0.011    0.971
+mlp_write_l0        0.415   0.813  +0.218   +0.079   +0.002    0.333
+x0_l1               0.013   0.686  +0.014   +0.000   +0.000    0.000
+attn_mix_l1         1.036   0.545  +0.458   +0.338   +0.006    0.956
+attn_write_l1       0.546   0.977  +0.197   +0.102   -0.006    0.283
+mlp_mix_l1          1.259   0.776  +0.234   +0.250   +0.048    0.758
+mlp_write_l1        0.194   0.512  +0.001   +0.000   -0.000    0.001
+x0_l2               0.004   0.652  +0.006   +0.000   +0.000    0.000
+attn_mix_l2         2.075   0.779  -0.551   -0.973   -0.094    0.862
+attn_write_l2       8.073   1.000  +0.387   +3.009   +0.056    0.333
+mlp_mix_l2          5.778   0.982  +0.029   +0.161   +0.118    0.538
+mlp_write_l2        0.607   0.881  -0.266   -0.146   -0.018    0.304
+x0_l3               0.002   0.610  +0.010   +0.000   +0.000    0.000
+attn_mix_l3        16.834   0.997  -0.175   -2.840   +0.160    0.567
+attn_write_l3      13.041   1.000  -0.011   -0.139   -0.270    0.000
+mlp_mix_l3          9.335   0.997  +0.723   +6.493   +0.329    0.957
+mlp_write_l3        0.420   0.637  +0.091   +0.029   -0.003    0.363
+x0_l4               0.003   0.558  +0.007   +0.000   +0.000    0.000
+attn_mix_l4        17.621   0.998  -0.850  -14.429   -0.795    0.916
+attn_write_l4      10.072   1.000  -0.018   -0.176   -0.214    0.000
+mlp_mix_l4         25.468   0.999  +0.709  +17.393   +1.445    0.721
+mlp_write_l4        0.375   0.658  +0.001   +0.000   -0.001    0.500
+x0_l5               0.006   0.564  +0.007   +0.000   -0.000    0.000
+attn_mix_l5        26.420   0.998  -0.712  -18.128   -1.523    0.862
+attn_write_l5       4.180   1.000  -0.618   -2.492   -0.220    0.596
+mlp_mix_l5         34.243   0.999  +0.735  +24.255   +1.984    0.816
+mlp_write_l5        0.071   0.653  +0.092   +0.005   +0.000    0.752
+norm               16.399   0.999  -0.749  -11.835             0.859
+states (per-slot share, rms, cos to c*, stream-diff share of the mean):
+  entry:0.018/1.05  inj:0.275/1.16  x0:0.275/1.16  a0:0.329/1.22  m0:0.249/1.37  x1:0.249/1.38  a1:0.174/1.70  m1:0.179/1.70  x2:0.179/1.70  a2:0.006/9.19  m2:0.005/9.32  x3:0.005/9.32  a3:0.005/9.10  m3:0.004/9.15  x4:0.004/9.15  a4:0.002/13.30  m4:0.002/13.29  x5:0.002/13.29  a5:0.001/17.19  m5:0.001/17.19  NORM:0.017/1.05
+attention parts and inputs (shared share, rms):
+  attn_part/l0/comp          shared 0.468 rms    0.033 per-slot 0.024
+  attn_part/l0/res           shared 0.781 rms    0.089 per-slot 0.042
+  attn_part/l0/win           shared 0.183 rms    0.247 per-slot 0.224
+  attn_part/l0/x             shared 0.481 rms    0.995 per-slot 0.716
+  attn_part/l1/comp          shared 0.907 rms    0.006 per-slot 0.002
+  attn_part/l1/res           shared 0.967 rms    0.189 per-slot 0.034
+  attn_part/l1/win           shared 0.995 rms    0.334 per-slot 0.023
+  attn_part/l1/x             shared 0.896 rms    0.989 per-slot 0.319
+  attn_part/l2/comp          shared 0.942 rms    0.003 per-slot 0.001
+  attn_part/l2/res           shared 0.999 rms    2.307 per-slot 0.079
+  attn_part/l2/win           shared 1.000 rms    4.359 per-slot 0.058
+  attn_part/l2/x             shared 0.957 rms    1.005 per-slot 0.208
+  attn_part/l3/comp          shared 0.972 rms    0.038 per-slot 0.006
+  attn_part/l3/res           shared 1.000 rms    1.205 per-slot 0.008
+  attn_part/l3/win           shared 1.000 rms   11.870 per-slot 0.026
+  attn_part/l3/x             shared 0.998 rms    1.010 per-slot 0.042
+  attn_part/l4/comp          shared 0.998 rms    0.004 per-slot 0.000
+  attn_part/l4/res           shared 1.000 rms    1.062 per-slot 0.006
+  attn_part/l4/win           shared 1.000 rms    9.042 per-slot 0.021
+  attn_part/l4/x             shared 0.999 rms    1.001 per-slot 0.038
+  attn_part/l5/comp          shared 0.998 rms    0.000 per-slot 0.000
+  attn_part/l5/res           shared 1.000 rms    2.661 per-slot 0.012
+  attn_part/l5/win           shared 0.998 rms    0.000 per-slot 0.000
+  attn_part/l5/x             shared 0.999 rms    1.013 per-slot 0.039
+  xin/attn_l0/normed         shared 0.481 rms    0.995 per-slot 0.716
+  xin/attn_l0/xbar           shared 0.476 rms    0.709 per-slot 0.513
+  xin/attn_l1/normed         shared 0.896 rms    0.989 per-slot 0.319
+  xin/attn_l1/xbar           shared 0.895 rms    1.617 per-slot 0.524
+  xin/attn_l2/normed         shared 0.957 rms    1.005 per-slot 0.208
+  xin/attn_l2/xbar           shared 0.952 rms    1.927 per-slot 0.422
+  xin/attn_l3/normed         shared 0.998 rms    1.010 per-slot 0.042
+  xin/attn_l3/xbar           shared 0.998 rms   12.067 per-slot 0.525
+  xin/attn_l4/normed         shared 0.999 rms    1.001 per-slot 0.038
+  xin/attn_l4/xbar           shared 0.998 rms    9.741 per-slot 0.407
+  xin/attn_l5/normed         shared 0.999 rms    1.013 per-slot 0.039
+  xin/attn_l5/xbar           shared 0.998 rms    9.146 per-slot 0.373
+  xin/mlp_l0/normed          shared 0.810 rms    0.924 per-slot 0.402
+  xin/mlp_l0/xbar            shared 0.792 rms    0.847 per-slot 0.386
+  xin/mlp_l1/normed          shared 0.865 rms    0.916 per-slot 0.336
+  xin/mlp_l1/xbar            shared 0.854 rms    1.011 per-slot 0.386
+  xin/mlp_l2/normed          shared 0.941 rms    0.956 per-slot 0.232
+  xin/mlp_l2/xbar            shared 0.938 rms    2.545 per-slot 0.634
+  xin/mlp_l3/normed          shared 0.912 rms    0.987 per-slot 0.293
+  xin/mlp_l3/xbar            shared 0.900 rms    1.657 per-slot 0.524
+  xin/mlp_l4/normed          shared 0.930 rms    0.972 per-slot 0.257
+  xin/mlp_l4/xbar            shared 0.926 rms    1.548 per-slot 0.421
+  xin/mlp_l5/normed          shared 1.000 rms    0.932 per-slot 0.014
+  xin/mlp_l5/xbar            shared 1.000 rms   32.792 per-slot 0.497
+HC write rows (Hpost_row mean per stream), attention / mlp:
+  attn: l0[0.53,1.55,0.82,1.09]  l1[1.27,1.02,1.71,0.00]  l2[0.00,1.00,2.00,1.00]  l3[1.00,1.00,1.00,1.00]  l4[1.01,0.99,1.00,1.00]  l5[2.99,0.00,0.00,1.01]
+  mlp: l0[0.00,1.00,2.00,1.00]  l1[1.00,1.04,1.01,0.95]  l2[1.91,0.04,1.09,0.96]  l3[1.38,0.61,2.00,0.01]  l4[1.99,2.01,0.00,0.00]  l5[4.00,0.00,0.00,0.00]
+  gates comp/win: l0 0.03/0.24  l1 0.01/0.13  l2 0.00/0.25  l3 0.00/0.75  l4 0.00/0.63  l5 0.00/0.00
+-- Q2 pass cosine (post-norm constant), row t0: 1.000 0.989 0.975 0.973 0.973 0.973
+   pass cosine (pre-norm), row t0: 1.000 0.985 0.967 0.965 0.965 0.965
+   cell cosine t0: [[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]]
+   shape_pre t0: rms 32.067; stream energy [0.747, 0.15, 0.038, 0.066]; stream-mean share 7.28e-02; top-1/8/32/128 channel share [0.023, 0.125, 0.312, 0.654]; max|.|/rms 8.5; ctx share 0.335 (fraction 0.312); cos(ch energy, g^2) 0.470; top ch [524, 310, 313, 977, 637]
+      stream pair cos [[1.0, -0.998, -0.998, 0.995], [-0.998, 1.0, 0.998, -0.998], [-0.998, 0.998, 1.0, -0.998], [0.995, -0.998, -0.998, 1.0]]
+   shape_pre t5: rms 17.183; stream energy [0.845, 0.102, 0.009, 0.044]; stream-mean share 1.29e-01; top-1/8/32/128 channel share [0.022, 0.115, 0.296, 0.636]; max|.|/rms 8.7; ctx share 0.406 (fraction 0.312); cos(ch energy, g^2) 0.491; top ch [310, 524, 313, 977, 850]
+      stream pair cos [[1.0, -0.994, -0.99, 0.996], [-0.994, 1.0, 0.982, -0.997], [-0.99, 0.982, 1.0, -0.989], [0.996, -0.997, -0.989, 1.0]]
+   shape_post t0: rms 1.042; stream energy [0.251, 0.25, 0.249, 0.249]; stream-mean share 1.41e-06; top-1/8/32/128 channel share [0.032, 0.145, 0.341, 0.679]; max|.|/rms 5.8; ctx share 0.352 (fraction 0.312); cos(ch energy, g^2) 0.438; top ch [524, 310, 313, 814, 977]
+      stream pair cos [[1.0, -0.998, -0.998, 0.995], [-0.998, 1.0, 0.998, -0.998], [-0.998, 0.998, 1.0, -0.998], [0.995, -0.998, -0.998, 1.0]]
+   shape_post t5: rms 1.037; stream energy [0.254, 0.253, 0.239, 0.254]; stream-mean share 9.06e-04; top-1/8/32/128 channel share [0.029, 0.137, 0.332, 0.67]; max|.|/rms 5.8; ctx share 0.423 (fraction 0.312); cos(ch energy, g^2) 0.452; top ch [524, 310, 313, 977, 850]
+      stream pair cos [[1.0, -0.995, -0.99, 0.996], [-0.995, 1.0, 0.983, -0.997], [-0.99, 0.983, 1.0, -0.99], [0.996, -0.997, -0.99, 1.0]]
+   g: mean 0.993 sd 0.047 min 0.890 max 1.210; injection A 0.398 dt 1.028
+-- Q3 ridge: 5078 slots, vocab 2000, coverage {'own': {'slots': 5078, 'distinct_token_coverage': 0.8285330822266238}, 'next': {'slots': 4986, 'distinct_token_coverage': 0.8284212150604003}}
+   source      own R2 next R2  own Rp  (freq) next Rp  (freq)
+   seed         0.397   0.044   0.469   0.255   0.276   0.255
+   p1           0.350   0.051   0.437   0.255   0.280   0.255
+   exit         0.333   0.054   0.420   0.255   0.284   0.255
+   prefix       0.327   0.049   0.417   0.255   0.280   0.255
+   p1_sm        0.319   0.031   0.431   0.255   0.272   0.255
+   exit_sm      0.311   0.049   0.412   0.255   0.281   0.255
+   prefix_sm    0.308   0.048   0.409   0.255   0.280   0.255
+-- Q4 base: CE d6 4.2159, d1 4.2294, K1-K6 +0.0135 [+0.0118, +0.0152]
+   ctrl        all_d6 +0.0000 [-0.0001,+0.0001]; butlast_d6 +0.0000 [-0.0001,+0.0001]; all_d1 +0.0000 [-0.0000,+0.0000]; K1-K6 +0.0135 (change -0.0000 [-0.0001,+0.0001]); winner agree 1.00 1.00 1.00 1.00 0.99 0.99
+   remove      all_d6 +0.1138 [+0.1068,+0.1219]; butlast_d6 +0.0164 [+0.0145,+0.0182]; all_d1 +0.0710 [+0.0643,+0.0785]; K1-K6 -0.0294 (change -0.0429 [-0.0517,-0.0344]); winner agree 0.74 0.53 0.17 0.17 0.17 0.18
+   remove_post all_d6 +0.2153 [+0.1991,+0.2327]; butlast_d6 +0.0649 [+0.0611,+0.0689]; all_d1 +0.0846 [+0.0767,+0.0939]; K1-K6 -0.1172 (change -0.1307 [-0.1416,-0.1195]); winner agree 0.95 0.58 0.23 0.23 0.23 0.23
+   budget      all_d6 +0.0962 [+0.0891,+0.1039]; butlast_d6 +0.0084 [+0.0068,+0.0099]; all_d1 +0.0428 [+0.0375,+0.0487]; K1-K6 -0.0399 (change -0.0534 [-0.0600,-0.0465]); winner agree 0.74 0.52 0.23 0.28 0.28 0.26
+   perm        all_d6 +0.1982 [+0.1847,+0.2131]; butlast_d6 +0.0392 [+0.0362,+0.0423]; all_d1 +0.1247 [+0.1159,+0.1341]; K1-K6 -0.0600 (change -0.0735 [-0.0815,-0.0655]); winner agree 0.70 0.54 0.15 0.20 0.19 0.19
+   ctrl tokens |dCE|>1e-3: all_d6 0.487, butlast_d6 0.486, all_d1 0.030
+   constant regrowth under edit (per-slot share of the carried cell after each pass):
+     remove      t0:0.998 t1:0.566 t2:0.111 t3:0.058 t4:0.074 t5:0.079
+     budget      t0:0.470 t1:0.355 t2:0.123 t3:0.144 t4:0.197 t5:0.207
+     remove_post t0:1.000 t1:0.186 t2:0.076 t3:0.056 t4:0.057 t5:0.055
+     perm        t0:0.005 t1:0.056 t2:0.035 t3:0.028 t4:0.022 t5:0.018
+
+=== lxtul  (tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm, step 5000, 96 rows, depth 6, carrier torch.float32)
+sanity: {"hook_vs_plain_bit_equal": true, "hook_vs_plain_max_abs_ce_diff": 0.0, "winner_eq_written_nonzero": true, "ctrl_max_abs_ce_diff": 0.9193496704101562, "selftest_max_rel_err": {"entry_eq_injection_input": 0.0, "attn_parts_sum": 0.002996577648445964, "continuity/attn_in": 0.0, "hc_split/attn": 0.0030190523248165846, "continuity/mlp_in": 0.0, "hc_split/mlp": 0.0029846697580069304, "continuity/block_out": 0.0, "continuity/norm_in": 0.0, "norm_formula": 0.0}}
+repro per-slot share: entry 0.5352  pass1 0.0019  exit 0.0165
+-- Q1 t0: entry proj share +0.703; sum of shares 1.000000; pre-norm sum 1.000000; unit-no-g shared 0.9982
+source                rms  shared  cos c*  proj c* proj pre diff-sub
+inject              0.254   0.247  +0.378   +0.045   +0.001    0.922
+x0_l0               0.007   0.670  +0.000   +0.000   -0.000    0.000
+attn_mix_l0         1.195   0.423  -0.447   -0.329   -0.011    0.436
+attn_write_l0       0.230   0.316  +0.113   +0.014   -0.000    0.152
+mlp_mix_l0          0.990   0.533  -0.549   -0.376   -0.002    0.988
+mlp_write_l0        0.316   0.132  +0.182   +0.020   -0.000    0.194
+x0_l1               0.001   0.737  -0.000   -0.000   -0.000    0.000
+attn_mix_l1         1.132   0.359  +0.255   +0.164   +0.005    0.463
+attn_write_l1       1.665   0.984  +0.314   +0.491   -0.002    0.568
+mlp_mix_l1          1.591   0.831  -0.292   -0.402   +0.009    0.658
+mlp_write_l1        0.218   0.064  +0.001   +0.000   -0.000    0.000
+x0_l2               0.007   0.670  -0.000   -0.000   -0.000    0.000
+attn_mix_l2         1.651   0.882  +0.446   +0.654   -0.003    0.569
+attn_write_l2      51.272   0.999  +0.499  +24.233   +0.224    0.749
+mlp_mix_l2         26.620   0.999  -0.542  -13.658   -0.094    0.827
+mlp_write_l2        0.464   0.156  +0.038   +0.007   +0.000    0.335
+x0_l3               0.003   0.633  -0.000   -0.000   -0.000    0.000
+attn_mix_l3        35.143   0.998  +0.008   +0.278   -0.269    0.846
+attn_write_l3       2.932   0.997  -0.000   -0.000   -0.017    0.000
+mlp_mix_l3         38.469   0.998  +0.513  +18.677   +0.284    0.822
+mlp_write_l3        0.265   0.668  +0.001   +0.000   +0.000    0.601
+x0_l4               0.002   0.657  +0.000   +0.000   -0.000    0.000
+attn_mix_l4        62.663   0.999  -0.925  -54.897   -0.961    0.990
+attn_write_l4       0.169   0.215  -0.016   -0.001   -0.000    0.559
+mlp_mix_l4        106.606   0.999  +0.587  +59.245   +1.808    0.680
+mlp_write_l4        0.206   0.497  -0.116   -0.016   -0.001    0.313
+x0_l5               0.004   0.667  +0.000   +0.000   -0.000    0.000
+attn_mix_l5       111.386   0.999  -0.635  -67.013   -1.938    0.836
+attn_write_l5       0.168   0.367  -0.376   -0.036   -0.001    0.753
+mlp_mix_l5        111.829   0.999  +0.689  +72.972   +1.961    0.807
+mlp_write_l5        0.176   0.215  +0.284   +0.022   +0.001    0.743
+norm               55.687   0.999  -0.755  -39.798             0.880
+reset               0.049   0.016  -0.017   -0.000             0.758
+states (per-slot share, rms, cos to c*, stream-diff share of the mean):
+  entry:0.507/1.12  inj:0.564/1.28  x0:0.564/1.28  a0:0.548/1.35  m0:0.545/1.42  x1:0.545/1.42  a1:0.157/2.70  m1:0.161/2.71  x2:0.161/2.71  a2:0.001/53.68  m2:0.001/53.68  x3:0.001/53.68  a3:0.001/56.44  m3:0.001/56.43  x4:0.001/56.43  a4:0.001/56.47  m4:0.001/56.47  x5:0.001/56.47  a5:0.001/56.48  m5:0.001/56.49  NORM:0.002/1.06  reset:0.002/1.06
+attention parts and inputs (shared share, rms):
+  attn_part/l0/comp          shared 0.568 rms    0.040 per-slot 0.027
+  attn_part/l0/res           shared 0.462 rms    0.064 per-slot 0.047
+  attn_part/l0/win           shared 0.239 rms    0.182 per-slot 0.159
+  attn_part/l0/x             shared 0.268 rms    0.997 per-slot 0.854
+  attn_part/l1/comp          shared 0.692 rms    0.060 per-slot 0.034
+  attn_part/l1/res           shared 0.935 rms    0.227 per-slot 0.058
+  attn_part/l1/win           shared 0.996 rms    1.191 per-slot 0.076
+  attn_part/l1/x             shared 0.764 rms    0.991 per-slot 0.481
+  attn_part/l2/comp          shared 0.998 rms   12.331 per-slot 0.595
+  attn_part/l2/res           shared 0.995 rms    0.282 per-slot 0.021
+  attn_part/l2/win           shared 1.000 rms   13.112 per-slot 0.093
+  attn_part/l2/x             shared 0.942 rms    1.013 per-slot 0.243
+  attn_part/l3/comp          shared 1.000 rms    0.009 per-slot 0.000
+  attn_part/l3/res           shared 1.000 rms    0.381 per-slot 0.001
+  attn_part/l3/win           shared 1.000 rms    2.568 per-slot 0.012
+  attn_part/l3/x             shared 1.000 rms    0.997 per-slot 0.015
+  attn_part/l4/comp          shared 0.999 rms    0.001 per-slot 0.000
+  attn_part/l4/res           shared 1.000 rms    0.056 per-slot 0.001
+  attn_part/l4/win           shared 0.998 rms    0.001 per-slot 0.000
+  attn_part/l4/x             shared 0.999 rms    0.988 per-slot 0.028
+  attn_part/l5/comp          shared 0.997 rms    0.001 per-slot 0.000
+  attn_part/l5/res           shared 0.999 rms    0.035 per-slot 0.001
+  attn_part/l5/win           shared 0.997 rms    0.001 per-slot 0.000
+  attn_part/l5/x             shared 0.996 rms    0.991 per-slot 0.062
+  xin/attn_l0/normed         shared 0.268 rms    0.997 per-slot 0.854
+  xin/attn_l0/xbar           shared 0.253 rms    0.900 per-slot 0.778
+  xin/attn_l1/normed         shared 0.764 rms    0.991 per-slot 0.481
+  xin/attn_l1/xbar           shared 0.763 rms    1.555 per-slot 0.757
+  xin/attn_l2/normed         shared 0.942 rms    1.013 per-slot 0.243
+  xin/attn_l2/xbar           shared 0.939 rms    3.466 per-slot 0.859
+  xin/attn_l3/normed         shared 1.000 rms    0.997 per-slot 0.015
+  xin/attn_l3/xbar           shared 0.999 rms   80.411 per-slot 2.301
+  xin/attn_l4/normed         shared 0.999 rms    0.988 per-slot 0.028
+  xin/attn_l4/xbar           shared 0.999 rms   29.975 per-slot 1.084
+  xin/attn_l5/normed         shared 0.996 rms    0.991 per-slot 0.062
+  xin/attn_l5/xbar           shared 0.996 rms   17.359 per-slot 1.156
+  xin/mlp_l0/normed          shared 0.084 rms    0.956 per-slot 0.915
+  xin/mlp_l0/xbar            shared 0.065 rms    1.101 per-slot 1.064
+  xin/mlp_l1/normed          shared 0.114 rms    0.945 per-slot 0.890
+  xin/mlp_l1/xbar            shared 0.106 rms    0.971 per-slot 0.918
+  xin/mlp_l2/normed          shared 0.337 rms    1.015 per-slot 0.826
+  xin/mlp_l2/xbar            shared 0.333 rms    0.762 per-slot 0.622
+  xin/mlp_l3/normed          shared 1.000 rms    0.992 per-slot 0.017
+  xin/mlp_l3/xbar            shared 0.999 rms   70.624 per-slot 1.990
+  xin/mlp_l4/normed          shared 0.988 rms    0.962 per-slot 0.104
+  xin/mlp_l4/xbar            shared 0.987 rms    7.413 per-slot 0.833
+  xin/mlp_l5/normed          shared 1.000 rms    0.946 per-slot 0.012
+  xin/mlp_l5/xbar            shared 0.999 rms   88.157 per-slot 2.293
+HC write rows (Hpost_row mean per stream), attention / mlp:
+  attn: l0[0.96,1.27,1.47,0.30]  l1[0.12,1.00,2.87,0.00]  l2[0.00,0.00,3.99,0.00]  l3[1.00,1.00,1.00,1.00]  l4[0.04,2.96,0.97,0.03]  l5[2.00,2.00,0.00,0.00]
+  mlp: l0[1.35,1.00,1.20,0.45]  l1[1.00,1.01,1.01,0.98]  l2[0.99,0.01,2.00,1.00]  l3[3.00,0.00,1.00,0.00]  l4[1.07,0.65,2.00,0.29]  l5[0.00,4.00,0.00,0.00]
+  gates comp/win: l0 0.04/0.18  l1 0.03/0.77  l2 0.93/1.00  l3 0.00/0.50  l4 0.00/0.00  l5 0.00/0.00
+-- Q1 t1: entry proj share +0.994; sum of shares 1.000000; pre-norm sum 1.000000; unit-no-g shared 0.9894
+source                rms  shared  cos c*  proj c* proj pre diff-sub
+inject              0.565   0.064  +0.019   +0.003   -0.000    0.615
+x0_l0               0.007   0.670  +0.000   +0.000   -0.000    0.000
+attn_mix_l0         1.209   0.787  -0.509   -0.518   -0.047    0.380
+attn_write_l0       0.215   0.260  +0.033   +0.003   -0.001    0.111
+mlp_mix_l0          1.032   0.779  -0.633   -0.548   -0.008    0.982
+mlp_write_l0        0.322   0.147  +0.043   +0.005   -0.001    0.024
+x0_l1               0.001   0.737  +0.000   +0.000   -0.000    0.000
+attn_mix_l1         1.192   0.678  +0.644   +0.600   +0.021    0.766
+attn_write_l1       1.752   0.996  +0.390   +0.648   -0.013    0.329
+mlp_mix_l1          1.768   0.928  -0.316   -0.510   +0.028    0.998
+mlp_write_l1        0.201   0.078  +0.001   +0.000   +0.000    0.000
+x0_l2               0.007   0.670  +0.000   +0.000   -0.000    0.000
+attn_mix_l2         1.091   0.853  -0.118   -0.113   -0.034    0.761
+attn_write_l2      12.855   0.998  +0.012   +0.149   -0.236    0.000
+mlp_mix_l2          9.428   0.993  +0.424   +3.779   +0.398    0.861
+mlp_write_l2        0.344   0.958  +0.037   +0.012   +0.000    0.333
+x0_l3               0.003   0.633  +0.000   +0.000   -0.000    0.000
+attn_mix_l3         8.578   0.991  -0.263   -2.130   -0.320    0.849
+attn_write_l3       3.368   1.000  -0.001   -0.003   -0.062    0.000
+mlp_mix_l3         15.031   0.996  +0.623   +8.868   +0.457    0.796
+mlp_write_l3        0.216   0.921  +0.084   +0.017   +0.000    0.600
+x0_l4               0.002   0.657  +0.001   +0.000   -0.000    0.000
+attn_mix_l4        23.626   0.998  -0.894  -20.019   -1.097    0.991
+attn_write_l4       0.119   0.831  -0.211   -0.022   -0.003    0.567
+mlp_mix_l4         36.179   0.998  +0.600  +20.594   +1.867    0.692
+mlp_write_l4        0.171   0.504  +0.179   +0.021   +0.001    0.318
+x0_l5               0.004   0.667  +0.000   +0.000   -0.000    0.000
+attn_mix_l5        37.209   0.998  -0.621  -21.885   -1.955    0.825
+attn_write_l5       0.076   0.619  -0.187   -0.011   -0.001    0.526
+mlp_mix_l5         37.360   0.998  +0.650  +22.998   +1.967    0.811
+mlp_write_l5        0.067   0.513  +0.015   +0.001   +0.000    0.750
+norm               18.086   0.998  -0.696  -11.933             0.865
+reset               0.119   0.064  -0.017   -0.000             0.948
+states (per-slot share, rms, cos to c*, stream-diff share of the mean):
+  entry:0.002/1.06  inj:0.214/1.21  x0:0.214/1.21  a0:0.239/1.26  m0:0.263/1.35  x1:0.263/1.35  a1:0.063/2.86  m1:0.067/2.87  x2:0.067/2.87  a2:0.004/15.44  m2:0.004/15.47  x3:0.004/15.47  a3:0.002/18.73  m3:0.002/18.75  x4:0.002/18.75  a4:0.002/18.82  m4:0.002/18.82  x5:0.002/18.82  a5:0.002/18.83  m5:0.002/18.84  NORM:0.010/1.06  reset:0.011/1.06
+attention parts and inputs (shared share, rms):
+  attn_part/l0/comp          shared 0.644 rms    0.023 per-slot 0.014
+  attn_part/l0/res           shared 0.702 rms    0.080 per-slot 0.044
+  attn_part/l0/win           shared 0.163 rms    0.182 per-slot 0.166
+  attn_part/l0/x             shared 0.528 rms    0.994 per-slot 0.683
+  attn_part/l1/comp          shared 0.768 rms    0.018 per-slot 0.009
+  attn_part/l1/res           shared 0.943 rms    0.237 per-slot 0.057
+  attn_part/l1/win           shared 0.999 rms    1.516 per-slot 0.055
+  attn_part/l1/x             shared 0.885 rms    0.990 per-slot 0.336
+  attn_part/l2/comp          shared 0.829 rms    1.235 per-slot 0.510
+  attn_part/l2/res           shared 0.998 rms    0.397 per-slot 0.019
+  attn_part/l2/win           shared 1.000 rms   11.436 per-slot 0.083
+  attn_part/l2/x             shared 0.970 rms    1.013 per-slot 0.177
+  attn_part/l3/comp          shared 0.987 rms    0.005 per-slot 0.001
+  attn_part/l3/res           shared 1.000 rms    0.430 per-slot 0.008
+  attn_part/l3/win           shared 1.000 rms    2.961 per-slot 0.022
+  attn_part/l3/x             shared 0.998 rms    0.997 per-slot 0.040
+  attn_part/l4/comp          shared 0.987 rms    0.000 per-slot 0.000
+  attn_part/l4/res           shared 0.999 rms    0.071 per-slot 0.003
+  attn_part/l4/win           shared 0.993 rms    0.000 per-slot 0.000
+  attn_part/l4/x             shared 0.996 rms    0.987 per-slot 0.066
+  attn_part/l5/comp          shared 0.989 rms    0.000 per-slot 0.000
+  attn_part/l5/res           shared 0.998 rms    0.037 per-slot 0.002
+  attn_part/l5/win           shared 0.989 rms    0.000 per-slot 0.000
+  attn_part/l5/x             shared 0.988 rms    0.991 per-slot 0.108
+  xin/attn_l0/normed         shared 0.528 rms    0.994 per-slot 0.683
+  xin/attn_l0/xbar           shared 0.521 rms    0.736 per-slot 0.509
+  xin/attn_l1/normed         shared 0.885 rms    0.990 per-slot 0.336
+  xin/attn_l1/xbar           shared 0.878 rms    1.512 per-slot 0.529
+  xin/attn_l2/normed         shared 0.970 rms    1.013 per-slot 0.177
+  xin/attn_l2/xbar           shared 0.964 rms    2.238 per-slot 0.422
+  xin/attn_l3/normed         shared 0.998 rms    0.997 per-slot 0.040
+  xin/attn_l3/xbar           shared 0.997 rms   23.477 per-slot 1.178
+  xin/attn_l4/normed         shared 0.996 rms    0.987 per-slot 0.066
+  xin/attn_l4/xbar           shared 0.993 rms    8.574 per-slot 0.704
+  xin/attn_l5/normed         shared 0.988 rms    0.991 per-slot 0.108
+  xin/attn_l5/xbar           shared 0.988 rms    6.926 per-slot 0.769
+  xin/mlp_l0/normed          shared 0.070 rms    0.927 per-slot 0.894
+  xin/mlp_l0/xbar            shared 0.052 rms    0.658 per-slot 0.641
+  xin/mlp_l1/normed          shared 0.205 rms    0.916 per-slot 0.817
+  xin/mlp_l1/xbar            shared 0.195 rms    0.543 per-slot 0.487
+  xin/mlp_l2/normed          shared 0.997 rms    1.019 per-slot 0.055
+  xin/mlp_l2/xbar            shared 0.996 rms   14.414 per-slot 0.893
+  xin/mlp_l3/normed          shared 0.998 rms    0.991 per-slot 0.043
+  xin/mlp_l3/xbar            shared 0.998 rms   22.531 per-slot 1.101
+  xin/mlp_l4/normed          shared 0.935 rms    0.954 per-slot 0.244
+  xin/mlp_l4/xbar            shared 0.923 rms    1.930 per-slot 0.534
+  xin/mlp_l5/normed          shared 0.999 rms    0.945 per-slot 0.030
+  xin/mlp_l5/xbar            shared 0.998 rms   28.482 per-slot 1.119
+HC write rows (Hpost_row mean per stream), attention / mlp:
+  attn: l0[0.96,1.36,1.26,0.42]  l1[1.00,1.00,1.99,0.01]  l2[1.00,0.99,1.03,0.98]  l3[1.00,1.00,1.00,1.00]  l4[0.11,2.86,0.97,0.05]  l5[2.00,2.00,0.00,0.00]
+  mlp: l0[1.10,1.00,1.03,0.88]  l1[1.00,1.01,1.00,0.99]  l2[1.00,0.00,2.00,1.00]  l3[3.00,0.00,1.00,0.00]  l4[1.12,0.53,2.00,0.35]  l5[0.00,4.00,0.00,0.00]
+  gates comp/win: l0 0.02/0.18  l1 0.01/0.82  l2 0.08/0.88  l3 0.00/0.50  l4 0.00/0.00  l5 0.00/0.00
+-- Q1 t5: entry proj share +0.999; sum of shares 1.000000; pre-norm sum 1.000000; unit-no-g shared 0.9833
+source                rms  shared  cos c*  proj c* proj pre diff-sub
+inject              0.548   0.085  -0.057   -0.009   -0.001    0.770
+x0_l0               0.007   0.670  +0.010   +0.000   -0.000    0.000
+attn_mix_l0         1.541   0.807  -0.663   -0.873   -0.044    0.518
+attn_write_l0       0.301   0.246  -0.017   -0.002   -0.000    0.198
+mlp_mix_l0          0.973   0.602  -0.409   -0.293   +0.010    0.677
+mlp_write_l0        0.375   0.863  -0.004   -0.001   -0.004    0.000
+x0_l1               0.001   0.737  +0.005   +0.000   -0.000    0.000
+attn_mix_l1         1.593   0.696  +0.523   +0.661   +0.032    0.946
+attn_write_l1       2.218   0.999  +0.002   +0.004   -0.043    0.000
+mlp_mix_l1          1.486   0.871  +0.689   +0.908   +0.033    0.958
+mlp_write_l1        0.225   0.559  +0.008   +0.001   +0.000    0.311
+x0_l2               0.007   0.670  +0.010   +0.000   -0.000    0.000
+attn_mix_l2         1.478   0.912  -0.810   -1.088   -0.037    0.942
+attn_write_l2      11.323   1.000  -0.005   -0.051   -0.231    0.000
+mlp_mix_l2          8.435   0.993  +0.418   +3.343   +0.363    0.872
+mlp_write_l2        0.391   0.977  +0.086   +0.032   +0.001    0.333
+x0_l3               0.003   0.633  +0.005   +0.000   -0.000    0.000
+attn_mix_l3         7.419   0.988  -0.229   -1.609   -0.286    0.854
+attn_write_l3       3.710   1.000  -0.005   -0.018   -0.075    0.000
+mlp_mix_l3         14.578   0.996  +0.638   +8.827   +0.490    0.783
+mlp_write_l3        0.235   0.949  +0.168   +0.037   +0.001    0.600
+x0_l4               0.002   0.657  +0.012   +0.000   +0.000    0.000
+attn_mix_l4        23.465   0.999  -0.880  -19.638   -1.150    0.993
+attn_write_l4       0.117   0.865  -0.145   -0.015   -0.003    0.512
+mlp_mix_l4         34.551   0.999  +0.605  +19.860   +1.894    0.695
+mlp_write_l4        0.218   0.403  -0.049   -0.006   -0.001    0.314
+x0_l5               0.004   0.667  +0.012   +0.000   -0.000    0.000
+attn_mix_l5        35.179   0.999  -0.603  -20.150   -1.957    0.810
+attn_write_l5       0.077   0.630  -0.184   -0.011   -0.002    0.543
+mlp_mix_l5         35.361   0.999  +0.622  +20.920   +1.969    0.806
+mlp_write_l5        0.065   0.574  -0.050   -0.002   -0.000    0.751
+norm               17.103   0.999  -0.666  -10.825             0.856
+states (per-slot share, rms, cos to c*, stream-diff share of the mean):
+  entry:0.016/1.06  inj:0.232/1.20  x0:0.232/1.20  a0:0.287/1.26  m0:0.239/1.39  x1:0.239/1.39  a1:0.052/2.97  m1:0.052/2.97  x2:0.052/2.97  a2:0.002/13.99  m2:0.002/14.07  x3:0.002/14.07  a3:0.001/17.68  m3:0.001/17.73  x4:0.001/17.73  a4:0.001/17.80  m4:0.001/17.80  x5:0.001/17.80  a5:0.001/17.81  m5:0.001/17.82  NORM:0.016/1.06
+attention parts and inputs (shared share, rms):
+  attn_part/l0/comp          shared 0.590 rms    0.028 per-slot 0.018
+  attn_part/l0/res           shared 0.712 rms    0.086 per-slot 0.046
+  attn_part/l0/win           shared 0.146 rms    0.236 per-slot 0.218
+  attn_part/l0/x             shared 0.484 rms    0.995 per-slot 0.715
+  attn_part/l1/comp          shared 0.945 rms    0.001 per-slot 0.000
+  attn_part/l1/res           shared 0.983 rms    0.202 per-slot 0.026
+  attn_part/l1/win           shared 1.000 rms    2.098 per-slot 0.047
+  attn_part/l1/x             shared 0.885 rms    0.990 per-slot 0.335
+  attn_part/l2/comp          shared 0.950 rms    0.030 per-slot 0.007
+  attn_part/l2/res           shared 1.000 rms    0.478 per-slot 0.007
+  attn_part/l2/win           shared 1.000 rms   10.844 per-slot 0.046
+  attn_part/l2/x             shared 0.987 rms    1.013 per-slot 0.116
+  attn_part/l3/comp          shared 0.999 rms    0.003 per-slot 0.000
+  attn_part/l3/res           shared 1.000 rms    0.467 per-slot 0.002
+  attn_part/l3/win           shared 1.000 rms    3.267 per-slot 0.016
+  attn_part/l3/x             shared 0.999 rms    0.997 per-slot 0.028
+  attn_part/l4/comp          shared 0.998 rms    0.000 per-slot 0.000
+  attn_part/l4/res           shared 1.000 rms    0.081 per-slot 0.001
+  attn_part/l4/win           shared 0.997 rms    0.000 per-slot 0.000
+  attn_part/l4/x             shared 0.996 rms    0.987 per-slot 0.065
+  attn_part/l5/comp          shared 0.988 rms    0.000 per-slot 0.000
+  attn_part/l5/res           shared 0.998 rms    0.038 per-slot 0.002
+  attn_part/l5/win           shared 0.988 rms    0.000 per-slot 0.000
+  attn_part/l5/x             shared 0.985 rms    0.991 per-slot 0.123
+  xin/attn_l0/normed         shared 0.484 rms    0.995 per-slot 0.715
+  xin/attn_l0/xbar           shared 0.476 rms    0.745 per-slot 0.539
+  xin/attn_l1/normed         shared 0.885 rms    0.990 per-slot 0.335
+  xin/attn_l1/xbar           shared 0.883 rms    0.866 per-slot 0.296
+  xin/attn_l2/normed         shared 0.987 rms    1.013 per-slot 0.116
+  xin/attn_l2/xbar           shared 0.986 rms    3.409 per-slot 0.406
+  xin/attn_l3/normed         shared 0.999 rms    0.997 per-slot 0.028
+  xin/attn_l3/xbar           shared 0.999 rms   20.196 per-slot 0.583
+  xin/attn_l4/normed         shared 0.996 rms    0.987 per-slot 0.065
+  xin/attn_l4/xbar           shared 0.996 rms    7.160 per-slot 0.477
+  xin/attn_l5/normed         shared 0.985 rms    0.991 per-slot 0.123
+  xin/attn_l5/xbar           shared 0.985 rms    6.531 per-slot 0.807
+  xin/mlp_l0/normed          shared 0.876 rms    0.950 per-slot 0.334
+  xin/mlp_l0/xbar            shared 0.865 rms    1.057 per-slot 0.389
+  xin/mlp_l1/normed          shared 0.862 rms    0.942 per-slot 0.349
+  xin/mlp_l1/xbar            shared 0.839 rms    1.436 per-slot 0.576
+  xin/mlp_l2/normed          shared 0.998 rms    1.019 per-slot 0.045
+  xin/mlp_l2/xbar            shared 0.998 rms   12.508 per-slot 0.568
+  xin/mlp_l3/normed          shared 0.999 rms    0.990 per-slot 0.030
+  xin/mlp_l3/xbar            shared 0.999 rms   20.973 per-slot 0.650
+  xin/mlp_l4/normed          shared 0.901 rms    0.950 per-slot 0.299
+  xin/mlp_l4/xbar            shared 0.895 rms    1.468 per-slot 0.477
+  xin/mlp_l5/normed          shared 1.000 rms    0.944 per-slot 0.017
+  xin/mlp_l5/xbar            shared 1.000 rms   26.231 per-slot 0.472
+HC write rows (Hpost_row mean per stream), attention / mlp:
+  attn: l0[0.56,1.32,0.58,1.54]  l1[1.00,0.99,1.01,0.99]  l2[1.00,1.00,1.00,1.00]  l3[1.00,1.00,1.00,1.00]  l4[0.24,2.73,0.96,0.07]  l5[1.99,2.01,0.00,0.00]
+  mlp: l0[1.00,1.00,1.00,1.00]  l1[1.00,1.95,0.05,1.00]  l2[1.00,0.00,2.00,1.00]  l3[3.00,0.00,1.00,0.00]  l4[1.18,0.50,2.00,0.31]  l5[0.00,4.00,0.00,0.00]
+  gates comp/win: l0 0.02/0.22  l1 0.00/0.87  l2 0.00/0.88  l3 0.00/0.50  l4 0.00/0.00  l5 0.00/0.00
+-- Q2 pass cosine (post-norm constant), row t0: 1.000 0.993 0.982 0.980 0.980 0.980
+   pass cosine (pre-norm), row t0: 1.000 0.990 0.976 0.974 0.974 0.974
+   cell cosine t0: [[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]]
+   shape_pre t0: rms 56.463; stream energy [0.03, 0.881, 0.061, 0.028]; stream-mean share 1.17e-01; top-1/8/32/128 channel share [0.03, 0.17, 0.413, 0.74]; max|.|/rms 10.5; ctx share 0.176 (fraction 0.312); cos(ch energy, g^2) 0.390; top ch [273, 495, 363, 969, 256]
+      stream pair cos [[1.0, -1.0, 1.0, -1.0], [-1.0, 1.0, -1.0, 1.0], [1.0, -1.0, 1.0, -1.0], [-1.0, 1.0, -1.0, 1.0]]
+   shape_pre t5: rms 17.811; stream energy [0.016, 0.934, 0.042, 0.009]; stream-mean share 1.33e-01; top-1/8/32/128 channel share [0.031, 0.172, 0.427, 0.77]; max|.|/rms 10.9; ctx share 0.203 (fraction 0.312); cos(ch energy, g^2) 0.380; top ch [273, 495, 363, 969, 256]
+      stream pair cos [[1.0, -0.993, 0.994, -0.994], [-0.993, 1.0, -0.998, 0.996], [0.994, -0.998, 1.0, -0.997], [-0.994, 0.996, -0.997, 1.0]]
+   shape_post t0: rms 1.056; stream energy [0.25, 0.25, 0.25, 0.25]; stream-mean share 6.57e-07; top-1/8/32/128 channel share [0.035, 0.19, 0.44, 0.76]; max|.|/rms 6.0; ctx share 0.179 (fraction 0.312); cos(ch energy, g^2) 0.368; top ch [273, 969, 495, 363, 256]
+      stream pair cos [[1.0, -1.0, 1.0, -1.0], [-1.0, 1.0, -1.0, 1.0], [1.0, -1.0, 1.0, -1.0], [-1.0, 1.0, -1.0, 1.0]]
+   shape_post t5: rms 1.051; stream energy [0.243, 0.254, 0.253, 0.25]; stream-mean share 9.21e-04; top-1/8/32/128 channel share [0.037, 0.198, 0.463, 0.794]; max|.|/rms 6.2; ctx share 0.209 (fraction 0.312); cos(ch energy, g^2) 0.354; top ch [273, 969, 495, 363, 256]
+      stream pair cos [[1.0, -0.994, 0.994, -0.994], [-0.994, 1.0, -0.998, 0.996], [0.994, -0.998, 1.0, -0.997], [-0.994, 0.996, -0.997, 1.0]]
+   g: mean 1.002 sd 0.039 min 0.916 max 1.159; injection A 0.388 dt 1.018
+-- Q3 ridge: 5078 slots, vocab 2000, coverage {'own': {'slots': 5078, 'distinct_token_coverage': 0.8285330822266238}, 'next': {'slots': 4986, 'distinct_token_coverage': 0.8284212150604003}}
+   source      own R2 next R2  own Rp  (freq) next Rp  (freq)
+   seed         0.385   0.043   0.473   0.255   0.275   0.255
+   p1           0.355   0.048   0.451   0.255   0.279   0.255
+   exit         0.349   0.055   0.446   0.255   0.284   0.255
+   prefix       0.344   0.051   0.441   0.255   0.282   0.255
+   p1_sm        0.302   0.030   0.439   0.255   0.269   0.255
+   exit_sm      0.331   0.051   0.431   0.255   0.283   0.255
+   prefix_sm    0.321   0.051   0.427   0.255   0.282   0.255
+-- Q4 base: CE d6 4.2489, d1 4.2711, K1-K6 +0.0222 [+0.0198, +0.0246]
+   ctrl        all_d6 -0.0000 [-0.0001,+0.0001]; butlast_d6 -0.0000 [-0.0001,+0.0001]; all_d1 +0.0000 [-0.0000,+0.0000]; K1-K6 +0.0222 (change +0.0000 [-0.0001,+0.0001]); winner agree 1.00 1.00 1.00 0.99 0.99 0.99
+   remove      all_d6 +0.1265 [+0.1187,+0.1351]; butlast_d6 +0.1607 [+0.1472,+0.1759]; all_d1 +0.0772 [+0.0684,+0.0868]; K1-K6 -0.0272 (change -0.0493 [-0.0584,-0.0406]); winner agree 0.80 0.62 0.18 0.24 0.27 0.23
+   remove_post all_d6 +0.1953 [+0.1851,+0.2064]; butlast_d6 +0.0713 [+0.0671,+0.0758]; all_d1 +0.0851 [+0.0797,+0.0911]; K1-K6 -0.0881 (change -0.1103 [-0.1192,-0.1021]); winner agree 0.96 0.70 0.09 0.22 0.14 0.18
+   budget      all_d6 +0.0648 [+0.0613,+0.0684]; butlast_d6 +0.0179 [+0.0161,+0.0196]; all_d1 +0.0349 [+0.0321,+0.0379]; K1-K6 -0.0077 (change -0.0299 [-0.0331,-0.0265]); winner agree 0.80 0.76 0.16 0.08 0.08 0.08
+   perm        all_d6 +0.1757 [+0.1645,+0.1883]; butlast_d6 +0.0459 [+0.0368,+0.0554]; all_d1 +0.1918 [+0.1781,+0.2067]; K1-K6 +0.0383 (change +0.0161 [+0.0063,+0.0269]); winner agree 0.85 0.53 0.09 0.07 0.07 0.08
+   ctrl tokens |dCE|>1e-3: all_d6 0.505, butlast_d6 0.505, all_d1 0.004
+   constant regrowth under edit (per-slot share of the carried cell after each pass):
+     remove      t0:0.995 t1:0.950 t2:0.864 t3:0.712 t4:0.673 t5:0.647
+     budget      t0:0.459 t1:0.451 t2:0.292 t3:0.211 t4:0.176 t5:0.160
+     remove_post t0:1.000 t1:0.133 t2:0.113 t3:0.195 t4:0.108 t5:0.109
+     perm        t0:0.002 t1:0.070 t2:0.320 t3:0.142 t4:0.197 t5:0.231
+
+=== cross-arm cosine of the shared vector (snap vs LXTUL)
+c_post t0: full cos -0.004; per-stream 4x4 [[-0.469, 0.467, -0.466, 0.468], [0.468, -0.466, 0.465, -0.467], [0.464, -0.462, 0.462, -0.463], [-0.463, 0.461, -0.46, 0.462]]; channel-energy profile cos 0.282
+c_post t5: full cos -0.004; per-stream 4x4 [[-0.474, 0.483, -0.479, 0.479], [0.481, -0.491, 0.488, -0.486], [0.471, -0.476, 0.474, -0.472], [-0.477, 0.487, -0.484, 0.483]]; channel-energy profile cos 0.279
+c_pre t0: full cos -0.201; per-stream 4x4 [[-0.477, 0.475, -0.474, 0.476], [0.476, -0.474, 0.473, -0.475], [0.472, -0.47, 0.469, -0.471], [-0.47, 0.468, -0.468, 0.469]]; channel-energy profile cos 0.309
+c_pre t5: full cos -0.192; per-stream 4x4 [[-0.482, 0.492, -0.489, 0.488], [0.489, -0.5, 0.497, -0.496], [0.479, -0.484, 0.483, -0.481], [-0.485, 0.496, -0.493, 0.492]]; channel-energy profile cos 0.307
+g snap vs LXTUL cos 0.999
