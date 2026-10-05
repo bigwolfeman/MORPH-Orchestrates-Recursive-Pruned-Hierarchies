@@ -104,7 +104,7 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 
 ## ⭐ LXTUL PRIMARY CANDIDATE (locked 2026-10-04): `morph/configs/lxtul.yaml`
 
-Strict slot loop + 4-cell fan (all cells written) + fixed-point 0.1 + latent-selected loop
+Strict slot loop + 4-cell fan (the coda reads only the final winner cell per slot) + fixed-point 0.1 + latent-selected loop
 (router-followed, rank-only latent head) + per-pass cell RMSNorm (`tul.slot_cell_pass_norm: rms`).
 K1-K6 +0.0215 / +0.0172 (two seeds, 5k), +0.0236 at 10k, directional; 12.4k tok/s. Open
 problems: CE (gap to plain 10k +0.356) and decode speed (cached decode refuses the fan).

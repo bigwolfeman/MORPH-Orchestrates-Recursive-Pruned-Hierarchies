@@ -20,8 +20,11 @@ differs). In words:
 
 - the strict slot loop (the loop is the only cross-span channel; a coda token reads its
   own span plus every earlier slot's prefix cells);
-- a 4-cell fan, every cell written to the coda (`fan_mix: all`), epivol diversity on
-  passes 1-2, no winner-take-all;
+- a 4-cell fan (`fan_mix: all`), epivol diversity on passes 1-2, no winner-take-all. Under
+  the latent-selected loop (`fan_lsel_read: winner`, the default) the coda reads the FINAL
+  WINNER alone: the winner goes into its own prefix position through `W_prefix[winner]` and
+  the three losers' positions are exactly zero (`_fan_route_cells`). Corrected 2026-10-05 01:02 CDT: this
+  record first said every cell is written to the coda;
 - the fixed-point term at 0.1;
 - the latent-selected loop: after every pass a router picks one of the 4 cells and the
   slot's cells reset to it (`fan_loop_select: joint`, `fan_lsel_train_follow: router`); the

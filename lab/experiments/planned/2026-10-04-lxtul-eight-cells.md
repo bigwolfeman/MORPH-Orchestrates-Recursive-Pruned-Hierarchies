@@ -40,6 +40,15 @@ References: LXTUL 5k seed 1 (gap +0.272, worth +0.176, K1-K6 +0.0215, 9800 tok/s
 
 Pass rule: E-2 and E-6 hold.
 
+Correction to the Question, 2026-10-05 01:02 CDT, after training and BEFORE any readout was read (the
+predictions above are unchanged): the Question is framed wrongly. Under LXTUL's
+latent-selected loop the coda reads only the final winner cell per slot; the other
+positions are exactly zero. So 8 cells do NOT widen the coda's channel (still one nonzero
+position per slot). They give the loop 8 proposals per pass instead of 4. This arm tests
+proposal count. The positions question moves to `lxtul_fan4x2` (each cell written into 2
+positions). E-8's stated reason ("the coda reads 2x the prefix positions") is wrong for the
+same cause.
+
 ## Method
 
 5000 steps, seed 1, `runner_steps.sh`. Readouts as for every LXTUL arm: depth sweep (480
