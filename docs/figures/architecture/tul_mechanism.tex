@@ -1,30 +1,83 @@
-% TUL — Thought Unpack Loop (mechanism), THE SLOT LOOP: think once per span, decode
-% cheaply. Only the slot positions loop (`_tul_core`); the tokens pass the prelude and the
-% coda once and never enter the loop. Spec: docs/tul-spec.md; design:
-% .agents/notes/proposed/architecture/2026-09-03-tul-loop-contribution-drawing-board.md;
-% the correction that the paid loop (tokens_through_core true) is NOT TUL: memory
-% `tul-means-the-slot-loop` (Wolfe, 2026-09-09).
-% Star of the show, drawn inside THINK: how the slot's prelude state e becomes the
-% thought z. h_0 = e; every pass re-injects e on the context channel
-% (h_ctx <- 0.447 h_ctx + e_ctx, morph/model/transformer.py DiagonalInjection) and runs
-% the six shared core blocks; after T passes z = h_T is written through W_prefix into the
-% slot's two cells. The noise-entry variant (Parcae: h_0 ~ N(0, 0.02^2), e injected on all
-% dims through a learned B) is named in the caption. The MUX (the slot's own loss, M-next)
-% is the arm under test and is drawn dashed.
-% Generation: a new token costs its prelude state and one coda pass (no core pass); a
-% boundary costs one think (x T) for the new slot. Exit is the punct / cap rule.
-% Palette follows morph_overview.tex (Paul Tol).
+% LXTUL — the latent-selected slot loop, THE PRIMARY CANDIDATE (morph/configs/lxtul.yaml,
+% locked 2026-10-04). Decision record:
+% .agents/notes/implemented/architecture/2026-10-04-lxtul-primary-candidate.md.
+% Redrawn 2026-10-05. Every fact below was read in the code at commit ef64e10e (file:line
+% are at that commit; the working tree was being edited by another agent at the time) and
+% in the composed Hydra config `lxtul` (compose run on CPU, 2026-10-05).
+%
+% What it draws, top to bottom:
+%  1. THE ROW. 1024 tokens; after every span the packer puts prefix_k = 4 slot positions;
+%     L_total = seq_len + prefix_k * max_slots = 1024 + 4*64 = 1280
+%     (tul_layout.py:335-337). Boundary = `.;!?` + substrings "\n", em dash, en dash, "--"
+%     (composed tul.boundary_chars / boundary_substrings), min span 4, cap 32
+%     (tul_layout.py:152-169, BoundaryRule). Every slot position gets the same input
+%     E_slot + W_sent embed(t_last) (`slot_seed: boundary`, tul.py:6301-6313).
+%  2. STRICT GEOMETRY (`tul.tg_geometry: strict`, `tg_coda_prefix_reach: all`,
+%     `tg_coda_token_reach` 0): prelude = same span only, a slot position also sees its own
+%     earlier positions (tul_layout.py:984); coda token = own span + every earlier slot's
+%     prefix positions (tul_layout.py:987); coda prefix position = itself only
+%     (tul_layout.py:997); conv / value shift / retention reset per segment and the coda's
+%     per-layer injections at slot positions are zeroed (tul.py:826-831). Loop: a cell reads
+%     every cell of its own slot and every cell of every earlier slot
+%     (`slot_cell_relation`, transformer.py:1606; loop_reach 0, fan_lineage off).
+%  3. SEED (TULSlotRegister, tul.py:5746; forward sum at tul.py:5847; added to the gathered
+%     prelude state at transformer.py:5848). Cell i of slot s sits at row position
+%     slot_index[s] + i (transformer.py:5798), so e_i = normed prelude state at that position
+%     + W_o Attn(Q_i; span s's prelude token states) + P_cell[i]. W_o, P_cell zero-init.
+%     h_0 = core_init(e) (transformer.py:5975). Carrier = Hyper-Connection, 4 streams x d 1024.
+%  4. THE LOOP (`_tul_core`): 6 shared core blocks per pass; per-slot depth
+%     T ~ Poisson(6) clamped to [1, 8] (transformer.py:5499; model.mean_depth 6,
+%     max_depth 8), bptt_depth 8 = full BPTT. Every pass re-injects the cell's own e_i on the
+%     ctx channels, h_ctx <- A h_ctx + dt e_ctx, A init 0.447 (DiagonalInjection,
+%     transformer.py:718). After every pass: RMSNorm with one gain g shared by all passes
+%     (transformer.py:7028, `slot_cell_pass_norm: rms`), then `_lsel_pass`
+%     (transformer.py:7191 -> 9626): FanRouter (tul_fan_route.py:368) scores the 4 cells
+%     (detached) against the slot's ctx; the loop FOLLOWS the router (`fan_lsel_train_follow:
+%     router`); every slot whose depth continues has all 4 cells reset to the winner
+%     (reset_to_winner, tul_fan_route.py:510). The last pass never resets: the 4 final
+%     candidates stay, later slots' loops read all 4, the coda reads the winner alone.
+%     Loop losses: epivol diversity on passes 1-2 (fan_repel_lambda 0.1), fixed-point term
+%     on the last pass (core_fixed_point_lambda 0.1, transformer.py:6143), gain hinge
+%     (slot_gain_lambda 100 at target 0.9, base.yaml).
+%  5. ROUTER TEACHER (train only, dashed). EMA twin of the prelude (FanTargetFront,
+%     tul_fan_route.py:91; momentum fan_target_ema 0.996, tul.py:494); z_s = LayerNorm of the
+%     twin's states mean-pooled over span s+1 (transformer.py:9421-9452). g = FanLatentHead
+%     (tul_fan_route.py:461) reads DETACHED cells (`fan_lsel_head_input: detached`,
+%     transformer.py:9705); teacher pick = argmin_i ||g(c_i) - z||^2; router CE onto it at
+%     every pass (transformer.py:9626-9660); exit loss (`_lsel_finish`,
+%     transformer.py:9676) = 1.0 * relaxed WTA on g + 0.2 * L_enc floor on the ONLINE
+%     prelude's pooled states + 1.0 * router CE.
+%  6. WRITE. `fan_lsel_read: winner`: `_fan_route_cells` (transformer.py:9562) zeroes every
+%     loser, prefix_project (tul.py:6354) sends cell k through W_prefix[k] into prefix
+%     position k (transformer.py:13627-13660). No E_pass is built, so the 3 loser
+%     positions are EXACTLY 0.
+%  7. CODA (4 blocks) -> LM head -> token CE (emit_weight 0, plast_weight 1, token-state
+%     dropout 0.15). SPAN DECODER (train only, dashed): `tul.spandec`, 2 layers, weight 1,
+%     teacher-forced decode of the NEXT span; it reads the uniform MEAN of the 4 final
+%     candidates (transformer.py:8777 `tul_fan` = mean; read at 13484 before the routed
+%     write; spandec_reads_cells false), NOT the winner.
+%  8. GENERATION: per-token cost is prelude + coda, per-boundary one think; only the eager
+%     recompute generator runs this model: the KV-cached one refuses fan_k > 0
+%     (morph/inference/tul_generate_cached.py:104).
+%  9. MEASURED box: lab/experiments/successes/2026-10-03-rank-only-cell-norm-seed-twin.md,
+%     .../2026-10-04-rank-only-cell-norm-10k.md, .../2026-10-04-exact-recall-gap-probe.md.
+%
+% Palette: Paul Tol (as morph_overview.tex). Wolfe is red-green colour blind: the winner is
+% marked by a dark fill, a heavy border and a star, never by hue; train-only parts are
+% dashed AND labelled.
 % Compile: pdflatex tul_mechanism.tex
 %          pdftoppm -png -r 220 -singlefile tul_mechanism.pdf ../tul_mechanism
-% Supersedes: the 2026-09-03..09 paid-loop version of this file (git history) and
-% tul_overview.tex (deprecated).
+% Supersedes: the 2026-09-09 slot-loop drawing of this file (one thought z per slot,
+% e -> h -> z inside THINK, W_prefix into 2 cells, MUX dashed; git history) and
+% tul_overview_deprecated.tex.
 
 \documentclass[border=14pt]{standalone}
 \usepackage[T1]{fontenc}
 \usepackage{amsmath,amssymb}
+\usepackage{array}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, fit, positioning, calc, backgrounds,
-  decorations.pathreplacing, bending}
+  decorations.pathreplacing, shapes.geometric}
 
 \definecolor{cbBlue}{HTML}{4477AA}
 \definecolor{cbOrange}{HTML}{EE7733}
@@ -34,253 +87,328 @@
 \definecolor{fOrange}{HTML}{FDE8D0}
 \definecolor{fPurple}{HTML}{EEDCEE}
 \definecolor{fTeal}{HTML}{D4EDDA}
+\definecolor{fYellow}{HTML}{FFF3CD}
 \definecolor{fGray}{HTML}{EBEBEB}
 \definecolor{bdr}{HTML}{555555}
 \definecolor{loopC}{HTML}{2255AA}
 
 \tikzset{
-  B/.style={draw=bdr, thick, rounded corners=4pt, minimum width=14.6cm,
-    minimum height=1.05cm, font=\small\sffamily, align=center, inner sep=7pt},
-  tok/.style={draw=bdr, fill=fGray, minimum width=0.78cm, minimum height=0.68cm,
+  B/.style={draw=bdr, thick, rounded corners=4pt, minimum width=17.6cm,
+    minimum height=1.0cm, font=\small\sffamily, align=center, inner sep=7pt},
+  tok/.style={draw=bdr, fill=fGray, minimum width=0.72cm, minimum height=0.62cm,
     font=\footnotesize\sffamily, inner sep=1pt},
-  tokDone/.style={draw=cbTeal, thick, fill=fTeal, minimum width=0.78cm,
-    minimum height=0.68cm, font=\footnotesize\sffamily\bfseries, inner sep=1pt,
-    text=cbTeal!70!black},
-  tokNext/.style={draw=cbOrange!70!black, thick, fill=fOrange!55, minimum width=0.78cm,
-    minimum height=0.68cm, font=\footnotesize\sffamily, inner sep=1pt,
+  punct/.style={draw=cbOrange, very thick, fill=fOrange, minimum width=0.72cm,
+    minimum height=0.62cm, font=\footnotesize\sffamily\bfseries, inner sep=1pt,
     text=cbOrange!75!black},
-  punct/.style={draw=cbOrange, very thick, fill=fOrange, minimum width=0.78cm,
-    minimum height=0.68cm, font=\footnotesize\sffamily\bfseries, inner sep=1pt,
-    text=cbOrange!75!black},
-  slot/.style={draw=cbPurple, thick, fill=fPurple, minimum width=0.62cm,
-    minimum height=0.68cm, font=\scriptsize\sffamily\bfseries, inner sep=1pt},
+  slot/.style={draw=cbPurple, thick, fill=fPurple, minimum width=0.46cm,
+    minimum height=0.62cm, font=\scriptsize\sffamily\bfseries, inner sep=1pt,
+    text=cbPurple!80!black},
   A/.style={-{Stealth[length=2.5mm,width=2mm]}, thick},
+  As/.style={-{Stealth[length=1.8mm,width=1.5mm]}, semithick},
+  Ad/.style={-{Stealth[length=2.2mm,width=1.8mm]}, thick, densely dashed},
   sub/.style={font=\scriptsize\sffamily},
   src/.style={font=\scriptsize\sffamily, text=bdr, align=center},
   ph/.style={font=\small\sffamily\bfseries},
-  note/.style={draw=bdr, thick, rounded corners=4pt, font=\scriptsize\sffamily,
-    inner sep=5pt, align=center},
+  % the slot loop's pieces
+  seed/.style={draw=cbBlue, thick, rounded corners=2pt, fill=fBlue, minimum width=0.62cm,
+    minimum height=0.36cm, font=\scriptsize\sffamily, inner sep=1pt},
+  pass/.style={draw=loopC, thick, rounded corners=3pt, fill=white, minimum width=1.45cm,
+    minimum height=2.15cm, font=\scriptsize\sffamily, align=center, inner sep=2pt},
+  nrm/.style={draw=loopC, thick, fill=fBlue, minimum width=0.34cm, minimum height=2.15cm,
+    inner sep=0pt},
+  cell/.style={circle, draw=cbPurple, thick, fill=white, minimum size=0.36cm,
+    font=\scriptsize\sffamily\bfseries, inner sep=0pt, text=cbPurple!80!black},
+  win/.style={circle, draw=black, line width=1.6pt, fill=cbPurple, minimum size=0.36cm,
+    font=\scriptsize\sffamily\bfseries, inner sep=0pt, text=white},
+  router/.style={diamond, draw=bdr, thick, fill=fYellow, aspect=1.3, inner sep=1pt,
+    font=\scriptsize\sffamily\bfseries},
+  train/.style={draw=cbPurple!70!black, thick, densely dashed, rounded corners=4pt,
+    fill=white, font=\scriptsize\sffamily, align=left, inner sep=5pt, nohyph},
+  nohyph/.style={execute at begin node={\hyphenpenalty=10000\exhyphenpenalty=10000}},
+}
+
+% One pass of the loop: #1 = name prefix, #2 = x of the pass box centre, #3 = winner row
+% (1..4), #4 = pass label. Rows sit at y = +0.75, +0.25, -0.25, -0.75 in the enclosing scope.
+\newcommand{\onepass}[4]{%
+  \node[pass] (#1box) at (#2, 0) {6 core\\blocks\\[1pt](shared)\\[3pt]$+$ own $e_i$\\injected};
+  \node[font=\scriptsize\sffamily\bfseries, text=loopC, above=1pt of #1box] {#4};
+  \node[nrm, right=0.14cm of #1box] (#1n) {};
+  \node[rotate=90, font=\tiny\sffamily\bfseries, text=loopC] at (#1n) {RMSNorm $\cdot\,g$};
+  \foreach \r/\yy in {1/0.75, 2/0.25, 3/-0.25, 4/-0.75} {
+    \ifnum\r=#3
+      \node[win] (#1c\r) at ($(#1n.center)+(0.68,\yy)$) {\r};
+    \else
+      \node[cell] (#1c\r) at ($(#1n.center)+(0.68,\yy)$) {\r};
+    \fi
+    \draw[As, draw=loopC] (#1box.east |- #1c\r) -- (#1n.west |- #1c\r);
+    \draw[As, draw=cbPurple] (#1n.east |- #1c\r) -- (#1c\r.west);
+  }
+  \node[router] (#1r) at ($(#1c4)+(0,-0.78)$) {R};
+  \draw[As, draw=bdr] (#1r.north) -- (#1c4.south);
+  \node[font=\normalsize, anchor=south west, inner sep=0pt] at ($(#1c#3.north east)+(0.0,-0.04)$) {$\star$};
 }
 
 \begin{document}
 \begin{tikzpicture}[node distance=0.55cm]
 
-% ── INPUT SEQUENCE: tokens and slots are ONE row; every slot is prefix_k = 2 cells ──
-\node[tok] (a1) {tok};
-\node[tok, right=0.08cm of a1] (a2) {tok};
-\node[tok, right=0.08cm of a2] (a3) {tok};
-\node[tok, right=0.08cm of a3] (a4) {tok};
-\node[punct, right=0.08cm of a4] (a5) {.};
-\node[slot, right=0.08cm of a5] (az1) {$z_i$};
-\node[slot, right=0.04cm of az1] (az1b) {$z_i'$};
-\node[tok, right=0.08cm of az1b] (a6) {tok};
-\node[tok, right=0.08cm of a6] (a7) {tok};
-\node[tok, right=0.08cm of a7] (a8) {tok};
-\node[tok, right=0.08cm of a8] (a9) {tok};
-\node[tok, right=0.08cm of a9] (a10) {tok};
-\node[punct, right=0.08cm of a10] (a11) {;};
-\node[slot, right=0.08cm of a11] (az2) {$z_{i+1}$};
-\node[slot, right=0.04cm of az2] (az2b) {$z_{i+1}'$};
-\node[tok, right=0.08cm of az2b] (a12) {tok};
-\node[tok, right=0.08cm of a12] (a13) {tok};
-\node[tok, right=0.08cm of a13] (a14) {tok};
-\node[tok, right=0.08cm of a14] (a14b) {tok};
-\node[punct, right=0.08cm of a14b] (a15) {.};
-\node[punct, right=0.08cm of a15] (a16) {\textbackslash n};
-\node[slot, right=0.08cm of a16] (az3) {$z_{i+2}$};
-\node[slot, right=0.04cm of az3] (az3b) {$z_{i+2}'$};
+% ════════════════════════════════════════════════════════════════════════════
+% 1. THE ROW
+% ════════════════════════════════════════════════════════════════════════════
+\node[tok] (a1) at (0.42, 0) {tok};
+\node[tok, right=0.07cm of a1] (a2) {tok};
+\node[tok, right=0.07cm of a2] (a3) {tok};
+\node[punct, right=0.07cm of a3] (a4) {.};
+\node[slot, right=0.09cm of a4] (s11) {1};
+\node[slot, right=0.03cm of s11] (s12) {2};
+\node[slot, right=0.03cm of s12] (s13) {3};
+\node[slot, right=0.03cm of s13] (s14) {4};
+\node[tok, right=0.09cm of s14] (b1) {tok};
+\node[tok, right=0.07cm of b1] (b2) {tok};
+\node[tok, right=0.07cm of b2] (b3) {tok};
+\node[tok, right=0.07cm of b3] (b4) {tok};
+\node[punct, right=0.07cm of b4] (b5) {;};
+\node[slot, right=0.09cm of b5] (s21) {1};
+\node[slot, right=0.03cm of s21] (s22) {2};
+\node[slot, right=0.03cm of s22] (s23) {3};
+\node[slot, right=0.03cm of s23] (s24) {4};
+\node[tok, right=0.09cm of s24] (c1) {tok};
+\node[tok, right=0.07cm of c1] (c2) {tok};
+\node[tok, right=0.07cm of c2] (c3) {tok};
+\node[punct, right=0.07cm of c3] (c4) {\textbackslash n};
+\node[slot, right=0.09cm of c4] (s31) {1};
+\node[slot, right=0.03cm of s31] (s32) {2};
+\node[slot, right=0.03cm of s32] (s33) {3};
+\node[slot, right=0.03cm of s33] (s34) {4};
+\node[font=\small\sffamily, text=bdr, right=0.12cm of s34] {$\cdots$};
 
-\node[ph, text=bdr, left=0.35cm of a1, align=right] {input\\row};
-
-% horizontal center of the row (notation and blocks sit on this)
-\coordinate (amid) at ($(a1.center)!0.5!(az3b.center)$);
-
-% notation ABOVE the row
-\node[src] (rule) at ($(amid)+(0,1.42)$) {%
-  \textbf{orange} = boundary \;(\texttt{.;!?--\textbackslash n}, no comma)\\[1pt]
-  one slot after each span, \textbf{2 positions} per slot \;$\cdot$\; span length 4--32 \;$\cdot$\; \texttt{.}\textbackslash n = one cut\\[1pt]
-  slot input $= E_{\mathrm{slot}} + W_{\mathrm{sent}}\,\mathrm{embed}(t_{\mathrm{last}})$, \;$t_{\mathrm{last}}$ = the span's last token};
-
-% title centered with the main column
-\node[font=\Large\sffamily\bfseries] (title) at ($(amid)+(0,2.55)$)
-  {TUL: Thought Unpack Loop};
+\node[ph, text=bdr, left=0.3cm of a1, align=right] {input\\row};
 
 \draw[decorate, decoration={brace, mirror, amplitude=3pt}]
-  ($(a1.south west)+(0,-0.06)$) -- ($(a5.south east)+(0,-0.06)$)
-  node[midway, below=3pt, sub] {span $i$};
-\draw[decorate, decoration={brace, mirror, amplitude=3pt}]
-  ($(a6.south west)+(0,-0.06)$) -- ($(a11.south east)+(0,-0.06)$)
-  node[midway, below=3pt, sub] {span $i{+}1$};
-\draw[decorate, decoration={brace, mirror, amplitude=3pt}]
-  ($(a12.south west)+(0,-0.06)$) -- ($(a16.south east)+(0,-0.06)$)
-  node[midway, below=3pt, sub] {span $i{+}2$};
-
-% ── PRELUDE ─────────────────────────────────────────────────────────────────
-\node[B, fill=fBlue, below=0.95cm of amid] (pre) {%
-  \textbf{PRELUDE}: all positions, once};
-\draw[A] ($(amid)-(0,0.55)$) -- (pre.north);
-
-% ── THINK: the slot loop. One block in the stack; the e -> h -> z chain drawn inside ──
-\node[B, fill=fPurple!35, draw=loopC, line width=1.6pt, minimum height=4.7cm,
-      below=0.85cm of pre] (think) {};
-\node[font=\small\sffamily\bfseries, text=loopC, anchor=north west]
-  at ($(think.north west)+(0.15,-0.1)$) {THINK: only the slot positions loop};
-\draw[A] (pre.south) -- (think.north)
-  node[midway, right=3pt, sub] {slot positions};
-
-% the chain, one row, centred in the block
-\coordinate (cy) at ($(think.center)+(0,0.62)$);
-\node[draw=cbBlue, thick, rounded corners=3pt, fill=fBlue, font=\scriptsize\sffamily,
-      align=center, inner sep=3.5pt, anchor=center] (eN) at ($(cy)+(-6.05,0)$)
-  {$e_i$: prelude state\\at slot $i$};
-\node[draw=bdr, thick, rounded corners=3pt, fill=white, font=\scriptsize\sffamily,
-      align=center, inner sep=3.5pt, right=0.32cm of eN] (h0N)
-  {$h_0 = e_i$};
-\node[draw=loopC, thick, rounded corners=3pt, fill=white, font=\scriptsize\sffamily,
-      align=center, inner sep=3.5pt, right=0.62cm of h0N] (injN)
-  {inject $e_i$ again\\$h_{\mathrm{ctx}} \leftarrow 0.447\,h_{\mathrm{ctx}} + e_{i,\mathrm{ctx}}$};
-\node[draw=loopC, thick, rounded corners=3pt, fill=fPurple, font=\scriptsize\sffamily\bfseries,
-      align=center, inner sep=3.5pt, right=0.32cm of injN] (coreN)
-  {core blocks\\$\times 6$};
-\node[draw=cbPurple, very thick, rounded corners=3pt, fill=fPurple, font=\scriptsize\sffamily\bfseries,
-      align=center, inner sep=3.5pt, right=0.62cm of coreN] (zN)
-  {$z_i = h_T$\\the thought};
-\node[draw=cbPurple, thick, rounded corners=3pt, fill=white, font=\scriptsize\sffamily,
-      align=center, inner sep=3.5pt, right=0.32cm of zN] (wpN)
-  {$W_{\mathrm{prefix}}$ writes $z_i$\\into cells $z_i,\,z_i'$};
-
-% the x T frame around inject + core, with the U-turn on its right edge
-\node[draw=loopC, thick, densely dashed, rounded corners=4pt, fill=none,
-      fit=(injN)(coreN), inner xsep=7pt, inner ysep=14pt] (loopF) {};
-\draw[loopC, line width=1.4pt, rounded corners=3pt,
-      -{Stealth[length=2.2mm,width=1.6mm]}]
-  (coreN.south) -- ++(0,-0.3) -| (injN.south);
-\node[font=\small\sffamily\bfseries, text=loopC, anchor=north west]
-  at ($(loopF.north west)+(0.06,-0.02)$) {$\times T$};
-\node[sub, text=loopC, anchor=north west] at ($(loopF.south west)+(0,-0.03)$)
-  {$h_{t+1}$ goes back in; $e_i$ is read again each pass};
-
-\draw[A] (eN) -- (h0N);
-\draw[A] (h0N) -- (loopF.west);
-\draw[A, draw=cbPurple] (loopF.east) -- (zN);
-\draw[A, draw=cbPurple] (zN) -- (wpN);
-\draw[A, draw=loopC] (injN) -- (coreN);
-
-% caption inside the block
-\node[src, anchor=south west, align=left] at ($(think.south west)+(0.15,0.1)$) {%
-  $T\sim\mathrm{Poi}(6)$ per slot, max 8, full BPTT \;$\cdot$\; in the loop the slots attend each other; the tokens are not in it\\[1pt]
-  noise entry (Parcae): $h_0\sim\mathcal N(0,0.02^2)$, $e_i$ injected on all dims through a learned $B$};
-
-% MUX: the slot's own loss, the arm under test — hangs off z to the right of the stack
-\node[draw=cbPurple, thick, densely dashed, rounded corners=4pt, fill=white,
-      font=\scriptsize\sffamily, align=center, inner sep=3.5pt, anchor=north east]
-  at ($(wpN.east |- zN.south)+(0,-0.7)$) (mux)
-  {MUX (under test): $z_i$'s own loss (M-next)};
-\draw[cbPurple, thick, densely dashed, -{Stealth[length=2mm,width=1.5mm]}]
-  (zN.south) -- (zN.south |- mux.north);
-
-% keep annotation: z lives in its two cells
-\node[draw=cbPurple, thick, rounded corners=4pt, fill=fPurple!60,
-      font=\scriptsize\sffamily, inner sep=5pt, align=center,
-      below=0.45cm of think] (keep) {%
-  $z_i$ stays in its two cells: every later token attends to $z_i,\,z_i'$ in the coda};
-\draw[A, draw=cbPurple] (think.south) -- (keep.north);
-
-% ── DECODE: the coda reads tokens and thoughts, the head emits the next token ──
-\node[B, fill=fTeal, draw=cbTeal, line width=1.4pt, below=0.5cm of keep] (dec) {%
-  \textbf{DECODE}: coda on all positions, once $\to$ head emits the next token $d$\\[2pt]
-  {\scriptsize span $i{+}1$'s tokens attend $z_i$ \;$\cdot$\; stop at punct / $\le 32$ \;$\cdot$\; training: next-token CE at every token, none at a slot cell}};
-\draw[A] (keep.south) -- (dec.north);
-
-% tokens skip the loop: prelude state straight to the coda, down the left margin of the stack
-\coordinate (bypX) at ($(think.east)+(0.4,0)$);
-\draw[A, draw=bdr!70, line width=1.2pt, rounded corners=3pt]
-  ($(pre.east)+(0,-0.15)$) -| (bypX |- keep.center) |- ($(dec.east)+(0,0.2)$);
-\node[sub, anchor=west, align=left, text=bdr]
-  at ($(bypX |- keep.center)+(0.12,0.35)$) {tokens: prelude state\\straight to the coda,\\never in the loop};
-
-% ── OUTPUT ROW (bottom) — same x as the in-row ──────────────────────────────
-\coordinate (bout) at (a1 |- dec.south);
-\node[tok, below=1.35cm of bout] (b1) {tok};
-\node[tok, right=0.08cm of b1] (b2) {tok};
-\node[tok, right=0.08cm of b2] (b3) {tok};
-\node[tok, right=0.08cm of b3] (b4) {tok};
-\node[punct, right=0.08cm of b4] (b5) {.};
-\node[slot, right=0.08cm of b5] (bz1) {$z_i$};
-\node[slot, right=0.04cm of bz1] (bz1b) {$z_i'$};
-% active span: emitted so far (z_i thought + toks through current d); future stays outside the box
-\node[tokDone, right=0.28cm of bz1b] (b6) {$d_{-2}$};
-\node[tokDone, right=0.22cm of b6] (b7) {$d_{-1}$};
-\node[tokDone, right=0.22cm of b7] (b8) {$d$};
-\node[tokNext, right=0.28cm of b8] (b9) {$d_{+1}$};
-\node[tokNext, right=0.08cm of b9] (b10) {$d_{+2}$};
-\node[punct, right=0.08cm of b10] (b11) {;};
-\node[slot, right=0.08cm of b11] (bz2) {$z_{i+1}$};
-\node[slot, right=0.04cm of bz2] (bz2b) {$z_{i+1}'$};
-\node[tok, right=0.08cm of bz2b] (b12) {tok};
-\node[tok, right=0.08cm of b12] (b13) {tok};
-\node[tok, right=0.08cm of b13] (b14) {tok};
-\node[tok, right=0.08cm of b14] (b14b) {tok};
-\node[punct, right=0.08cm of b14b] (b15) {.};
-\node[punct, right=0.08cm of b15] (b16) {\textbackslash n};
-\node[slot, right=0.08cm of b16] (bz3) {$z_{i+2}$};
-\node[slot, right=0.04cm of bz3] (bz3b) {$z_{i+2}'$};
-
-\node[ph, text=bdr, left=0.35cm of b1, align=right] {output\\row};
-
-% frame = everything emitted so far (span toks + punct + z_i + … + current d)
-\begin{scope}[on background layer]
-  \node[draw=cbTeal, thick, rounded corners=5pt, fill=fTeal!20,
-        fit=(b1)(b2)(b3)(b4)(b5)(bz1)(bz1b)(b6)(b7)(b8),
-        inner xsep=4.5pt, inner ysep=6pt] (spanBox) {};
-\end{scope}
-\node[sub, text=cbTeal!75!black, anchor=west]
-  at ($(spanBox.north east)+(0.12,0.12)$) {emitted so far (through $d$)};
-
-% d: vertical drop from DECODE's bottom edge aligned over $d$
-\draw[A, draw=cbTeal, line width=1.5pt]
-  (dec.south -| b8) -- (b8.north)
-  node[midway, right=3pt, font=\small\sffamily\bfseries, text=cbTeal] {$d$};
-
-% generation feedback. Per token: the new token's prelude state (once) and the coda
-% again — NO core pass. Per boundary: a new slot is thought once (x T) and written.
-\coordinate (fbStart) at ([xshift=0.45cm]spanBox.north west);
-\coordinate (fbBound) at ([xshift=0.15cm]spanBox.north west);
-\draw[cbTeal, line width=1.5pt, rounded corners=3pt,
-      -{Stealth[length=2.8mm,width=2.2mm]}]
-  (fbStart) |- ($(dec.west)+(0,-0.2)$);
-\node[font=\scriptsize\sffamily, text=cbTeal!80!black, anchor=east, align=right]
-  at ([xshift=-0.12cm]fbBound |- dec.west)
-  {append $d$: its prelude\\state, then the coda again;\\no core pass (cheap decode)};
-\draw[cbOrange!80!black, line width=1.5pt, rounded corners=3pt,
-      -{Stealth[length=2.8mm,width=2.2mm]}]
-  (fbBound) |- (think.west);
-\node[font=\scriptsize\sffamily, text=cbOrange!75!black, anchor=east, align=right]
-  at ([xshift=-0.12cm]fbBound |- think.west)
-  {a boundary emitted:\\two slot cells inserted,\\the new slot is thought once};
-
-% braces: span i+1 is the full token run including future + punct
+  ($(a1.south west)+(0,-0.06)$) -- ($(a4.south east)+(0,-0.06)$)
+  node[midway, below=3pt, sub] {span $s{-}1$};
 \draw[decorate, decoration={brace, mirror, amplitude=3pt}]
   ($(b1.south west)+(0,-0.06)$) -- ($(b5.south east)+(0,-0.06)$)
-  node[midway, below=3pt, sub] {span $i$};
+  node[midway, below=3pt, sub] {span $s$};
 \draw[decorate, decoration={brace, mirror, amplitude=3pt}]
-  ($(b6.south west)+(0,-0.06)$) -- ($(b11.south east)+(0,-0.06)$)
-  node[midway, below=3pt, sub] {span $i{+}1$};
-\draw[decorate, decoration={brace, mirror, amplitude=3pt}]
-  ($(b12.south west)+(0,-0.06)$) -- ($(b16.south east)+(0,-0.06)$)
-  node[midway, below=3pt, sub] {span $i{+}2$};
+  ($(c1.south west)+(0,-0.06)$) -- ($(c4.south east)+(0,-0.06)$)
+  node[midway, below=3pt, sub] {span $s{+}1$};
+\draw[decorate, decoration={brace, amplitude=3pt}]
+  ($(s21.north west)+(0,0.06)$) -- ($(s24.north east)+(0,0.06)$)
+  node[midway, above=3pt, sub, text=cbPurple!80!black, align=center]
+  {slot $s$: 4 positions\\= its 4 cells};
 
-% Slots stay in the row: looped WITH the tokens, read by every later position.
-\node[draw=cbPurple, thick, rounded corners=4pt, fill=fPurple,
-      font=\scriptsize\sffamily\bfseries, align=center, inner sep=5pt,
-      below=0.95cm of bz2] (kept)
-  {$z$ kept in the row:\\thought once per span, read by every later token; never looped again};
-\draw[cbPurple, thick, densely dashed]
-  (kept.west) -| (bz1b.south);
-\draw[cbPurple, thick, densely dashed]
-  (kept.north) -- (bz2.south);
-\draw[cbPurple, thick, densely dashed]
-  (kept.east) -| (bz3.south);
+% notation and title above the row
+\node[src, anchor=south] (rule) at (8.8, 1.25) {%
+  one row = 1024 tokens; after every span the packer inserts \textbf{4 slot positions}
+  ($\le 64$ slots, row length $1024 + 4\cdot 64 = 1280$)\\[1pt]
+  \textbf{orange} = boundary (\texttt{.;!?}, newline, dashes; no comma) \;$\cdot$\; span
+  length 4--32 \;$\cdot$\; every slot position's input $= E_{\mathrm{slot}} + W_{\mathrm{sent}}\,
+  \mathrm{embed}(t_{\mathrm{last}})$};
+\node[font=\Large\sffamily\bfseries, anchor=south] (title) at ($(rule.north)+(0,0.75)$)
+  {LXTUL: the latent-selected slot loop};
+\node[src, anchor=north] at ($(title.south)+(0,0.02)$)
+  {primary candidate, \texttt{morph/configs/lxtul.yaml} (locked 2026-10-04)};
+
+% ════════════════════════════════════════════════════════════════════════════
+% 2. STRICT GEOMETRY: who reads what
+% ════════════════════════════════════════════════════════════════════════════
+\node[draw=bdr, thick, rounded corners=4pt, fill=white, anchor=north,
+      minimum width=17.6cm, inner sep=5pt, font=\scriptsize\sffamily]
+  (geo) at (8.8, -1.25) {%
+  \renewcommand{\arraystretch}{1.3}%
+  \begin{tabular}{@{}>{\bfseries}p{3.0cm} p{7.2cm} p{6.2cm}@{}}
+  \multicolumn{3}{@{}l}{\small\bfseries STRICT GEOMETRY: the slot loop is the only path
+    from one span to a later span}\\[1pt]
+  \hline
+  stage & a \textbf{token} reads & a \textbf{slot position / cell} reads\\
+  \hline
+  prelude, 4 blocks & its own span's tokens only &
+    its own span's tokens and its own earlier slot positions\\
+  slot loop, 6 blocks $\times T$ & (tokens are not in the loop) &
+    all 4 cells of its own slot $+$ every cell of every earlier slot\\
+  coda, 4 blocks & its own span's tokens $+$ the prefix positions of every earlier slot &
+    itself only (it carries what the loop wrote, nothing else)\\
+  \hline
+  \multicolumn{3}{@{}l}{conv, value shift and retention carry reset at every segment;
+    the coda's per-layer injections at slot positions are zeroed}
+  \end{tabular}};
+
+% ════════════════════════════════════════════════════════════════════════════
+% 3. PRELUDE and SEED
+% ════════════════════════════════════════════════════════════════════════════
+\node[B, fill=fBlue, below=0.55cm of geo] (pre) {%
+  \textbf{PRELUDE} (4 blocks): every position of the row, once};
+\draw[A] (geo.south) -- (pre.north);
+
+\node[B, fill=fBlue!45, draw=cbBlue, below=0.55cm of pre, align=center] (seed) {%
+  \textbf{SEED the 4 cells of slot $s$} \;(\texttt{TULSlotRegister}), \;$i = 1..4$:\\[4pt]
+  $e_i \;=\; \hat x_{s,i} \;+\; W_o\,\mathrm{Attn}\big(Q_i;\; x_{j \in \mathrm{span}\,s}\big)
+   \;+\; P_{\mathrm{cell}}[i]$\\[4pt]
+  {\scriptsize $\hat x_{s,i}$ = normed prelude state at slot position $i$
+  \;$\cdot$\; $Q_i$ = cell $i$'s own learned query, one head, keys and values = span $s$'s
+  prelude token states}\\
+  {\scriptsize $W_o$ and $P_{\mathrm{cell}}$ start at zero \;$\cdot$\; cell carrier =
+  Hyper-Connection, 4 streams $\times$ $d$ 1024 \;$\cdot$\; $h_0 = e_i$}};
+\draw[A] (pre.south) -- (seed.north) node[midway, right=3pt, sub] {slot positions};
+
+% ════════════════════════════════════════════════════════════════════════════
+% 4. THINK: the latent-selected loop, unrolled
+% ════════════════════════════════════════════════════════════════════════════
+\node[B, fill=fPurple!30, draw=loopC, line width=1.6pt, minimum height=6.75cm,
+      below=0.6cm of seed] (think) {};
+\draw[A] (seed.south) -- (think.north) node[midway, right=3pt, sub] {$e_1..e_4$ per slot};
+\node[font=\small\sffamily\bfseries, text=loopC, anchor=north west]
+  at ($(think.north west)+(0.15,-0.1)$)
+  {THINK: every slot's 4 cells loop together; after each pass the router picks one cell and
+  all 4 restart from it};
+
+\begin{scope}[shift={($(think.north west)+(0,-2.55)$)}]
+  % seeds
+  \foreach \r/\yy in {1/0.75, 2/0.25, 3/-0.25, 4/-0.75}
+    \node[seed] (e\r) at (0.65, \yy) {$e_{\r}$};
+  \node[sub, text=cbBlue!80!black, above=2pt of e1] {seeds};
+
+  \onepass{p1}{2.35}{3}{pass 1}
+  \onepass{p2}{6.65}{1}{pass 2}
+  \onepass{pT}{11.75}{2}{pass $T$ (last)}
+
+  \foreach \r in {1,2,3,4}
+    \draw[As, draw=cbBlue] (e\r.east) -- (p1box.west |- e\r);
+
+  % reset to the winner: winner of pass 1 (cell 3) fans out to all 4 rows of pass 2
+  \foreach \yy in {0.75, 0.25, -0.25, -0.75}
+    \draw[As, draw=cbPurple, line width=1.1pt] (p1c3.east) .. controls +(0.55,0) and +(-0.55,0)
+      .. (p2box.west |- 0,\yy);
+  \node[sub, text=cbPurple!80!black, align=center, anchor=south]
+    at ($(p1c1.north)!0.5!(p2box.north west)+(0.1,0.12)$)
+    {reset: all 4\\$\leftarrow$ winner};
+
+  % pass 2 winner (cell 1) fans out into passes 3..T-1, drawn as stubs + dots
+  \coordinate (mid) at ($(p2c1.east)!0.5!(pTbox.west |- p2c1.east)$);
+  \foreach \yy in {0.75, 0.25, -0.25, -0.75}
+    \draw[draw=cbPurple, line width=1.1pt] (p2c1.east) .. controls +(0.4,0) and +(-0.3,0)
+      .. ($(mid |- 0,\yy)+(-0.15,0)$);
+  \node[font=\large\sffamily\bfseries, text=loopC] at ($(mid |- 0,0)+(0.25,0)$) {$\cdots$};
+  \foreach \yy in {0.75, 0.25, -0.25, -0.75}
+    \draw[As, draw=cbPurple, line width=1.1pt] ($(mid |- 0,\yy)+(0.65,0)$) -- (pTbox.west |- 0,\yy);
+  \node[sub, text=cbPurple!80!black, align=center, anchor=south]
+    at ($(mid |- p2c1.north)+(0.25,0.12)$)
+    {passes $3..T{-}1$:\\the same};
+
+  % router labels
+  \node[sub, anchor=west, align=left] at ($(p1r.east)+(0.04,0)$) {router picks\\the winner};
+  \node[sub, anchor=west, align=left] at ($(p2r.east)+(0.04,0)$) {router picks};
+  \node[sub, anchor=west, align=left] at ($(pTr.east)+(0.04,0)$) {final pick $w$};
+
+  % exit, right of the last pass
+  \node[draw=cbPurple, thick, rounded corners=3pt, fill=white, font=\scriptsize\sffamily,
+        align=left, inner sep=4pt, anchor=west] (exitN) at ($(pTc2.east)+(0.55,-0.25)$)
+    {no reset after the\\last pass: 4 final\\candidates. Later\\slots' loops read\\all 4; the coda\\gets only $w$.};
+  \draw[As, draw=cbPurple, line width=1.1pt] (pTc2.east) -- (exitN.west |- pTc2);
+\end{scope}
+
+% legend + per-pass facts, at the bottom of THINK
+\node[src, anchor=south west, align=left, nohyph] (thinkNotes) at ($(think.south west)+(0.15,0.12)$) {%
+  {\color{black}\textbf{legend}}: \tikz[baseline=-0.6ex]\node[win, minimum size=0.28cm]{};\,$\star$ = the pass's
+  winner (dark fill) \;$\cdot$\; \tikz[baseline=-0.6ex]\node[cell, minimum size=0.28cm]{}; = another cell
+  \;$\cdot$\; R = \texttt{FanRouter}, a low-rank scorer of each cell (its inputs are detached)\\[1pt]
+  every pass: each cell gets its OWN seed again on the context channels,
+  $h_{\mathrm{ctx}} \leftarrow A\,h_{\mathrm{ctx}} + dt\, e_{i,\mathrm{ctx}}$
+  (\texttt{DiagonalInjection}, $A$ starts at 0.447)\\[1pt]
+  then RMSNorm with one gain $g$ shared by all passes \;$\cdot$\;
+  $T \sim \mathrm{Poisson}(6)$ per slot, clamped to 1..8, full BPTT\\[1pt]
+  loop terms: epivol diversity on passes 1--2 (0.1), fixed-point term on the last pass (0.1),
+  gain hinge (100 at 0.9)};
+
+% ════════════════════════════════════════════════════════════════════════════
+% 5. WRITE: the winner only
+% ════════════════════════════════════════════════════════════════════════════
+\node[B, fill=fPurple!60, draw=cbPurple, line width=1.2pt, minimum height=1.55cm,
+      below=0.6cm of think] (write) {};
+\draw[A, draw=cbPurple] (think.south) -- (write.north)
+  node[midway, right=3pt, sub, text=cbPurple!80!black] {winner $w$ of every slot};
+\node[font=\small\sffamily, anchor=west, align=left] (writeT) at ($(write.west)+(0.25,0)$)
+  {\textbf{WRITE: the winner alone}\\[1pt]
+   {\scriptsize slot position $k$ $\leftarrow$ $W_{\mathrm{prefix}}[k]\,c_k$ for $k = w$;
+   the 3 other positions are EXACTLY 0}\\
+   {\scriptsize so the coda reads ONE live vector per earlier span}};
+\node[slot, minimum width=1.2cm, minimum height=0.7cm, font=\scriptsize\sffamily,
+      fill=white, anchor=west] (w1) at ($(write.center)+(2.6,-0.12)$) {0};
+\node[slot, minimum width=1.9cm, minimum height=0.7cm, font=\scriptsize\sffamily\bfseries,
+      fill=cbPurple, text=white, draw=black, line width=1.4pt, right=0.06cm of w1] (w2)
+  {$W_{\mathrm{prefix}}[2]\,c_2$};
+\node[slot, minimum width=1.2cm, minimum height=0.7cm, font=\scriptsize\sffamily,
+      fill=white, right=0.06cm of w2] (w3) {0};
+\node[slot, minimum width=1.2cm, minimum height=0.7cm, font=\scriptsize\sffamily,
+      fill=white, right=0.06cm of w3] (w4) {0};
+\node[sub, above=1pt of w2, text=cbPurple!80!black] {slot $s$'s 4 positions ($w = 2$ here)};
+
+% ════════════════════════════════════════════════════════════════════════════
+% 6. CODA
+% ════════════════════════════════════════════════════════════════════════════
+\node[B, fill=fTeal, draw=cbTeal, line width=1.4pt, below=0.6cm of write] (coda) {%
+  \textbf{CODA} (4 blocks): every position, once \;$\rightarrow$\; LM head
+  \;$\rightarrow$\; next-token CE\\[2pt]
+  {\scriptsize a token reads its own span $+$ the prefix positions of every earlier slot
+  \;$\cdot$\; token-state dropout 0.15}\\
+  {\scriptsize no CE at slot positions; the boundary token keeps its ordinary label}};
+\draw[A] (write.south) -- (coda.north);
+
+% tokens skip the loop: prelude state straight to the coda, down the right margin
+\coordinate (bypX) at ($(think.east)+(0.45,0)$);
+\draw[A, draw=bdr!70, line width=1.2pt, rounded corners=3pt]
+  (pre.east) -| (bypX |- seed.south) |- ($(coda.east)+(0,0.15)$);
+\node[sub, anchor=west, align=left, text=bdr]
+  at ($(bypX |- seed.center)+(0.12,0)$) {tokens: prelude state\\straight to the coda,\\never in the loop};
+
+% ════════════════════════════════════════════════════════════════════════════
+% 7. TRAIN-ONLY HEADS (dashed), right column
+% ════════════════════════════════════════════════════════════════════════════
+\node[train, anchor=north west, text width=5.6cm] (teach) at ($(think.north east)+(1.75,0)$) {%
+  {\small\bfseries TRAIN ONLY: the router's teacher}\\[3pt]
+  $\bullet$ an EMA twin of the prelude (momentum 0.996, no gradient) reads span $s{+}1$:
+  $z_s$ = LayerNorm(mean of its token states)\\[2pt]
+  $\bullet$ head $g$ (LayerNorm, MLP) reads the cells DETACHED; teacher pick:\\
+  \hspace*{1.2em}$\arg\min_i \lVert g(c_i) - z_s\rVert^2$\\[2pt]
+  $\bullet$ router: cross-entropy onto the teacher pick, at every pass\\[2pt]
+  $\bullet$ exit loss: relaxed winner-take-all on $g$ (weight 1) trains $g$ only, so no
+  latent gradient reaches the loop; a std floor on the online prelude's pooled span
+  states (0.2)\\[3pt]
+  \textbf{The forward follows the router, at train and at eval.} $z$ is a label only:
+  nothing built from it enters the loop or the coda.};
+\draw[Ad, draw=cbPurple!70!black] ($(think.east)+(0,0.9)$) -- ($(teach.west |- think.east)+(0,0.9)$)
+  node[midway, above, sub, text=cbPurple!80!black] {cells, detached};
+\draw[Ad, draw=cbPurple!70!black] ($(teach.west |- think.east)+(0,0.25)$) -- ($(think.east)+(0,0.25)$)
+  node[midway, below, sub, text=cbPurple!80!black] {router CE};
+
+\node[train, anchor=north west, text width=5.6cm] (spandec) at ($(write.north east)+(1.75,0.15)$) {%
+  {\small\bfseries TRAIN ONLY: span decoder}\\[3pt]
+  2 layers, weight 1: teacher-forced decode of the NEXT span (span $s{+}1$). It reads the
+  uniform MEAN of the 4 final candidates, not the winner.};
+\draw[Ad, draw=cbPurple!70!black] ($(think.south east)+(0,0.45)$) -- ++(1.0,0) |- (spandec.west);
+
+% ════════════════════════════════════════════════════════════════════════════
+% 8. GENERATION and MEASURED
+% ════════════════════════════════════════════════════════════════════════════
+\node[draw=bdr, thick, rounded corners=4pt, fill=fGray!50, anchor=north west,
+      text width=8.15cm, font=\scriptsize\sffamily, align=left, inner sep=6pt, nohyph]
+  (gen) at ($(coda.south west)+(0,-0.55)$) {%
+  {\small\bfseries GENERATION}\\[3pt]
+  a new token costs its prelude pass and one coda pass, no core pass \;$\cdot$\; an emitted
+  boundary inserts 4 slot positions and costs ONE think for that new slot ($T$ passes
+  $\times$ 4 cells)\\[2pt]
+  today only the eager recompute generator (\texttt{tul\_generate.py}) runs LXTUL: the
+  KV-cached generators refuse \texttt{fan\_k} $> 0$, so decode speed is not yet measured};
+
+\node[draw=cbBlue, thick, rounded corners=4pt, fill=fBlue!40, anchor=north east,
+      text width=8.15cm, font=\scriptsize\sffamily, align=left, inner sep=6pt, nohyph]
+  (meas) at ($(coda.south east)+(0,-0.55)$) {%
+  {\small\bfseries MEASURED} (480 sweep rows, paired CIs)\\[3pt]
+  K1$-$K6 (what loop depth earns): $+0.0215$ / $+0.0172$ at 5k (two seeds), $+0.0236$ at 10k\\
+  CE gap to a plain model at the same step: $+0.272$ (5k), $+0.356$ (10k)\\
+  65\,\% of the 10k gap is bigram repeats 33--256 tokens back (15\,\% of tokens)\\[2pt]
+  {\tiny lab/experiments/successes/2026-10-03-rank-only-cell-norm-seed-twin.md,
+  2026-10-04-rank-only-cell-norm-10k.md, 2026-10-04-exact-recall-gap-probe.md}};
 
 \end{tikzpicture}
 \end{document}
