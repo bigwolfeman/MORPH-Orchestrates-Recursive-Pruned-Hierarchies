@@ -190,6 +190,10 @@ def main() -> None:
     ap.add_argument("--far-gap", type=int, default=FAR_GAP)
     ap.add_argument("--n-boot", type=int, default=N_BOOT)
     ap.add_argument("--seed", type=int, default=BOOT_SEED)
+    ap.add_argument("--expect-gap-json", default=None,
+                    help="a paired_vs_ruler gap json ({arm: {ce_<d>_minus_ruler_ce<d>: "
+                         "[pt, lo, hi]}}) whose gap this run must reproduce before it "
+                         "trusts anything; default: the shipped 10k pair (EXPECTED_GAP)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     d = a.depth
@@ -205,14 +209,24 @@ def main() -> None:
     print(f"[sanity] paired(lx, ce_{d}, plain, ce_{d}) = {point:+.4f} [{lo:+.4f}, {hi:+.4f}] "
           f"({pairing})")
     exp_pt, exp_lo, exp_hi = EXPECTED_GAP
+    exp_src = "gap_vs_plain10k.json"
+    if a.expect_gap_json is not None:
+        # Any other pair (an arm against plain 5k): the target is THAT pair's own
+        # paired_vs_ruler output, read from disk, never a number typed in here.
+        with open(a.expect_gap_json) as f:
+            gj = json.load(f)
+        if len(gj) != 1:
+            raise ValueError(f"{a.expect_gap_json}: expected one arm, got {list(gj)}")
+        exp_pt, exp_lo, exp_hi = next(iter(gj.values()))[f"ce_{d}_minus_ruler_ce{d}"]
+        exp_src = a.expect_gap_json
     if (abs(point - exp_pt) > EXPECTED_TOL or abs(lo - exp_lo) > EXPECTED_TOL
             or abs(hi - exp_hi) > EXPECTED_TOL):
         raise RuntimeError(
             f"STOP: sanity reproduction FAILED. Got {point:+.4f} [{lo:+.4f}, {hi:+.4f}], "
             f"expected {exp_pt:+.4f} [{exp_lo:+.4f}, {exp_hi:+.4f}] from "
-            f"gap_vs_plain10k.json. Do not trust the table below; the pairing or depth "
+            f"{exp_src}. Do not trust the table below; the pairing or depth "
             f"is wrong.")
-    print(f"[sanity] OK — reproduces gap_vs_plain10k.json's ce_{d}_minus_ruler_ce{d} "
+    print(f"[sanity] OK — reproduces {exp_src}'s ce_{d}_minus_ruler_ce{d} "
           f"within {EXPECTED_TOL}.")
 
     # ---- 2. load the per-token npz's the table below actually reads. ----
