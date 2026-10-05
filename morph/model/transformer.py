@@ -4839,15 +4839,20 @@ class MORPHTransformer(nn.Module):
                     f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
             tg_attn_kwargs = tg_reset = None
             if self._tg_strict:
-                # The SAME prelude relation `_forward_tul` builds (tul.tg_geometry), for
-                # the same reason: a probe that read an unrestricted prelude off a strict
-                # arm would report states the run never computed.
+                # The SAME prelude relation `_forward_tul` builds (tul.tg_geometry /
+                # tul.tg_strict_prelude), for the same reason: a probe that read an
+                # unrestricted (or wrongly-reset) prelude off a strict arm would report
+                # states the run never computed. See `_tul_tg_kwargs` for the reasoning
+                # on why "causal" also drops `tg_seg` / the reset mask to None here.
                 _seg = tg_segment_ids(layout)
-                _pre_allow = tg_strict_allow(layout, "prelude")
+                _causal_pre = tc.tg_strict_prelude == "causal"
+                _pre_history_kw = {"prelude_history": "causal"} if _causal_pre else {}
+                _pre_allow = tg_strict_allow(layout, "prelude", **_pre_history_kw)
                 tg_attn_kwargs = {"tg_allow": _pre_allow,
                                   "tg_slot_mask": layout.slot_mask,
-                                  "tg_comp_allow": _pre_allow, "tg_seg": _seg}
-                tg_reset = tg_reset_from_ids(_seg)
+                                  "tg_comp_allow": _pre_allow,
+                                  "tg_seg": None if _causal_pre else _seg}
+                tg_reset = None if _causal_pre else tg_reset_from_ids(_seg)
             elif self._tg_restrict and tc.tg_restrict_scope == "all":
                 # scope "coda": the prelude is global, exactly as in _forward_tul
                 tg_allow = tg_allow_mask(layout, soft_prev_span=tc.tg_soft_prev_span)
@@ -12551,7 +12556,27 @@ class MORPHTransformer(nn.Module):
             # retention carry at every reach, which is what keeps the widening to the
             # attention relation alone (the reasoning is in `tg_strict_allow`).
             _seg = tg_segment_ids(layout)
-            _pre_allow = tg_strict_allow(layout, "prelude")
+            # `tul.tg_strict_prelude` ("span", the default, bit-identical; "causal") ONLY
+            # changes the PRELUDE side of this split. At "causal" a token query reads
+            # every earlier TOKEN of the row (`tg_strict_allow`'s `prelude_history`); the
+            # conv / value shift and the retention carry must then NOT reset at every
+            # segment either, or the prelude would attend a full row while its conv/
+            # retention state kept forgetting at every span boundary — not a causal model
+            # of the history. `_front_seg` / `_front_reset` go to `None` for exactly that
+            # reason: `segment_causal_conv` and the GLA branch both treat `seg=None` /
+            # `reset_mask=None` as "run the ordinary unsegmented causal form" (their own
+            # defaults, already exercised by every non-TG model). The CODA's `_seg` /
+            # `tg_reset` below are UNCHANGED at every value of this knob: the coda's
+            # segment partition (a span's tokens, its own cells, the next span's tokens)
+            # is not something "causal" has any claim on.
+            _causal_pre = tc.tg_strict_prelude == "causal"
+            # At "span" the call is the tree's call, argument for argument — no new
+            # keyword reaches `tg_strict_allow` unless the knob is actually in use
+            # (the `tg_coda_token_reach` precedent just below).
+            _pre_history_kw = {"prelude_history": "causal"} if _causal_pre else {}
+            _pre_allow = tg_strict_allow(layout, "prelude", **_pre_history_kw)
+            _front_seg = None if _causal_pre else _seg
+            _front_reset = None if _causal_pre else tg_reset_from_ids(_seg)
             # At reach 0 the call is the tree's call, argument for argument.
             _reach_kw = ({"coda_token_reach": tc.tg_coda_token_reach}
                          if tc.tg_coda_token_reach else {})
@@ -12559,7 +12584,7 @@ class MORPHTransformer(nn.Module):
                                           coda_prefix_reach=tc.tg_coda_prefix_reach,
                                           **_reach_kw)
             _strict_front_kw = {"tg_allow": _pre_allow, "tg_slot_mask": layout.slot_mask,
-                                "tg_comp_allow": _pre_allow, "tg_seg": _seg}
+                                "tg_comp_allow": _pre_allow, "tg_seg": _front_seg}
             tg_attn_kwargs = {"tg_allow": _coda_allow, "tg_slot_mask": layout.slot_mask,
                               "tg_comp_allow": _coda_allow, "tg_seg": _seg}
             tg_reset = tg_reset_from_ids(_seg)
@@ -12586,11 +12611,11 @@ class MORPHTransformer(nn.Module):
             tg_reset = tg_reset_mask(layout)
 
         if self._tg_strict:
-            _front_kw, _front_reset = _strict_front_kw, tg_reset
+            _ret_front_kw, _ret_front_reset = _strict_front_kw, _front_reset
         else:
-            _front_kw = tg_attn_kwargs if tc.tg_restrict_scope == "all" else None
-            _front_reset = tg_reset if tc.tg_restrict_scope == "all" else None
-        return _front_kw, _front_reset, tg_attn_kwargs, tg_reset
+            _ret_front_kw = tg_attn_kwargs if tc.tg_restrict_scope == "all" else None
+            _ret_front_reset = tg_reset if tc.tg_restrict_scope == "all" else None
+        return _ret_front_kw, _ret_front_reset, tg_attn_kwargs, tg_reset
 
     def _forward_tul(self, input_ids: Tensor, labels: Tensor | None,
                      layout: SlotLayout, plan_nats: bool, halt: bool = False,

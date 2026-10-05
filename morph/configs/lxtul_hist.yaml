@@ -1,0 +1,26 @@
+# LXTUL with the PRELUDE seeing the row's full causal token history (2026-10-05, Wolfe:
+# "we need to test the prelude and loop seeing full token history"). One factor from
+# lxtul.yaml: tul.tg_strict_prelude "span" -> "causal". A prelude TOKEN query now reads
+# every earlier TOKEN of the row (not only its own span), and the prelude's conv/
+# value-shift/retention carry stop resetting at segment boundaries so the widened
+# attention is backed by a genuinely causal conv/retention state. A slot cell's own
+# prelude read is UNCHANGED (its own span's tokens and its own earlier cells) — the loop
+# reaches the row's history through its ordinary seed (pooled from these now-causal
+# token states), not through a second route opened in the prelude. The CODA is
+# untouched: coda_token_input stays "prelude", so a coda token still carries the
+# prelude's global-context summary at its own position (as lxtul does today) PLUS
+# whatever the strict coda relation already gave it. See lxtul_hist_embed.yaml for the
+# arm that also cuts the coda's own-position bypass. 5000 steps, to pair with lxtul's 5k
+# seeds; the loop/fan/fp01/lsel/cnorm recipe is otherwise identical to lxtul.
+defaults:
+  - lxtul
+  - _self_
+
+tul:
+  tg_strict_prelude: causal
+
+training:
+  steps: 5000
+
+wandb:
+  name: lxtul-hist

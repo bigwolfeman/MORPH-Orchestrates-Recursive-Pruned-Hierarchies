@@ -142,6 +142,8 @@ KNOWN_TUL_KEYS = frozenset({
     "tg_coda_prefix_reach", "tg_geometry",
     # the looser strict coda (2026-09-26): previous spans' tokens in the coda relation
     "tg_coda_token_reach",
+    # the prelude's own history (2026-10-05): "span" (default) | "causal"
+    "tg_strict_prelude",
     "tg_restrict", "tg_restrict_scope", "tg_soft_prev_span", "tg_span_comp",
     "tg_span_gate", "token_state_dropout", "tokens_through_core", "xattn",
 })
@@ -504,6 +506,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         tg_geometry=str(tc.get("tg_geometry", "restrict")),
         tg_coda_prefix_reach=str(tc.get("tg_coda_prefix_reach", "all")),
         tg_coda_token_reach=int(tc.get("tg_coda_token_reach", 0)),
+        tg_strict_prelude=str(tc.get("tg_strict_prelude", "span")),
         loop_reach=int(tc.get("loop_reach", 0)),
         loop_carry=str(tc.get("loop_carry", "none")),
         oracle_z=bool(tc.get("oracle_z", False)),
@@ -797,6 +800,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "tg_geometry": model_cfg.tg_geometry,
         "tg_coda_prefix_reach": model_cfg.tg_coda_prefix_reach,
         "tg_coda_token_reach": model_cfg.tg_coda_token_reach,
+        "tg_strict_prelude": model_cfg.tg_strict_prelude,
         "loop_reach": model_cfg.loop_reach,
         "loop_carry": model_cfg.loop_carry,
         "oracle_z": model_cfg.oracle_z,
@@ -1580,6 +1584,15 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                   f"token-path receptive field = reach x n_coda spans, the loop beyond "
                   f"(.agents/notes/proposed/architecture/"
                   f"2026-09-26-slot-channel-width-and-reach.md)", flush=True)
+        if model_cfg.tg_strict_prelude == "causal":
+            print(f"  TUL STRICT PRELUDE = CAUSAL: a prelude TOKEN query reads every "
+                  f"earlier TOKEN of the row, not only its own span; the prelude's conv/"
+                  f"value-shift/retention carry do NOT reset at segments (the coda's "
+                  f"stay segment-reset, unchanged); a slot-cell's own prelude read is "
+                  f"unchanged (its own span's tokens and earlier cells). The loop's seed "
+                  f"is pooled from these token states, so it now carries the row's full "
+                  f"history with no second route (coda_token_input={model_cfg.coda_token_input!r})",
+                  flush=True)
     if model_cfg.oracle_z:
         print(f"  TUL ORACLE-Z ON: T={model_cfg.oracle_z_steps} lr={model_cfg.oracle_z_lr} "
               f"weight={model_cfg.oracle_z_weight} J={model_cfg.oracle_z_max_tokens} — each "

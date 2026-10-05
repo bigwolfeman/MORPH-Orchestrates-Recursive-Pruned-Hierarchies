@@ -949,6 +949,40 @@ class TULConfig:
     # tests whether the channel's narrowness, not loop depth, is the gap.
     # Note: .agents/notes/proposed/architecture/2026-09-26-slot-channel-width-and-reach.md
     tg_coda_token_reach: int = 0
+    # ── THE PRELUDE'S OWN HISTORY (2026-10-05, Wolfe: "test the prelude and loop seeing
+    # full token history") ──────────────────────────────────────────────────────────
+    # tg_strict_prelude: what a strict PRELUDE token query may read, beside its own span.
+    #    "span"   — today, and bit-identical: `tg_strict_allow(layout, "prelude")` returns
+    #               `causal AND bag_id[i] == bag_id[j]` for every query, token or slot cell.
+    #    "causal" — a TOKEN query ALSO reads every earlier TOKEN position of the whole row
+    #               (`causal AND NOT slot_mask[j]`, replacing the same-span relation for
+    #               token queries only). A SLOT-CELL query is UNCHANGED (`bag_id[i] ==
+    #               bag_id[j]`, its own span's tokens and its own earlier cells): the loop
+    #               reads the row through the register's pool over the span's prelude
+    #               states, not through a second cross-span route opened in the prelude
+    #               itself, so a cell's OWN read stays the span summary it always was.
+    #               The conv, the `W_v_prev` value shift and the retention carry do NOT
+    #               reset in the prelude under "causal" (`tg_seg=None`, `ret_reset_mask=
+    #               None` on the prelude call only — the coda's segment partition and
+    #               reset are UNCHANGED, built from the same `tg_segment_ids` as always):
+    #               a conv or a retention state that still reset at every span boundary
+    #               would not be a causal model of the row's history, whatever the
+    #               attention relation said.
+    #
+    # CONSEQUENCE, stated rather than left to be rediscovered: the slot seed (and, with
+    # `tul.fan_k`, every register cell) is pooled from THIS span's own prelude token
+    # states (`TULSlots.slot_input` / `TULSlotRegister`'s pool, unchanged code, unchanged
+    # positions). Under "causal" those same states are no longer a pure summary of one
+    # span — each one is already a causal summary of the WHOLE row up to that token — so
+    # the loop sees full row history through its ordinary seed, with no second pooling
+    # mechanism added. This is the intended effect of the key, not a side door.
+    #
+    # Refused outside `tul.tg_geometry='strict'` (there is no "the prelude" relation to
+    # widen at `tg_geometry='restrict'`: the prelude is already global there, scope
+    # `tg_restrict_scope='all'`, or untouched). `tul.coda_token_input` governs a SEPARATE
+    # choice — what the coda's TOKEN carrier holds — and composes with either value here;
+    # see its own docstring for why "embed" closes the prelude's bypass at the coda.
+    tg_strict_prelude: str = "span"
     # ── DEPTH AS REACH (arm `slot-spandec-strict-reach1`, 2026-09-12) ─────────────
     # loop_reach: how many slots BACK a slot may attend inside the loop, per pass.
     #    0 — unlimited (today, and bit-identical: no mask is built at all).
@@ -3584,6 +3618,18 @@ class TULConfig:
                 "a candidate for EVERY span of a row in one forward, which is valid only "
                 "while a coda token cannot read another span's tokens. Under the wider "
                 "reach span s+2's candidate would read span s+1's CANDIDATE tokens.")
+        if self.tg_strict_prelude not in ("span", "causal"):
+            raise ValueError(
+                f"tul.tg_strict_prelude must be 'span' or 'causal', got "
+                f"{self.tg_strict_prelude!r}")
+        if self.tg_strict_prelude != "span" and self.tg_geometry != "strict":
+            raise ValueError(
+                "tul.tg_strict_prelude is a tul.tg_geometry='strict' knob: it widens the "
+                "STRICT prelude's token relation. At "
+                f"tg_geometry={self.tg_geometry!r} there is no strict prelude relation to "
+                f"widen (restrict's prelude is already global at scope 'all', or untouched "
+                f"at scope 'coda'), so the key would be silently ignored (got "
+                f"{self.tg_strict_prelude!r}).")
         if self.oracle_z:
             if not self.spandec:
                 raise ValueError(
