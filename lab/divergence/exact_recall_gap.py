@@ -275,6 +275,13 @@ def main() -> None:
     pl_at = gather(pl_idx, pl_ce, idx_all)
     lx_at = gather(lx_idx, lx_ce, idx_all)
     gap = lx_at - pl_at
+    # The arm's own LOOP contribution per token, K1 - K<d> (CE at 1 pass minus CE at d
+    # passes, the sweep's K-curve), so each bucket also reports how much of the loop's
+    # earning lives there (2026-10-05, Stage 0 of the trace-free pseudo-token note:
+    # copy content is held, not computed, so a carrier that delivers copies may take
+    # over the part of K1-K6 that sits in the far-repeat buckets).
+    lx_k1 = gather(lx_idx, lx["ce_1"].astype(np.float64), idx_all)
+    loop_k = lx_k1 - lx_at
 
     # sanity check #2: an i that lines up with the PREDICTED token should be easier
     # to predict on repeat than on novel, for the plain model, on average.
@@ -301,12 +308,17 @@ def main() -> None:
         row_sum_lx = np.bincount(row_all[mask], weights=lx_at[mask], minlength=N_ROWS)
         point = float(row_sum_gap.sum() / row_cnt.sum())
         lo, hi = bootstrap_ci(row_sum_gap, row_cnt, draws)
+        row_sum_k = np.bincount(row_all[mask], weights=loop_k[mask], minlength=N_ROWS)
+        k_lo, k_hi = bootstrap_ci(row_sum_k, row_cnt, draws)
         return {
             "name": name, "n_tokens": cnt, "token_share": cnt / n_tok,
             "mean_gap": point, "mean_gap_ci": [lo, hi],
             "plain_mean_ce": float(row_sum_pl.sum() / row_cnt.sum()),
             "lxtul_mean_ce": float(row_sum_lx.sum() / row_cnt.sum()),
             "total_gap": float(row_sum_gap.sum()),
+            "loop_k1_kd": float(row_sum_k.sum() / row_cnt.sum()),
+            "loop_k1_kd_ci": [k_lo, k_hi],
+            "total_loop_k": float(row_sum_k.sum()),
         }
 
     results: dict[str, dict] = {}
@@ -319,8 +331,10 @@ def main() -> None:
             results[f"{label}@{bname}"] = bucket_stats(m, f"{label}@{bname}")
 
     grand_total_gap = float(gap.sum())
+    grand_total_k = float(loop_k.sum())
     for r in results.values():
         if r.get("n_tokens", 0) > 0:
+            r["loop_k_share"] = r["total_loop_k"] / grand_total_k
             r["gap_share"] = r["total_gap"] / grand_total_gap
             r["share_ratio"] = (r["gap_share"] / r["token_share"]
                                  if r["token_share"] > 0 else float("nan"))
@@ -371,7 +385,8 @@ def main() -> None:
 
     # ---- 7. the table. ----
     header = (f"{'bucket':26s} {'n_tok':>8s} {'tok_share':>9s} {'mean_gap':>22s} "
-              f"{'gap_share':>9s} {'ratio':>7s} {'plain_ce':>8s} {'lxtul_ce':>8s}")
+              f"{'gap_share':>9s} {'ratio':>7s} {'plain_ce':>8s} {'lxtul_ce':>8s} "
+              f"{'loop_K1-Kd':>24s} {'loop_share':>10s}")
     print(header)
     print("-" * len(header))
     order = ["far_bigram_repeat", "far_bigram_repeat@33-64", "far_bigram_repeat@65-256",
@@ -385,7 +400,9 @@ def main() -> None:
         lo_, hi_ = r["mean_gap_ci"]
         print(f"{name:26s} {r['n_tokens']:8d} {r['token_share']:9.4f} "
               f"{r['mean_gap']:+7.4f} [{lo_:+.4f},{hi_:+.4f}] {r['gap_share']:9.4f} "
-              f"{r['share_ratio']:7.2f} {r['plain_mean_ce']:8.4f} {r['lxtul_mean_ce']:8.4f}")
+              f"{r['share_ratio']:7.2f} {r['plain_mean_ce']:8.4f} {r['lxtul_mean_ce']:8.4f} "
+              f"{r['loop_k1_kd']:+7.4f} [{r['loop_k1_kd_ci'][0]:+.4f},{r['loop_k1_kd_ci'][1]:+.4f}] "
+              f"{r['loop_k_share']:10.4f}")
     print()
     for k, v in preds.items():
         print(f"{k}: {v}")

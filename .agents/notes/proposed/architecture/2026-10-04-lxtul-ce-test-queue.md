@@ -43,7 +43,7 @@ The queue. Each item gets its own prereg before it runs. Status is kept here.
 
 After the queued arms (item 1 filed, item 2 running): **A2, then B, then A3, then A1.**
 
-- **A2, pseudo-token write**: the loop emits N pseudo tokens per span in token-embedding
+- **A2, pseudo-token write** ([design: `lxtul_snap`](2026-10-05-trace-free-pseudo-token-carrier.md), Lean `lab/theory/tul_pseudotoken/`): the loop emits N pseudo tokens per span in token-embedding
   space (PonderLM-style probability-weighted embedding mixtures) instead of one vector. It
   must be trained WITHOUT thinking traces. An Opus agent is working the training signal out
   in Lean (`lab/theory/tul_pseudotoken/`), seeded by CODI and PonderLM.

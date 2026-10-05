@@ -1,0 +1,26 @@
+name = "tul_pseudotoken"
+version = "0.1.0"
+keywords = ["math"]
+defaultTargets = ["TulPseudotoken"]
+
+[leanOptions]
+pp.unicode.fun = true # pretty-prints `fun a ↦ b`
+relaxedAutoImplicit = false
+weak.linter.mathlibStandardSet = true
+maxSynthPendingDepth = 3
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.31.0"
+
+[[require]]
+name = "tul_information"
+path = "../tul_information"
+
+[[require]]
+name = "tul_exploration"
+path = "../tul_exploration"
+
+[[lean_lib]]
+name = "TulPseudotoken"
