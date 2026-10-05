@@ -67,6 +67,7 @@ from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
 from .tul_spandec import (SpanDecoder, horizon_span_slots, next_span_slots,
                           own_span_slots, span_slots)
+from .tul_snap import TULPseudoSnap
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
 from .tul_nextlat import SpanTransition, nextlat_pairs, span_token_embeddings
 from .tul_code_enum import TULCodeEnum
@@ -1836,6 +1837,12 @@ class MORPHTransformer(nn.Module):
     # (the slots whose pass t ran)}`` (detached) once per pass. None by default.
     _lsel_capture: list | None = None
 
+    # `tul.pseudo_k`'s test hook (the `_lsel_capture` pattern): attach a list and
+    # `_tul_pseudo_snap_write` appends ``{"c" (the per-slot source, exit or entry,
+    # BEFORE the head), "winner", "pseudo" (the written vectors)}`` (detached) once per
+    # forward. None by default, so the shipped graph never sees it.
+    _pseudo_snap_capture: list | None = None
+
     # `tul.fan_all_wta_winner="map"`/`"latent"`'s test hook: attach a list and
     # `_tul_fan_all` appends ``{"map_idx", "choice", "forced", "ce_map", "cells_map",
     # "S_slots"}`` (all detached) once per train step, right after the winner is picked
@@ -2855,6 +2862,24 @@ class MORPHTransformer(nn.Module):
             self.tul_fan_lsel_head = FanLatentHead(d, int(cfg.tul.fan_lsel_hidden))
             self.tul_fan_lsel_router = FanRouter(d, int(cfg.tul.fan_k),
                                                  int(cfg.tul.fan_lsel_router_rank))
+
+        # ── the trace-free pseudo-token carrier (tul.pseudo_k; tul_snap.py) ──────────
+        # "0" (default) builds nothing: `tul_pseudo_snap` stays None and `_forward_tul`
+        # takes exactly the branch it always did. TULConfig._check_pseudo_snap already
+        # refuses every geometry but the latent-selected loop's hard winner write, so by
+        # the time this runs `self._lsel_mode != "off"` and `not self._lsel_read_all` are
+        # both guaranteed — the RuntimeError below is unreachable except as a guard
+        # against a future change to that check (the `tul_fan_opf` / `tul_fan_router`
+        # precedent just above).
+        self.tul_pseudo_snap: TULPseudoSnap | None = None
+        if cfg.tul is not None and cfg.tul.pseudo_k > 0:
+            if self._lsel_mode == "off" or self._lsel_read_all:
+                raise RuntimeError(
+                    "tul.pseudo_k built without the latent-selected loop's hard winner "
+                    "write; TULConfig should have refused this configuration.")
+            self.tul_pseudo_snap = TULPseudoSnap(d, int(cfg.tul.pseudo_k),
+                                                 float(cfg.tul.pseudo_scale_init),
+                                                 float(cfg.tul.pseudo_gate_init))
 
         # ── stage-1 latent pretraining (tul.latent_pre_target; tul_latent_pre.py) ────
         # "off" (default) builds nothing: `_latent_pre_mode` is the Python constant "off",
@@ -9781,6 +9806,95 @@ class MORPHTransformer(nn.Module):
         self._lsel_out = {"loss": loss, "stats": stats, "winner": winner,
                           "teacher": teacher}
 
+    # ── the trace-free pseudo-token carrier (tul.pseudo_k; tul_snap.py) ──────────────
+
+    def _tul_pseudo_snap_write(self, values: Tensor, winner: Tensor, cells: Tensor,
+                               xn: Tensor, layout: SlotLayout, input_ids: Tensor,
+                               plan_mode: str, stats: dict) -> Tensor:
+        """Overwrite the ``pseudo_k`` loser prefix positions of every slot
+        ``(winner + n) mod fan_k`` for ``n in 1..pseudo_k`` — exactly the positions
+        :meth:`_fan_route_cells` left at zero — with :class:`TULPseudoSnap`'s snapped
+        mixture. Called right after :meth:`TULSlots.prefix_project`, so the write lands
+        in COORDINATE SPACE (the coda's own input space), the same space every token
+        position already carries — NOT through ``W_prefix``, which is the register's
+        route for a LOOP STATE, not a vocabulary mixture.
+
+        ``values`` ``[B, S*K, *mid, C]`` (``K = tul.prefix_k == fan_k`` under
+        ``_check_pseudo_snap``'s ``prefix_per_cell == 1`` refusal, ``mid`` the
+        Hyper-Connection stream axis or ``()``); ``winner`` ``[B, S]`` the latent-selected
+        loop's final pick (``_fan_route["winner"]``); ``cells`` the SAME post-ablation
+        ``[B, S, K, *mid, C]`` stack :meth:`prefix_project` was just called with.
+
+        ``plan_mode != "normal"`` (the eval-only plan ablations, :meth:`_tul_plan_ablate`)
+        is deliberately NOT given its own pseudo channel here. ``"zero"`` / ``"all_slots"``
+        already zero every entry of ``cells`` — winner included — before this runs, so
+        the "exit" source is exactly 0 and a naive softmax over it would read UNIFORM
+        (not zero: ``RMSNorm(0) = 0`` makes every logit 0, and a uniform mixture of the
+        span's own token embeddings is a nonzero vector), silently reopening the "zero"
+        ablation's whole point — removing the plan's content AND the fact a plan is
+        there. So every ``plan_mode`` but ``"normal"`` skips this write outright and
+        ``values`` keeps whatever :meth:`prefix_project` already wrote at those
+        positions — exactly 0 under ``"zero"`` / ``"all_slots"`` (matching the ablation's
+        contract), and the ALREADY-shuffled cell's zero loser entries under ``"shuffle"``
+        (consistent with how every other reader of ``cells`` sees the permutation — but
+        this channel is simply ABSENT from a shuffle reading: a shuffle cost measured on
+        a pseudo-snap model covers the ordinary LXTUL channel only, not this one. Stated
+        here rather than silently approximated.
+        """
+        if plan_mode != "normal":
+            return values
+        tc = self.cfg.tul
+        head = self.tul_pseudo_snap
+        assert head is not None
+        k, K = head.k, int(tc.prefix_k)
+        B, S = winner.shape
+        mid = values.shape[2:-1]
+        C = values.shape[-1]
+        if tc.pseudo_source == "exit":
+            idx = winner.view(B, S, 1, *([1] * len(mid)), 1).expand(B, S, 1, *mid, C)
+            c = cells.gather(2, idx).squeeze(2)                     # [B, S, *mid, C]
+        else:
+            c = gather_valid(xn, layout.slot_index, layout.slot_valid)
+        while c.dim() > 3:
+            c = c.mean(dim=-2)                                      # [B, S, C]
+        ids, valid = own_span_slots(input_ids, layout, int(tc.bound_span_cap))
+        table = self.embed.lm_weight().detach()
+        pseudo, p, vertex = head(c, ids, valid, table)               # [B,S,k,C], [B,S,k,J], [B,S,k]
+        if self._pseudo_snap_capture is not None:
+            self._pseudo_snap_capture.append(
+                {"c": c.detach(), "winner": winner.detach(), "pseudo": pseudo.detach()})
+        if mid:
+            pseudo = pseudo.unsqueeze(-2).expand(B, S, k, *mid, C)
+        n = torch.arange(1, k + 1, device=winner.device).view(1, 1, k)
+        cell_idx = (winner.unsqueeze(-1) + n) % K                    # [B, S, k]
+        flat_idx = (cell_idx + torch.arange(S, device=winner.device).view(1, S, 1) * K
+                   ).reshape(B, S * k)
+        upd = pseudo.reshape(B, S * k, *mid, C).to(values.dtype)
+        idx_full = flat_idx.view(B, S * k, *([1] * (values.dim() - 2))).expand_as(upd)
+        out = values.scatter(1, idx_full, upd)
+        with torch.no_grad():
+            vf = layout.slot_valid.float()
+            nv = vf.sum().clamp_min(1.0)
+            stats["pseudo_vertex_mass"] = ((vertex.mean(dim=-1) * vf).sum() / nv).detach()
+            pd = p.detach().clamp_min(1e-12)
+            ent = -(pd * pd.log()).sum(dim=-1).mean(dim=-1)          # [B, S] mean over k
+            stats["pseudo_entropy"] = ((ent * vf).sum() / nv).detach()
+            # `fan_pseudo_copy_hit`: does the argmax pseudo token's id occur again in a
+            # LATER span of the same row (bag_id > s, a real token)? Cheap relative to one
+            # core block: B*S*k comparisons against the row's own L tokens.
+            amax = p.detach().argmax(dim=-1, keepdim=True)              # [B,S,k,1]
+            picked = ids.unsqueeze(2).expand(B, S, k, ids.shape[-1]).gather(
+                -1, amax).squeeze(-1)                                    # [B,S,k]
+            later = ((layout.bag_id.unsqueeze(1)
+                     > torch.arange(S, device=winner.device).view(1, S, 1))
+                    & (~layout.slot_mask).unsqueeze(1))                # [B, S, L]
+            hit = (picked.unsqueeze(-1) == input_ids.unsqueeze(1).unsqueeze(1)
+                  ) & later.unsqueeze(2)                                # [B, S, k, L]
+            hit = hit.any(dim=-1).float()                               # [B, S, k]
+            vfk = vf.unsqueeze(-1).expand(B, S, k)
+            stats["pseudo_copy_hit"] = (hit * vfk).sum() / vfk.sum().clamp_min(1.0)
+        return out
+
     # ── the EMA target twin's lifecycle (trainer hooks) ──────────────────────────────
 
     def tul_fan_target_build(self) -> bool:
@@ -13758,6 +13872,13 @@ class MORPHTransformer(nn.Module):
                 values, pos = _ct_values, self.tul.prefix_positions(layout, L)
             else:
                 values, pos = self.tul.prefix_project(h_slots, layout, L, cells=_cells)
+            if self.tul_pseudo_snap is not None:
+                # tul.pseudo_k: fill the loser prefix positions `_fan_route_cells` left at
+                # zero with the snapped mixture. `_fan_route` and `_cells` are the lsel
+                # winner write's own (`_check_pseudo_snap` refuses every other geometry).
+                values = self._tul_pseudo_snap_write(values, _fan_route["winner"], _cells,
+                                                     xn, layout, input_ids, plan_mode,
+                                                     fan_stats)
             if _pad_cells is not None:
                 # A PAD cell's carrier is EXACTLY zero, `E_pass` included. Zeroing the
                 # SOURCE state is not enough: `prefix_project` adds the per-cell embedding

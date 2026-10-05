@@ -437,6 +437,46 @@ class TULConfig:
     # no defined meaning on a mixing or selecting fan, which writes ONE state through the
     # single-source `prefix_project` (no `cells=` argument at all).
     prefix_per_cell: int = 1             # m coda positions per fan cell (fan_mix=all only)
+    # `tul.pseudo_k` (2026-10-05, the trace-free pseudo-token carrier, arm "snap" —
+    # `lxtul_snap.yaml`, one factor off `lxtul.yaml`): fills up to `pseudo_k` of the
+    # `fan_k - 1` prefix positions `_fan_route_cells` leaves EXACTLY zero on the latent-
+    # selected loop's winner write with a PonderLM-style snapped mixture of the SPAN'S
+    # OWN tokens (`morph/model/tul_snap.py::TULPseudoSnap`). 0 (default) builds no module,
+    # draws no RNG and the forward is the one from before the key. Refused outside
+    # `fan_loop_select != "off"` with `fan_lsel_read == "winner"`, `fan_mix == "all"`,
+    # `tg_geometry == "strict"` and `prefix_per_cell == 1` (`_check_pseudo_snap`): the
+    # pseudo tokens fill the exact loser positions that write leaves at zero, and that
+    # write only has this shape under that composition.
+    pseudo_k: int = 0                    # number of pseudo positions per slot (<= fan_k - 1)
+    # `"exit"` (default): the winner cell AFTER THE LOOP'S LAST PASS, not detached — the
+    # coda's CE reaches the loop through the pseudo write exactly as it reaches the
+    # ordinary W_prefix write, which is the K-sweep's whole point (the pseudo channel is
+    # truncated WITH the loop). `"entry"`: the matched bypass twin
+    # (`lxtul_snap_entry.yaml`) reads the slot's loop INPUT instead — a quantity fixed
+    # before pass 1 runs, so it cannot depend on how many passes the loop took
+    # (`bypass_zeroes_passes`): the instrument for "does the loop shape the pseudo
+    # tokens", not a model anyone would deploy.
+    pseudo_source: str = "exit"          # "exit" | "entry"
+    # The candidate set the softmax mixes over. "span" (the only built value): the
+    # SPAN'S OWN tokens (`morph/model/tul_spandec.py::own_span_slots`) — copies, not a
+    # computed guess, and a support the cell cannot use to smuggle arbitrary content past
+    # the loop (`raw_span_sufficient`, `mixture_strength_eq_one_iff`). Any other value
+    # RAISES rather than silently building nothing (`vocab_topk`, the full-vocabulary
+    # PonderLM support, is the NEXT arm — see the note's Alternatives).
+    pseudo_support: str = "span"         # "span" (only built value)
+    # beta_n init (learnable, read through `exp(.)`): a FREE scale commits a correct pick
+    # in one snap (`exists_scale_commit`); bounding it would force depth to matter for
+    # commitment (`passes_to_commit`), which Wolfe has ruled out as a K-curve made by
+    # construction. 0.0 keeps the logit scale at 1 at step 0; it is multiplied by `g_n`
+    # below, so it has no effect on the forward until `g_n` moves off its own init.
+    pseudo_scale_init: float = 0.0
+    # g_n init (learnable): 0.0 makes `pseudo_k > 0` BYTE-IDENTICAL to `pseudo_k == 0` at
+    # step 0 (every pseudo position still computes a real softmax, for a real gradient
+    # into W_q the moment g_n moves, but writes it scaled by exactly 0). Grows on the
+    # coda's CE gradient; `W_q` only gets a gradient once `g_n` has moved off zero (the
+    # register's zero-init `W_o` precedent — `fan_select_gate_lambda` and this key share
+    # the same slow-start risk, named in the note).
+    pseudo_gate_init: float = 0.0
     # `fan_all_wta_winner` (2026-09-29, "onewinner"; restructured 2026-09-29 "onewinner-
     # perf" — see `fan_all_wta_grad_rollouts` below): WHICH winner-picking table the WTA
     # term's no-grad passes build, under `tul.code_enum_k > 1` only. "per_rollout" (the
@@ -2645,6 +2685,8 @@ class TULConfig:
         self._check_fan_opf_route()
         # ── the latent-selected loop (2026-09-30) — same rule, same place ────────
         self._check_fan_loop_select()
+        # ── the trace-free pseudo-token carrier (tul.pseudo_k, 2026-10-05) ───────
+        self._check_pseudo_snap()
 
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
         if self.loop_carry not in LOOP_CARRY_MODES:
@@ -4397,6 +4439,54 @@ class TULConfig:
         for bad, why in _refused:
             if bad:
                 raise NotImplementedError(f"tul.{_arm} with {why}.")
+
+    def _check_pseudo_snap(self) -> None:
+        """``tul.pseudo_k`` — the trace-free pseudo-token carrier (arm "snap",
+        2026-10-05; ``morph/model/tul_snap.py``). Values first, then every
+        ``pseudo_*`` knob set while ``pseudo_k == 0`` (a silent no-op), then the one
+        composition it is defined on: the latent-selected loop's hard winner write."""
+        _keys = ("pseudo_source", "pseudo_support", "pseudo_scale_init", "pseudo_gate_init")
+        _defaults = TULConfig.__dataclass_fields__
+        if self.pseudo_k == 0:
+            _unread = [k for k in _keys if getattr(self, k) != _defaults[k].default]
+            if _unread:
+                raise ValueError(
+                    f"tul.{', tul.'.join(_unread)} set with tul.pseudo_k=0: a silent "
+                    f"no-op.")
+            return
+        if self.pseudo_k < 0:
+            raise ValueError(f"tul.pseudo_k must be >= 0, got {self.pseudo_k}")
+        if self.pseudo_source not in ("exit", "entry"):
+            raise ValueError(
+                f"tul.pseudo_source must be 'exit' or 'entry', got "
+                f"{self.pseudo_source!r}")
+        if self.pseudo_support != "span":
+            raise ValueError(
+                f"tul.pseudo_support must be 'span' — the only built candidate set (a "
+                f"span's own tokens); got {self.pseudo_support!r}. The full-vocabulary "
+                f"support (PonderLM's top-k) is the NEXT arm, not built here, and would "
+                f"otherwise silently fall back to 'span'.")
+        if not (self.fan_loop_select != "off" and self.fan_lsel_read == "winner"
+                and self.fan_mix == "all" and self.tg_geometry == "strict"):
+            raise ValueError(
+                f"tul.pseudo_k={self.pseudo_k} needs tul.fan_loop_select != 'off' with "
+                f"tul.fan_lsel_read == 'winner', tul.fan_mix == 'all' and "
+                f"tul.tg_geometry == 'strict' (got fan_loop_select={self.fan_loop_select!r}, "
+                f"fan_lsel_read={self.fan_lsel_read!r}, fan_mix={self.fan_mix!r}, "
+                f"tg_geometry={self.tg_geometry!r}). The pseudo tokens fill the exact "
+                f"loser prefix positions `_fan_route_cells` leaves at zero on the hard "
+                f"winner write, and that write only exists under this composition.")
+        if self.prefix_per_cell != 1:
+            raise NotImplementedError(
+                f"tul.pseudo_k with tul.prefix_per_cell={self.prefix_per_cell}: the pseudo "
+                f"write indexes coda positions by (winner + n) mod fan_k, which assumes "
+                f"ONE coda position per cell. Composing with the wider write needs its own "
+                f"index arithmetic, not specified here.")
+        if self.pseudo_k > self.fan_k - 1:
+            raise ValueError(
+                f"tul.pseudo_k={self.pseudo_k} > tul.fan_k - 1 = {self.fan_k - 1}: the "
+                f"winner keeps its own prefix position, so at most fan_k - 1 loser "
+                f"positions exist to fill.")
 
     def _check_spandec_parallel(self) -> None:
         """``tul.spandec_parallel`` — LXTUL-E's committed product reader

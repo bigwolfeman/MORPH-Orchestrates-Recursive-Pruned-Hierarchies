@@ -1,0 +1,28 @@
+# ============================================================================================
+# lxtul_snap_entry — the matched BYPASS twin of lxtul_snap (2026-10-05).
+#
+# Same keys as lxtul_snap.yaml except `tul.pseudo_source: entry`: the pseudo mixture reads
+# the slot's loop INPUT (the state before pass 1, fixed whatever the loop's depth draw is)
+# instead of the winner cell after the loop's last pass. Per `bypass_zeroes_passes`
+# (lab/theory/tul_pseudotoken/Bypass.lean): a PASS-INDEPENDENT view is the instrument for
+# "does the loop shape the pseudo tokens" — if this twin's K1-K6 and CE gap track
+# lxtul_snap's closely, the exit source is not doing anything the entry couldn't.
+#
+# Run per the note's Stage 0 rule: only if the exit arm's copy-share-of-K1-K6 risk needs a
+# bypass control (Stage 0 put the far-bigram share at ~25%, under the 50% line, so this is
+# the secondary read, not the primary one).
+# ============================================================================================
+defaults:
+  - lxtul
+  - _self_
+
+tul:
+  pseudo_k: 3
+  pseudo_source: entry
+  pseudo_support: span
+
+training:
+  steps: 5000
+
+wandb:
+  name: lxtul-snap-entry

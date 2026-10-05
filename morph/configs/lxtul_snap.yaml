@@ -1,0 +1,33 @@
+# ============================================================================================
+# lxtul_snap — the trace-free pseudo-token carrier, arm "snap" (2026-10-05).
+#
+# LXTUL (the primary candidate) plus `tul.pseudo_k: 3`: the three prefix positions
+# `_fan_route_cells` leaves EXACTLY zero on the latent-selected loop's hard winner write
+# get filled with a PonderLM-style snapped mixture of the SPAN'S OWN tokens, read off the
+# winner cell AFTER the loop's last pass (`pseudo_source: exit` — not detached, so the
+# coda's CE trains the mixture AND reaches the loop through it, same as the ordinary
+# W_prefix write). `pseudo_gate_init: 0.0` (TULConfig's default) makes step 0 bit-
+# identical to lxtul.yaml; the gate is the ONLY thing standing between this arm and its
+# ruler at construction.
+#
+# Decision record (the full theorem-backed design, Stage 0's bucket shares, and the
+# acceptance thresholds — read before judging a run against it):
+# .agents/notes/proposed/architecture/2026-10-05-trace-free-pseudo-token-carrier.md
+#
+# 5000 steps (not lxtul.yaml's 10k default): the first read is loop contribution
+# (K1-K6) and the CE gap at 5k, per the note's acceptance criteria.
+# ============================================================================================
+defaults:
+  - lxtul
+  - _self_
+
+tul:
+  pseudo_k: 3
+  pseudo_source: exit
+  pseudo_support: span
+
+training:
+  steps: 5000
+
+wandb:
+  name: lxtul-snap
