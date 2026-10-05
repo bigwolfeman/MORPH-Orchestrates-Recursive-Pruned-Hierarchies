@@ -63,7 +63,8 @@ KNOWN_TUL_KEYS = frozenset({
     "per_slot_embed",
     "per_slot_embed_std", "pass_lora_rank", "pass_lora_targets",
     "pass_readout",
-    "pass_residual_lambda", "plast_weight", "prefix_k", "prefix_source", "progressive_p",
+    "pass_residual_lambda", "plast_weight", "prefix_k", "prefix_per_cell", "prefix_source",
+    "progressive_p",
     "reinject_seed_every_pass", "recur_gate", "recur_gate_bias",
     "row_contrast_lambda", "row_contrast_tau",
     "fan_k", "fan_mix", "fan_repel_lambda", "fan_repel_passes",
@@ -261,6 +262,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
             f"it would cut spans it is only supposed to mark")
 
     prefix_k = int(tc.get("prefix_k", 2))
+    prefix_per_cell = int(tc.get("prefix_per_cell", 1))
 
     # ── LXTUL: `tul.fan_k` ALIASES `tul.slot_cells` (morph/model/tul_fan.py) ──────
     # The fan's K streams ARE the Thought Register's cells: the same per-stream learned
@@ -310,6 +312,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
     model_cfg = TULConfig(
         gate=gate_cfg,
         prefix_k=prefix_k,
+        prefix_per_cell=prefix_per_cell,
         slot_id=int(slot_id),
         token_state_dropout=float(tc.get("token_state_dropout", 0.15)),
         slot_mean_depth=int(tc.get("slot_mean_depth", 0)),
@@ -894,6 +897,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "span_cap": rule.span_cap,
         "fixed_stride": rule.fixed_stride,
         "prefix_k": prefix_k,
+        "prefix_per_cell": model_cfg.prefix_per_cell,
         "seq_len": seq_len,
         "max_slots": spec.max_slots,
         "l_total": spec.l_total,

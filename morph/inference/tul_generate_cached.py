@@ -102,6 +102,11 @@ def _check_supported(model) -> None:
     # per slot per rollout and the coda cell cache one write per slot; M write-all cells
     # per slot were not built. Named before the register line so the refusal says so.
     need(int(tc.fan_k) == 0, "the fan (tul.fan_k > 0, incl. LX-Fan's K rollouts x M cells)")
+    # Transitively covered by the fan_k==0 line above (tul.prefix_per_cell > 1 is refused
+    # at construction without fan_k > 0 and fan_mix='all'), named explicitly so the
+    # message says what is unsupported rather than relying on a reader to trace the
+    # construction-time refusal back here.
+    need(int(tc.prefix_per_cell) == 1, "tul.prefix_per_cell > 1 (the wider write)")
     need(int(tc.slot_cells) == 1, "the Thought Register (tul.slot_cells > 1)")
     need(tc.prefix_source == "exit", f"tul.prefix_source={tc.prefix_source!r}")
     need(tc.slot_seed in ("boundary", "bag_mean"), f"tul.slot_seed={tc.slot_seed!r}")

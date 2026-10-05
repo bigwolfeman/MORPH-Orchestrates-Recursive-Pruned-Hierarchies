@@ -1,0 +1,23 @@
+# LXTUL with each of the 4 cells writing 2 coda positions instead of 1 (2026-10-05,
+# Wolfe: "wider write" arm). One factor from lxtul.yaml: tul.prefix_per_cell 1 -> 2
+# (fan_mix: all needs prefix_k = fan_k * prefix_per_cell, so prefix_k 4 -> 8 too). The
+# LOOP is unchanged (fan_k stays 4, four streams) — only the coda's read widens, which
+# isolates "more coda positions" from lxtul_fan8.yaml's "more loop streams" (fan_k 4 ->
+# 8). Tokens per row stay at seq_len; the packer adds prefix_k * max_slots cell
+# positions on top, the same L_total growth lxtul_fan8.yaml documents. 5000 steps, to
+# pair with lxtul's 5k seeds.
+# model.ckpt_grad_iters is left at lxtul's value; the orchestrator smokes this on GPU
+# and decides whether the 8-position write needs lxtul_fan8's "checkpoint every pass".
+defaults:
+  - lxtul
+  - _self_
+
+tul:
+  prefix_per_cell: 2
+  prefix_k: 8
+
+training:
+  steps: 5000
+
+wandb:
+  name: lxtul-fan4x2

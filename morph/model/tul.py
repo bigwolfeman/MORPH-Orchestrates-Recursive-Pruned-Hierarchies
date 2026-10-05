@@ -357,6 +357,30 @@ class TULConfig:
     # collapsed its cells to rank 1.24 of 4; this arm differs from it by the term.
     # 0 builds no term and runs no coda pass (LX-Fan runs at 0; > 0 is refused under the code).
     fan_all_wta_lambda: float = 1.0      # weight of the winner-alone span CE (fan_mix=all)
+    # `tul.prefix_per_cell` (2026-10-05, the "wider write" arm — `lxtul_fan4x2.yaml`, one
+    # factor off `lxtul.yaml`): a write-all fan cell lands in `m` coda positions instead of
+    # one, so `prefix_k` must equal `fan_k * prefix_per_cell` (the check below replaces the
+    # plain `prefix_k == fan_k` rule above). WHY: it isolates "more coda positions" from
+    # "more loop streams" against `lxtul_fan8.yaml` (fan_k 4 -> 8, i.e. more STREAMS) — this
+    # key holds the loop at 4 streams and widens only what the coda reads. 1 (default)
+    # builds nothing extra and is BIT-IDENTICAL to the tree before this key: cell i's one
+    # copy goes through `W_prefix[i]`, exactly the `prefix_k == fan_k` write.
+    # `TULSlots.prefix_project` is the ONE seam: cell i -> positions `i*m .. i*m+m-1`
+    # (slot-major, cell-major within the slot — `cells.repeat_interleave(m, dim=2)` before
+    # the per-position matmuls), position `i*m+j` through `W_prefix[i*m+j]`. Every caller
+    # that writes `cells=[B, S, fan_k, ...]` (the deployed write, a router's winner-alone
+    # stack, the blank single-stream writes, the shared-mixture pass) is unchanged and
+    # widens for free: the expansion sits strictly INSIDE `prefix_project`, so a probe that
+    # intercepts its `cells` argument still sees the fan_k-sized tensor.
+    # INIT (`TULSlots.__init__`): copy 0 of each cell (`i*m+0`) stays IDENTITY — the exact
+    # `m=1` write at step 0 — and copies `j >= 1` start as random ORTHOGONAL matrices
+    # (trainable, like every W_prefix copy) from
+    # a PRIVATE generator (the `build_bound_rotations` / `W_sent` precedent), so the global
+    # RNG stream is untouched and an `m=1` model's base weights are byte-for-byte unmoved.
+    # Refused (`__post_init__`) unless `fan_k > 0` and `fan_mix == "all"`: a wider write has
+    # no defined meaning on a mixing or selecting fan, which writes ONE state through the
+    # single-source `prefix_project` (no `cells=` argument at all).
+    prefix_per_cell: int = 1             # m coda positions per fan cell (fan_mix=all only)
     # `fan_all_wta_winner` (2026-09-29, "onewinner"; restructured 2026-09-29 "onewinner-
     # perf" — see `fan_all_wta_grad_rollouts` below): WHICH winner-picking table the WTA
     # term's no-grad passes build, under `tul.code_enum_k > 1` only. "per_rollout" (the
@@ -2692,11 +2716,25 @@ class TULConfig:
                 "tul.fan_all_wta_lambda is read only under tul.fan_mix='all' "
                 f"(got fan_mix={self.fan_mix!r}): setting it elsewhere would be a silent "
                 "no-op.")
-        if self.fan_mix == "all" and self.fan_k > 0 and self.prefix_k != self.fan_k:
+        if self.prefix_per_cell < 1:
             raise ValueError(
-                f"tul.fan_mix='all' needs tul.prefix_k={self.fan_k} (= fan_k): every "
-                f"stream is written into ITS prefix cell through W_prefix[i], the "
-                f"register's 1:1 route. Got prefix_k={self.prefix_k}.")
+                f"tul.prefix_per_cell must be >= 1, got {self.prefix_per_cell}")
+        if self.prefix_per_cell > 1 and not (self.fan_k > 0 and self.fan_mix == "all"):
+            raise ValueError(
+                f"tul.prefix_per_cell={self.prefix_per_cell} needs tul.fan_k > 0 and "
+                f"tul.fan_mix='all' (got fan_k={self.fan_k}, fan_mix={self.fan_mix!r}): a "
+                f"wider per-cell write only has a defined meaning on the write-all fan, "
+                f"whose cells reach the coda 1:1 through `prefix_project(cells=...)`. "
+                f"Raises rather than silently no-opping on every other geometry.")
+        if self.fan_mix == "all" and self.fan_k > 0:
+            _expect_k = self.fan_k * self.prefix_per_cell
+            if self.prefix_k != _expect_k:
+                raise ValueError(
+                    f"tul.fan_mix='all' needs tul.prefix_k={_expect_k} (= fan_k="
+                    f"{self.fan_k} x prefix_per_cell={self.prefix_per_cell}): every stream "
+                    f"is written into its prefix_per_cell coda positions through "
+                    f"W_prefix[i*prefix_per_cell+j], the register's 1:1 route widened. "
+                    f"Got prefix_k={self.prefix_k}.")
         if self.fan_all_wta_winner not in ("per_rollout", "map", "latent"):
             raise ValueError(
                 f"tul.fan_all_wta_winner must be 'per_rollout', 'map' or 'latent', got "
@@ -6130,7 +6168,11 @@ class TULSlots(nn.Module):
     * ``W_prefix`` ``[prefix_k, d, d]`` — one looped state ``h_i`` projected into the
       slot's ``prefix_k`` coda positions (spec §3.1; Block Transformer App. F.2 / Fig 3f
       picks prefix length 2 over 1). Init identity, so at the activation step both coda
-      positions see ``h_i`` unchanged and the extra position costs nothing.
+      positions see ``h_i`` unchanged and the extra position costs nothing. Under
+      ``tul.prefix_per_cell=m > 1`` (the write-all fan's wider write) copy 0 of each of
+      the ``fan_k`` cells (position ``i*m``) is still identity; copies ``j in 1..m-1``
+      (position ``i*m+j``) start as random orthogonal matrices (trainable) from a private
+      generator — see :meth:`__init__`.
     * ``W_sent`` ``[d, d]``, bias-free — ONLY built when ``tul.slot_seed == "boundary"``
       (arm TG4b, lab/divergence/TG-WORKLIST.md A1). Projects the span's boundary token
       embedding into the slot input. An unused Linear still draws weight decay and
@@ -6178,6 +6220,24 @@ class TULSlots(nn.Module):
         self.W_prefix: nn.Parameter | None = None
         if with_prefix:
             eye = torch.eye(d_model).unsqueeze(0).repeat(tul.prefix_k, 1, 1)
+            m = tul.prefix_per_cell
+            if m > 1:
+                # tul.prefix_per_cell (2026-10-05): cell i's copy 0 (position i*m) stays
+                # IDENTITY — the exact m=1 write at step 0 — and copies j in 1..m-1
+                # (position i*m+j) start as random ORTHOGONAL matrices (trainable, like
+                # every W_prefix copy): norm-preserving,
+                # like identity, but a different basis, so the duplicate positions are not
+                # identical to each other OR to copy 0 at step 0 (a model whose coda could
+                # not tell its m copies apart would have nothing to widen). Drawn from a
+                # PRIVATE generator — the `build_bound_rotations` / `W_sent` precedent
+                # above — so the global RNG stream is untouched and an `m=1` model's base
+                # weights are byte-for-byte unmoved by this key existing.
+                fan_k = tul.prefix_k // m
+                g = torch.Generator(device="cpu").manual_seed(0x9A41)
+                for i in range(fan_k):
+                    for j in range(1, m):
+                        eye[i * m + j] = torch.linalg.qr(
+                            torch.randn(d_model, d_model, generator=g))[0]
             self.W_prefix = nn.Parameter(eye)
         # E_pass [prefix_k, d] — the per-cell PASS-INDEX embedding, built only when
         # `tul.prefix_source` is not "exit". Init ZERO and RNG-neutral (no draw), so an
@@ -6368,6 +6428,12 @@ class TULSlots(nn.Module):
         before this parameter existed — broadcasts ``h_slots`` to every cell, which is
         the identical arithmetic to the old body and is asserted bit-exact in
         ``tests/test_tul_prefix_source.py``.
+
+        ``cells`` ``[B, S, fan_k, …, C]`` under ``tul.prefix_per_cell=m > 1`` (the
+        write-all fan's wider write, ``fan_mix='all'``): cell ``i`` is expanded (BEFORE
+        the per-position matmuls) into ``m`` consecutive entries and lands at positions
+        ``i*m .. i*m+m-1`` through ``W_prefix[i*m] .. W_prefix[i*m+m-1]`` — see the
+        expansion's own comment, a few lines below.
         """
         K = self.tul.prefix_k
         B, S = layout.slot_index.shape
@@ -6379,6 +6445,29 @@ class TULSlots(nn.Module):
                 "model or an FM planner (TULSlots(with_prefix=True)); the paid loop "
                 "(tul.tokens_through_core) has no projection to write through.")
         w = self.W_prefix.to(h_slots.dtype)
+        m = int(self.tul.prefix_per_cell)
+        if cells is not None and m > 1 and cells.shape[2] != K:
+            # tul.prefix_per_cell (2026-10-05, the "wider write" arm): every caller under
+            # this key builds `cells` fan_k-sized — `_tul_fan_stream_write`'s blank, the
+            # deployed write (`_reg_cells` / a router's winner-alone stack), the shared-
+            # mixture pass — never prefix_k-sized, so this is the ONE seam that widens for
+            # the write. `repeat_interleave` on the cell axis turns entry i into m
+            # CONSECUTIVE entries i*m .. i*m+m-1 (slot-major, cell-major within the slot —
+            # exactly the position order `prefix_positions` already lays out below), each
+            # one still THE SAME source state for cell i, so the per-position matmul loop
+            # right below needs no change: position i*m+j reads `cells[:, :, i]` through
+            # its own `W_prefix[i*m+j]`. The external `cells=` CONTRACT stays fan_k-sized —
+            # this expansion lives entirely inside the call, so a probe that captures the
+            # argument it was handed (`lab/divergence/ln_common_mode_probe.py`'s
+            # `Capture.pp_cells`, `exploration_ledger.py`'s `write_cell` patch) still sees
+            # the un-widened tensor it built.
+            fan_k = K // m
+            if cells.shape[2] != fan_k:
+                raise ValueError(
+                    f"prefix_project cells {tuple(cells.shape)}: tul.prefix_per_cell={m} "
+                    f"expects dim 2 to be fan_k={fan_k} (so it can expand to prefix_k={K} "
+                    f"positions) or already prefix_k={K}; got {cells.shape[2]}.")
+            cells = cells.repeat_interleave(m, dim=2)
         if cells is None:
             # [B,S,M,C] through each W_prefix[k] → [B,S,K,M,C]. K plain matmuls, each one
             # GEMM over the folded [B·S·M, C] rows, NOT the broadcast matmul
