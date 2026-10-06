@@ -46,7 +46,21 @@ Four readings, same 96 rows and the same packer / seed as the data-flow probe:
 NOTHING in ``morph/`` is edited. Hooks: forward hooks on ``model.injection``, the core
 blocks and ``tul_cell_norm``; the instance attribute ``_hc_post`` of every core block's two
 Hyper-Connection residuals is wrapped (it receives Hres, Hpost_row, h and y exactly as the
-model computed them); the model's own ``_jac_capture`` / ``_lsel_capture`` lists. Self-tests:
+model computed them); the model's own ``_jac_capture`` / ``_lsel_capture`` lists.
+
+Two arms of the carrier-constant twin (2026-10-05, lab/experiments/planned/2026-10-05-
+carrier-constant-twin.md) are handled explicitly:
+  * ``tul.loop_attn_hc: uniform``: the core ATTENTION residual is a ``UniformResidual``
+    (no ``_hc_post``). A forward hook on it decomposes the same way with the fixed maps
+    ``Hres = I`` (mix = 0), ``Hpost_row = 1`` (every stream gets y) and
+    ``y = mean_n(out - h - post_inject)`` (exact: ``out = h + y`` broadcast over streams).
+  * ``tul.loop_attn_center: ema``: the attention sublayer reads ``x_bar - mu_l``. A hook on
+    ``blk.attn_center`` records ``xin/attn_l{i}/xbar`` (the RAW HC read, BEFORE centering)
+    and ``xin/attn_l{i}/xbar_centered`` (what ``norm_attn`` receives), plus the per-cell
+    ratio rms(centered) / rms(raw) (``center/l{i}/...``: mean, share of cells under 0.1 /
+    0.3, the minimum). On every other model ``xin/attn_l{i}/xbar`` is ``norm_attn``'s input,
+    which is the raw read there. Self-test ``center_out_eq_norm_in``.
+Self-tests:
 the instrumented forward's CE is bit-equal to the plain one; every stage's input equals the
 previous stage's output; the HC split reproduces the residual's output; the sources sum to
 the final carrier; the Q4 control reproduces the plain CE.
@@ -74,6 +88,7 @@ from _rows import pack_rows, stream_from_loader  # noqa: E402
 from dataflow_probe import RowAcc, VecAcc, ce_of, forward_ce, rel_err  # noqa: E402
 
 import morph.model.attention as _attn  # noqa: E402
+from morph.model.hyper_connections import UniformResidual  # noqa: E402
 
 sys.path.insert(0, f"{ROOT}/scripts")
 from tul_samples import load_ckpt  # noqa: E402
@@ -128,6 +143,10 @@ class Cap:
         self.order: dict[int, list[str]] = defaultdict(list)   # pass -> state names in order
         self.cur = None           # the core block running now (None outside the core)
         self.o_gcu = None
+        self.residual_kind: dict = {}      # (layer, branch) -> "hc" | "uniform"
+        self.centered: set[int] = set()    # core layers whose attention reads x_bar - mu
+        self.center_out = {}               # layer -> the centered input of the last call
+        self.center_min: dict[str, float] = {}   # f"t{t}/l{i}" -> min per-cell rms ratio
 
     # -- helpers -----------------------------------------------------------------------
     def t(self) -> int:
@@ -161,8 +180,21 @@ class Cap:
             self.handles.append(blk.register_forward_pre_hook(self._blk_pre(i)))
             self.handles.append(blk.register_forward_hook(self._blk_post(i)))
             for br, res in (("attn", blk.mrr_attn), ("mlp", blk.mrr_mlp)):
-                self.orig_post[(i, br)] = res._hc_post
-                res._hc_post = self._wrap_post(i, br, res._hc_post)
+                if isinstance(res, UniformResidual):
+                    self.handles.append(res.register_forward_hook(self._uni_hook(i, br),
+                                                                  with_kwargs=True))
+                    self.residual_kind[(i, br)] = "uniform"
+                elif hasattr(res, "_hc_post"):
+                    self.orig_post[(i, br)] = res._hc_post
+                    res._hc_post = self._wrap_post(i, br, res._hc_post)
+                    self.residual_kind[(i, br)] = "hc"
+                else:
+                    raise NotImplementedError(f"core block {i} {br}: residual "
+                                              f"{type(res).__name__} is not decomposed here")
+            ctr = getattr(blk, "attn_center", None)
+            if ctr is not None:
+                self.handles.append(ctr.register_forward_hook(self._center_hook(i)))
+                self.centered.add(i)
         self.handles.append(m.tul_cell_norm.register_forward_hook(self._norm_hook))
         for i, blk in enumerate(m.core):
             for br, nrm in (("attn", blk.norm_attn), ("mlp", blk.norm_mlp)):
@@ -173,9 +205,9 @@ class Cap:
     def detach(self):
         for h in self.handles:
             h.remove()
-        for i, blk in enumerate(self.m.core):
-            blk.mrr_attn._hc_post = self.orig_post[(i, "attn")]
-            blk.mrr_mlp._hc_post = self.orig_post[(i, "mlp")]
+        for (i, br), orig in self.orig_post.items():
+            res = self.m.core[i].mrr_attn if br == "attn" else self.m.core[i].mrr_mlp
+            res._hc_post = orig
         _attn._CCABase._gate_combine_up = self.o_gcu
 
     def _sub_in_hook(self, i, br):
@@ -184,9 +216,45 @@ class Cap:
             if not self.on:
                 return
             t = self.t()
+            if br == "attn" and i in self.centered:
+                # norm_attn's input IS the centered read: it must equal the center's output
+                c_out = self.center_out.pop(i, None)
+                if c_out is None:
+                    raise RuntimeError(f"core layer {i}: norm_attn ran without the center")
+                self.selftest["center_out_eq_norm_in"] = max(
+                    self.selftest["center_out_eq_norm_in"], rel_err(args[0], c_out))
             if t in self.rec:
-                self.vacc.add(f"t{t}/xin/{br}_l{i}/xbar", flat_valid(args[0], self.vcell))
+                if not (br == "attn" and i in self.centered):
+                    # no center: norm_attn reads the raw HC read x_bar
+                    self.vacc.add(f"t{t}/xin/{br}_l{i}/xbar", flat_valid(args[0], self.vcell))
                 self.vacc.add(f"t{t}/xin/{br}_l{i}/normed", flat_valid(out, self.vcell))
+        return f
+
+    def _center_hook(self, i):
+        """``LoopAttnCenter``: args[0] = the RAW x_bar, out = x_bar - mu_used."""
+        def f(mod, args, out):
+            if not self.on:
+                return
+            self.center_out[i] = out.detach()
+            t = self.t()
+            if t not in self.rec:
+                return
+            raw = args[0].detach().float()
+            cen = out.detach().float()
+            self.selftest["center_formula"] = max(
+                self.selftest["center_formula"],
+                rel_err(raw - mod.mu_used.float(), cen))
+            self.vacc.add(f"t{t}/xin/attn_l{i}/xbar", flat_valid(raw, self.vcell))
+            self.vacc.add(f"t{t}/xin/attn_l{i}/xbar_centered", flat_valid(cen, self.vcell))
+            rr = cen.pow(2).mean(-1).sqrt() / raw.pow(2).mean(-1).sqrt().clamp_min(1e-30)
+            rv = rr[self.vcell]                                   # [N] valid cells
+            n = rv.numel()
+            if n:
+                self.acc.add(f"t{t}/center/l{i}/rms_ratio", float(rv.sum()), n)
+                self.acc.add(f"t{t}/center/l{i}/frac_lt_0.1", float((rv < 0.1).sum()), n)
+                self.acc.add(f"t{t}/center/l{i}/frac_lt_0.3", float((rv < 0.3).sum()), n)
+                k = f"t{t}/l{i}"
+                self.center_min[k] = min(self.center_min.get(k, float("inf")), float(rv.min()))
         return f
 
     def _wrap_gcu(self, orig):
@@ -267,6 +335,24 @@ class Cap:
             self.last = out.detach().float()
         return f
 
+    def _uni_hook(self, i, br):
+        """``UniformResidual``: out = h + y (+ post_inject), broadcast over the n streams;
+        the decomposition below is the HC one with Hres = I and Hpost_row = 1."""
+        def f(mod, args, kwargs, out):
+            if not self.on:
+                return
+            h = args[0]
+            term = kwargs.get("post_inject")
+            d = out.detach().float() - h.detach().float()
+            if term is not None:
+                d = d - term.detach().float().unsqueeze(-2)
+            y = d.mean(-2)                                             # [B, S, C]
+            B, S, n = h.shape[:3]
+            hres = torch.eye(n, device=h.device).expand(B, S, n, n)
+            hpost_row = torch.ones(B, S, n, device=h.device)
+            self._record_post(i, br, hres, hpost_row, h, y, term, out)
+        return f
+
     def _wrap_post(self, i, br, orig):
         cap = self
 
@@ -274,36 +360,42 @@ class Cap:
             out = orig(hres, hpost_row, h, y, term)
             if not cap.on:
                 return out
-            t = cap.t()
-            cap._cont(t, f"{br}_in", h)
-            hf = h.detach().float()
-            mix = torch.einsum("bsij,bsjc->bsic", hres.detach().float(), hf) - hf
-            write = hpost_row.detach().float().unsqueeze(-1) * y.detach().float().unsqueeze(2)
-            if term is not None:
-                write = write + term.detach().float().unsqueeze(2)
-            of = out.detach().float()
-            cap.selftest[f"hc_split/{br}"] = max(cap.selftest[f"hc_split/{br}"],
-                                                 rel_err(hf + mix + write, of))
-            if t in cap.rec:
-                # the write absorbs the bf16 rounding of the residual's own add, so the
-                # sources telescope EXACTLY to the carrier the model carried
-                cap._contrib(t, f"{br}_mix_l{i}", mix)
-                cap._contrib(t, f"{br}_write_l{i}", of - hf - mix)
-                cap._state(t, f"{br}_l{i}", of)
-                vy = flat_valid(y, cap.vcell)                          # [N, C] single stream
-                cap.vacc.add(f"t{t}/y/{br}_l{i}", vy)
-                hp = hpost_row.detach().float()[cap.vcell]             # [N, n]
-                for j in range(hp.shape[-1]):
-                    cap.acc.add(f"t{t}/hpost/{br}_l{i}/s{j}", float(hp[:, j].sum()),
-                                hp.shape[0])
-                    cap.acc.add(f"t{t}/hpost_sd/{br}_l{i}/s{j}",
-                                float(hp[:, j].std()) * hp.shape[0], hp.shape[0])
-                eye = torch.eye(hres.shape[-1], device=hres.device)
-                dres = (hres.detach().float() - eye).flatten(2).norm(dim=-1)[cap.vcell]
-                cap.acc.add(f"t{t}/hres_dev/{br}_l{i}", float(dres.sum()), dres.shape[0])
-            cap.last = of
+            cap._record_post(i, br, hres, hpost_row, h, y, term, out)
             return out
         return post
+
+    def _record_post(self, i, br, hres, hpost_row, h, y, term, out):
+        """Split one residual update into the stream mix (Hres - I) h and the write
+        Hpost_row (x) y (+ the folded injection term); both residual kinds land here."""
+        cap = self
+        t = cap.t()
+        cap._cont(t, f"{br}_in", h)
+        hf = h.detach().float()
+        mix = torch.einsum("bsij,bsjc->bsic", hres.detach().float(), hf) - hf
+        write = hpost_row.detach().float().unsqueeze(-1) * y.detach().float().unsqueeze(2)
+        if term is not None:
+            write = write + term.detach().float().unsqueeze(2)
+        of = out.detach().float()
+        cap.selftest[f"hc_split/{br}"] = max(cap.selftest[f"hc_split/{br}"],
+                                             rel_err(hf + mix + write, of))
+        if t in cap.rec:
+            # the write absorbs the bf16 rounding of the residual's own add, so the
+            # sources telescope EXACTLY to the carrier the model carried
+            cap._contrib(t, f"{br}_mix_l{i}", mix)
+            cap._contrib(t, f"{br}_write_l{i}", of - hf - mix)
+            cap._state(t, f"{br}_l{i}", of)
+            vy = flat_valid(y, cap.vcell)                          # [N, C] single stream
+            cap.vacc.add(f"t{t}/y/{br}_l{i}", vy)
+            hp = hpost_row.detach().float()[cap.vcell]             # [N, n]
+            for j in range(hp.shape[-1]):
+                cap.acc.add(f"t{t}/hpost/{br}_l{i}/s{j}", float(hp[:, j].sum()),
+                            hp.shape[0])
+                cap.acc.add(f"t{t}/hpost_sd/{br}_l{i}/s{j}",
+                            float(hp[:, j].std()) * hp.shape[0], hp.shape[0])
+            eye = torch.eye(hres.shape[-1], device=hres.device)
+            dres = (hres.detach().float() - eye).flatten(2).norm(dim=-1)[cap.vcell]
+            cap.acc.add(f"t{t}/hres_dev/{br}_l{i}", float(dres.sum()), dres.shape[0])
+        cap.last = of
 
     def _norm_hook(self, mod, args, out):
         if not self.on:
@@ -848,6 +940,32 @@ def run_arm(spec: str, a) -> dict:
         "injection_A_mean": float(inj.log_A.detach().float().exp().mean()),
         "injection_dt_mean": float(inj.log_dt.detach().float().exp().mean()),
     }
+    # the centered arm: mu per layer against the raw x_bar's mean, the per-cell rms ratio
+    center_info = None
+    if cap.centered:
+        center_info = {"min_rms_ratio": dict(cap.center_min), "layers": {}}
+        for i in sorted(cap.centered):
+            ctr = model.core[i].attn_center
+            mu = ctr.mu.detach().float().cpu().numpy()
+            li = {"mu_rms": float(np.sqrt((mu ** 2).mean())),
+                  "n_updates": int(ctr.n_updates), "decay": ctr.decay,
+                  "mu_used_eq_mu": bool(torch.equal(ctr.mu_used, ctr.mu))}
+            for t in sorted(cap.rec):
+                raw = means.get(f"t{t}/xin/attn_l{i}/xbar")
+                cen = means.get(f"t{t}/xin/attn_l{i}/xbar_centered")
+                if raw is None:
+                    continue
+                li[f"t{t}"] = {
+                    "cos_mu_to_raw_mean": cos(mu, raw),
+                    "raw_mean_rms": float(np.sqrt((raw ** 2).mean())),
+                    "centered_mean_rms": float(np.sqrt((cen ** 2).mean())),
+                    "raw_shared_share": cm[f"t{t}/xin/attn_l{i}/xbar"]["mean"],
+                    "centered_shared_share": cm[f"t{t}/xin/attn_l{i}/xbar_centered"]["mean"],
+                    "raw_rms": cm[f"t{t}/xin/attn_l{i}/xbar"]["rms"],
+                    "centered_rms": cm[f"t{t}/xin/attn_l{i}/xbar_centered"]["rms"],
+                    **{k.split("/")[-1]: v for k, v in hp.items()
+                       if k.startswith(f"t{t}/center/l{i}/")}}
+            center_info["layers"][f"l{i}"] = li
     del model
     if device.startswith("cuda"):
         torch.cuda.empty_cache()
@@ -909,6 +1027,8 @@ def run_arm(spec: str, a) -> dict:
         "q4_regrowth": {k: {"per_slot_share": 1 - v["mean"], "rms": v["rms"]}
                         for k, v in cm.items() if k.startswith("q4/")},
         "hc": {k: v for k, v in hp.items() if k.startswith(("t0/", "t1/", f"t{T - 1}/"))},
+        "residual_kind": {f"{br}_l{i}": v for (i, br), v in sorted(cap.residual_kind.items())},
+        "center": center_info,
         "stream_pair_cos_note": "q2.shape_*.stream_pair_cos: +-1 entries mean one channel "
                                 "direction with a per-stream sign / scale",
         "wall_s": time.time() - t0,

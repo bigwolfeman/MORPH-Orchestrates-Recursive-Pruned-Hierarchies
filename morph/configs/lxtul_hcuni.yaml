@@ -4,7 +4,7 @@
 # (Hpre = 1/n), writes the same output to every stream (Hpost_row = 1) and does not mix
 # streams (Hres = I); no parameters. The core MLP's Hyper-Connection stays Cayley. 5000
 # steps, to pair with lxtul's 5k seeds.
-# Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+# Note: .agents/notes/rejected/architecture/2026-10-05-slot-loop-carrier-constant.md
 # Prereg: lab/experiments/planned/2026-10-05-carrier-constant-twin.md
 defaults:
   - lxtul

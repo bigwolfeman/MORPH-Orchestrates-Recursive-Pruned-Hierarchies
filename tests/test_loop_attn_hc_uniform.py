@@ -12,7 +12,7 @@ Files: morph/model/hyper_connections.py (``UniformResidual``), morph/model/trans
 (the build swap, the ``_core_region`` refusal), morph/model/tul.py (keys,
 ``_check_loop_attn``), morph/training/tul_setup.py (keys, manifest, banner),
 morph/inference/tul_generate_cached.py (refusal), morph/configs/lxtul_hcuni.yaml.
-Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+Note: .agents/notes/rejected/architecture/2026-10-05-slot-loop-carrier-constant.md
 
 What each test pins:
   1. Off (absent or explicit ``cayley``) is the tree: the master pins of

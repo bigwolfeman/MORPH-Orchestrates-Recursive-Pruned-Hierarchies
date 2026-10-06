@@ -1,6 +1,6 @@
 # Agent Note: the slot loop's carrier constant, and two ways to cut it
 
-Status: proposed
+Status: rejected — both cuts failed: the loop rebuilt the constant by another path (uniform HC) or detonated (centering)
 
 ## Problem
 
@@ -69,3 +69,14 @@ Two arms on `lxtul.yaml`, run as a twin at 5k (prereg
   The per-slot share reading catches this.
 - The constant may be doing a job (a bias the coda reads); cutting it may cost CE.
 - Uniform HC loses the attention's stream routing, which may cost the loop capacity.
+
+## Outcome (2026-10-06)
+
+Both arms tested and failed
+([filing](../../../../lab/experiments/failures/2026-10-05-carrier-constant-twin.md)). Uniform
+loop attention HC: training rebuilt a new load-bearing constant through the MLP stream
+mixers; scores unchanged. Centered loop attention: detonated at step 470 and never trained.
+Kept in `rejected/` because the finding (98 % of the carrier is a slot-shared vector hidden
+in the HC stream differences) and the two failed cuts are the record that stops the next
+attempt at the same path. Do not retry a single-path cut; a model without HC streams is the
+cleaner test.

@@ -3682,7 +3682,7 @@ class MORPHTransformer(nn.Module):
         # weight is byte-identical to the same-seed model without the keys. On a model with
         # either key the core runs ONLY inside `_tul_core` (`TULConfig._check_loop_attn`
         # refuses the config paths that run it elsewhere; `_core_region` raises).
-        # Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+        # Note: .agents/notes/rejected/architecture/2026-10-05-slot-loop-carrier-constant.md
         self._loop_attn_centers: tuple = ()
         self._loop_attn_center_frozen = False
         self._loop_attn_on = False

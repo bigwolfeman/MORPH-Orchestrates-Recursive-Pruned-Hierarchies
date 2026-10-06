@@ -14,7 +14,7 @@ refusal), morph/model/tul.py (keys, ``_check_loop_attn``), morph/training/tul_se
 (``KNOWN_TUL_KEYS``, the Hydra -> TULConfig path, the manifest, the activate_at refusal,
 the banner), morph/training/train.py (the compile warmup freezes the EMA),
 morph/inference/tul_generate_cached.py (refusal), morph/configs/lxtul_center.yaml.
-Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+Note: .agents/notes/rejected/architecture/2026-10-05-slot-loop-carrier-constant.md
 
 What each test pins:
   1. Off (key absent or explicit default) is bit-identical to the tree before the key:

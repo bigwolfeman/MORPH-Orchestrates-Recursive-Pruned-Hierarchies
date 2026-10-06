@@ -2616,7 +2616,7 @@ class TULConfig:
     # applied to the core blocks, which on a model that sets either key run ONLY inside
     # the slot loop (`_tul_core`): every other core path is refused here or in
     # `MORPHTransformer.__init__`, and `_core_region` raises on such a model.
-    # Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+    # Note: .agents/notes/rejected/architecture/2026-10-05-slot-loop-carrier-constant.md
     #
     # loop_attn_center: "off" (default, builds nothing, bit-identical) | "ema". Under "ema"
     #   each core block's attention sublayer reads `x_bar - mu_l` instead of `x_bar`

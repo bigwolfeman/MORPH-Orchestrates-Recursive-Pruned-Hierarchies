@@ -4,7 +4,7 @@
 # bias-corrected EMA (decay 0.99, the default) of x_bar's mean over the valid slot cells
 # of every pass of a training forward, frozen at eval. No parameter. 5000 steps, to pair
 # with lxtul's 5k seeds.
-# Note: .agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md
+# Note: .agents/notes/rejected/architecture/2026-10-05-slot-loop-carrier-constant.md
 # Prereg: lab/experiments/planned/2026-10-05-carrier-constant-twin.md
 defaults:
   - lxtul

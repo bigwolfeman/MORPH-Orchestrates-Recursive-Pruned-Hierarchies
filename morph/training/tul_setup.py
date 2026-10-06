@@ -1685,7 +1685,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  "to every stream)" if model_cfg.loop_attn_hc == "uniform"
                  else " through the Cayley Hyper-Connection")
               + "; the MLP sublayer is unchanged "
-              "(.agents/notes/proposed/architecture/2026-10-05-slot-loop-carrier-constant.md)",
+              "(.agents/notes/rejected/architecture/2026-10-05-slot-loop-carrier-constant.md)",
               flush=True)
     return TulRuntime(model_cfg=model_cfg, data_cfg=data_cfg,
                       activate_at=activate_at, manifest=manifest)
