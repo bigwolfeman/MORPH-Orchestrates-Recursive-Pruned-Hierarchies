@@ -2,7 +2,7 @@
 # One factor from lxtul.yaml: tul.fan_k 4 -> 8 (fan_mix: all needs prefix_k = fan_k, so
 # prefix_k 4 -> 8 too). Tokens per row stay at seq_len; the packer adds prefix_k * max_slots
 # cell positions on top (L_total 1280 -> 1536). 5000 steps, to pair with lxtul's 5k seeds.
-# Prereg: lab/experiments/planned/2026-10-04-lxtul-eight-cells.md
+# Prereg: lab/experiments/failures/2026-10-04-lxtul-eight-cells.md
 defaults:
   - lxtul
   - _self_

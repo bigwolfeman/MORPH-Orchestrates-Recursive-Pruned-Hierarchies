@@ -1,6 +1,6 @@
 # Planned: does LXTUL with 8 cells per slot carry a larger share of the cross-span budget?
 
-Status: planned
+Status: failure
 
 Date: 2026-10-04, before the run (the `date` stamp is in the commit). Config
 `lxtul_fan8`: `lxtul.yaml` with `tul.fan_k` 4 -> 8 and `tul.prefix_k` 4 -> 8
@@ -62,3 +62,44 @@ with 4 eager passes. Checkpointing is exact (gradients unchanged), so the arm is
 only its speed is. The 5k LXTUL seeds this pairs with also ran at -1 (9800 / 8876 tok/s),
 so E-8 is read against those, not the 12402 of the 10k run. Smoke at -1: 60 steps and a val
 pass, peak 18.46 GB, about 8.1k tok/s by step 40.
+
+## Results
+
+References as preregistered: LXTUL 5k seed 1 / seed 2 K1-K6 +0.0215 / +0.0172, gap to plain 5k +0.272 / +0.282, zero-cell worth +0.176 / +0.154, far-bigram bucket gap +1.150 / +1.154. Readouts: 480-row depth sweep, `paired_vs_ruler.py` gap vs plain 5k, `worth_profile.py` on 192 rows, the exploration ledger, `exact_recall_gap.py` vs plain 5k, the LayerNorm probe's `--vablate` on 96 rows (K6-K1 change when the cells' shared-direction amplitude is set to its mean). Artifacts: [`../results/2026-10-04-lxtul-eight-cells/`](../results/2026-10-04-lxtul-eight-cells/).
+
+| reading | more cells (fan8) |
+| --- | --- |
+| tripwire | EXCURSION: one-step outliers at 383, 1374, 2782 (max 4.5e4), each recovered |
+| K1-K6 | +0.0103 [+0.0097, +0.0110] |
+| gap to plain 5k | +0.2697 [+0.2537, +0.2878] |
+| zero-cell worth / shuffle | +0.158 / +0.137 |
+| share worth / (worth + gap) | 0.37 |
+| ledger CE | 4.3470 |
+| far-bigram bucket gap (share of gap) | +1.154 (75.7 %) |
+| mean-ablation of the shared direction, K6-K1 change | +13 % |
+| tok/s, peak (checkpoint every pass) | 7456, 19.9 GB |
+| repetition eval | not measured: OOM twice (2.06 GiB alloc), alone on the GPU the second time |
+
+| prediction | held |
+| --- | --- |
+| E-1 no detonation | yes (recovered one-step outliers) |
+| E-2 gap < +0.262 | no |
+| E-3 gap < +0.245 | no |
+| E-4 worth > +0.190 | no |
+| E-5 share > 0.42 | no (0.37) |
+| E-6 K1-K6 > +0.0108 | no (+0.0103) |
+| E-7 mean-ablation change < 30 % | yes (+13 %) |
+| E-8 tok/s 15-35 % below LXTUL at -1 | yes (24 % / 16 % below the two seeds) |
+
+## Verdict
+
+Failure: the pass rule (E-2 and E-6) fails on both. Eight proposals per pass leave the gap at the
+LXTUL seed level and HALVE the loop's depth earning. Under the latent-selected loop the coda
+still reads one winner per slot, so more cells only widen the per-pass search; the wider search
+costs 24 % in speed and buys no CE. Cell count as search breadth is not a CE lever at 5k.
+
+## Updated hypothesis
+
+More search breadth per pass does not help a loop whose carrier is 98 % one slot-shared vector
+(see the 2026-10-05 data-flow probe); the variable-cell-count idea stays open as a test-time
+knob but has no CE prior from this run.

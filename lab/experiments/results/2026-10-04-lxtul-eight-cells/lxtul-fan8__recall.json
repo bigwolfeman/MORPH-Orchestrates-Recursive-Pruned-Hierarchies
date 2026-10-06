@@ -1,0 +1,184 @@
+{
+ "sanity_reproduction": {
+  "point": 0.2696851234435345,
+  "lo": 0.25374671496354984,
+  "hi": 0.2878035909916859,
+  "pairing": "tokens n=491520 blocks=481",
+  "expected": [
+   0.3564,
+   0.3356,
+   0.3791
+  ]
+ },
+ "n_classified_tokens": 461280,
+ "grand_total_gap": 133230.6519175139,
+ "buckets": {
+  "far_bigram_repeat": {
+   "name": "far_bigram_repeat",
+   "n_tokens": 87428,
+   "token_share": 0.18953347207769686,
+   "mean_gap": 1.153653207377524,
+   "mean_gap_ci": [
+    1.1050923271091666,
+    1.209862401635812
+   ],
+   "plain_mean_ce": 1.8714800259416042,
+   "lxtul_mean_ce": 3.0251332333191283,
+   "total_gap": 100861.59261460218,
+   "gap_share": 0.7570449529665881,
+   "share_ratio": 3.994254654166031
+  },
+  "far_token_repeat": {
+   "name": "far_token_repeat",
+   "n_tokens": 162549,
+   "token_share": 0.35238683662851195,
+   "mean_gap": 0.1252212197571739,
+   "mean_gap_ci": [
+    0.11867899309057466,
+    0.1318956780977286
+   ],
+   "plain_mean_ce": 3.449542623579009,
+   "lxtul_mean_ce": 3.5747638433361835,
+   "total_gap": 20354.58405030886,
+   "gap_share": 0.15277703559471315,
+   "share_ratio": 0.4335492127243433
+  },
+  "novel": {
+   "name": "novel",
+   "n_tokens": 211303,
+   "token_share": 0.45807969129379117,
+   "mean_gap": 0.0568589904194586,
+   "mean_gap_ci": [
+    0.05064928255913092,
+    0.06325977177179024
+   ],
+   "plain_mean_ce": 5.42167283467109,
+   "lxtul_mean_ce": 5.478531825090548,
+   "total_gap": 12014.47525260286,
+   "gap_share": 0.09017801143869876,
+   "share_ratio": 0.19686096797699495
+  },
+  "far_bigram_repeat@33-64": {
+   "name": "far_bigram_repeat@33-64",
+   "n_tokens": 23706,
+   "token_share": 0.05139177939646202,
+   "mean_gap": 1.598809577498048,
+   "mean_gap_ci": [
+    1.5144999807998283,
+    1.6818329660987328
+   ],
+   "plain_mean_ce": 1.2316795346080815,
+   "lxtul_mean_ce": 2.830489112106129,
+   "total_gap": 37901.379844168725,
+   "gap_share": 0.2844794294606794,
+   "share_ratio": 5.535504565157436
+  },
+  "far_bigram_repeat@65-256": {
+   "name": "far_bigram_repeat@65-256",
+   "n_tokens": 44681,
+   "token_share": 0.09686307665626084,
+   "mean_gap": 1.3597356770292734,
+   "mean_gap_ci": [
+    1.3071919542681791,
+    1.4197143340783418
+   ],
+   "plain_mean_ce": 1.6639645161074053,
+   "lxtul_mean_ce": 3.0237001931366785,
+   "total_gap": 60754.349785344966,
+   "gap_share": 0.45600880060963267,
+   "share_ratio": 4.7077670496455175
+  },
+  "far_bigram_repeat@257+": {
+   "name": "far_bigram_repeat@257+",
+   "n_tokens": 19041,
+   "token_share": 0.041278616024973985,
+   "mean_gap": 0.11584806391935765,
+   "mean_gap_ci": [
+    0.0894071744417764,
+    0.14525144744861102
+   ],
+   "plain_mean_ce": 3.15497936644128,
+   "lxtul_mean_ce": 3.2708274303606375,
+   "total_gap": 2205.862985088489,
+   "gap_share": 0.016556722896276067,
+   "share_ratio": 0.40109685087937735
+  },
+  "far_token_repeat@33-64": {
+   "name": "far_token_repeat@33-64",
+   "n_tokens": 58778,
+   "token_share": 0.12742369060006936,
+   "mean_gap": 0.1691161782840721,
+   "mean_gap_ci": [
+    0.15925039174629027,
+    0.17940647789160022
+   ],
+   "plain_mean_ce": 2.8482241736368246,
+   "lxtul_mean_ce": 3.017340351920897,
+   "total_gap": 9940.31072718119,
+   "gap_share": 0.07460978824404058,
+   "share_ratio": 0.585525249603781
+  },
+  "far_token_repeat@65-256": {
+   "name": "far_token_repeat@65-256",
+   "n_tokens": 75897,
+   "token_share": 0.1645356399583767,
+   "mean_gap": 0.12228503006132549,
+   "mean_gap_ci": [
+    0.11338206756289405,
+    0.13105528054518678
+   ],
+   "plain_mean_ce": 3.5672896934394385,
+   "lxtul_mean_ce": 3.6895747235007637,
+   "total_gap": 9281.066926564421,
+   "gap_share": 0.06966164912493665,
+   "share_ratio": 0.4233833420075995
+  },
+  "far_token_repeat@257+": {
+   "name": "far_token_repeat@257+",
+   "n_tokens": 27874,
+   "token_share": 0.0604275060700659,
+   "mean_gap": 0.040654602732411844,
+   "mean_gap_ci": [
+    0.028133870239319434,
+    0.0527332859512941
+   ],
+   "plain_mean_ce": 4.396936126108417,
+   "lxtul_mean_ce": 4.437590728840829,
+   "total_gap": 1133.2063965632478,
+   "gap_share": 0.008505598225735933,
+   "share_ratio": 0.14075706212124098
+  }
+ },
+ "predictions": {
+  "R1_far_bigram_ge_2x_novel": {
+   "far_bigram_gap": 1.153653207377524,
+   "novel_gap": 0.0568589904194586,
+   "ratio": 20.289723733517338,
+   "holds": true
+  },
+  "R2_far_bigram_share_ge_1.5x_tokens": {
+   "share_ratio": 3.994254654166031,
+   "holds": true
+  },
+  "R3_novel_gap_ci_above_0": {
+   "novel_gap": 0.0568589904194586,
+   "novel_ci": [
+    0.05064928255913092,
+    0.06325977177179024
+   ],
+   "holds": true
+  },
+  "R4_dist33to64_le_dist257plus": {
+   "d33_64": 1.598809577498048,
+   "d257p": 0.11584806391935765,
+   "holds": false
+  }
+ },
+ "config": {
+  "min_i": 64,
+  "far_gap": 33,
+  "n_boot": 1000,
+  "seed": 0,
+  "depth": "6"
+ }
+}

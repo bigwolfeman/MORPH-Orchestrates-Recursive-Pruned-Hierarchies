@@ -1,6 +1,6 @@
 # Planned: does packing more of the span into the LXTUL cell narrow the gap? (three arms)
 
-Status: planned
+Status: failure
 
 Date: 2026-10-05 01:55 CDT, before any smoke or run. Item B of the
 [CE queue](../../../.agents/notes/proposed/architecture/2026-10-04-lxtul-ce-test-queue.md)
@@ -48,3 +48,45 @@ with a val pass first for each arm (exit 0, memory, the mechanism's log line); a
 smoke fails is not queued and the failure is filed. Readouts per arm (`arm_after.sh`): depth
 sweep (480 rows), gap vs plain 5k, worth, exploration ledger, LayerNorm probe and
 `--vablate`, the exact-recall probe with per-bucket loop K1-K6, the repetition eval.
+
+## Results
+
+References as preregistered: LXTUL 5k seed 1 / seed 2 K1-K6 +0.0215 / +0.0172, gap to plain 5k +0.272 / +0.282, zero-cell worth +0.176 / +0.154, far-bigram bucket gap +1.150 / +1.154. Readouts: 480-row depth sweep, `paired_vs_ruler.py` gap vs plain 5k, `worth_profile.py` on 192 rows, the exploration ledger, `exact_recall_gap.py` vs plain 5k, the LayerNorm probe's `--vablate` on 96 rows (K6-K1 change when the cells' shared-direction amplitude is set to its mean). Artifacts: [`../results/2026-10-05-lxtul-cell-packing-panel/`](../results/2026-10-05-lxtul-cell-packing-panel/).
+
+| reading | multi-head pool | own-span reconstruction | pool + reconstruction |
+| --- | --- | --- | --- |
+| tripwire | DETONATED at 2844 (4.0e5), recovered | HEALTHY, max 301 | AMBIGUOUS, max 9.2e3 |
+| K1-K6 | +0.0221 [+0.0210, +0.0231] | +0.0010 [+0.0008, +0.0013] | +0.0039 [+0.0034, +0.0044] |
+| gap to plain 5k | +0.2789 [+0.2627, +0.2965] | +0.3774 [+0.3633, +0.3932] | +0.3942 [+0.3797, +0.4102] |
+| zero-cell worth / shuffle | +0.166 / +0.160 | +0.161 / +0.122 | +0.145 / +0.113 |
+| ledger CE | 4.3593 | 4.4580 | 4.4749 |
+| far-bigram bucket gap | +1.149 | +1.178 | +1.208 |
+| mean-ablation K6-K1 change | -1.8 % | | |
+| tok/s, peak | 12318, 20.2 GB | 10852, 21.8 GB | 10723, 22.0 GB |
+
+| prediction | held |
+| --- | --- |
+| no detonation | pool: one recovered spike; recon: yes; both: yes |
+| P-1 pool K1-K6 > +0.0108 | yes |
+| P-2 pool gap < +0.262 | no |
+| P-3 pool far-bigram >= 0.05 below +1.150 | no |
+| P-4 pool tok/s >= 11000 | yes |
+| R-1 recon K1-K6 > +0.0108 | no (+0.0010) |
+| R-2 recon gap < +0.262 | no |
+| R-3 recon far-bigram >= 0.05 below +1.150 | no (+1.178, worse) |
+| R-4 recon tok/s >= 10000 | yes |
+| C-1 both gap 0.005 below the better single arm | no |
+| C-2 both K1-K6 > +0.0108 | no |
+
+## Verdict
+
+Failure on every arm's pass rule. The multi-head pool is neutral: loop earning at the seed-1 level,
+gap unchanged. Own-span reconstruction is harmful: it kills loop contribution (K1-K6 +0.0010) and
+widens the gap by 0.10; asking the cell to keep its own span crowds out what the loop carries
+forward. Combined is worse than either.
+
+## Updated hypothesis
+
+Getting span tokens INTO the cell (pool heads) or making the cell KEEP them (reconstruction) does
+not close the gap. Together with the wider write and the carrier-constant twin, the cell-content
+axis of the CE queue is closed at 5k.

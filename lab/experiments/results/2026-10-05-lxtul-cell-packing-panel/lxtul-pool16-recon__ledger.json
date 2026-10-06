@@ -1,0 +1,946 @@
+{
+ "lxtul-pool16-recon": {
+  "kind": "lsel",
+  "M": 4,
+  "passes": 6,
+  "rows": 480,
+  "n_tokens": 511089,
+  "shipped_ce": 4.474858434381598,
+  "readings": {
+   "random_exit": {
+    "ce": 4.487509208714426,
+    "anchor": "0 = the learned pick is no better than a random cell; > 0 = pick value",
+    "delta": {
+     "point": 0.012650774332828796,
+     "lo": 0.011867363327668823,
+     "hi": 0.013451704969392053,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.017100325146254036,
+      "lo": 0.015439174703877923,
+      "hi": 0.018866294183949247,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.011954651173731179,
+      "lo": 0.010842576268325988,
+      "hi": 0.013096767793370767,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 0.011021959014661853,
+      "lo": 0.009897820847293248,
+      "hi": 0.012213869896608375,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.011382951603810199,
+      "lo": 0.009905841303971962,
+      "hi": 0.012996980436741867,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "random_search": {
+    "ce": 4.4873864923583575,
+    "anchor": "0 = the learned search is no better than a random walk; > 0 = search value",
+    "delta": {
+     "point": 0.012528057976759932,
+     "lo": 0.011667502768967575,
+     "hi": 0.013420607413840746,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.01697621386006487,
+      "lo": 0.015166121919716658,
+      "hi": 0.018845647263255147,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.01198660997030121,
+      "lo": 0.01081078087554963,
+      "hi": 0.013228706286023705,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 0.010846088653119423,
+      "lo": 0.009628560864151115,
+      "hi": 0.012043502944416692,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.011325696299580912,
+      "lo": 0.009877585481164953,
+      "hi": 0.012865206687344588,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "teacher": {
+    "ce": 4.481246936017497,
+    "anchor": "< 0 = following the latent teacher beats the router (router error); 0 = the router matches the teacher",
+    "delta": {
+     "point": 0.006388501635899324,
+     "lo": 0.005688320315974193,
+     "hi": 0.007068695268094083,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.011236267978346426,
+      "lo": 0.009641097978705705,
+      "hi": 0.01313590417414705,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.005673285494271596,
+      "lo": 0.004751691643029066,
+      "hi": 0.006603649570225922,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 0.004600625612434683,
+      "lo": 0.0036282923488042186,
+      "hi": 0.0055006839909341075,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.004970169444448835,
+      "lo": 0.003919465867536932,
+      "hi": 0.0060318322362774785,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "cell_0": {
+    "ce": 4.474080029235778,
+    "anchor": "write-all fans: > 0 = reading all cells beats one (width value); selecting arms: > 0 = the pick beats an arbitrary fixed cell",
+    "delta": {
+     "point": -0.000778405145818617,
+     "lo": -0.0011744445385474256,
+     "hi": -0.00045647573312563883,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": -0.001072266596061855,
+      "lo": -0.0018269493667225187,
+      "hi": -0.00038996661838471854,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": -0.0005013488829392898,
+      "lo": -0.0010063783920996716,
+      "hi": -2.181625947415009e-05,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": -0.0009789841651626219,
+      "lo": -0.001523696925532958,
+      "hi": -0.0005083075645105908,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": -0.0003310767074555798,
+      "lo": -0.0008852446123550626,
+      "hi": 0.00024659861700053736,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "cell_1": {
+    "ce": 4.482509021016821,
+    "anchor": "write-all fans: > 0 = reading all cells beats one (width value); selecting arms: > 0 = the pick beats an arbitrary fixed cell",
+    "delta": {
+     "point": 0.007650586635222112,
+     "lo": 0.006872244318656673,
+     "hi": 0.008405989467377362,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.009008914003527657,
+      "lo": 0.0073680497549825094,
+      "hi": 0.010869402417977021,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.007377738978146198,
+      "lo": 0.006383826504378566,
+      "hi": 0.008339291967704308,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 0.00704332422282139,
+      "lo": 0.0060090962235302085,
+      "hi": 0.008028620889500848,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.007417934532233161,
+      "lo": 0.005961166458800582,
+      "hi": 0.009009587790621198,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "cell_2": {
+    "ce": 4.504920919544901,
+    "anchor": "write-all fans: > 0 = reading all cells beats one (width value); selecting arms: > 0 = the pick beats an arbitrary fixed cell",
+    "delta": {
+     "point": 0.03006248516330423,
+     "lo": 0.028486518110056713,
+     "hi": 0.03186840933980779,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.03653531975198021,
+      "lo": 0.033733320569803646,
+      "hi": 0.03994990325725993,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.026746900212531344,
+      "lo": 0.02494035321150905,
+      "hi": 0.028499235841036353,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 0.026478269373559904,
+      "lo": 0.024554292087477548,
+      "hi": 0.02855316337217315,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.03229178850535419,
+      "lo": 0.029415626819514998,
+      "hi": 0.03530444556030594,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "cell_3": {
+    "ce": 4.520399463830872,
+    "anchor": "write-all fans: > 0 = reading all cells beats one (width value); selecting arms: > 0 = the pick beats an arbitrary fixed cell",
+    "delta": {
+     "point": 0.045541029449274184,
+     "lo": 0.04366358500793284,
+     "hi": 0.04744561758520833,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.06702570318329215,
+      "lo": 0.0634358018658687,
+      "hi": 0.07073130095855334,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.04542807589534448,
+      "lo": 0.043123932594758885,
+      "hi": 0.047824754544690595,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 0.03870616475861954,
+      "lo": 0.03639381793311582,
+      "hi": 0.04101836492838751,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.03537633991022027,
+      "lo": 0.03236267866300431,
+      "hi": 0.03856517496732144,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "no_reset": {
+    "ce": 4.474843909037971,
+    "anchor": "> 0 = resetting to the winner each pass beats M independent chains picked at the exit; 0 = the per-pass search adds nothing",
+    "delta": {
+     "point": -1.4525343626559106e-05,
+     "lo": -0.0001312513321476194,
+     "hi": 0.00010429213755660526,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": -6.903597083418589e-05,
+      "lo": -0.00034009035529438677,
+      "hi": 0.00022598063692560438,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": -1.939090837677071e-05,
+      "lo": -0.00024483294339332494,
+      "hi": 0.000199066009431692,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": -2.294319419782198e-06,
+      "lo": -0.00018076630138825762,
+      "hi": 0.00018024014448416692,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.0001139424090306207,
+      "lo": -9.545916386137775e-05,
+      "hi": 0.0003175722216482989,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "fixed_lineage": {
+    "ce": 4.474055443218264,
+    "anchor": "> 0 = selection of any kind is worth that much; 0 = selection is worthless",
+    "delta": {
+     "point": -0.0008029911633347098,
+     "lo": -0.001216105058724159,
+     "hi": -0.0004550707587859697,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": -0.0010290414490254918,
+      "lo": -0.0018488674956700032,
+      "hi": -0.00031355483005998116,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": -0.0005357380734958284,
+      "lo": -0.0010732678650340554,
+      "hi": -5.0419044430372257e-05,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": -0.0010188381844224992,
+      "lo": -0.0015894772479165815,
+      "hi": -0.0005387078454281995,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": -0.00041755969578982643,
+      "lo": -0.0009694421003392905,
+      "hi": 0.00014130451276730377,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "loser_t0": {
+    "ce": 4.474866963313185,
+    "anchor": "> 0 at pass t = the pick at pass t carries credit to the final CE; 0 = that pass's pick does not matter",
+    "delta": {
+     "point": 8.528931586759825e-06,
+     "lo": -5.9497311213818614e-05,
+     "hi": 7.891694382091688e-05,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": -8.648990595716555e-06,
+      "lo": -0.00014992572400784884,
+      "hi": 0.00013285888998630898,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 4.327245954094394e-05,
+      "lo": -9.4652090031877e-05,
+      "hi": 0.0001934412238510541,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": -5.483497425018413e-07,
+      "lo": -9.898670300410028e-05,
+      "hi": 0.00010505091612860168,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 5.412632626899949e-05,
+      "lo": -6.859735518440764e-05,
+      "hi": 0.0001726804876168275,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "loser_t1": {
+    "ce": 4.47493164644647,
+    "anchor": "> 0 at pass t = the pick at pass t carries credit to the final CE; 0 = that pass's pick does not matter",
+    "delta": {
+     "point": 7.321206487365117e-05,
+     "lo": -3.1742445948768034e-05,
+     "hi": 0.00017357328639593382,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.00020312632400054653,
+      "lo": -5.638334368794904e-05,
+      "hi": 0.0004565702104719737,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.00019436993220711685,
+      "lo": -1.4625325318240411e-05,
+      "hi": 0.00041996989966968084,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": -1.4840189625608957e-05,
+      "lo": -0.00017548334199000146,
+      "hi": 0.00015216919320710771,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": -6.304307977877954e-06,
+      "lo": -0.00021092583603026234,
+      "hi": 0.00019234143553492617,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "loser_t2": {
+    "ce": 4.474966287894525,
+    "anchor": "> 0 at pass t = the pick at pass t carries credit to the final CE; 0 = that pass's pick does not matter",
+    "delta": {
+     "point": 0.00010785351292685874,
+     "lo": -3.2352639331767124e-06,
+     "hi": 0.00022364431095618352,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.0003492964910813967,
+      "lo": 7.938550589303708e-05,
+      "hi": 0.0006173870675505565,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.0001386340482314452,
+      "lo": -8.302967605926525e-05,
+      "hi": 0.0003644850508725206,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 5.836166773320883e-05,
+      "lo": -0.00010461864073063598,
+      "hi": 0.00022391321951338296,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": -4.620197900884193e-05,
+      "lo": -0.0002522695732609658,
+      "hi": 0.00015343281429085464,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "loser_t3": {
+    "ce": 4.4749793840341745,
+    "anchor": "> 0 at pass t = the pick at pass t carries credit to the final CE; 0 = that pass's pick does not matter",
+    "delta": {
+     "point": 0.00012094965257691825,
+     "lo": 1.0023839215955765e-05,
+     "hi": 0.00023163398753107677,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.00013064602701229333,
+      "lo": -0.0001344417630764538,
+      "hi": 0.0003923052687290318,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.00019962353013447398,
+      "lo": -3.846617851022131e-05,
+      "hi": 0.0004509115869340878,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 3.629511771219285e-05,
+      "lo": -0.0001154483322722832,
+      "hi": 0.00020496404920085072,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 7.650547530335672e-05,
+      "lo": -0.00013931444268810989,
+      "hi": 0.0002892676668307058,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "loser_t4": {
+    "ce": 4.474761784793615,
+    "anchor": "> 0 at pass t = the pick at pass t carries credit to the final CE; 0 = that pass's pick does not matter",
+    "delta": {
+     "point": -9.664958798172307e-05,
+     "lo": -0.00024075993070902247,
+     "hi": 5.433301853914318e-05,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": -0.0004140698235248763,
+      "lo": -0.00074078536792066,
+      "hi": -8.234719575979108e-05,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": -0.00011111714243305926,
+      "lo": -0.00039181287058329676,
+      "hi": 0.00016277285540042816,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": -0.0002547738295062274,
+      "lo": -0.0004998171712074839,
+      "hi": -1.5684821204131678e-05,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.00048358754885757804,
+      "lo": 0.00020711044567509607,
+      "hi": 0.0007556298723643716,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "single_cell": {
+    "ce": 4.495477358407094,
+    "anchor": "write-all fans: > 0 = reading all cells beats one (width value); selecting arms: > 0 = the pick beats an arbitrary fixed cell",
+    "delta": {
+     "point": 0.020618924025495033,
+     "lo": 0.01976083014010732,
+     "hi": 0.02154110443481445,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": 0.02787441758568443,
+      "lo": 0.026261156483374095,
+      "hi": 0.029648996952937122,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": 0.01976284155077135,
+      "lo": 0.018746241150306365,
+      "hi": 0.020850303548821135,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": 0.017812193547459998,
+      "lo": 0.016745379133777494,
+      "hi": 0.018916079863319602,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": 0.018688746560087566,
+      "lo": 0.01729520273190781,
+      "hi": 0.020121761628450696,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   },
+   "oracle": {
+    "ce": 4.450066115176504,
+    "anchor": "selecting arms (the shipped read IS one cell): <= 0, |delta| = headroom of a perfect per-span pick. Write-all fans (the shipped read is all cells): > 0 = reading every cell beats the best single cell per span",
+    "delta": {
+     "point": -0.024792319205093172,
+     "lo": -0.02552723329502258,
+     "hi": -0.024127674123725164,
+     "n_units": 480,
+     "n_boot": 2000,
+     "level": 0.95,
+     "n_tokens": 511089
+    },
+    "by_plain_quartile": {
+     "Q1": {
+      "point": -0.026152377495449297,
+      "lo": -0.027785908087633114,
+      "hi": -0.024605837373659345,
+      "n_units": 457,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 97925
+     },
+     "Q2": {
+      "point": -0.021134709925871853,
+      "lo": -0.022044060964635803,
+      "hi": -0.020232657083306793,
+      "n_units": 459,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 136125
+     },
+     "Q3": {
+      "point": -0.02325337937427374,
+      "lo": -0.024259787052563063,
+      "hi": -0.022294304624390505,
+      "n_units": 460,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 139896
+     },
+     "Q4": {
+      "point": -0.029690109279033372,
+      "lo": -0.031002612280069907,
+      "hi": -0.028438014203819927,
+      "n_units": 462,
+      "n_boot": 2000,
+      "level": 0.95,
+      "n_tokens": 118068
+     }
+    }
+   }
+  },
+  "not_applicable": {},
+  "anchors": {
+   "shipped": "the model's own eval forward (the reference every delta is taken against)",
+   "random_exit": "0 = the learned pick is no better than a random cell; > 0 = pick value",
+   "random_search": "0 = the learned search is no better than a random walk; > 0 = search value",
+   "teacher": "< 0 = following the latent teacher beats the router (router error); 0 = the router matches the teacher",
+   "single_cell": "write-all fans: > 0 = reading all cells beats one (width value); selecting arms: > 0 = the pick beats an arbitrary fixed cell",
+   "oracle": "selecting arms (the shipped read IS one cell): <= 0, |delta| = headroom of a perfect per-span pick. Write-all fans (the shipped read is all cells): > 0 = reading every cell beats the best single cell per span",
+   "no_reset": "> 0 = resetting to the winner each pass beats M independent chains picked at the exit; 0 = the per-pass search adds nothing",
+   "fixed_lineage": "> 0 = selection of any kind is worth that much; 0 = selection is worthless",
+   "loser": "> 0 at pass t = the pick at pass t carries credit to the final CE; 0 = that pass's pick does not matter"
+  },
+  "oracle_pick_share": [
+   0.416555629254396,
+   0.2439477273038551,
+   0.17931710523998756,
+   0.16017953820176134
+  ],
+  "plain": {
+   "used": true,
+   "shift": 0,
+   "corr_by_shift": {
+    "-1": 0.006703503761634915,
+    "0": 0.9071342913544566,
+    "1": 0.04505055078730132
+   },
+   "shift0_is_best_corr": true,
+   "matched_tokens": 491520,
+   "plain_mean_on_matched": 4.074992917823656,
+   "shipped_minus_plain_on_matched": 0.3941873825842356
+  },
+  "self_checks": {
+   "ce_tokens_max_abs_dev": 7.2479248046875e-05,
+   "label_free_max_abs_dev_batch0": 0.0,
+   "oracle_tokens_mean": 4.450066115176504,
+   "fan_oracle_ce_model_mean": 4.44566735625267,
+   "fan_oracle_ce_note": "the model's oracle scores bags >= 1 only, with no slot-id mask; the ledger's oracle scores every token with the mask, so a small gap is expected"
+  },
+  "shipped_fan_stats": {
+   "ce_tokens": 4.4748617827892305,
+   "fan_lsel_weighted": 1.6464212529361248,
+   "fan_lsel_share_k0": 0.7866383729502558,
+   "fan_lsel_share_k1": 0.11801865221932531,
+   "fan_lsel_share_k2": 0.04484468674636446,
+   "fan_lsel_share_k3": 0.050498288506059905,
+   "fan_lsel_switch_rate": 0.0762965241825441,
+   "fan_lsel_switch_n": 790.46875,
+   "fan_lsel_cell_spread": 0.2303719075396657,
+   "fan_lsel_lat": 0.42152801193296907,
+   "fan_lsel_enc": 0.0,
+   "fan_lsel_router_ce": 1.2248932369053365,
+   "fan_lsel_r2": -0.0418785747140646,
+   "fan_lsel_win_dist": 0.4086984621360898,
+   "fan_lsel_mean_dist": 0.6011417536064982,
+   "fan_lsel_enc_std_min": 0.46664877366274593,
+   "fan_lsel_target_rank": 17.5352464556694,
+   "fan_lsel_teacher_router_agree": 0.44400744177401064,
+   "fan_lsel_teacher_router_agree_t0": 0.6347040351480245,
+   "fan_lsel_teacher_router_agree_t1": 0.5953315718099474,
+   "fan_lsel_teacher_router_agree_t2": 0.36907662618905307,
+   "fan_lsel_teacher_router_agree_t3": 0.3562715511769056,
+   "fan_lsel_teacher_router_agree_t4": 0.3553214449435472,
+   "fan_lsel_teacher_router_agree_t5": 0.3533394256606698,
+   "fan_lsel_exit_teacher_router_agree": 0.3533394256606698,
+   "fan_lsel_n_slots": 155.24375,
+   "fan_mix_entropy": 1.3862943798303604,
+   "fan_mix_w_max": 0.24999999776482582,
+   "fan_stream_cos_t0": 0.7448111090809106,
+   "fan_stream_cos_t1": -0.31812413446605203,
+   "fan_stream_cos_t2": -0.31385501828044654,
+   "fan_stream_cos_t3": 0.9387347351759672,
+   "fan_stream_cos_t4": 0.9406198650598526,
+   "fan_stream_cos_t5": 0.9406947325915098,
+   "fan_stream_cos_t6": 0.9408343061804771,
+   "fan_repel_terms": 2.0,
+   "fan_epi_t0": 0.2603207716718316,
+   "fan_epi_t1": 0.8819583930075169,
+   "fan_epi_t2": 0.8755041874945164,
+   "fan_epi_t3": 0.05988959758542478,
+   "fan_epi_t4": 0.05809936970472336,
+   "fan_epi_t5": 0.05798830154817551,
+   "fan_epi_t6": 0.05791910565458238,
+   "fan_vol_t0": 1.4656837850809097,
+   "fan_vol_t1": 2.657109443843365,
+   "fan_vol_t2": 2.656506784260273,
+   "fan_vol_t3": 0.6399195553734899,
+   "fan_vol_t4": 0.6265314560383558,
+   "fan_vol_t5": 0.6258571797981858,
+   "fan_vol_t6": 0.6250034026801586,
+   "fan_stream_rank_t0": 1.9347652785480023,
+   "fan_stream_rank_t1": 2.8917317375540734,
+   "fan_stream_rank_t2": 2.900261826813221,
+   "fan_stream_rank_t3": 1.5022673428058624,
+   "fan_stream_rank_t4": 1.5084757760167122,
+   "fan_stream_rank_t5": 1.507611372321844,
+   "fan_stream_rank_t6": 1.5096247151494027,
+   "fan_router_coda_agree": 0.3601789322681725,
+   "fan_router_pick_regret": 0.02818103326135315,
+   "fan_rand_pick_regret": 0.04618151125032455,
+   "fan_teacher_coda_agree": 0.2904344190843403,
+   "fan_oracle_ce": 4.44566735625267,
+   "fan_single_ce": 4.470081028342247,
+   "fan_mixed_ce": 4.470884925127029,
+   "fan_oracle_gap": 0.024413672089576722,
+   "fan_oracle_pick0": 0.3912252062931657,
+   "fan_oracle_n_spans": 155.24375,
+   "fan_oracle_n_tokens": 3101.51875,
+   "fan_stream_ce_k0": 4.470081028342247,
+   "fan_stream_ce_k1": 4.478629940748215,
+   "fan_stream_ce_k2": 4.501453459262848,
+   "fan_stream_ce_k3": 4.517231044173241
+  },
+  "wall_s": 420.4,
+  "config": "lxtul_pool16_recon",
+  "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-pool16-recon/step_5000.pt",
+  "step": 5000,
+  "overrides": [],
+  "tokens_npz": "/home/wolfe/morph-scratch/xled/ledger_lxtul-pool16-recon.lxtul-pool16-recon.tokens.npz"
+ }
+}
