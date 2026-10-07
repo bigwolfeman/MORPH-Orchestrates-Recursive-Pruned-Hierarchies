@@ -167,6 +167,9 @@ def main() -> None:
     ap.add_argument("--ckpt", action="append", required=True,
                     help="LABEL=CONFIG=PATH[=OVR1,OVR2]")
     ap.add_argument("--depths", default="1,2,3,4,5,6,7,8")
+    ap.add_argument("--pointer-off", action="store_true",
+                    help="tul.pointer_heads leak check: force the pointer gate onto the model "
+                         "(every head's weight 0), so the logits are the model's own")
     ap.add_argument("--rows", type=int, default=48)
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
@@ -192,6 +195,15 @@ def main() -> None:
         model, step = load_ckpt(cfg, path,
                                 device, tul_rt.model_cfg if tul_rt else None)
         model.eval()
+        if a.pointer_off:
+            if getattr(model, "tul_pointer", None) is None:
+                raise ValueError(f"{label}: --pointer-off on a model with no tul.pointer_heads")
+            g = model.tul_pointer.gate_norm_head
+            with torch.no_grad():
+                g.weight.zero_()
+                g.bias.fill_(-1e4)
+                g.bias[0] = 0.0
+            print(f"[{label}] POINTER OFF: gate forced onto the model", flush=True)
         warn_if_frozen_reader(cfg, label)
         plain = tul_rt is None  # the plain control (tul.activate_at: never)
         # Two TUL forwards run the ordinary `_core_region` over the whole packed row, so

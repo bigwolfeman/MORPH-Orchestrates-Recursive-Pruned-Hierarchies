@@ -2,8 +2,9 @@
 # tul.pointer_heads 0 -> 4 (morph/model/tul_pointer.py). Each head attends from a token's final
 # hidden state over earlier tokens' and reads the attention as a distribution over the token
 # that followed; a gate mixes the heads with the model's head. Nothing enters a hidden state.
-# Why: on the Parcae testbed this head took strict LXTUL's gap to plain from +0.294 to -0.026
-# at 5k with K1-K6 unchanged (parcae lxtul-testbed docs/experiments/failures/2026-10-06-parcae-copy-heads.md).
+# Why: on the Parcae testbed, with a head on both sides, strict LXTUL's gap to plain fell from
+# +0.294 to +0.045 at 5k with K1-K6 kept (parcae lxtul-testbed
+# docs/experiments/failures/2026-10-06-parcae-pointer-cellkey.md).
 defaults:
   - lxtul
   - _self_

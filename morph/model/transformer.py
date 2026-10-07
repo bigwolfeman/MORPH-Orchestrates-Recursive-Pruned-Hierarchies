@@ -3805,12 +3805,13 @@ class MORPHTransformer(nn.Module):
             if self._code_enum_k:
                 raise NotImplementedError("tul.pointer_heads with tul.code_enum_k > 1: the "
                                           "per-span Bayes read builds its own log-probs")
-            self.tul_pointer = TULPointer(cfg.d_model, int(cfg.tul.pointer_heads))
+            self.tul_pointer = TULPointer(cfg.d_model, int(cfg.tul.pointer_heads),
+                                          cell_key=bool(cfg.tul.pointer_cell_key))
             print(f"  TUL POINTER ON: {cfg.tul.pointer_heads} heads over earlier tokens' final "
                   f"hidden states (token order, j < i), each read as a distribution over the "
                   f"token that followed j, gated with the model's head; output-only; "
                   f"{sum(p.numel() for p in self.tul_pointer.parameters()):,} params, never "
-                  f"ternary", flush=True)
+                  f"ternary; cell keys {'ON' if cfg.tul.pointer_cell_key else 'off'}", flush=True)
 
         if cfg.retention_carry_mode == "acausal_final":
             print("  WARNING: retention_carry='acausal_final' — the cross-iteration GLA "
@@ -12494,7 +12495,7 @@ class MORPHTransformer(nn.Module):
             lp_model = fused_linear_label_logprob(flat, w_head, lab, ignore_index=-100,
                                                   chunk_size=chunk, mask_token_id=mask_id)
             lp = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
-                                                 layout.slot_mask).reshape(-1)
+                                                 layout.slot_mask, layout).reshape(-1)
             wv = row_w * (lab != -100).to(row_w.dtype)
             loss = -(lp * wv).sum() / wv.sum().clamp_min(1e-9)
             _ptr_tok = (~layout.slot_mask).reshape(-1) & (lab != -100)
@@ -14930,7 +14931,7 @@ class MORPHTransformer(nn.Module):
                     # log-probs (a valid logit tensor; core_depth_sweep and the eager
                     # generator read these)
                     out["logits"] = self.tul_pointer.mixed_logprobs(
-                        xh, out["logits"], input_ids, layout.slot_mask)
+                        xh, out["logits"], input_ids, layout.slot_mask, layout)
             if self.mtp is not None:
                 # The heads' logits on the COMPACT token axis ([B, n_max, V], token order,
                 # a row's ragged tail past its token count is unscored garbage); the same

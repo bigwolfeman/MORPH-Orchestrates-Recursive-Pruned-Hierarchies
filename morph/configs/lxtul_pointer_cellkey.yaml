@@ -1,0 +1,11 @@
+# LXTUL + the pointer head with cell keys: keys in EARLIER spans also read that span's loop
+# cells (morph/model/tul_pointer.py). Parcae: -0.0074 paired against the head without them.
+defaults:
+  - lxtul_pointer
+  - _self_
+
+tul:
+  pointer_cell_key: true
+
+wandb:
+  name: lxtul-pointer-cellkey

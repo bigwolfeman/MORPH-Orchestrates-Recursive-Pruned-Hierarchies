@@ -123,11 +123,58 @@ def test_eval_logits_are_causal_normalised_and_the_head_trains():
         assert prm.grad is not None and float(prm.grad.abs().sum()) > 0
 
 
+def _cellkey_live(seed=11):
+    m = _live(_lx(pointer_heads=2, pointer_cell_key=True))
+    with torch.no_grad():
+        m.tul_pointer.kc.weight.normal_(0, 0.3, generator=torch.Generator().manual_seed(seed))
+    return m
+
+
+def test_cell_key_zero_init_is_the_head_without_them():
+    _ids, inp, lab, layout = _batch(M)
+    a, b = _live(_lx(pointer_heads=2)), _live(_lx(pointer_heads=2, pointer_cell_key=True))
+    b.load_state_dict(a.state_dict(), strict=False)
+    for m in (a, b):
+        m.eval()
+    with torch.no_grad():
+        la = a(inp, labels=None, slot_layout=layout)["logits"]
+        lb = b(inp, labels=None, slot_layout=layout)["logits"]
+    assert torch.equal(la, lb)
+
+
+def test_cell_key_train_eval_agree_causal_and_live():
+    m = _cellkey_live()
+    ids, inp, lab, layout = _batch(M)
+    m.eval()
+    with torch.no_grad():
+        o = m(inp, labels=lab, slot_layout=layout)
+        lg = m(inp, labels=None, slot_layout=layout)["logits"]
+    assert abs(float(o["ce_tokens"]) - _token_ce_from_logits(lg, lab, layout)) < 1e-4
+    with torch.no_grad():
+        m.tul_pointer.kc.weight.zero_()
+        lg0 = m(inp, labels=None, slot_layout=layout)["logits"]
+    assert not torch.allclose(lg, lg0, atol=1e-5)                       # the term is live
+    m = _cellkey_live()
+    m.eval()
+    tok = (~layout.slot_mask[0]).nonzero().squeeze(1)
+    t = int(tok[len(tok) // 2])
+    inp2 = inp.clone()
+    fut = tok[tok >= t]
+    inp2[0, fut] = inp[1, fut]
+    with torch.no_grad():
+        a = m(inp, labels=None, slot_layout=layout)["logits"]
+        b = m(inp2, labels=None, slot_layout=layout)["logits"]
+    before = tok[tok < t]
+    assert torch.equal(a[0, before], b[0, before])
+
+
 def test_config_refusals():
     with pytest.raises(ValueError, match="pointer_heads must be >= 0"):
         TULConfig(pointer_heads=-1)
     with pytest.raises(ValueError, match="slot loop"):
         TULConfig(pointer_heads=2, tokens_through_core=True)
+    with pytest.raises(ValueError, match="pointer_cell_key needs"):
+        TULConfig(pointer_cell_key=True)
 
 
 def test_hydra_path_manifest_and_compose_diff(monkeypatch):
@@ -149,6 +196,9 @@ def test_hydra_path_manifest_and_compose_diff(monkeypatch):
     a, b = _compose_leaves("lxtul_pointer"), _compose_leaves("lxtul")
     diff = {k for k in a.keys() | b.keys() if a.get(k, _MISSING) != b.get(k, _MISSING)}
     assert diff == {"tul.pointer_heads", "training.steps", "wandb.name"}, sorted(diff)
+    c = _compose_leaves("lxtul_pointer_cellkey")
+    diff = {k for k in a.keys() | c.keys() if a.get(k, _MISSING) != c.get(k, _MISSING)}
+    assert diff == {"tul.pointer_cell_key", "wandb.name"}, sorted(diff)
 
 
 def test_cached_generator_refuses_the_pointer():

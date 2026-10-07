@@ -2641,10 +2641,13 @@ class TULConfig:
     #   the token that followed j; a gate mixes the heads with the model's head in the
     #   training CE and in the eval / generation logits. Nothing enters a hidden state, so
     #   the strict geometry's rule (only the loop crosses spans inside the model) holds.
-    #   Why: on the Parcae testbed ~90 % of strict LXTUL's CE gap to plain is copying, and
-    #   this head took that gap from +0.294 to -0.026 with the loop's K1-K6 unchanged
-    #   (parcae lxtul-testbed, docs/experiments/failures/2026-10-06-parcae-copy-heads.md).
+    #   Why: on the Parcae testbed ~90 % of strict LXTUL's CE gap to plain is copying; with a
+    #   head on both sides the gap fell +0.294 -> +0.045 with the loop's K1-K6 kept (parcae
+    #   lxtul-testbed, docs/experiments/failures/2026-10-06-parcae-pointer-cellkey.md).
+    # pointer_cell_key: keys in EARLIER spans also read that span's cells (tul_pointer.py);
+    #   zero-initialised. Parcae: -0.0074 paired against the head without them.
     pointer_heads: int = 0
+    pointer_cell_key: bool = False
 
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
@@ -5115,6 +5118,8 @@ class TULConfig:
         if int(self.pointer_heads) < 0:
             raise ValueError(f"tul.pointer_heads must be >= 0, got {self.pointer_heads}")
         if int(self.pointer_heads) == 0:
+            if self.pointer_cell_key:
+                raise ValueError("tul.pointer_cell_key needs tul.pointer_heads > 0")
             return
         if self.tokens_through_core:
             raise ValueError("tul.pointer_heads is built for the slot loop "
