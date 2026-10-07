@@ -1,0 +1,25 @@
+# The winner (lxtul_pointer) on the graph-captured training step (2026-10-07). Same model and
+# objective; only how the step executes changes: probes off, whole-block compile with static
+# core shapes, the CE softmax-gradient kernel, the capturable optimizer (no GradScaler), the
+# graph-safe forward (fixed 8 passes, dense slot-column attention, fixed-shape fan terms) and
+# the step replayed as one CUDA graph. Not bit-identical to lxtul_pointer (dense attention and
+# the CE kernel change roundings); task 1.10 of
+# .agents/notes/proposed/architecture/2026-10-07-graph-captured-training-step.md checks it at 5k.
+defaults:
+  - lxtul_pointer
+  - _self_
+
+model:
+  ce_softmax_kernel: true
+  graph_safe: true
+
+training:
+  grad_probe_every: 0
+  loop_cot_probe: false
+  compile_blocks: true
+  compile_core_dynamic: false
+  capturable_optimizer: true
+  graph_step: true
+
+wandb:
+  name: lxtul-pointer-graph
