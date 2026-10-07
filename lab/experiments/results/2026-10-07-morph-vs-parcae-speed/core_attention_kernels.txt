@@ -1,0 +1,31 @@
+== kernels under labels containing '_tul_core&attention': 10248/step ==
+    876   1.36ms B void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::arra
+    840   3.24ms B void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::dire
+    780   1.08ms B void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::Ten
+    612   0.94ms F void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::Ten
+    552   1.67ms B void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIter
+    420   2.10ms F void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::dire
+    420   0.53ms B void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<c10::BFloat16>, std::
+    360   1.39ms B void at::native::reduce_kernel<128, 4, at::native::ReduceOp<float, at::native::func_wrapper_t<f
+    348   0.62ms B void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<c10::BFloat16>, s
+    180   0.47ms F void at::native::(anonymous namespace)::CatArrayBatchedCopy_vectorized<at::native::(anonymous n
+    180   0.71ms F void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIter
+    180   0.48ms B void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::Bina
+    180   0.78ms B void at::native::reduce_kernel<512, 1, at::native::ReduceOp<c10::BFloat16, at::native::func_wra
+    180   0.92ms B void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::CUDA
+    120   0.49ms F void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::(ano
+    120   0.08ms F void (anonymous namespace)::elementwise_kernel_with_index<int, at::native::arange_cuda_out(c10:
+    120   0.11ms F void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<bool, bool, bool, a
+    120   0.09ms F void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, std::array<ch
+    120   0.28ms F void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::Bina
+    120   0.31ms B void cublasLt::splitKreduce_kernel<32, 16, int, __nv_bfloat16, __nv_bfloat16, float, __nv_bfloa
+    120   0.55ms B void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_nn_align8>(cutl
+    120   0.59ms B void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::(ano
+    120   0.09ms B Memset (Device)
+     60   1.60ms F void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_64x3_tn_align8>(cut
+     60   0.04ms F void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<c10::BFloat16>, std::
+     60   0.42ms F _dw_fwd_kernel
+     60   0.72ms F _gp_fwd_kernel
+     60   3.57ms F _cca_q_fwd_kernel
+     60   1.89ms F _cca_k_fwd_kernel
+     60   0.22ms F _cca_v_fwd_kernel

@@ -1,0 +1,25 @@
+  fwd ms   bwd ms   sum ms   fwd n   bwd n  label   (per step)
+    26.3     69.8     96.2    3839    9599  MORPHTransformer._forward_tul > MORPHTransformer._tul_core
+    52.4     14.3     66.7     554     186  MORPHTransformer._forward_tul > MORPHTransformer._tul_spandec_loss
+    16.5     34.3     50.8     348     349  MORPHTransformer._forward_tul > MORPHTransformer._tul_group_losses
+    14.5     21.8     36.4     448     829  MORPHTransformer._forward_tul > MORPHTransformer._tul_front
+    10.0     21.2     31.2     389     707  MORPHTransformer._forward_tul > MORPHTransformer._back_region
+     6.4     19.3     25.6     896    2697  MORPHTransformer._forward_tul > MORPHTransformer._tul_core > MORPHTransformer._slot_gain_penalty
+    17.1      0.0     17.1     903       0  MORPHTransformer._forward_tul > MORPHTransformer._tul_fan_target > MORPHTransformer._tul_front
+     7.2      1.6      8.8     628     299  MORPHTransformer._forward_tul > tul_fan.fan_epi_term
+     5.1      0.0      5.1     414       0  optimizer.step > optimizer.step
+     2.2      0.5      2.7     456     198  MORPHTransformer._forward_tul > MORPHTransformer._tul_core > MORPHTransformer._lsel_pass
+     2.3      0.0      2.3      42       0  clip_grad_norm
+     2.1      0.0      2.1     244       2  <no range>
+     0.5      0.3      0.8     146      37  MORPHTransformer._forward_tul > MORPHTransformer._tul_core > MORPHTransformer._lsel_finish
+     0.2      0.3      0.6      79      59  MORPHTransformer._forward_tul
+     0.3      0.3      0.5     153      88  MORPHTransformer._forward_tul > tul_fan.fan_vol_term
+     0.1      0.4      0.5      48     108  MORPHTransformer._forward_tul > MORPHTransformer._tul_core > MORPHTransformer._slot_cell_norm
+     0.2      0.1      0.3      39       9  MORPHTransformer._forward_tul > MORPHTransformer._tul_fan_target
+     0.1      0.0      0.1      26       0  MORPHTransformer._forward_tul > MORPHTransformer._tul_tg_kwargs
+     0.1      0.0      0.1      46       0  MORPHTransformer._forward_tul > tul_fan.fan_repel_term
+     0.0      0.0      0.0      15       0  MORPHTransformer._forward_tul > MORPHTransformer._tul_core > MORPHTransformer._lsel_begin
+     0.0      0.0      0.0       3       2  MORPHTransformer._forward_tul > MORPHTransformer._tul_fan_all
+     0.0      0.0      0.0       4       0  MORPHTransformer._forward_tul > MORPHTransformer._fan_route_cells
+     0.0      0.0      0.0       6       0  MORPHTransformer._forward_tul > MORPHTransformer._tul_core > MORPHTransformer._sample_slot_depths
+   163.8    184.1    347.9    9725   15169  TOTAL

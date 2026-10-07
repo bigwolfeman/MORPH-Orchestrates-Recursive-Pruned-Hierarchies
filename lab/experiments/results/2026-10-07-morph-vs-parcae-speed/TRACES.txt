@@ -1,0 +1,1 @@
+Chrome traces (300 MB each) stay in /home/wolfe/morph-scratch/perf/r1007/prof_*.json (private scratch, not committed).

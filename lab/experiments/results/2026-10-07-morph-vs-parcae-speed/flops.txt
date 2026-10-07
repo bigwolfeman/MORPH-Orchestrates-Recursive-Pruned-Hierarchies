@@ -1,0 +1,3 @@
+flops_morph_lxptr model TF/step at counted batch 11.176 optimizer TF/step 0.0 {'mm': 10.564, 'bmm': 0.155, '_scaled_dot_product_efficient_attention': 0.159, 'addmm': 0.03, '_scaled_dot_product_flash_attention': 0.002, '_scaled_dot_product_efficient_attention_backward': 0.262, '_scaled_dot_product_flash_attention_backward': 0.004}
+flops_parcae_lxptr model TF/step at counted batch 11.218 optimizer TF/step 5.544 {'mm': 10.328, '_scaled_dot_product_flash_attention': 0.321, 'bmm': 5.557, 'addmm': 0.029, '_scaled_dot_product_flash_attention_backward': 0.527}
+flops_parcae_plain model TF/step at counted batch 14.896 optimizer TF/step 4.51 {'mm': 12.68, '_scaled_dot_product_flash_attention': 0.799, '_scaled_dot_product_flash_attention_backward': 1.417, 'bmm': 4.51}

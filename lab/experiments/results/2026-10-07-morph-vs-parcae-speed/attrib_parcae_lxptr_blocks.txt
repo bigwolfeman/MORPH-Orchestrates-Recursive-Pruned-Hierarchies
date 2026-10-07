@@ -1,0 +1,13 @@
+  fwd ms   bwd ms   sum ms   fwd n   bwd n  label   (per step)
+    19.3     48.3     67.6    1144    2923  forward > LXTULParcae._core_step
+    50.5      0.0     50.5     265       0  optimizer.step
+    16.7     31.2     47.9     762     794  forward
+    16.4      9.7     26.0     122     112  forward > LXTULParcae._spandec
+    11.1     11.7     22.8     180     210  forward > LXTULParcae._prelude
+     6.1     13.3     19.5      88     148  forward > blocks.coda
+     4.9     14.4     19.3     310     893  forward > LXTULParcae._gain_penalty
+     1.8      3.6      5.4      99     132  forward > LXTULParcae._out_mix
+     5.3      0.0      5.3     158       0  <no range>
+     1.1      0.5      1.6     194     180  forward > LXTULParcae._epivol
+     0.2      0.3      0.5      35      52  forward > LXTULParcae._lsel_exit
+   133.5    133.0    266.4    3358    5444  TOTAL

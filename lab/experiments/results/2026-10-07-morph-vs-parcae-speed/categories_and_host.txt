@@ -1,0 +1,152 @@
+== morph_lxptr
+trace wall 594.2 ms/step; GPU span 593.7; busy 451.3 (76% of span); kernels 31345/step; mean kernel 14.4 us
+category                ms/step  %sum  n/step  us/kern
+gemm                      147.8  32.8    2892     51.1
+copy/cast                  93.6  20.7   10501      8.9
+elementwise                71.0  15.7    9260      7.7
+custom-triton              67.3  14.9    1719     39.2
+reduce                     18.6   4.1    2098      8.9
+attention                  14.7   3.3     184     79.7
+inductor-fused             13.3   3.0    1900      7.0
+optimizer/foreach           9.9   2.2     475     20.8
+softmax/norm                6.4   1.4     253     25.4
+memcpy/memset               3.9   0.9    1197      3.2
+other                       2.5   0.6     228     11.0
+index/scatter/gather        2.2   0.5     639      3.4
+kernels < 10 us: 24540/step, 68.7 ms/step
+wall 594.2 ms/step
+tid 3802895: CPU busy   301.5 ms/step (51% of wall), launches 17938/step, 16.8 us CPU per launch
+tid 3802622: CPU busy   270.6 ms/step (46% of wall), launches 12210/step, 22.2 us CPU per launch
+== parcae_lxptr
+trace wall 275.2 ms/step; GPU span 275.0; busy 266.5 (97% of span); kernels 8802/step; mean kernel 30.3 us
+category                ms/step  %sum  n/step  us/kern
+gemm                      159.7  59.9    2248     71.1
+inductor-fused             43.3  16.2    2993     14.5
+elementwise                17.6   6.6    1746     10.1
+copy/cast                  16.7   6.3     650     25.7
+attention                  10.9   4.1     252     43.2
+optimizer/foreach           6.4   2.4      77     82.8
+softmax/norm                3.4   1.3      57     60.1
+reduce                      3.3   1.2     274     12.0
+memcpy/memset               2.6   1.0     208     12.5
+other                       1.6   0.6     153     10.1
+index/scatter/gather        1.0   0.4     140      6.8
+custom-triton               0.0   0.0       4      1.5
+kernels < 10 us: 5921/step, 19.3 ms/step
+wall 275.2 ms/step
+tid 3803893: CPU busy   161.4 ms/step (59% of wall), launches 3222/step, 50.1 us CPU per launch
+tid 3804374: CPU busy   109.7 ms/step (40% of wall), launches 5371/step, 20.4 us CPU per launch
+== morph_plain
+trace wall 588.6 ms/step; GPU span 588.5; busy 565.5 (96% of span); kernels 27908/step; mean kernel 20.3 us
+category                ms/step  %sum  n/step  us/kern
+gemm                      167.6  29.6    1940     86.4
+custom-triton             156.2  27.6    1796     87.0
+elementwise                88.8  15.7   10249      8.7
+copy/cast                  73.6  13.0    7770      9.5
+optimizer/foreach          25.6   4.5     524     48.9
+inductor-fused             17.1   3.0    1840      9.3
+reduce                     15.4   2.7    1864      8.3
+attention                   7.3   1.3     104     69.9
+memcpy/memset               5.7   1.0     912      6.3
+index/scatter/gather        3.5   0.6     571      6.1
+softmax/norm                3.4   0.6     222     15.1
+other                       1.3   0.2     115     11.1
+kernels < 10 us: 20680/step, 56.3 ms/step
+wall 588.6 ms/step
+tid 3805893: CPU busy   391.5 ms/step (67% of wall), launches 19033/step, 20.6 us CPU per launch
+tid 3805683: CPU busy   178.5 ms/step (30% of wall), launches 7962/step, 22.4 us CPU per launch
+== parcae_plain
+trace wall 284.8 ms/step; GPU span 284.6; busy 282.0 (99% of span); kernels 4758/step; mean kernel 59.3 us
+category                ms/step  %sum  n/step  us/kern
+gemm                      182.6  64.8    1287    141.9
+inductor-fused             44.1  15.6    1668     26.4
+attention                  18.0   6.4     250     72.3
+elementwise                15.8   5.6     496     31.9
+copy/cast                   6.2   2.2     116     53.5
+optimizer/foreach           5.6   2.0      66     85.3
+softmax/norm                5.1   1.8       4   1279.7
+other                       2.3   0.8     416      5.5
+index/scatter/gather        1.1   0.4      80     13.7
+reduce                      0.8   0.3     111      7.3
+memcpy/memset               0.2   0.1     264      0.9
+custom-triton               0.0   0.0       1     10.0
+kernels < 10 us: 2206/step, 7.5 ms/step
+wall 284.8 ms/step
+tid 3804811: CPU busy   171.1 ms/step (60% of wall), launches 1869/step, 91.6 us CPU per launch
+tid 3805343: CPU busy   112.1 ms/step (39% of wall), launches 2625/step, 42.7 us CPU per launch
+== morph_L2
+trace wall 527.5 ms/step; GPU span 527.4; busy 420.1 (80% of span); kernels 23107/step; mean kernel 18.2 us
+category                ms/step  %sum  n/step  us/kern
+gemm                      149.5  35.6    2892     51.7
+copy/cast                  72.1  17.2    4759     15.2
+custom-triton              68.8  16.4    1719     40.0
+elementwise                57.8  13.8    5154     11.2
+inductor-fused             23.7   5.6    5156      4.6
+attention                  14.8   3.5     252     58.6
+reduce                     13.3   3.2    1266     10.5
+optimizer/foreach           9.1   2.2     460     19.8
+softmax/norm                4.1   1.0      79     52.3
+memcpy/memset               2.7   0.6     768      3.5
+other                       2.5   0.6     228     11.1
+index/scatter/gather        1.7   0.4     375      4.6
+kernels < 10 us: 16834/step, 47.0 ms/step
+wall 527.5 ms/step
+tid 3839380: CPU busy   287.7 ms/step (55% of wall), launches 13130/step, 21.9 us CPU per launch
+tid 3838727: CPU busy   229.6 ms/step (44% of wall), launches 9209/step, 24.9 us CPU per launch
+== morph_L5
+trace wall 496.5 ms/step; GPU span 496.4; busy 347.9 (70% of span); kernels 24894/step; mean kernel 14.0 us
+category                ms/step  %sum  n/step  us/kern
+gemm                      142.0  40.8    3940     36.0
+copy/cast                  58.3  16.8    3804     15.3
+elementwise                42.5  12.2    4682      9.1
+custom-triton              38.4  11.0    1367     28.1
+inductor-fused             20.8   6.0    5828      3.6
+attention                  14.9   4.3     252     59.0
+reduce                      9.9   2.9    1012      9.8
+optimizer/foreach           9.0   2.6     460     19.5
+softmax/norm                4.1   1.2      95     43.3
+other                       3.1   0.9     795      3.8
+memcpy/memset               2.8   0.8    1365      2.0
+index/scatter/gather        2.2   0.6    1294      1.7
+kernels < 10 us: 20578/step, 50.1 ms/step
+wall 496.5 ms/step
+tid 3840871: CPU busy   291.9 ms/step (59% of wall), launches 14450/step, 20.2 us CPU per launch
+tid 3840126: CPU busy   194.6 ms/step (39% of wall), launches 9079/step, 21.4 us CPU per launch
+== morph_O1
+trace wall 492.2 ms/step; GPU span 492.0; busy 388.1 (79% of span); kernels 22807/step; mean kernel 17.0 us
+category                ms/step  %sum  n/step  us/kern
+gemm                      140.6  36.2    2877     48.9
+custom-triton              69.2  17.8    1726     40.1
+copy/cast                  59.2  15.3    4665     12.7
+elementwise                52.9  13.6    5031     10.5
+inductor-fused             23.8   6.1    5156      4.6
+attention                  14.9   3.8     252     59.0
+reduce                     10.8   2.8    1238      8.7
+optimizer/foreach           9.1   2.3     460     19.8
+memcpy/memset               2.6   0.7     763      3.4
+other                       2.5   0.7     230     11.0
+index/scatter/gather        1.6   0.4     342      4.6
+softmax/norm                0.9   0.2      67     13.0
+kernels < 10 us: 16649/step, 46.5 ms/step
+wall 492.2 ms/step
+tid 3875184: CPU busy   264.1 ms/step (54% of wall), launches 13130/step, 20.1 us CPU per launch
+tid 3874568: CPU busy   218.0 ms/step (44% of wall), launches 8914/step, 24.5 us CPU per launch
+== morph_O3
+trace wall 538.5 ms/step; GPU span 538.4; busy 463.3 (86% of span); kernels 31027/step; mean kernel 14.9 us
+category                ms/step  %sum  n/step  us/kern
+gemm                      225.4  47.7    6681     33.7
+inductor-fused             66.5  14.1   10372      6.4
+copy/cast                  56.5  11.9    3013     18.7
+elementwise                50.5  10.7    4671     10.8
+other                      40.7   8.6    2742     14.8
+optimizer/foreach           9.2   1.9     460     20.0
+reduce                      9.1   1.9     726     12.5
+index/scatter/gather        6.9   1.5     782      8.9
+memcpy/memset               3.9   0.8    1459      2.7
+softmax/norm                2.6   0.5      87     29.7
+attention                   1.0   0.2       8    123.3
+custom-triton               0.7   0.1      26     25.8
+kernels < 10 us: 24336/step, 67.9 ms/step
+wall 538.5 ms/step
+tid 3872524: CPU busy   282.1 ms/step (52% of wall), launches 16426/step, 17.2 us CPU per launch
+tid 3871933: CPU busy   248.8 ms/step (46% of wall), launches 13142/step, 18.9 us CPU per launch

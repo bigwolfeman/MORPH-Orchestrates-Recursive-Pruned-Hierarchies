@@ -1,0 +1,7 @@
+     18    Explanation: Skip calling function `<function _hc_post_dispatch at 0x7f8b5dbc31a0>` since it was wrapped with `torch.compiler.disable` (reason: None)
+     15    Explanation: Skip calling function `<function _hc_pre_map_dispatch at 0x7f8b5dbc2fc0>` since it was wrapped with `torch.compiler.disable` (reason: None)
+     10    Explanation: Skip calling function `<function fused_segment_causal_conv at 0x7f8d69dc8fe0>` since it was wrapped with `torch.compiler.disable` (reason: None)
+      8    Explanation: Skip calling function `<function _cca_conv_dispatch at 0x7f8d69dc8180>` since it was wrapped with `torch.compiler.disable` (reason: None)
+      4    Explanation: Skip calling function `<function _cca_prologue_dispatch at 0x7f8d69f53380>` since it was wrapped with `torch.compiler.disable` (reason: None)
+      1    Explanation: Operator `aten._local_scalar_dense.default` has a non-Tensor output whose value is dependent on the data of Tensor inputs.
+      1    Explanation: Detected data-dependent branching (e.g. `if my_tensor.sum() > 0:`). Dynamo does not support tracing dynamic control flow.

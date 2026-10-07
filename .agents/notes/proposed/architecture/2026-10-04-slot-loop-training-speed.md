@@ -365,3 +365,15 @@ None of these was built.
 4. **Gain hinge without checkpointing** when memory allows: about 20 ms for about 2 GB.
 5. **The eager attention's fp32 <-> bf16 activation casts** (4 080 `_to_copy` per step):
    keep q/k/v in bf16 through the TG-restricted branches. Not bit-identical.
+
+## 2026-10-07 update: the MORPH-vs-Parcae round
+
+[`lab/experiments/mixed/2026-10-07-morph-vs-parcae-speed.md`](../../../../lab/experiments/mixed/2026-10-07-morph-vs-parcae-speed.md)
+measured the winner arm (`lxtul_pointer`) against the Parcae testbed at equal FLOPs. The
+step is host-serial (forward + autograd CPU time = wall, about 20 us per launch, 31.3k
+launches against Parcae's 8.8k), so this note's ranking changes: launch count is first. Item 1
+above (a captured per-pass core step) stays first; a new second item is to register the HC,
+CCA and conv Triton dispatchers as `torch.library` custom ops, because their
+`torch.compiler.disable` wrappers cut every compiled MORPHBlock into fragments (60 graph
+breaks in 12 steps). Swapping them for their torch references removes the breaks but is
+slower (492.8 and 519.5 ms against 444.7).

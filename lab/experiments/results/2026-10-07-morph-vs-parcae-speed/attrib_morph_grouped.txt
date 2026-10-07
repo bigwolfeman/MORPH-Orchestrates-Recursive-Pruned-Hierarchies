@@ -1,0 +1,26 @@
+== grouped by sublayer (innermost label), ms/step by kernel category ==
+  120.7  hc_mlp                                                                  gemm=64.6  custom-triton=21.3  inductor-fused=13.4  elementwise=11.4  copy/cast=7.9
+   99.5  attention                                                               custom-triton=30.0  copy/cast=23.2  gemm=18.2  attention=12.7  elementwise=7.2
+   61.6  MORPHTransformer._forward_tul > MORPHTransformer._tul_spandec_loss      gemm=28.6  copy/cast=16.3  elementwise=9.1  softmax/norm=3.2  reduce=2.8
+   50.4  MORPHTransformer._forward_tul > MORPHTransformer._tul_group_losses      copy/cast=20.8  gemm=15.9  elementwise=10.3  reduce=1.9  memcpy/memset=0.8
+   30.3  hc_attn                                                                 custom-triton=14.2  elementwise=8.1  gemm=5.3  copy/cast=1.9  reduce=0.5
+   18.4  norm                                                                    elementwise=7.6  copy/cast=7.4  reduce=3.0  memcpy/memset=0.4
+   13.6  MORPHTransformer._forward_tul > MORPHTransformer._tul_core              elementwise=6.5  copy/cast=3.7  reduce=1.3  gemm=1.1  memcpy/memset=0.6
+    9.6  MORPHTransformer._forward_tul > MORPHTransformer._tul_front             elementwise=4.0  copy/cast=3.1  gemm=1.0  reduce=0.8  index/scatter/gather=0.3
+    8.7  MORPHTransformer._forward_tul > tul_fan.fan_epi_term                    gemm=5.3  other=1.9  reduce=0.5  elementwise=0.4  copy/cast=0.4
+    8.1  hc                                                                      gemm=3.4  custom-triton=2.0  copy/cast=1.9  elementwise=0.6  reduce=0.2
+    6.2  d_tul > MORPHTransformer._tul_fan_target > MORPHTransformer._tul_front  elementwise=2.9  copy/cast=2.2  gemm=0.5  reduce=0.3  index/scatter/gather=0.2
+    5.1  optimizer.step > optimizer.step                                         optimizer/foreach=5.1
+    4.2  MORPHTransformer._forward_tul > MORPHTransformer._back_region           copy/cast=1.9  gemm=1.0  elementwise=0.8  reduce=0.6  memcpy/memset=0.0
+    3.2  forward_tul > MORPHTransformer._tul_core > MORPHTransformer._lsel_pass  gemm=1.6  elementwise=0.5  copy/cast=0.5  reduce=0.3  softmax/norm=0.1
+    2.5  <no range>                                                              optimizer/foreach=1.6  elementwise=0.4  reduce=0.3  copy/cast=0.1  memcpy/memset=0.0
+    2.4  clip_grad_norm                                                          optimizer/foreach=2.3  copy/cast=0.0  elementwise=0.0  softmax/norm=0.0  reduce=0.0
+    1.9  MORPHTransformer._forward_tul                                           copy/cast=0.9  gemm=0.3  elementwise=0.3  memcpy/memset=0.2  reduce=0.1
+    0.9  tul > MORPHTransformer._tul_core > MORPHTransformer._slot_gain_penalty  copy/cast=0.5  elementwise=0.2  reduce=0.1  memcpy/memset=0.0  softmax/norm=0.0
+    0.8  train._preclip_probe                                                    optimizer/foreach=0.8  copy/cast=0.0  softmax/norm=0.0  elementwise=0.0  memcpy/memset=0.0
+    0.8  rward_tul > MORPHTransformer._tul_core > MORPHTransformer._lsel_finish  gemm=0.4  reduce=0.1  elementwise=0.1  copy/cast=0.1  memcpy/memset=0.0
+    0.7  MORPHTransformer._forward_tul > MORPHTransformer._tul_fan_target        elementwise=0.3  copy/cast=0.2  reduce=0.2  index/scatter/gather=0.1  softmax/norm=0.0
+    0.6  MORPHTransformer._forward_tul > tul_fan.fan_vol_term                    copy/cast=0.2  reduce=0.1  elementwise=0.1  gemm=0.1  other=0.0
+    0.1  MORPHTransformer._forward_tul > MORPHTransformer._tul_tg_kwargs         copy/cast=0.1  elementwise=0.0  index/scatter/gather=0.0
+    0.1  MORPHTransformer._forward_tul > tul_fan.fan_repel_term                  reduce=0.1  copy/cast=0.0  gemm=0.0  other=0.0  elementwise=0.0
+    0.1  rd_tul > MORPHTransformer._tul_core > MORPHTransformer._slot_cell_norm  elementwise=0.1

@@ -1,0 +1,9 @@
+L0_base            516.2 ms/step    11903 tok/s  peak 19.80 GB
+L1_noprobe         513.6 ms/step    11963 tok/s  peak 19.80 GB
+L2_cblocks         482.1 ms/step    12745 tok/s  peak 18.05 GB
+L3_noternary       468.3 ms/step    13120 tok/s  peak 18.05 GB
+L4_hc1             434.5 ms/step    14140 tok/s  peak 14.62 GB
+L5_nodrop          428.5 ms/step    14338 tok/s  peak 14.51 GB
+O1_optins          444.7 ms/step    13815 tok/s  peak 18.05 GB
+O2_hceager         492.8 ms/step    12469 tok/s  peak 21.45 GB
+O3_alleager        519.5 ms/step    11827 tok/s  peak 23.77 GB
