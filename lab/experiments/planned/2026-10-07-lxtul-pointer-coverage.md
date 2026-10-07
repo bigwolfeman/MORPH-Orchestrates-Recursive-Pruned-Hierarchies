@@ -36,6 +36,17 @@ greedy,sample_t07_k40` (T = 0.7, top-k 40; the T = 1 mode cannot show repetition
 24 prompts, 256 new tokens, on both phases, the 5k pointer checkpoint, LXTUL without the head
 (the 5k lead checkpoint) and the plain 5k model.
 
+Method amendment, 2026-10-07 02:18 CDT, after the control phase trained and before the coverage
+phase trained. `training.init_from` resets the step AND the train stream to doc 0, so each phase
+re-trains the first docs of OpenWebText, which are the 480 rows that `core_depth_sweep.py` and the
+gap readout score (skip 0). The control's sweep gap reads -0.209 against -0.150 at 5k while the
+trainer's val (doc 50,000+, clean) got 0.035 WORSE (3.9202 -> 3.9548): the sweep rows are
+contaminated for both phases. Readings change as follows. Prediction 2 is read on the trainer's
+final val loss (clean) and reported beside the sweep CE@6 (contaminated, but matched between the
+two phases). No sweep number from a phase is compared with a 5k checkpoint's. The generation eval
+reads its prompts at the trainer's val offset (skip 50,000), so predictions 3-5 are unaffected.
+Both phases run as configured; adding `training.data_skip_batches` now would unpair them.
+
 ## Predictions
 
 1. The coverage loss falls during the phase: `tul/pointer_cov` over the last 100 steps at most
