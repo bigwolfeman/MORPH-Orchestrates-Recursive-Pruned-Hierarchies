@@ -1,0 +1,577 @@
+{
+  "arms": {
+    "pointer_5k": {
+      "step": 5000,
+      "config": "lxtul_pointer",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-pointer/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.91943359375,
+        "seq_rep_2": 0.9022875816993464,
+        "seq_rep_3": 0.8961614173228346,
+        "seq_rep_4": 0.8911396574440053,
+        "rep_l": 0.91943359375,
+        "distinct_1": 0.04443359375,
+        "distinct_2": 0.07549019607843137,
+        "distinct_4": 0.10227272727272728,
+        "seq_rep_4_ci": [
+          0.8644515810276681,
+          0.9158473320158103
+        ],
+        "distinct_4_ci": [
+          0.04865365612648222,
+          0.08267457180500659
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 1.580244834224383,
+        "gen_ppl": 4.856144616102012,
+        "gen_ppl_nll_ci": [
+          1.2346488481387494,
+          2.091276647771398
+        ],
+        "wall_s": 864.7744030952454,
+        "wall_s_per_row": 36.03226679563522,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\n\n\"We are not going to have a lot of money to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to be done to"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "012 election, which was also the first of its most recent years in the 2012 election.\n\nThe 2012 election, which was also the first of its most recent years in the 2012 election, was also the first of its most recent years in the 2012 election.\n\nThe 2012 election, which was also the first of its most recent years in the 2012 election, was also the first of its most recent years in the 2012 election.\n\nThe 2012 election, which was also the first of its most recent years in the 2012 election, was also the first of its most recent years in the 2012 election.\n\nThe 2012 election, which was also the first of its most recent years in the 2012 election, was also the first of its most recent years in the 2012 election.\n\nThe 2012 election, which was also the first of its most recent years in the 2012 election, was also the first of its most recent years in the 201"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the 9th Circuit will be the first to hear the "
+          }
+        ]
+      },
+      "sample_t07_k40": {
+        "seq_rep_1": 0.69287109375,
+        "seq_rep_2": 0.4821895424836602,
+        "seq_rep_3": 0.38008530183727035,
+        "seq_rep_4": 0.3068181818181818,
+        "rep_l": 0.6715494791666666,
+        "distinct_1": 0.12923177083333334,
+        "distinct_2": 0.376797385620915,
+        "distinct_4": 0.6714426877470355,
+        "seq_rep_4_ci": [
+          0.22117094861660078,
+          0.40332674571805005
+        ],
+        "distinct_4_ci": [
+          0.34361824769433463,
+          0.5299695322793148
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 2.4944261809190116,
+        "gen_ppl": 12.114779831871683,
+        "gen_ppl_nll_ci": [
+          2.2821235841761034,
+          2.7125986590981483
+        ],
+        "wall_s": 865.6250078678131,
+        "wall_s_per_row": 36.06770866115888,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\n\n\"The international treaty is a fair bet,\" said Mike. \"This is a fair bet to learn about federal legislation and an international commitment to avoid a fair bet.\n\n\"If we have to be able to share our action, we don't like to give up our action, and we're all in the absence of a fair bet,\" he said.\n\n\"So far, there will be more judgment against the public's public's public's public's public's public's public's public's public's life that's been a fair bet.\n\n\"All of the money is that it's not for us to say, but we have to be able to share the money on remedies and an international public's care system.\"\n\nThe fair bet. \"We are all in the absence of federal legislation and an investigation into the public's public's public's public interest,\" he said.\n\n\"We've been able to share our action, and we're all going to make our's position,\" he said. \"I don't like to make up my's position. I don't like it. I'm not sure I'm not going to try to go back to our"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "012 election in 2015, as well as well as the 8th U.S. and will be the next U.S. and will be held in the Senate.\n\nThe theft is part of the 5th U.S. and the theatrical utilities, which are only about 200 million in 2015, New Orleans and the theft of 50 million in 2015, which is the next U.S. by the Southwestern Institute of Technology and the theatrical utilities, which is the cost of the state.\n\nA group of the largest theft of in 2015, the theft of in 2010, the theatrical utilities of the theatrical utilities of the theatrical utilities in the city are also also also a utilities of the theft.\n\nThe 50 percent of the theatrical utilities were still lower than the theft of the state\u2014the theatrical utilities will not have been used to be the theft, although the theft is the largest theatrical utilities, which is the most recent intervention, and the average"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the utility defendants in the 2014-18 campaign to create a new-to-the-government-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-control-"
+          }
+        ]
+      }
+    },
+    "pointer_phase": {
+      "step": 1000,
+      "config": "lxtul_pointer_ft",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-pointer-ft/step_1000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.9326171875,
+        "seq_rep_2": 0.9197712418300653,
+        "seq_rep_3": 0.9138779527559056,
+        "seq_rep_4": 0.9090909090909092,
+        "rep_l": 0.9326171875,
+        "distinct_1": 0.0380859375,
+        "distinct_2": 0.06258169934640523,
+        "distinct_4": 0.08498023715415019,
+        "seq_rep_4_ci": [
+          0.8861989459815547,
+          0.9288537549407115
+        ],
+        "distinct_4_ci": [
+          0.04413702239789196,
+          0.06949934123847168
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 1.3898713601132233,
+        "gen_ppl": 4.014333616355847,
+        "gen_ppl_nll_ci": [
+          1.1015497841561834,
+          1.731072715607782
+        ],
+        "wall_s": 863.5073642730713,
+        "wall_s_per_row": 35.97947351137797,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies that are the leading beacons of climate change.\"\n\nThe courts have been recovered from the courts to the courts, and the courts have been recovered from the courts to the courts of the courts.\n\n\"The courts have been recovered from the courts to the courts, and they have been recovered from the courts to the courts,\" he said.\n\n\"The courts have been recovered from the courts to the courts, and they have been recovered from the courts to the courts,\" he said.\n\n\"The courts have been recovered from the courts to the courts, and they have been recovered from the courts to the courts,\" he said.\n\n\"The courts have been recovered from the courts to the courts, and they have been recovered from the courts to the courts,\" he said.\n\n\"The courts have been recovered from the courts to the courts, and they have been recovered from the courts to the courts,\" he said.\n\n\"The courts have been recovered from the courts to the courts,"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "016 election, and the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the 2016 election, the "
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": " in the 2009 election, the 9th Circuit will be awarded a $100 million in the 2009 election, and the 9th Circuit will be awarded a $100 million in the 2009 election.\n\nThe 9th Circuit will be awarded a $100 million in the 2009 election, and the 9th Circuit will be awarded a $100 million in the 2009 election, and the 9th Circuit will be awarded a $100 million in the 2009 election.\n\nThe 9th Circuit will be awarded a $100 million in the 2009 election, and the 9th Circuit will be awarded a $100 million in the 2009 election, and the 9th Circuit will be awarded a $100 million in the 2009 election.\n\nThe 9th Circuit will be awarded a $100 million in the 2009 election, and the 9th Circuit will be awarded a $100 million in the 2"
+          }
+        ]
+      },
+      "sample_t07_k40": {
+        "seq_rep_1": 0.6842447916666666,
+        "seq_rep_2": 0.463235294117647,
+        "seq_rep_3": 0.3585958005249344,
+        "seq_rep_4": 0.2906785243741766,
+        "rep_l": 0.6676432291666666,
+        "distinct_1": 0.130859375,
+        "distinct_2": 0.39019607843137255,
+        "distinct_4": 0.6897233201581028,
+        "seq_rep_4_ci": [
+          0.19942770092226614,
+          0.40036231884057977
+        ],
+        "distinct_4_ci": [
+          0.3573451910408432,
+          0.5400197628458498
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 2.478522333006064,
+        "gen_ppl": 11.923632236007876,
+        "gen_ppl_nll_ci": [
+          2.1557667796189586,
+          2.761377749219537
+        ],
+        "wall_s": 860.4804313182831,
+        "wall_s_per_row": 35.85335130492846,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies for the effects of climate change. In the absence of a fair deal, there is enormous action against there. They will be able to find out what will come to us.\"\n\nA fair deal, May, Tobacco, has been under investigation by the Climate Change Foundation and has been under investigation by the Climate Change Committee, said the Climate Change Foundation.\n\n\"The effects of climate change are the leading beacons for the effects of these policies.\n\n\"They can be easily put on the effects of their climate change systems,\" said May, who is also the director of the Climate Change Foundation, the director of the Climate Change Foundation, and the theology board of the Climate Change Foundation.\n\nHowever, the effects of these policies are \"the leading beacons that are undertaken in the long term system, a majority of the effects are undertaken in the long term.\"\n\nThe fair deal has been on a bill that has a number of the effects of climate change.\n\n\"It's not a federal policy, but the effects are good for the theology and the community.\"\n\nThe Climate Change Committee, which owns three years to em"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "008 1970 1990 1990 1990 and 509,000 times the 2008 1990 1990s was in the 2008 1970 1970 1990 1990 1990 1990 1990 1990 1990 1990 299 1990 1990 1990 1990 1990 1980 1990 1990 1990 1993 1970 1973 1990 1990 1996 1999 1970 1990 199 1990 1990 1990 1990 1970 1990 1990 1990 1998 1990"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the same amount will be reached to discuss the 9th U.S. Supreme Court.\n\nThe 9th Circuit will likely be a fifth-round petition in the U.S. of the United Kingdom, the 9th Circuit will likely be a fifth-round petition in the U.S., to prove the effect of the damage.\n\nWhile the majority of the damage was being-traded, the 9th Circuit will likely be a fifth-round petition in the U.S.. in 2009.\n\nThe 9th Circuit will not be a fifth-round petition in the United Kingdom, along with six-party members, and the U.S. to the U.S. Congress.\n\nThe 9th Circuit will be a fifth-round petition to the U.S. Circuit will likely be a fifth-round petition in the United States. For the 9th Circuit will likely be a fifth-round pick, the 9th Circuit will likely be a fifth-round petitioning on the petition.\n\nThe still-pending petition the New York Times"
+          }
+        ]
+      }
+    },
+    "pointer_cov": {
+      "step": 1000,
+      "config": "lxtul_pointer_cov",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-pointer-cov/step_1000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.9431966145833334,
+        "seq_rep_2": 0.9330065359477123,
+        "seq_rep_3": 0.9284776902887139,
+        "seq_rep_4": 0.9245718050065878,
+        "rep_l": 0.939453125,
+        "distinct_1": 0.02978515625,
+        "distinct_2": 0.050490196078431374,
+        "distinct_4": 0.06982872200263504,
+        "seq_rep_4_ci": [
+          0.910737812911726,
+          0.9387351778656127
+        ],
+        "distinct_4_ci": [
+          0.036631258234519105,
+          0.05682641633728589
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 1.2612784666319687,
+        "gen_ppl": 3.529931503438841,
+        "gen_ppl_nll_ci": [
+          1.0726723201572896,
+          1.4436077330261468
+        ],
+        "wall_s": 864.3938186168671,
+        "wall_s_per_row": 36.016409109036125,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\n\n\"The effects of climate change are the leading beacons of the effects of climate change. The effects of climate change are the leading beacons of the effects of climate change.\n\n\"The effects of climate change are the leading beacons of the effects of climate change. The effects of climate change are the leading beacons of the effects of climate change. The effects of climate change are the leading beacons of the effects of climate change.\n\n\"The effects of climate change are the leading beacons of the effects of climate change. The effects of climate change are the leading beacons of the effects of climate change. The effects of climate change are the leading beacons of the effects of climate change. The effects of climate change are the leading beacons of the effects of climate change. The effects of climate change are the leading beacons of the effects of climate change. The effects of climate change are the leading beacons of the effects of climate change.\n\nThe effects of climate change are the leading beacons of the effects of climate change. The effects of"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "016 election, which was awarded a 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in the 10-year-old woman who was not in"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit will be a part of the 9th Circuit"
+          }
+        ]
+      },
+      "sample_t07_k40": {
+        "seq_rep_1": 0.7093098958333334,
+        "seq_rep_2": 0.5173202614379085,
+        "seq_rep_3": 0.43143044619422577,
+        "seq_rep_4": 0.3738471673254282,
+        "rep_l": 0.69580078125,
+        "distinct_1": 0.1240234375,
+        "distinct_2": 0.3498366013071895,
+        "distinct_4": 0.6065546772068511,
+        "seq_rep_4_ci": [
+          0.2625164690382082,
+          0.5072710803689063
+        ],
+        "distinct_4_ci": [
+          0.3060482542819499,
+          0.48866106719367586
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 2.2915955310066543,
+        "gen_ppl": 9.890706026529095,
+        "gen_ppl_nll_ci": [
+          1.9732554900770387,
+          2.5844539768993853
+        ],
+        "wall_s": 863.8579790592194,
+        "wall_s_per_row": 35.994082460800804,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies of the effects of climate change. In the absence of a fair bet,\" she says.Brigins and his team have been able to find out how to use the bathroom with a \u201cnational\u201d game, but they need to be a part about the new NBA. At this point, the game has been built by the \u201cnational\u201d game, and it\u2019s just about all the things I\u2019ve got.\n\nNow, I\u2019ve been in the game. I\u2019ll remember we can play a bit more exciting. I\u2019ll be happy with this, so I\u2019ll be in the top 10 for the game. So, in a way it\u2019s still the best NBA player to play, it\u2019s definitely not a huge game. I\u2019ll have a good time with each other and I\u2019ll be in the game, a lot of the game-box and a really nice way to do.\n\nI think I\u2019ll need to get a lot of a sudden, because I\u2019ll have to go back on the phone. The NBA is going to be good. The 30th overall game is a bit of a good start, but it\u2019s an extra"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "008 1970s by the coalition of its 1876 47050.\n\nThe 2nd U.S. Circuit Court of Appeals (NASDA) was informed by the state's state state law. The Circuit Court is part of a new coalition of Muslim and Afghanistan in 2004. The Circuit Court of Appeals panel sided with the Circuit Court in the 2008 U.S. Circuit Court in Congress on Monday that the 2008 Circuit Court of Appeals (NASDA) was informed by the 2008 U.S. Circuit Court of Appeals (NASDA) announced its Circuit Court of Appeals against a \"uncompleteness of the 2008 largest 10705. This new 107 largest 107055. This new policy could reduce the value of the 2008 Circuit Court of Appeals, which is the largest 10705. The 200"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the Circuit Court of Appeals on Wednesday called appealed to the 9th U.S. Circuit Court of Appeals, a rallying crying out at the Mexican American American American Revolution, said that the damage was unusually little.\n\nBut the 9th Circuit will have a \u201cgood. This is because of the fact that the 5th Circuit Court of Appeals was the first of three decades earlier in the past year. This is because we have to pay for the 2nd Circuit Court of Appeals.\u201d\n\nThe 9th Circuit will likely come next, as the Circuit will be an unusually little petition to the 2004 Circuit Court of the U.S. Congress. The Circuit Court of Appeals on Wednesday reported that the Obama administration is \u201cno. No more.\u201d\n\nThe 9th Circuit will begin with the 2004 2009 Circuit Court of Appeals on Wednesday.\n\nThe 2004 2004 Circuit Court of Appeals on Wednesday said the 9th Circuit will serve"
+          }
+        ]
+      }
+    },
+    "lxtul_nohead": {
+      "step": 5000,
+      "config": "tul_slot_spandec_strict_fan4_all_fp01_lsel_joint_rf_lam1_rank_cnorm",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/slot-spandec-strict-fan4-all-fp01-lsel-joint-rf-lam1-rank-cnorm/step_5000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.8779296875,
+        "seq_rep_2": 0.8124183006535949,
+        "seq_rep_3": 0.772801837270341,
+        "seq_rep_4": 0.7439064558629775,
+        "rep_l": 0.8761393229166666,
+        "distinct_1": 0.03515625,
+        "distinct_2": 0.08709150326797385,
+        "distinct_4": 0.17885375494071146,
+        "seq_rep_4_ci": [
+          0.6905261857707509,
+          0.7961215415019761
+        ],
+        "distinct_4_ci": [
+          0.10276679841897234,
+          0.15234683794466403
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 1.0437098555266857,
+        "gen_ppl": 2.839732494123418,
+        "gen_ppl_nll_ci": [
+          0.8926465527464946,
+          1.181364284642041
+        ],
+        "wall_s": 860.209187746048,
+        "wall_s_per_row": 35.84204948941866,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies, and the government is not a good thing.\n\n\"The government is not a good thing to do, but it's not a matter of time to do it. It's not a matter of time,\" said Mike Huckabee, a former chief executive of the U.S. and the U.S. and the United States,\" said Mike Huckabee, a former CEO for the National Security Agency. \"The government has been aimed at the public interest in the United States and the United States. It is not a matter of the way that the government is going to be able to do it,\" said Mike Huckabee, a former CEO for the U.S. and the United States.\n\n\"We have a lot of work to do with the government,\" said Mike Huckabee, a former CEO for the University of Michigan. \"We have a lot of work to do. We have to do it. We have to do it. We have to do it. We have to do it. We have to do it. We have to do it. We have to do it. We have to do it. We have to do it"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "015 election.\n\nThe U.S. government's Office of the U.S. and the United States, the U.S. and the United States, and the United States, and the United States.\n\nThe U.S. government has been awarded a new report of the U.S. and the United States. The U.S. and the U.S. government, which is the first of the 2015 elections in 2012.\n\nThe U.S. government has been awarded the U.S. and the United States for the first time since 2009.\n\nThe U.S. government has been awarded the U.S. and the United States for the first time since 2009.\n\nThe U.S. government has been awarded the U.S. and the United States for the first time since 2009.\n\nThe U.S. government has been awarded the U.S. and the United States for the first time since 2009.\n\nThe U.S. government has been awarded the U.S. and the United States for the"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the U.S. government has been awarded a $100 million contract to the U.S. and the U.S. government.\n\nThe U.S. government has been awarded a $100 million contract to the U.S. and the U.S. government, which is expected to be awarded by the U.S. and the U.S. government.\n\nThe U.S. government has been awarded a new report to the U.S. and the U.S. government, which is the first of the 2015 elections in 2012.\n\nThe U.S. government has been awarded the U.S. and the U.S. government to expand the U.S. and the United States.\n\nThe U.S. government has been awarded the U.S. and the United States for the first time since 2009.\n\nThe U.S. government has been awarded the U.S. and the United States for the first time since 2009.\n\nThe U.S. government has been awarded the U.S. and the United States"
+          }
+        ]
+      },
+      "sample_t07_k40": {
+        "seq_rep_1": 0.54736328125,
+        "seq_rep_2": 0.2235294117647059,
+        "seq_rep_3": 0.09186351706036744,
+        "seq_rep_4": 0.04117259552042161,
+        "rep_l": 0.52587890625,
+        "distinct_1": 0.17122395833333334,
+        "distinct_2": 0.517483660130719,
+        "distinct_4": 0.9013504611330698,
+        "seq_rep_4_ci": [
+          0.025197628458498017,
+          0.06208827404479578
+        ],
+        "distinct_4_ci": [
+          0.4930747694334651,
+          0.6851161067193675
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 2.6146562894185386,
+        "gen_ppl": 13.662519618214818,
+        "gen_ppl_nll_ci": [
+          2.5179706051945683,
+          2.7100778927405673
+        ],
+        "wall_s": 858.7514753341675,
+        "wall_s_per_row": 35.78131147225698,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\n\n\"The U.S. government is taking a full deal with the United States, and the Iranian government will continue to continue to ensure that it has the potential to continue with a government of sanctions, and they need to be a priority.The NSA has also taken the 12th of its first season in 2012, a couple of months ago, and a third of its recent draft in 2012, the 2.25% of the year, which is the most popular year in 2014.\n\nThe 2015 season in the 2014 season, in a number of years, is the third consecutive season in the first half-hour run at the 2007 Brexit season, as well as the NBA\u2019s annual cost of up to \u00a3100 in 2016.\n\nHe has been awarded the new 42.7 percent paying for the first time in 2014, with the annual 220-year-old Michigan-based 10,000 votes, including 20,00"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "012 proposal as a \"discriminate and criminal investigation on Israel and the Israel\". That's a major factor in the 19th century.\n\n\"The CIA has a very large majority of people who were unable to see it and they are trying to help the American people get us out of the world of the region,\" said Alfo. \"\"\n\nHowever, the United States is a part of a new financial crisis.\n\nAmong the world's biggest population in recent years, the United States is now in the US. The United States was the first military to win. In 2006, the US army was under the control of the US and China.\n\nThe U.S. politicians have been able to make up about 1,000 people in the wake of the Muslim world's capital, according to the US. The U.S. is to be able to make it more difficult to find a way to get the right to stay.\n\nThe United States is also on the basis of the Iranian market. And it is also the worst of the political party, with the highest level of health"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": " to reach the US, the US's new economic policies (including the 1998-2-149-6) bomb, a 23 percent figure compared to the U.S. Navy Department on Monday, and had received the deal with the NSA's 1997 program and a total number of Americans faced in the U.S. and the US.\n\nThe 2013 report also reported it was 14 years ago that the number of former U.S. politicians were in the back of their first year of congressional elections against the U.S., which has been a major role in the U.S. and the US economy.\n\n\"We're not at this point,\" said Bloomberg, who has been the first senator for the Iranian government of the American Government in 2011, which has been accused of trying to keep the state's spending on the US government.\n\nThe FBI's decision also surprised the government's decision to allow it to continue to be a \"deterrent\" place to improve its own health care.\n\nThe New Democr"
+          }
+        ]
+      }
+    },
+    "plain": {
+      "step": 5000,
+      "config": "notul_panel_norm_match",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/plain-panel-norm-match/step_5000.pt",
+      "tul": false,
+      "greedy": {
+        "seq_rep_1": 0.92041015625,
+        "seq_rep_2": 0.8959150326797386,
+        "seq_rep_3": 0.8833661417322833,
+        "seq_rep_4": 0.8725296442687748,
+        "rep_l": 0.92041015625,
+        "distinct_1": 0.032877604166666664,
+        "distinct_2": 0.06764705882352941,
+        "distinct_4": 0.11594202898550725,
+        "seq_rep_4_ci": [
+          0.8376070487483531,
+          0.9000329380764164
+        ],
+        "distinct_4_ci": [
+          0.05702816205533597,
+          0.09486989459815547
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 0.755208557471633,
+        "gen_ppl": 2.1280552989099717,
+        "gen_ppl_nll_ci": [
+          0.6570412611278396,
+          0.853456489695236
+        ],
+        "wall_s": 71.26089406013489,
+        "wall_s_per_row": 2.969203919172287,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\"\n\nThe law enforcement agencies have been accused of a \"deterrent\" in the law, and the law is not a \"deterrent\" in the law.\n\n\"The law enforcement agencies have been accused of a \"deterrent\" in the law, and the law is not a \"deterrent\" in the law.\n\n\"The law enforcement agencies have been accused of a \"deterrent\" in the law, and the law is not a \"deterrent\" in the law.\n\n\"The law enforcement agencies have been accused of a \"deterrent\" in the law, and the law is not a \"deterrent\" in the law.\n\n\"The law enforcement agencies have been accused of a \"deterrent\" in the law, and the law is not a \"deterrent\" in the law.\n\n\"The law enforcement agencies have been accused of a \"deterrent\" in the law, and the law is not a \"deterrent\" in the law.\n\n\"The law enforcement agencies have been accused of a \"deterrent\" in"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "nd U.S. District Court of Appeals.\n\n\"The 2nd U.S. District Court of Appeals has been a major factor in the 2nd U.S. District Court of Appeals,\" said the 2nd U.S. District Court of Appeals. \"The 2nd U.S. District Court of Appeals has been a major factor in the 2nd U.S. District Court of Appeals.\"\n\nThe 2nd U.S. District Court of Appeals has been a major factor in the 2nd U.S. District Court of Appeals. The 2nd U.S. District Court of Appeals has been awarded a 2nd U.S. District Court of Appeals.\n\nThe 2nd U.S. District Court of Appeals has been awarded a 2nd U.S. District Court of Appeals. The 2nd U.S. District Court of Appeals has been awarded a 2nd U.S. District Court of Appeals.\n\n"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the 9th Circuit will be the first to have a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a 10-year-old, a"
+          }
+        ]
+      },
+      "sample_t07_k40": {
+        "seq_rep_1": 0.6429036458333334,
+        "seq_rep_2": 0.3913398692810457,
+        "seq_rep_3": 0.2785433070866142,
+        "seq_rep_4": 0.2149209486166008,
+        "rep_l": 0.6259765625,
+        "distinct_1": 0.14404296875,
+        "distinct_2": 0.4256535947712418,
+        "distinct_4": 0.7523056653491436,
+        "seq_rep_4_ci": [
+          0.1330492424242424,
+          0.31259057971014487
+        ],
+        "distinct_4_ci": [
+          0.4006052371541502,
+          0.5878746706192358
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 1.8678943887352943,
+        "gen_ppl": 6.474648942461315,
+        "gen_ppl_nll_ci": [
+          1.6365228556096554,
+          2.073367522656917
+        ],
+        "wall_s": 72.0039234161377,
+        "wall_s_per_row": 3.000163475672404,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\"\n\nMindy H. L. P. William M. Sessions, the president of the American Oval Office, said it was \"would come to the point that people don't care about the issue of spending on the internet,\" and would not have an independent lawyer.\n\n\"I think he's still in the U.S. and he has been a fraudulent person, but I think that he's not going to be the only person on the Internet,\" he said. \"He's not going to have a legalization of the community. I mean, I can't tell that he's not going to do it.\"\n\nIt's not as if he's the only person who has been the senior vice president of the United States.\n\n\"I think I'm not going to have a police officer,\" he said, adding with the idea that he says \"there is only one lot of cooperation.\"\n\n\"It's not going to be a lawyer because it's been a lawyer and a police officer, who is in the U.S. and has been a senior for many, I'm not going to have a police officer"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "nd U.S. District Court in the 2008 state of the world.\n\n\"The only thing we have to do is make sure the law can be done,\" Carter said on Friday.\n\n\"We have to do with the state's ability to use the law to help the law. Now, I think we have to do that.\"\n\nHe said: \"We're not going to do that.\"\n\n\"I am not going to do it. We are in the world and we can also do it.\"\n\nHe said: \"The only way to do it was that the law was the state. It was a civilization.\"\n\n\"The people in Africa have been trying to do that.\"\n\nHe said: \"I don't know if it has the same name as the state, not the government, or the state.\"\n\nHe added: \"I'm just not going to do it. I am going to do it.\"\n\nHe said: \"I don't want to do it.\"\n\nHe said: \"I would be the author of the law and the law. And it's just the law, I think it's just what it's going to do"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the country's two states have to take advantage of the debt limit, the US, where the United States will not receive a $1 billion increase, including the number of debt limit as the final option.\n\nThe nation's largest coalition will be held on January 27, 2014, when the U.S. Supreme Court defended the government's decision to put it back to the U.S. Supreme Court.\n\nThe current 16-year-old has been one of the biggest senior Republican nominee in the United States since 1980.\n\nBy 21, the United States announced its decision to put the US election down on the country's debt limit, while the U.S. Supreme Court's decision to launch a new bill to the U.S. Supreme Court.\n\nThe Nation's largest agreement to push the United States to the United States will have to be reached at the same time.\n\nThe U.S. Supreme Court's decision to join the US on June 27, 2013, are expected to be the most important in"
+          }
+        ]
+      }
+    },
+    "pointer_ditto": {
+      "step": 1000,
+      "config": "lxtul_pointer_ditto",
+      "path": "/home/wolfe/morph-to/checkpoints/morph/lxtul-pointer-ditto/step_1000.pt",
+      "tul": true,
+      "greedy": {
+        "seq_rep_1": 0.9093424479166666,
+        "seq_rep_2": 0.8679738562091505,
+        "seq_rep_3": 0.8421916010498688,
+        "seq_rep_4": 0.8209815546772069,
+        "rep_l": 0.908203125,
+        "distinct_1": 0.04541015625,
+        "distinct_2": 0.09950980392156862,
+        "distinct_4": 0.17012516469038208,
+        "seq_rep_4_ci": [
+          0.7700798748353097,
+          0.866110836627141
+        ],
+        "distinct_4_ci": [
+          0.08330862977602109,
+          0.13983036890645587
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 1.4811579038699467,
+        "gen_ppl": 4.398035235762135,
+        "gen_ppl_nll_ci": [
+          1.200849399343133,
+          1.7647925382480023
+        ],
+        "wall_s": 867.105363368988,
+        "wall_s_per_row": 36.129390140374504,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\"\n\nThe issue is that the issue of climate change is not a matter of fact.\n\n\"The issue is that the issue is not a matter of fact, but it is a very important issue.\n\n\"The issue is that the issue is not a matter of fact, but it is a very important issue.\n\n\"The issue is that we are not going to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able.\"\n\nThe issue is that the issue is not a matter of fact.\n\nThe issue is that the issue is not a matter of fact.\n\nThe issue is that the issue is not a matter of fact.\n\nThe issue is a very important issue.\n\nThe issue is a very important issue.\n\nThe issue is a lack of a policy that is not a matter of policy.\n\u2014\n\nThe issue is a very important issue.\nThe issue is a very simple issue"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "007 election.\n\nThe 2007 election.\n\nThe 2007 election.\n\nThe 2007 election.\n\nThe 2007 election.\n\nThe 2007 election.\n\nThe election is a major part of the election, and the election of the election is to be a part of the election.\n\nThe election is a major part of the election, and the election of the election is to be a part of the election.\n\nThe election is a very important issue.\n\nThe election is a very important issue.\n\nThe election is a very important issue for the election.\n\nThe election is a very important issue for the election.\n\nThe election is a very important one.\n\nThe election is a rare point of view.\n\nThe election is a rare point of view. In a recent studymbok of the worldmbok of the world,mbok of the world is a rare and well-picked politmbok. In the world of political science, the world is a political political system that is a political political system.\n\nThe election is a very important one.\n\nThe election is"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the 9th Circuit Court of Appeals on Nov. 2019.\n\nThe 9th Circuit Court of Appeals on Nov. 2019, the 9th Circuit Court of Appeals on Nov. 2019, the 9th Circuit Court of Appeals on Nov. 2019, the 9th Circuit Court of Appeals on Nov. 2019, the 2009 10th Circuit Court of Appeals on Nov. 2019, the 2009 10th Circuit Court of Appeals on Nov. 2019, the 2009 10th Circuit Court of Appeals on Nov. 2011, 2011, 2011, 2011, 2011, 2011, 2011, 2011, 2011, 2011, 2011111, 2011, 2011,"
+          }
+        ]
+      },
+      "sample_t07_k40": {
+        "seq_rep_1": 0.6101888020833334,
+        "seq_rep_2": 0.32483660130718955,
+        "seq_rep_3": 0.20554461942257218,
+        "seq_rep_4": 0.13982213438735178,
+        "rep_l": 0.5895182291666666,
+        "distinct_1": 0.15348307291666666,
+        "distinct_2": 0.47320261437908495,
+        "distinct_4": 0.8199934123847167,
+        "seq_rep_4_ci": [
+          0.08744647562582344,
+          0.20536890645586295
+        ],
+        "distinct_4_ci": [
+          0.4419548748353096,
+          0.6337574110671936
+        ],
+        "n_rows": 24,
+        "gen_ppl_nll_mean": 2.6730874429146447,
+        "gen_ppl": 14.484620667344961,
+        "gen_ppl_nll_ci": [
+          2.5369452606886624,
+          2.785612370322148
+        ],
+        "wall_s": 866.425933599472,
+        "wall_s_per_row": 36.10108056664467,
+        "examples": [
+          {
+            "prompt": "A definitive step toward providing legal remedies for the effects of climate change could occur before either an international treaty or legislative accord can be reached, according to attorneys tracking the issue in the courts.\n\n\"My prediction is that there will be more judicial action before there's enacted federal legislation or international agreement. That's a fair bet,\" said James May, a law professor at Widener University in Delaware. \"In the absence of federal legislation and an international accord, these cases are the leading beacons for remed",
+            "continuation": "ies.\n\nMindy says that he's not too surgery than there is enormous action against there.\n\n\"It is always a fair bet that there will be more people to vote against the effects of climate change.\"\n\nThe treaties' campaign said the campaign was \"a lot of political crimes.\"\n\nThe treaties also told a couple people were saying they were saying they were in the same same room, but they said they would vote for the treaties.Hillary Clinton is a great opportunity for President Obama\u2019s Democratic leadership, as he believes he\u2019s the only issue in a new election against President Obama on Oct. 1, 2011.\n\nThe newspaper reported a \u201cright-sized\u201d on Tuesday about the new administration\u2019s on Tuesday, which led to the conviction of the Federal Government and a presidential candidate who served as a president of the country\u2019s chief of staff.\n\nThe on Tuesday in the 2000 vote, which was the first President to have a plan, said he was going to have a statement on Thursday"
+          },
+          {
+            "prompt": ", judges -- to consider the harms from climate change right now.\"\n\nIn Connecticut v. AEP, the 2nd U.S. Circuit Court of Appeals panel sided on Sept. 21 with a coalition of eight states, New York City and environmental groups that had filed a public nuisance lawsuit against the nation's largest coal-burning utilities.\n\nThen in October, a three-judge panel on the 5th U.S. Circuit Court of Appeals in New Orleans cited the 2",
+            "continuation": "008 attacks in 2015.\n\nThen, on the other hand, the 2008 attacks on Circuit Court of Appeals, which was unclear, according to the nation's final three years of 1995.\n\nThen, there was little to no plans against the nuisance of the Muslim community.\n\n\u201cAs we have seen, our attacks are so dangerous to be the most dangerous. We have to be living in the country in the last several months, we have to make their job a bit more in the future.\u201d\n\n\u201cThe three years ago were Circuit Court of Appeals (1994\u20131991]\n\nThe nation\u2019s years have been rumored to have been avoided by the attacks in the theatre.\n\nThen in 2015, the 2007 attacks on 2015 was indicted from the nuisance of the British attacks in 2013, along with his wife Cornell, who was a member of the country, who had been treated in a political climate. The 500"
+          },
+          {
+            "prompt": " to prove the damages they want in Comer and Kivalina.\n\nThe tribe filed its notice of appeal to the 9th U.S. Circuit Court of Appeals on Nov. 5. The utility defendants in Connecticut filed a still-pending petition for rehearing in the 2nd Circuit on the same day, and the energy companies in Comer filed still-pending petitions for rehearing on Nov. 30, 2009.\n\nAwaiting appeal\n\nWhile the 9th Circuit will likely schedule oral arguments",
+            "continuation": ", the utility defendants informed the utility they want to take into account the need to overlook to the 9/11 attacks.\n\nThe utility is already underway by 2019, and most of the onset of the 9/11 2nd Circuit Court of Appeals and the UK.\n\n\u201cIt\u2019s a great deal of interest to be very clear,\u201d said Russell, who was the first person to be a 3rd U.0-million dollars. He said that the 2nd Circuit Court of Appeals\u2019 decision to take place between 2009 and 2001 was uncovered the U.S. Circuit Court was not supported by the utility, the utility director, the CIA informed the utility at 14/20.\n\n\u201cWe\u2019ve got to take over the utility this year, and we\u2019re able to do three of those events,\u201d said, \u201cbut I didn\u2019t care \u2014 the utility, we\u2019re going to want to stay in the 1930s.\u201d\n\nWhile Russell, the utility of the 2007 1990"
+          }
+        ]
+      }
+    }
+  },
+  "real_anchor": {
+    "seq_rep_1": 0.3697916666666667,
+    "seq_rep_2": 0.09591503267973857,
+    "seq_rep_3": 0.04101049868766404,
+    "seq_rep_4": 0.019598155467720688,
+    "rep_l": 0.3455403645833333,
+    "distinct_1": 0.3126627604166667,
+    "distinct_2": 0.7665032679738563,
+    "distinct_4": 0.958498023715415,
+    "seq_rep_4_ci": [
+      0.009877305665349138,
+      0.030961791831357055
+    ],
+    "distinct_4_ci": [
+      0.5190176218708827,
+      0.7278162055335967
+    ],
+    "n_rows": 24,
+    "gen_ppl_nll_mean": 4.568591008583705,
+    "gen_ppl": 96.40817573831345,
+    "gen_ppl_nll_ci": [
+      4.3630227046708265,
+      4.76464023962617
+    ],
+    "examples": [
+      "ying the effects of climate change.\"\n\nIn September, a federal appeals court in New York issued a historic ruling regarding citizen and government enforcement of greenhouse gas emissions. Less than a month later, decisions in two similar cases came down. All three are awaiting appeal.\n\n\"These cases are an important part of the overall climate change landscape,\" said Bruce Myers, a senior attorney with the Environmental Law Institute. \"One obvious reason is that they have managed to prop open the door for new lawsuits against any company or other entity that is a significant greenhouse gas emitter, creating the possibility of large damages awards or injunctive relief that alters how defendants like energy companies do their business.\"\n\nMyers added, \"The climate tort lawsuits are much more than just prods for regulatory or legislative action. It is important to remember that a new EPA regulation or federal cap-and-trade law, whatever its content, will probably have to run a gauntlet of legal challenges before it can be successfully implemented. In the meantime, these pending cases are compelling federal decision-makers -- in this",
+      "nd Circuit ruling in Comer v. Murphy Oil Co., which held that 14 individuals who filed a class-action lawsuit against insurance, oil, coal and chemical companies could seek relief for property damages resulting from Hurricane Katrina.\n\nA judge on the U.S. District Court for the Northern District of California, however, dismissed a public nuisance lawsuit brought by the Alaskan coastal town of Kivalina against 24 energy and utility firms.\n\nThe ruling made public in Native Village of Kivalina v. Exxon Mobil Corp. explicitly broke from the 2nd Circuit's take on whether companies could be held liable for greenhouse gas emissions that contribute to global warming.\n\n\"What the courts in Connecticut and Comer said is you can't just wish these cases away because they're controversial or raise political questions,\" said Robert Percival, director of the Environmental Law Program at the University of Maryland. \"They do raise what has for centuries been a traditional common law nuisance claim. It's just really",
+      " in the Kivalina appeal in early 2010, it remains to be seen when the 2nd and 5th Circuits will rule on the en banc appeals.\n\n\"Developments in the Comer case are interesting because on Dec. 2, the 5th Circuit requested the Mississippi Katrina victims to respond to the energy companies' rehearing requests,\" said Howard Shapiro of Van Ness Feldman. \"That does not mean that the court will grant the rehearing and reconsider the case, but it signals at least that a majority of the 5th Circuit's sitting judges believe that some serious issues have been raised.\"\n\nSaid Widener University's May: \"The appeals courts are waiting to see what happens in Copenhagen, not as a legal matter but as a psychological matter that will influence just how much interest they give those cases. Without an accord and without a cap-and-trade bill, it's more likely that the court will grant en banc review.\"\n\nOf course, once the full court decides to review the case, a decision may not come down"
+    ]
+  },
+  "_meta": {
+    "n": 24,
+    "prompt_len": 128,
+    "gen_len": 256,
+    "seed": 1234,
+    "val_skip_samples": 50000,
+    "val_split": "validation",
+    "decodes": [
+      "greedy",
+      "sample_t07_k40"
+    ],
+    "plain_scorer": "plain",
+    "plain_scorer_step": 5000,
+    "rep_l_window": 128
+  }
+}

@@ -1,0 +1,10 @@
+lxtul-pointer-ditto tokens n=491520 blocks=481
+  ce_1_minus_ruler_ce6: -0.0882 [-0.1048, -0.0728]
+  ce_2_minus_ruler_ce6: -0.1059 [-0.1232, -0.0900]
+  ce_3_minus_ruler_ce6: -0.1209 [-0.1388, -0.1049]
+  ce_4_minus_ruler_ce6: -0.1197 [-0.1377, -0.1037]
+  ce_5_minus_ruler_ce6: -0.1195 [-0.1375, -0.1035]
+  ce_6_minus_ruler_ce6: -0.1195 [-0.1375, -0.1035]
+  arm_K1-K6: +0.0294 [+0.0239, +0.0338]
+  arm_K3-K6: -0.0012 [-0.0019, -0.0006]
+wrote /home/wolfe/morph-scratch/abc/lxtul-pointer-ditto/gap_vs_plain.json
