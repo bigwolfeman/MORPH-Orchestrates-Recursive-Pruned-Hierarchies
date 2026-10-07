@@ -1,0 +1,10 @@
+lxtul-pointer-cellkey tokens n=491520 blocks=481
+  ce_1_minus_ruler_ce6: -0.1473 [-0.1672, -0.1295]
+  ce_2_minus_ruler_ce6: -0.1498 [-0.1695, -0.1322]
+  ce_3_minus_ruler_ce6: -0.1560 [-0.1759, -0.1380]
+  ce_4_minus_ruler_ce6: -0.1568 [-0.1766, -0.1388]
+  ce_5_minus_ruler_ce6: -0.1569 [-0.1767, -0.1390]
+  ce_6_minus_ruler_ce6: -0.1569 [-0.1768, -0.1389]
+  arm_K1-K6: +0.0098 [+0.0089, +0.0107]
+  arm_K3-K6: +0.0010 [+0.0008, +0.0012]
+wrote /home/wolfe/morph-scratch/abc/lxtul-pointer-cellkey/gap_vs_plain.json
