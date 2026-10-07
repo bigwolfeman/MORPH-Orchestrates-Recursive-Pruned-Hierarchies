@@ -1,0 +1,35 @@
+=== loading PLAIN scorer plain [notul_panel_norm_match] /home/wolfe/morph-to/checkpoints/morph/plain-panel-norm-match/step_5000.pt ===
+  [slot-levers] {'slot_cot_clip': 4.0, 'slot_gain_lambda': 100.0} INERT on this model: no TUL block. They act only inside the slot loop (_tul_core).
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 49151), got 50256. This may result in unexpected behavior.
+MORPHTransformer: 265.1M params, loop 4:6×6:4 (kernels=fused, residual=hc_cayley(n=4))
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[data] local arrow source: 80 shards (first=openwebtext-train-00000-of-00080.arrow)
+    24 val rows read (skip_samples=50000, split=validation, tokenizer=bigcode/starcoder2-7b)
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer GPT2Tokenizer. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+    REAL TEXT anchor: seq_rep_4=0.0196 distinct_4=0.9585 gen_ppl=96.41
+
+=== plain  [notul_panel_norm_match]  /home/wolfe/morph-to/checkpoints/morph/plain-panel-norm-match/step_5000.pt ===
+    (same checkpoint as the plain scorer — reusing resident weights)
+      greedy           seq_rep_4=0.8725 distinct_4=0.1159 gen_ppl=2.13 (71s, 2.97s/row)
+      sample_t07_k40   seq_rep_4=0.2149 distinct_4=0.7523 gen_ppl=6.47 (72s, 3.00s/row)
+    [flush] /home/wolfe/morph-scratch/abc/coverage-gen/gen.json now holds 5 arm(s)
+
+====================================================================================================
+arm                          decode            seq_rep_4  distinct_4    rep_l   gen_ppl  wall_s/row
+----------------------------------------------------------------------------------------------------
+REAL TEXT                                     0.0196±0.011 0.9585±0.104   0.3455     96.41         nan
+pointer_5k [greedy]                           0.8911±0.026 0.1023±0.017   0.9194      4.86      36.032
+pointer_5k [sample_t07_k40]                   0.3068±0.091 0.6714±0.093   0.6715     12.11      36.068
+pointer_phase [greedy]                        0.9091±0.021 0.0850±0.013   0.9326      4.01      35.979
+pointer_phase [sample_t07_k40]                  0.2907±0.100 0.6897±0.091   0.6676     11.92      35.853
+pointer_cov [greedy]                          0.9246±0.014 0.0698±0.010   0.9395      3.53      36.016
+pointer_cov [sample_t07_k40]                  0.3738±0.122 0.6066±0.091   0.6958      9.89      35.994
+lxtul_nohead [greedy]                         0.7439±0.053 0.1789±0.025   0.8761      2.84      35.842
+lxtul_nohead [sample_t07_k40]                  0.0412±0.018 0.9014±0.096   0.5259     13.66      35.781
+plain [greedy]                                0.8725±0.031 0.1159±0.019   0.9204      2.13       2.969
+plain [sample_t07_k40]                        0.2149±0.090 0.7523±0.094   0.6260      6.47       3.000
+====================================================================================================
+wrote /home/wolfe/morph-scratch/abc/coverage-gen/gen_plain.md
+
+wrote /home/wolfe/morph-scratch/abc/coverage-gen/gen.json

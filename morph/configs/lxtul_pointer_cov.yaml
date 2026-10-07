@@ -1,3 +1,5 @@
+# MEASURED NEGATIVE 2026-10-07: coverage made sampled repetition 29 % worse (0.374 vs 0.291);
+# lab/experiments/failures/2026-10-07-lxtul-pointer-coverage.md. Kept to reproduce that result.
 # The See et al. 2017 coverage phase (arXiv 1704.04368 §2.3, §4): a SEPARATE final phase at
 # lambda 1, as the paper runs it (from the first iteration it "interfered with the main
 # objective"). Starts from the trained LXTUL + pointer 5k checkpoint (weights only, fresh

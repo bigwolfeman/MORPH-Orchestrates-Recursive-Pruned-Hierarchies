@@ -1,0 +1,10 @@
+lxtul-pointer-cov tokens n=491520 blocks=481
+  ce_1_minus_ruler_ce6: -0.1683 [-0.1874, -0.1518]
+  ce_2_minus_ruler_ce6: -0.1714 [-0.1904, -0.1548]
+  ce_3_minus_ruler_ce6: -0.1898 [-0.2087, -0.1732]
+  ce_4_minus_ruler_ce6: -0.1902 [-0.2089, -0.1737]
+  ce_5_minus_ruler_ce6: -0.1902 [-0.2090, -0.1736]
+  ce_6_minus_ruler_ce6: -0.1902 [-0.2090, -0.1736]
+  arm_K1-K6: +0.0221 [+0.0208, +0.0233]
+  arm_K3-K6: +0.0004 [+0.0003, +0.0006]
+wrote /home/wolfe/morph-scratch/abc/lxtul-pointer-cov/gap_vs_plain.json
