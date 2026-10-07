@@ -56,6 +56,7 @@ def _ademamix_b1zero_fused_kernel(
     code_signed_ptr,  # 256 fp32 ascending dynamic map (signed)   — dynamic mode only
     code_unsigned_ptr,# 256 fp32 ascending dynamic map (unsigned) — dynamic mode only
     sched_ptr,        # fp32[7] [lr,beta2,beta3,alpha,eps,bc2,wd] — LOAD_SCHED mode only
+    skip_ptr,         # fp32[1] found-inf flag — HAS_SKIP mode only (nonzero → write nothing)
     lr, beta2, beta3, alpha, eps, bc2, wd,   # fp32 scalars (ignored when LOAD_SCHED)
     g_coef, snr_kappa, snr_floor, coord_cap, upd_clip,  # fp32 cure scalars
     is_init,          # 1 → state is zero (skip dequant), 0 → dequant existing code
@@ -77,6 +78,11 @@ def _ademamix_b1zero_fused_kernel(
                                   # is unchanged and fp32 IEEE ops are deterministic, so the
                                   # two variants produce identical bits (unit-gated in
                                   # tests via torch.equal on all 5 outputs).
+    HAS_SKIP: tl.constexpr,       # True → read a device found-inf flag and, when it is set,
+                                  # store NOTHING (params, codes, absmax untouched): the
+                                  # capturable optimizer's skip of a non-finite step, decided
+                                  # on the device with no host read. A clear flag leaves every
+                                  # mask as it was, so the written values are unchanged.
 ):
     if LOAD_SCHED:
         lr = tl.load(sched_ptr + 0)
@@ -90,6 +96,11 @@ def _ademamix_b1zero_fused_kernel(
     block_start = pid * BLOCK_SIZE
     offs = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offs < n_elements
+    amax_mask = None              # the per-block absmax stores: unmasked unless HAS_SKIP
+    if HAS_SKIP:
+        live = tl.load(skip_ptr) == 0.0
+        mask = mask & live
+        amax_mask = live
 
     g = tl.load(g_ptr + offs, mask=mask, other=0.0).to(tl.float32)
 
@@ -165,8 +176,8 @@ def _ademamix_b1zero_fused_kernel(
         nu_norm = nu / (new_nu_amax + tiny)        # ∈ [0,1]
         m2_q = _nearest_code(m2_norm, code_signed_ptr)
         nu_q = _nearest_code(nu_norm, code_unsigned_ptr)
-        tl.store(m2_amax_ptr + pid, new_m2_amax)
-        tl.store(nu_amax_ptr + pid, new_nu_amax)
+        tl.store(m2_amax_ptr + pid, new_m2_amax, mask=amax_mask)
+        tl.store(nu_amax_ptr + pid, new_nu_amax, mask=amax_mask)
         tl.store(m2_code_ptr + offs, m2_q.to(tl.uint8), mask=mask)
         tl.store(nu_code_ptr + offs, nu_q.to(tl.uint8), mask=mask)
     else:
@@ -189,8 +200,8 @@ def _ademamix_b1zero_fused_kernel(
                 1.0,
                 nu_q,
             )
-        tl.store(m2_amax_ptr + pid, new_m2_amax)
-        tl.store(nu_amax_ptr + pid, new_nu_sqrt_amax)
+        tl.store(m2_amax_ptr + pid, new_m2_amax, mask=amax_mask)
+        tl.store(nu_amax_ptr + pid, new_nu_sqrt_amax, mask=amax_mask)
         tl.store(m2_code_ptr + offs, m2_q.to(tl.int8), mask=mask)
         tl.store(nu_code_ptr + offs, nu_q.to(tl.int8), mask=mask)
 
@@ -235,6 +246,7 @@ def fused_ademamix_b1zero_step(
     code_signed=None,
     code_unsigned=None,
     sched=None,
+    skip=None,
 ):
     """Launch the fused kernel for one param tensor (all flat, contiguous).
 
@@ -248,6 +260,10 @@ def fused_ademamix_b1zero_step(
     the scalar args are ignored — required under CUDA-graph capture, where launch args are
     baked into the graph but tensor CONTENTS are read fresh on every replay. Bit-exact vs
     the arg path (same fp32 values, same expressions; see kernel comment).
+
+    skip: optional fp32[1] device found-inf flag (HAS_SKIP=True). Nonzero → the launch
+    writes nothing. The capturable optimizer (``AdEMAMixB1Zero(capturable=True)``) passes it
+    so a non-finite step is skipped with no host read.
     """
     n = p.numel()
     grid = (triton.cdiv(n, BLOCK),)
@@ -261,9 +277,10 @@ def fused_ademamix_b1zero_step(
         cs = cu = m2_amax
     # sched placeholder when unused (LOAD_SCHED constexpr-eliminates every read of it).
     sp = sched if sched is not None else m2_amax
+    kp = skip if skip is not None else m2_amax          # same placeholder rule as sched
     _ademamix_b1zero_fused_kernel[grid](
         p, g, m2_code, m2_amax, nu_code, nu_amax,
-        cs, cu, sp,
+        cs, cu, sp, kp,
         float(lr), float(beta2), float(beta3), float(alpha),
         float(eps), float(bc2), float(wd),
         float(g_coef), float(snr_kappa), float(snr_floor),
@@ -279,4 +296,5 @@ def fused_ademamix_b1zero_step(
         DYNAMIC_QMAP=bool(dynamic_qmap),
         NU_FLOOR=bool(nu_floor),
         LOAD_SCHED=(sched is not None),
+        HAS_SKIP=(skip is not None),
     )

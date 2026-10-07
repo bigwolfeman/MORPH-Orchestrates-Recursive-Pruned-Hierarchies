@@ -1094,7 +1094,13 @@ def load_checkpoint(
                   f"{'...' if len(_benign_missing) > 8 else ''}")
 
     if "scaler" in ckpt:
-        scaler.load_state_dict(ckpt["scaler"])
+        if ckpt["scaler"] or not scaler.is_enabled():
+            scaler.load_state_dict(ckpt["scaler"])
+        else:
+            # Written under training.capturable_optimizer (a disabled scaler saves {}):
+            # there is no scale to restore, so this run's scaler starts at its default.
+            print("  [ckpt] checkpoint has no GradScaler state (capturable_optimizer run); "
+                  "the scaler starts fresh", flush=True)
 
     # 3. RNG — continue the SAME stochastic stream (Poisson depth draws, dropout).
     if ckpt.get("rng_cpu") is not None:
@@ -2831,7 +2837,19 @@ def main(cfg: DictConfig) -> None:
     # ── Optimizer + LR schedule ───────────────────────────────────────────
     optimizer = create_optimizer(model, cfg)
     lr_fn = create_lr_schedule(cfg)
-    scaler = torch.amp.GradScaler("cuda")
+    # training.capturable_optimizer: no loss scale (bf16 autocast does not need one) and no
+    # GradScaler host read. A DISABLED scaler passes scale / unscale_ / step / update straight
+    # through, so the loop below is unchanged; the skip of a non-finite step moves onto the
+    # device (optimizer.mark_found_inf after the clip, read by the optimizer's kernels).
+    _cap_opt = bool(getattr(tr, "capturable_optimizer", False))
+    if _cap_opt:
+        scaler = torch.amp.GradScaler("cuda", enabled=False)
+        if os.environ.get("MORPH_DIAG_OPT") or os.environ.get("MORPH_DIAG_M2G"):
+            raise ValueError("MORPH_DIAG_OPT / MORPH_DIAG_M2G read the optimizer's host step "
+                             "counter, which training.capturable_optimizer keeps on the "
+                             "device; run those diagnostics with the key off")
+    else:
+        scaler = torch.amp.GradScaler("cuda")
 
     # ── Pruning schedule ──────────────────────────────────────────────────
     pruning = PruningSchedule.from_cfg(cfg)
@@ -3635,6 +3653,9 @@ def main(cfg: DictConfig) -> None:
         lr = lr_fn(step)
         for pg in optimizer.param_groups:
             pg["lr"] = lr * pg.get("lr_mult", 1.0)
+        if _cap_opt:
+            # The device copy of the lr, written here, before any captured region.
+            optimizer.write_step_scalars()
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -3945,7 +3966,13 @@ def main(cfg: DictConfig) -> None:
             # The 2026-08-17 TUL divergence was invisible in wandb for exactly this reason —
             # the failure was a 1e8 gradient through the looped core, and the only surviving
             # evidence was a CMS saliency buffer inside a checkpoint. It is one scalar.
-            _gnorm = float(nn.utils.clip_grad_norm_(model.parameters(), grad_clip))
+            if _cap_opt:
+                # No host read: the norm stays a device tensor (`float()` at the log and
+                # trace sites reads it) and flags a non-finite step for the optimizer.
+                _gnorm = nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.mark_found_inf(_gnorm)
+            else:
+                _gnorm = float(nn.utils.clip_grad_norm_(model.parameters(), grad_clip))
 
         with _rt.region("opt"):
             _step_optimizer()
@@ -4166,8 +4193,8 @@ def main(cfg: DictConfig) -> None:
                 # clip_factor << 1 sustained means the reported loss curve is being driven
                 # by a gradient the clip is mostly discarding — read this BEFORE believing
                 # any loss comparison between arms.
-                "train/grad_norm": _gnorm,
-                "train/clip_factor": min(1.0, grad_clip / max(_gnorm, 1e-12)),
+                "train/grad_norm": float(_gnorm),
+                "train/clip_factor": min(1.0, grad_clip / max(float(_gnorm), 1e-12)),
             }
             # step_mix: per-mode cumulative step count + running mean loss (mission
             # spec keys, e.g. train/steps_db1, train/loss_db1). Cumulative across the
