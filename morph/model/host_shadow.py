@@ -115,3 +115,36 @@ def masked_rows(x: Tensor, mask: Tensor) -> Tensor:
     if shadow(mask) is None:
         return x[mask]
     return x.reshape(-1, *x.shape[k:])[true_index(mask)]
+
+
+# ── model.graph_safe: the FIXED-SHAPE forms of the readers above ───────────────────────
+# A captured CUDA graph replays one op sequence at one set of shapes, so a reader whose row
+# count is the host's count of a mask (`masked_rows`, `true_index`) or whose branch is the
+# host's answer to "is any row set?" (`any_true`) is wrong on the next batch even with a
+# shadow. These two keep EVERY row, zero the masked-out ones and weight the reduction, so
+# the shapes are the mask's own and nothing is read on the host. Not bit-identical to the
+# gathered form: a reduction over the full row set sums the same nonzero terms plus exact
+# zeros, in a different order (pinned against fp64 in tests/test_graph_safe.py).
+
+
+def fixed_rows(x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
+    """``(rows, w)``: every row of ``x`` over ``mask``'s leading dims, flattened to
+    ``[mask.numel(), *x.shape[k:]]`` with the masked-out rows set to EXACTLY 0 (``where``,
+    so their gradient is exactly 0 too), and ``w`` the mask as ``float32`` ``[mask.numel()]``.
+    The rows ``masked_rows(x, mask)`` returns are ``rows[w == 1]``, in the same order."""
+    k = mask.dim()
+    if tuple(x.shape[:k]) != tuple(mask.shape):
+        raise ValueError(f"fixed_rows: mask {tuple(mask.shape)} does not lead x "
+                         f"{tuple(x.shape)}")
+    m = mask.reshape(-1)
+    rows = x.reshape(-1, *x.shape[k:])
+    rows = torch.where(m.view(-1, *([1] * (rows.dim() - 1))), rows, torch.zeros_like(rows))
+    return rows, m.to(torch.float32)
+
+
+def masked_mean(v: Tensor, w: Tensor) -> Tensor:
+    """Mean of ``v`` ``[N]`` over the rows where ``w`` ``[N]`` is 1: ``v[w == 1].mean()``,
+    except that no row set reads exactly 0 (``sum / max(count, 1)``) where the gathered
+    form would give a NaN mean or take a host branch."""
+    w = w.to(v.dtype)
+    return (v * w).sum() / w.sum().clamp_min(1.0)

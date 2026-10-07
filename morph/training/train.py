@@ -718,6 +718,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         ce_softmax_kernel=bool(getattr(m, "ce_softmax_kernel", False)),
         ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
+        # MORPHConfig.graph_safe: a training forward with no host sync and fixed shapes.
+        graph_safe=bool(getattr(m, "graph_safe", False)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         tg_scoped_kernels=bool(getattr(m, "tg_scoped_kernels", False)),
         hc_streams=int(getattr(m, "hc_streams", 4)),

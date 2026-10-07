@@ -580,7 +580,8 @@ def _tg_relation_guard(tg_relation: Tensor | None, tg_allow: Tensor | None,
 def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
                        sink_logits: Tensor, scale: float,
                        extra_mask: Tensor | None = None,
-                       relation: Tensor | None = None) -> Tensor:
+                       relation: Tensor | None = None,
+                       dense_slot_cols: bool = False) -> Tensor:
     """TG compressed branch (docs/tul-tg-spec.md §3): direct attention over slot
     positions instead of pooled compression, under ``tg_restrict``.
 
@@ -617,9 +618,27 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
     SUPERSET of flattened causal, which an AND can never express. Dense form only: with a
     ``slot_mask`` it raises (see :func:`_tg_relation_guard`). Mutually exclusive with
     ``extra_mask``.
+    dense_slot_cols: ``model.graph_safe``, in every mode: a training step also runs this
+    branch in EVAL mode, inside the fan target's EMA twin of the prelude
+    (``MORPHTransformer._tul_fan_target``), and that forward is captured with the rest of the
+    step. With a ``slot_mask``, score EVERY column of the row
+    and mask the non-slot ones (``allow = causal AND slot_mask[j] AND extra_mask``)
+    instead of gathering the batch's largest per-row slot count, whose value is a host
+    read and whose shape changes per batch. The same function: a column masked to -inf
+    gets weight exactly 0 in either form. Not bit-identical: the softmax and the value
+    product sum over more (zero) terms, in a different order.
     """
     B, H, S, D = q.shape
     device = q.device
+    if slot_mask is not None and dense_slot_cols:
+        if relation is not None:                 # unreachable via _tg_relation_guard
+            raise NotImplementedError(
+                "_tg_slot_attention: relation is defined on the compact cell axis only.")
+        # The gathered form's relation over every column: causal, a slot column, and
+        # whatever `extra_mask` narrows. Handed to the dense form below as its extra mask.
+        _cols = slot_mask[:, None, None, :]                                    # [B,1,1,S]
+        extra_mask = _cols if extra_mask is None else extra_mask & _cols      # [B,1,S,S]
+        slot_mask = None
     if slot_mask is None:
         # Core region: every position is a slot and S is the (small) slot count —
         # the dense causal form is already compact there. Under model.span_mask this
@@ -1047,11 +1066,13 @@ class _CCACSAAttention(nn.Module):
                  compression: int, csa_compress_ratio: int, top_k: int,
                  d_indexer: int, max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
-                 tg_restrict: bool = False, tg_span_gate: bool = False):
+                 tg_restrict: bool = False, tg_span_gate: bool = False,
+                 graph_safe: bool = False):
         super().__init__()
         self.top_k = top_k
         self.compress_ratio = csa_compress_ratio
         self.tg_restrict = tg_restrict
+        self.graph_safe = graph_safe          # model.graph_safe (see _tg_slot_attention)
 
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
                             max_seq_len, context_len, window_size,
@@ -1156,7 +1177,8 @@ class _CCACSAAttention(nn.Module):
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
                                               self.cca.sink_logits, scale,
                                               extra_mask=tg_comp_allow,
-                                              relation=tg_relation)
+                                              relation=tg_relation,
+                                              dense_slot_cols=self.graph_safe)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
                                             extra_mask=tg_allow,
                                             relation=tg_relation)
@@ -1249,10 +1271,12 @@ class _CCAHCAAttention(nn.Module):
                  compression: int, hca_compress_ratio: int,
                  max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
-                 tg_restrict: bool = False, tg_span_gate: bool = False):
+                 tg_restrict: bool = False, tg_span_gate: bool = False,
+                 graph_safe: bool = False):
         super().__init__()
         self.compress_ratio = hca_compress_ratio
         self.tg_restrict = tg_restrict
+        self.graph_safe = graph_safe          # model.graph_safe (see _tg_slot_attention)
 
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
                             max_seq_len, context_len, window_size,
@@ -1333,7 +1357,8 @@ class _CCAHCAAttention(nn.Module):
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
                                               self.cca.sink_logits, scale,
                                               extra_mask=tg_comp_allow,
-                                              relation=tg_relation)
+                                              relation=tg_relation,
+                                              dense_slot_cols=self.graph_safe)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
                                             extra_mask=tg_allow,
                                             relation=tg_relation)
@@ -1412,6 +1437,9 @@ class MORPHAttention(nn.Module):
                             pooled block spans several spans and cannot be cut at a
                             boundary), and it then drives tg_allow / tg_comp_allow /
                             tg_seg from the span ids instead of a slot layout.
+        graph_safe:         model.graph_safe — the compressed branch's slot columns take
+                            the dense fixed-shape form (_tg_slot_attention's
+                            ``dense_slot_cols``), in train and eval mode alike.
 
     Forward:
         x: [B, S, d_model]
@@ -1455,6 +1483,7 @@ class MORPHAttention(nn.Module):
         conv_kernel: int = 4,
         tg_restrict: bool = False,
         tg_span_gate: bool = False,
+        graph_safe: bool = False,
     ):
         super().__init__()
 
@@ -1464,6 +1493,7 @@ class MORPHAttention(nn.Module):
             context_len=context_len, window_size=window_size,
             init_alpha=init_alpha, conv_kernel=conv_kernel,
             tg_restrict=tg_restrict, tg_span_gate=tg_span_gate,
+            graph_safe=graph_safe,
         )
 
         if layer_idx % 2 == 0:

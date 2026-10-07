@@ -293,8 +293,12 @@ class LoopAttnCenter(nn.Module):
         self._w = None
 
     @torch.no_grad()
-    def apply(self, frozen: bool = False) -> Tensor | None:
+    def apply(self, frozen: bool = False, skip: Tensor | None = None) -> Tensor | None:
         """Fold this forward's record into ``mu`` (or discard it when ``frozen``).
+
+        ``skip`` (``model.graph_safe``): a 0-dim DEVICE bool with ``frozen``'s meaning, read
+        without a host sync. The update runs and is multiplied away when it is True, so
+        ``mu`` and ``n_updates`` end where the host branch would leave them.
 
         Returns the forward's mean ``m`` (fp32 [C]) or None when nothing was recorded."""
         self._w = None
@@ -303,6 +307,16 @@ class LoopAttnCenter(nn.Module):
         m = torch.stack(self._acc).mean(dim=0)
         self._acc = []
         if frozen:
+            return m
+        if skip is not None:
+            self.n_updates.add_((~skip).to(self.n_updates.dtype))
+            alpha = (1.0 - self.decay) / (1.0 - torch.pow(
+                self.decay, self.n_updates.to(torch.float64)))
+            # Skipped before any update, n_updates is 0 and alpha is 1/0: `where` picks 0,
+            # and with `m` finite the add below is then an exact no-op.
+            alpha = torch.where(skip, torch.zeros_like(alpha), alpha)
+            self.mu.add_((m - self.mu.float()).mul_(alpha.to(torch.float32))
+                         .to(self.mu.dtype))
             return m
         self.n_updates.add_(1)
         # On-device scalar math (a Python base, no host-to-device copy, no sync), fp64 so

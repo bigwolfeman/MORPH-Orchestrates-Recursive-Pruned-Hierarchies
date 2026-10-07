@@ -56,7 +56,8 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
 from .tul_ditto import ditto_loss
-from .host_shadow import any_true, derive as derive_shadow, masked_rows, shadow as host_shadow
+from .host_shadow import (any_true, derive as derive_shadow, fixed_rows, masked_mean,
+                          masked_rows, shadow as host_shadow)
 from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_repel_term,
                       fan_stream_rank, fan_vol_term, select_gate_loss, select_streams,
                       select_winners, fan_stream_stats, plan_streams)
@@ -401,6 +402,23 @@ class MORPHConfig:
     # sync per CE call for the row count. Not bit-identical (the loss and grad_w sums run
     # over different chunks); about half the span decoder's rows are pads. False = all rows.
     ce_compact_rows: bool = False
+    # A TRAINING forward with no host sync and no host read of a device value, whose op
+    # sequence and every tensor shape are fixed for every batch of a config, so a CUDA graph
+    # captured on one batch replays on any other (2026-10-07, the graph-captured training
+    # step, `.agents/notes/proposed/architecture/2026-10-07-graph-captured-training-step.md`).
+    # What changes under it, every site named at its line:
+    #   * the slot loop runs `slot_depth_fixed` or `slot_max_depth` passes, not the batch's
+    #     drawn maximum (no `depths.cpu()`); a pass no slot reaches is masked as today;
+    #   * the prelude/coda slot-column attention scores every column of the row (the dense
+    #     [S, S] form) instead of the batch's largest slot count, in train AND eval mode
+    #     (the fan target's EMA twin runs it in eval mode inside a training step);
+    #   * every host-shadow reader (`morph.model.host_shadow`) becomes a masked computation
+    #     over the fixed row count: the fixed-point term, the fan's epi / vol / cosine
+    #     terms, the mix statistics, the loop-attention-center skip.
+    # An eval forward keeps today's loop and readers (it runs eager), only the attention
+    # form above changes. NOT bit-identical: the masked reductions sum in a different
+    # order, pinned against fp64 in tests/test_graph_safe.py. False = today.
+    graph_safe: bool = False
 
     # Parallel multi-token prediction on the coda readout (Gloeckle et al. 2024, arXiv
     # 2404.19737; arc E8, 2026-09-07 [W]). mtp_heads = the number of future tokens each
@@ -2034,6 +2052,7 @@ class MORPHTransformer(nn.Module):
             tg_restrict=self._tg_restrict or self._span_mask,
             tg_span_gate=(bool(cfg.tul.tg_span_gate) if cfg.tul is not None
                           else False),
+            graph_safe=bool(cfg.graph_safe),
         )
 
         # ── Residual = n-stream Hyper-Connection (Cayley/JPmHC), the sole residual ──
@@ -5944,6 +5963,9 @@ class MORPHTransformer(nn.Module):
         # cell-level layout never reaches them.
         _m_cells = int(self.cfg.tul.slot_cells)
         _n_slots = layout.slot_index.shape[1]
+        # model.graph_safe: a Python-level constant for this forward. TRAINING only — an
+        # eval forward is never captured and keeps today's path, host reads included.
+        _gsafe = bool(self.cfg.graph_safe) and self.training
         _layout_slots = layout          # the PER-SLOT view, kept for the register and the
                                         # per-slot depth draw; `layout` becomes per-CELL
         if _m_cells > 1:
@@ -5957,7 +5979,7 @@ class MORPHTransformer(nn.Module):
             # The per-cell validity's host value, when the per-slot one has one
             # (`morph.model.host_shadow`): the fixed-point term below reads masks of it.
             _vh_slots = host_shadow(_layout_slots.slot_valid)
-            if _vh_slots is not None:
+            if _vh_slots is not None and not _gsafe:
                 derive_shadow(layout.slot_valid, np.repeat(_vh_slots, _m_cells, axis=1))
         gidx, gvalid = layout.slot_index, layout.slot_valid
 
@@ -6297,6 +6319,9 @@ class MORPHTransformer(nn.Module):
         # absolute state h* + Delta. `halt` (eval only) never reaches it.
         _fp_lam = float(self.cfg.core_fixed_point_lambda) if self.training else 0.0
         _fp_terms: list[Tensor] = []
+        # model.graph_safe's form of the same term: (u_T, h_{T-1}, charged) per cell, filled
+        # pass by pass with `torch.where` (see the term's site in the loop). None otherwise.
+        _fp_acc: tuple[Tensor, Tensor, Tensor] | None = None
         _gain_reg: dict | None = None
         # tul.slot_cell_pass_norm's eval readings: reset at EVERY forward of a normed
         # model (a train forward leaves None, so a stale eval dict never reaches a train
@@ -6373,13 +6398,25 @@ class MORPHTransformer(nn.Module):
                         "within a slot. Raises rather than silently using cell 0's value.")
                 depths = _dv[:, :, :1].expand(B, _n_slots, _m_cells).reshape(
                     B, _n_slots * _m_cells).contiguous()
-            # THE one host sync the loop needs: its Python pass count is the table's max.
-            # The whole [B, S] table comes across in that same sync and rides on `depths`
-            # as its host shadow, so every per-pass mask below is known on the host and
-            # costs no further sync (2026-10-04).
-            _dh = depths.cpu().numpy()
-            derive_shadow(depths, _dh)
-            total_iters = int(_dh.max())
+            if _gsafe:
+                # model.graph_safe: the pass count is the CONFIG's ceiling, not the drawn
+                # table's max, so nothing crosses to the host and every batch runs the
+                # same passes. A pass that no slot reaches is masked exactly as an
+                # inactive slot is (`active = depths > t`). Equal to the drawn max
+                # whenever some slot draws the ceiling: 1000 of 1000 real `lxtul_pointer`
+                # batches did (census 2026-10-07, P(not) ~1e-28 at 212 valid slots).
+                # `slot_depth_fixed` IS the max, so that panel is exact on every batch.
+                _fixed_d = int(self.cfg.tul.slot_depth_fixed)
+                total_iters = (_fixed_d if _fixed_d > 0
+                               else int(self.cfg.tul.slot_max_depth or self.cfg.max_depth))
+            else:
+                # THE one host sync the loop needs: its Python pass count is the table's
+                # max. The whole [B, S] table comes across in that same sync and rides on
+                # `depths` as its host shadow, so every per-pass mask below is known on the
+                # host and costs no further sync (2026-10-04).
+                _dh = depths.cpu().numpy()
+                derive_shadow(depths, _dh)
+                total_iters = int(_dh.max())
         # ── tul.fan_loop_select: the latent-selected loop's per-forward state ──────
         # A Python-level constant: "off" (every other model) binds None and the three
         # `_ls` sites below trace out. Built after the depth draw because the reset mask of
@@ -6404,6 +6441,13 @@ class MORPHTransformer(nn.Module):
         # it is a training mechanism, not an instrument, and it must vary per step.
         _prog_p = float(self.cfg.tul.progressive_p)
         _prog = _prog_p > 0.0 and self.training and torch.is_grad_enabled() and not halt
+        if _gsafe and (_prog or _pr_lam > 0.0):
+            # Both read a device mask on the host every pass (`bool(_gm.any())`,
+            # `bool(_prm.any())` and a boolean-mask gather below). Refused rather than
+            # left to sync inside a captured step.
+            raise NotImplementedError(
+                "model.graph_safe does not cover tul.progressive_p or "
+                "tul.pass_residual_lambda (host reads of a device mask every pass).")
         _pk = None
         if _prog:
             _sel = torch.rand(depths.shape, device=depths.device) < _prog_p
@@ -7295,13 +7339,28 @@ class MORPHTransformer(nn.Module):
                     # pass in the grad window) and kept explicit so the invariant is
                     # stated where it is relied on, not only where the draw is made.
                     _fin = _fin & ~_pfx
-                else:
+                elif not _gsafe:
                     # The same mask's host value from the depth table's and the validity's
                     # shadows, so the test and the two gathers below run without a sync.
                     _dhs, _vhs = host_shadow(depths), host_shadow(layout.slot_valid)
                     if _dhs is not None and _vhs is not None:
                         derive_shadow(_fin, (_dhs > t) & _vhs & ~(_dhs > t + 1))
-                if any_true(_fin):
+                if _gsafe:
+                    # model.graph_safe: no gather of a host-counted row set. `_fin` is
+                    # `depths == t + 1` on the valid cells, so the passes' finishing sets
+                    # are DISJOINT and each cell's (u_T, h_{T-1}) pair is written into the
+                    # full-width accumulator exactly once; the term is reduced ONCE after
+                    # the loop (`_fp_acc` below). `torch.where` saves only its mask, so the
+                    # backward holds one fp32 carrier pair, as the gather did, and its
+                    # gradient reaches each cell's own pass unchanged.
+                    _fv = _fin.view(*_fin.shape, *([1] * (h.dim() - 2)))
+                    if _fp_acc is None:
+                        _fp_acc = (torch.where(_fv, _h_det, torch.zeros_like(_h_det)),
+                                   torch.where(_fv, h, torch.zeros_like(h)), _fin)
+                    else:
+                        _fp_acc = (torch.where(_fv, _h_det, _fp_acc[0]),
+                                   torch.where(_fv, h, _fp_acc[1]), _fp_acc[2] | _fin)
+                elif any_true(_fin):
                     # `_h_det`: u_T, the deterministic part (tul.gram; `h_new` itself on
                     # every other arm) — ||u_T - h_{T-1}||^2 / ||u_T||^2.
                     # Gathered to the FINISHING slots before the fp32 casts (the pass
@@ -7396,9 +7455,16 @@ class MORPHTransformer(nn.Module):
             # valid cell in the batch the record is a mean of nothing: discard it rather
             # than pull mu toward 0. `_loop_attn_center_frozen` is the trainer's compile
             # warmup on random tokens: it records (the same code runs) and discards.
-            _ctr_skip = self._loop_attn_center_frozen or not any_true(layout.slot_valid)
-            for _c in _ctrs:
-                _c.apply(frozen=_ctr_skip)
+            if _gsafe:
+                # model.graph_safe: the "no valid cell" test stays on the device and
+                # zeroes the update instead of branching on it (`LoopAttnCenter.apply`).
+                _ctr_empty = ~layout.slot_valid.any()
+                for _c in _ctrs:
+                    _c.apply(frozen=self._loop_attn_center_frozen, skip=_ctr_empty)
+            else:
+                _ctr_skip = self._loop_attn_center_frozen or not any_true(layout.slot_valid)
+                for _c in _ctrs:
+                    _c.apply(frozen=_ctr_skip)
         if _cot_hooks and _cot_clip > 0.0 and h.requires_grad:
             # The reference for every iteration's clip: the cotangent that reaches the
             # loop's exit carrier. Registered on the carrier itself (not on the last
@@ -7489,6 +7555,18 @@ class MORPHTransformer(nn.Module):
             # write reads), the final winner and the readings, stashed on `_lsel_out`.
             self._lsel_finish(_ls, h)
         _aux: dict = {}
+        if _fp_acc is not None:
+            # model.graph_safe: the same per-cell ratio as the gathered rows below, over
+            # every cell, and the mean over the cells that were charged. A batch with no
+            # charged cell reads exactly 0 (the gathered path leaves the key out).
+            _fn = _fp_acc[0].flatten(2).float()
+            _fo = _fp_acc[1].flatten(2).float()
+            _fd = _fn if _scse is None else _fn + h_star.flatten(2).float()
+            _rel = (_fn - _fo).pow(2).sum(-1) / (_fd.pow(2).sum(-1) + 1e-6)     # [B, S*M]
+            _fpm = _fp_acc[2].float()
+            _fp = (_rel * _fpm).sum() / _fpm.sum().clamp_min(1.0)
+            _aux["fixed_point"] = _fp.detach()
+            _aux["fp_weighted"] = _fp_lam * _fp
         if _fp_terms:
             _fp = torch.cat(_fp_terms).mean()
             _aux["fixed_point"] = _fp.detach()
@@ -13636,11 +13714,20 @@ class MORPHTransformer(nn.Module):
                     # `_tul_group_losses` lifts them into the loss `groups` dict as
                     # tensors already, and train.py's logger is the one place that calls
                     # `float()` on these, on the steps it logs).
+                    # model.graph_safe (TRAINING only, a Python-level constant): every
+                    # reader below takes its fixed-shape masked form (`fixed=`), so the
+                    # row counts are the layout's and no mask is read on the host.
+                    _gsafe = bool(self.cfg.graph_safe) and self.training
                     fan_stats["mix_entropy"] = TULFanMix.entropy(
-                        _fan_w, layout.slot_valid).detach()
-                    fan_stats["mix_w_max"] = (
-                        masked_rows(_fan_w, layout.slot_valid).amax(dim=-1).mean().detach()
-                        if any_true(layout.slot_valid) else _fan_w.new_zeros(()))
+                        _fan_w, layout.slot_valid, fixed=_gsafe).detach()
+                    if _gsafe:
+                        _fw_rows, _fw_m = fixed_rows(_fan_w, layout.slot_valid)
+                        fan_stats["mix_w_max"] = masked_mean(
+                            _fw_rows.amax(dim=-1), _fw_m).detach()
+                    else:
+                        fan_stats["mix_w_max"] = (
+                            masked_rows(_fan_w, layout.slot_valid).amax(dim=-1).mean().detach()
+                            if any_true(layout.slot_valid) else _fan_w.new_zeros(()))
                     _fan_cells = _reg_cells
                     # ── the repulsion (tul.fan_repel_lambda, tul.fan_repel_passes) ──
                     # Read off the SAME live-carry trajectory every per-pass reader uses,
@@ -13672,7 +13759,7 @@ class MORPHTransformer(nn.Module):
                             if _mode == "cos":
                                 _rp = fan_repel_term(db_traj, layout.slot_valid, _m,
                                                      int(tc.fan_repel_passes), stats=fan_stats,
-                                                     instruments=_inst)
+                                                     instruments=_inst, fixed=_gsafe)
                             else:
                                 # `epi` / `vol` / `epivol`: the cosines stay INSTRUMENTS
                                 # (every pass, no gradient); the charged term is minus the
@@ -13682,19 +13769,19 @@ class MORPHTransformer(nn.Module):
                                     with torch.no_grad():
                                         fan_repel_term(db_traj, layout.slot_valid, _m,
                                                        int(tc.fan_repel_passes),
-                                                       stats=fan_stats)
+                                                       stats=fan_stats, fixed=_gsafe)
                                 _parts = []
                                 if _mode in ("epi", "epivol"):
                                     _parts.append(fan_epi_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         self.tul_fan_epi, _epi_ridge,
                                         float(tc.fan_epi_eta), stats=fan_stats,
-                                        instruments=_inst))
+                                        instruments=_inst, fixed=_gsafe))
                                 if _mode in ("vol", "epivol"):
                                     _parts.append(fan_vol_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         float(tc.fan_epi_eta), stats=fan_stats,
-                                        instruments=_inst))
+                                        instruments=_inst, fixed=_gsafe))
                                 _parts = [p for p in _parts if p is not None]
                                 _rp = torch.stack(_parts).sum() if _parts else None
                         else:
@@ -13710,21 +13797,23 @@ class MORPHTransformer(nn.Module):
                             # the same K cells (LXTUL-R Step 1b, 2026-09-22).
                             with torch.no_grad():
                                 fan_repel_term(db_traj, layout.slot_valid, _m,
-                                               int(tc.fan_repel_passes), stats=fan_stats)
+                                               int(tc.fan_repel_passes), stats=fan_stats,
+                                               fixed=_gsafe)
                                 if _mode in ("epi", "epivol"):
                                     fan_epi_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         self.tul_fan_epi, _epi_ridge,
-                                        float(tc.fan_epi_eta), stats=fan_stats)
+                                        float(tc.fan_epi_eta), stats=fan_stats, fixed=_gsafe)
                                 if _mode in ("vol", "epivol"):
                                     fan_vol_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
-                                        float(tc.fan_epi_eta), stats=fan_stats)
+                                        float(tc.fan_epi_eta), stats=fan_stats, fixed=_gsafe)
                             _traj_plan = [plan_streams(_t, _m, _h)[0] for _t in db_traj]
                             _m_plan = _m - _h
                             if _mode == "cos":
                                 _rp = fan_repel_term(_traj_plan, layout.slot_valid, _m_plan,
-                                                     int(tc.fan_repel_passes), stats=None)
+                                                     int(tc.fan_repel_passes), stats=None,
+                                                     fixed=_gsafe)
                             else:
                                 _parts = []
                                 if _mode in ("epi", "epivol"):
@@ -13732,12 +13821,12 @@ class MORPHTransformer(nn.Module):
                                         _traj_plan, layout.slot_valid, _m_plan,
                                         int(tc.fan_repel_passes), self.tul_fan_epi,
                                         _epi_ridge, float(tc.fan_epi_eta),
-                                        stats=None))
+                                        stats=None, fixed=_gsafe))
                                 if _mode in ("vol", "epivol"):
                                     _parts.append(fan_vol_term(
                                         _traj_plan, layout.slot_valid, _m_plan,
                                         int(tc.fan_repel_passes), float(tc.fan_epi_eta),
-                                        stats=None))
+                                        stats=None, fixed=_gsafe))
                                 _parts = [p for p in _parts if p is not None]
                                 _rp = torch.stack(_parts).sum() if _parts else None
                         if self.training and tc.fan_repel_lambda > 0.0:
