@@ -1,0 +1,21 @@
+# The See et al. 2017 coverage phase (arXiv 1704.04368 §2.3, §4): a SEPARATE final phase at
+# lambda 1, as the paper runs it (from the first iteration it "interfered with the main
+# objective"). Starts from the trained LXTUL + pointer 5k checkpoint (weights only, fresh
+# optimizer); the matched control is lxtul_pointer_ft.yaml (the same phase, no coverage).
+# tul.pointer_coverage_lambda: the coverage term in the head's score + the coverage loss
+# (morph/model/tul_pointer.py). The init_from path is this machine's checkpoint store.
+defaults:
+  - lxtul_pointer
+  - _self_
+
+tul:
+  pointer_coverage_lambda: 1.0
+
+training:
+  init_from: /home/wolfe/morph-to/checkpoints/morph/lxtul-pointer/step_5000.pt
+  init_from_new_modules: [tul_pointer.cov_gain_bias]
+  steps: 1000
+  warmup: 200
+
+wandb:
+  name: lxtul-pointer-cov

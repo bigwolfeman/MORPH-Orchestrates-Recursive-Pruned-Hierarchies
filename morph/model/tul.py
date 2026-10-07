@@ -2646,8 +2646,12 @@ class TULConfig:
     #   lxtul-testbed, docs/experiments/failures/2026-10-06-parcae-pointer-cellkey.md).
     # pointer_cell_key: keys in EARLIER spans also read that span's cells (tul_pointer.py);
     #   zero-initialised. Parcae: -0.0074 paired against the head without them.
+    # pointer_coverage_lambda: > 0 builds the See et al. 2017 coverage term and loss (the guard
+    #   against the copy head looping on its own output; tul_pointer.py). The paper's recipe
+    #   is a SEPARATE final phase at lambda 1: `lxtul_pointer_cov.yaml` (init_from).
     pointer_heads: int = 0
     pointer_cell_key: bool = False
+    pointer_coverage_lambda: float = 0.0
 
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
@@ -5117,9 +5121,14 @@ class TULConfig:
         through `_tul_group_losses` / the eval logits; refuse the paths it does not cover."""
         if int(self.pointer_heads) < 0:
             raise ValueError(f"tul.pointer_heads must be >= 0, got {self.pointer_heads}")
+        if float(self.pointer_coverage_lambda) < 0:
+            raise ValueError("tul.pointer_coverage_lambda must be >= 0, got "
+                             f"{self.pointer_coverage_lambda}")
         if int(self.pointer_heads) == 0:
             if self.pointer_cell_key:
                 raise ValueError("tul.pointer_cell_key needs tul.pointer_heads > 0")
+            if float(self.pointer_coverage_lambda) > 0:
+                raise ValueError("tul.pointer_coverage_lambda needs tul.pointer_heads > 0")
             return
         if self.tokens_through_core:
             raise ValueError("tul.pointer_heads is built for the slot loop "

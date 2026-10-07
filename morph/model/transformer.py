@@ -3805,13 +3805,15 @@ class MORPHTransformer(nn.Module):
             if self._code_enum_k:
                 raise NotImplementedError("tul.pointer_heads with tul.code_enum_k > 1: the "
                                           "per-span Bayes read builds its own log-probs")
-            self.tul_pointer = TULPointer(cfg.d_model, int(cfg.tul.pointer_heads),
-                                          cell_key=bool(cfg.tul.pointer_cell_key))
+            self.tul_pointer = TULPointer(
+                cfg.d_model, int(cfg.tul.pointer_heads), cell_key=bool(cfg.tul.pointer_cell_key),
+                coverage=float(cfg.tul.pointer_coverage_lambda) > 0)
             print(f"  TUL POINTER ON: {cfg.tul.pointer_heads} heads over earlier tokens' final "
                   f"hidden states (token order, j < i), each read as a distribution over the "
                   f"token that followed j, gated with the model's head; output-only; "
                   f"{sum(p.numel() for p in self.tul_pointer.parameters()):,} params, never "
-                  f"ternary; cell keys {'ON' if cfg.tul.pointer_cell_key else 'off'}", flush=True)
+                  f"ternary; cell keys {'ON' if cfg.tul.pointer_cell_key else 'off'}; coverage "
+                  f"lambda {float(cfg.tul.pointer_coverage_lambda)}", flush=True)
 
         if cfg.retention_carry_mode == "acausal_final":
             print("  WARNING: retention_carry='acausal_final' — the cross-iteration GLA "
@@ -12494,12 +12496,19 @@ class MORPHTransformer(nn.Module):
                 raise NotImplementedError("tul.pointer_heads with tul.coda_logit_l2")
             lp_model = fused_linear_label_logprob(flat, w_head, lab, ignore_index=-100,
                                                   chunk_size=chunk, mask_token_id=mask_id)
-            lp = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
-                                                 layout.slot_mask, layout).reshape(-1)
+            lp, _ptr_cov = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
+                                                           layout.slot_mask, layout)
+            lp = lp.reshape(-1)
             wv = row_w * (lab != -100).to(row_w.dtype)
             loss = -(lp * wv).sum() / wv.sum().clamp_min(1e-9)
             _ptr_tok = (~layout.slot_mask).reshape(-1) & (lab != -100)
             _ptr_ce_tokens = (-(lp * _ptr_tok).sum() / _ptr_tok.sum().clamp_min(1)).detach()
+            if _ptr_cov is not None:
+                # tul.pointer_coverage_lambda (See et al. 2017 eq. 13): mean over labelled
+                # token positions of sum_j min(alpha, coverage), added to the CE
+                _ptr_cov = (_ptr_cov.reshape(-1) * _ptr_tok).sum() / _ptr_tok.sum().clamp_min(1)
+                _ptr_cov_w = float(self.cfg.tul.pointer_coverage_lambda) * _ptr_cov
+                loss = loss + _ptr_cov_w
         elif logit_l2 != 0.0:
             # tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. arXiv 2011.09468):
             # an L2 penalty on the coda's raw token logits, folded into the SAME fused
@@ -12516,6 +12525,11 @@ class MORPHTransformer(nn.Module):
                                               **self._ce_kw)
         valid = (lab != -100).to(row_w.dtype)
         out = {"loss": loss, "n_targets": (row_w * valid).sum()}
+        if self.tul_pointer is not None and _ptr_cov is not None:
+            # inside out["loss"]; exposed detached so train.py subtracts it back out of
+            # train/loss and val loss (the `*_weighted` contract)
+            out["pointer_cov"] = _ptr_cov.detach()
+            out["pointer_cov_weighted"] = _ptr_cov_w.detach()
         if logit_l2 != 0.0:
             # Same contract as `spandec_weighted` / `code_enc_var_weighted`: the term is
             # ALREADY inside `out["loss"]` (folded into the fused kernel above, not a

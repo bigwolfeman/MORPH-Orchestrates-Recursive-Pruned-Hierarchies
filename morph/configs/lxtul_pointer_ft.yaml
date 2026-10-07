@@ -1,0 +1,15 @@
+# Matched control for lxtul_pointer_cov.yaml: the same 1000-step phase from the same LXTUL +
+# pointer 5k checkpoint (weights only, fresh optimizer, 200-step ramp), WITHOUT coverage. The
+# phase itself (optimizer reset, ramp, more steps) moves CE and repetition; this arm carries
+# all of that, so coverage's effect is the difference between the two.
+defaults:
+  - lxtul_pointer
+  - _self_
+
+training:
+  init_from: /home/wolfe/morph-to/checkpoints/morph/lxtul-pointer/step_5000.pt
+  steps: 1000
+  warmup: 200
+
+wandb:
+  name: lxtul-pointer-ft

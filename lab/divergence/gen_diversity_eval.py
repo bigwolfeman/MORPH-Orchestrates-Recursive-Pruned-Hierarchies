@@ -94,10 +94,15 @@ from tul_samples import emit_source_for, load_cfg, load_ckpt  # noqa: E402
 VAL_SKIP_SAMPLES = 50_000  # morph/training/train.py::_make_val_loader — the trainer's own offset.
 
 # (label, temperature, top_k, top_p, is_greedy)
-DECODES = [
-    ("greedy", 0.0, 0, 0.0, True),
-    ("sample_t1_p95", 1.0, 0, 0.95, False),
-]
+DECODE_TABLE = {
+    "greedy": ("greedy", 0.0, 0, 0.0, True),
+    "sample_t1_p95": ("sample_t1_p95", 1.0, 0, 0.95, False),
+    # 2026-10-07: T=1 sampling at 5k repeats so little that every arm (real text included)
+    # sits near zero on seq_rep_4, so it cannot show a repetition problem. T=0.7, top-k 40
+    # is a common deployment setting and the one where small models visibly repeat.
+    "sample_t07_k40": ("sample_t07_k40", 0.7, 40, 0.0, False),
+}
+DECODES = [DECODE_TABLE["greedy"], DECODE_TABLE["sample_t1_p95"]]
 
 SEQ_REP_NS = (1, 2, 3, 4)
 DISTINCT_NS = (1, 2, 4)
@@ -225,6 +230,8 @@ def main():
     ap.add_argument("--plain_ckpt", required=True,
                     help="LABEL=CONFIG=PATH of the PLAIN (non-TUL) checkpoint used as "
                          "the gen-PPL scorer for every arm, including itself")
+    ap.add_argument("--decodes", default="greedy,sample_t1_p95",
+                    help=f"comma list from {sorted(DECODE_TABLE)}")
     ap.add_argument("--n", type=int, default=64)
     ap.add_argument("--prompt_len", type=int, default=128)
     ap.add_argument("--gen_len", type=int, default=256)
@@ -233,6 +240,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--examples_out", default="")
     a = ap.parse_args()
+    global DECODES
+    DECODES = [DECODE_TABLE[k] for k in a.decodes.split(",")]
 
     device = torch.device(a.device)
     out_path = pathlib.Path(a.out)

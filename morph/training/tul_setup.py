@@ -88,6 +88,7 @@ KNOWN_TUL_KEYS = frozenset({
     # the output-only pointer / copy head (2026-10-06)
     "pointer_heads",
     "pointer_cell_key",
+    "pointer_coverage_lambda",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -466,6 +467,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         loop_attn_hc=str(tc.get("loop_attn_hc", "cayley")),
         pointer_heads=int(tc.get("pointer_heads", 0)),
         pointer_cell_key=bool(tc.get("pointer_cell_key", False)),
+        pointer_coverage_lambda=float(tc.get("pointer_coverage_lambda", 0.0)),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -788,6 +790,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "loop_attn_hc": model_cfg.loop_attn_hc,
         "pointer_heads": model_cfg.pointer_heads,
         "pointer_cell_key": model_cfg.pointer_cell_key,
+        "pointer_coverage_lambda": model_cfg.pointer_coverage_lambda,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,

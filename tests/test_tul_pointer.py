@@ -168,6 +168,91 @@ def test_cell_key_train_eval_agree_causal_and_live():
     assert torch.equal(a[0, before], b[0, before])
 
 
+def _cov_ref(alpha):
+    """mean_h sum_j min(alpha_hij, sum_{i' < i} alpha_hi'j), by loops (See et al. eq. 12)."""
+    B, H, N, _ = alpha.shape
+    out = torch.zeros(B, N)
+    for b in range(B):
+        for i in range(N):
+            tot = 0.0
+            for h in range(H):
+                c = alpha[b, h, :i].sum(0)
+                tot += float(torch.minimum(alpha[b, h, i], c).sum())
+            out[b, i] = tot / H
+    return out
+
+
+def test_coverage_term_starts_off_and_the_loss_matches_the_paper():
+    from morph.model.tul_pointer import TULPointer, candidates_from_ids
+    _ids, inp, lab, layout = _batch(M)
+    torch.manual_seed(4)
+    a = TULPointer(16, 2)
+    torch.manual_seed(4)
+    b = TULPointer(16, 2, coverage=True)
+    sa, sb = a.state_dict(), b.state_dict()
+    assert set(sb) - set(sa) == {"cov_gain_bias"}
+    assert all(torch.equal(sa[k], sb[k]) for k in sa)               # built last: no RNG shift
+    h = torch.randn(inp.shape[0], inp.shape[1], 16)
+    cand = candidates_from_ids(inp, layout.slot_mask)
+    with torch.no_grad():
+        al_a, nu_a, _g, cov_a = a.attend(h, cand, layout.slot_mask)
+        al_b, nu_b, _g, cov_b = b.attend(h, cand, layout.slot_mask)
+        assert cov_a is None and torch.equal(al_a, al_b) and torch.equal(nu_a, nu_b)
+        assert torch.allclose(cov_b, _cov_ref(al_b), atol=1e-5)
+        assert float(cov_b.max()) <= 1.0 + 1e-6 and float(cov_b.sum()) > 0
+        b.cov_gain_bias.fill_(-3.0)
+        al_c, _n, _g, cov_c = b.attend(h, cand, layout.slot_mask)
+        assert not torch.allclose(al_c, al_b)                         # the score term is live
+        assert torch.allclose(cov_c, _cov_ref(al_c), atol=1e-5)       # loss on the final alpha
+
+
+def _cov_live():
+    m = _live(_lx(pointer_heads=2, pointer_coverage_lambda=1.0))
+    with torch.no_grad():
+        m.tul_pointer.cov_gain_bias.copy_(torch.tensor([-2.0, 1.5]))
+    return m
+
+
+def test_coverage_loss_is_in_the_loss_and_trains_the_gain():
+    _ids, inp, lab, layout = _batch(M)
+    on = _cov_live()
+    on.train()
+    torch.manual_seed(7)
+    o = on(inp, labels=lab, slot_layout=layout)
+    assert float(o["pointer_cov"]) > 0
+    assert abs(float(o["pointer_cov_weighted"]) - float(o["pointer_cov"])) < 1e-6   # lambda 1
+    o["loss"].backward()
+    assert float(on.tul_pointer.cov_gain_bias.grad.abs().sum()) > 0
+    # the CE part equals the loss minus the weighted term (the train.py subtraction contract)
+    two = _lx(pointer_heads=2, pointer_coverage_lambda=2.0)
+    two.load_state_dict(on.state_dict())
+    two.train()
+    torch.manual_seed(7)
+    o2 = two(inp, labels=lab, slot_layout=layout)
+    d1 = float(o["loss"]) - float(o["pointer_cov_weighted"])
+    d2 = float(o2["loss"]) - float(o2["pointer_cov_weighted"])
+    assert abs(d1 - d2) < 1e-5 and abs(float(o2["pointer_cov_weighted"]) - 2 * float(o["pointer_cov"])) < 1e-5
+
+
+def test_coverage_eval_logits_agree_and_are_causal():
+    m = _cov_live()
+    ids, inp, lab, layout = _batch(M)
+    m.eval()
+    with torch.no_grad():
+        o = m(inp, labels=lab, slot_layout=layout)
+        lg = m(inp, labels=None, slot_layout=layout)["logits"]
+    assert abs(float(o["ce_tokens"]) - _token_ce_from_logits(lg, lab, layout)) < 1e-4
+    tok = (~layout.slot_mask[0]).nonzero().squeeze(1)
+    t = int(tok[len(tok) // 2])
+    inp2 = inp.clone()
+    fut = tok[tok >= t]
+    inp2[0, fut] = inp[1, fut]
+    with torch.no_grad():
+        lg2 = m(inp2, labels=None, slot_layout=layout)["logits"]
+    before = tok[tok < t]
+    assert torch.equal(lg[0, before], lg2[0, before])
+
+
 def test_config_refusals():
     with pytest.raises(ValueError, match="pointer_heads must be >= 0"):
         TULConfig(pointer_heads=-1)
@@ -175,6 +260,10 @@ def test_config_refusals():
         TULConfig(pointer_heads=2, tokens_through_core=True)
     with pytest.raises(ValueError, match="pointer_cell_key needs"):
         TULConfig(pointer_cell_key=True)
+    with pytest.raises(ValueError, match="pointer_coverage_lambda needs"):
+        TULConfig(pointer_coverage_lambda=1.0)
+    with pytest.raises(ValueError, match="must be >= 0"):
+        TULConfig(pointer_heads=2, pointer_coverage_lambda=-1.0)
 
 
 def test_hydra_path_manifest_and_compose_diff(monkeypatch):
@@ -199,6 +288,10 @@ def test_hydra_path_manifest_and_compose_diff(monkeypatch):
     c = _compose_leaves("lxtul_pointer_cellkey")
     diff = {k for k in a.keys() | c.keys() if a.get(k, _MISSING) != c.get(k, _MISSING)}
     assert diff == {"tul.pointer_cell_key", "wandb.name"}, sorted(diff)
+    ft, cv = _compose_leaves("lxtul_pointer_ft"), _compose_leaves("lxtul_pointer_cov")
+    diff = {k for k in ft.keys() | cv.keys() if ft.get(k, _MISSING) != cv.get(k, _MISSING)}
+    assert diff == {"tul.pointer_coverage_lambda", "training.init_from_new_modules",
+                    "wandb.name"}, sorted(diff)
 
 
 def test_cached_generator_refuses_the_pointer():

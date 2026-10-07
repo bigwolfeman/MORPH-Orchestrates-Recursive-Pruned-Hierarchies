@@ -21,6 +21,18 @@ mean over the prefix_k cells). The query's span may already read those cells und
 geometry, so the head sees nothing new; same-span keys get no term (their cells lie in the
 query's future). Zero-initialised: step 0 is the head without them. Parcae: -0.0074 paired.
 
+Coverage (``tul.pointer_coverage_lambda``, See et al. 2017 §2.3, arXiv 1704.04368): the guard
+against a copy head feeding on its own output and looping. Per head, the coverage of key j at
+query i is the attention earlier queries already paid it, c_hij = sum_{i' < i} alpha_hi'j. It
+enters the score as w_h c_hij (w_h learned, zero-init) and the loss adds
+lambda * mean_h sum_j min(alpha_hij, c_hij) per token (bounded by 1). The paper found the loss
+necessary ("without the loss function ... no discernible reduction in repetition"), lambda = 1
+(2 raised the main loss), and coverage as a separate final phase (from the first iteration it
+"interfered with the main objective"). One deviation, forced by parallel training: the paper's
+coverage is recursive (each step's attention already saw coverage); here the score term reads
+the coverage of the coverage-free attention, the loss the final attention's. Training and
+generation compute the same function, so the deviation is from the paper, not train vs test.
+
 Training reads p at the true target only (``target_logprob``); generation and the sweep read the
 full mixed log-probs (``mixed_logprobs``). Both use the same attention, the same gate and the
 same candidates, so the two agree (tests/test_tul_pointer.py). Nothing here writes a hidden
@@ -74,7 +86,8 @@ def mix_target(logp_model: Tensor, gate_logits: Tensor, p: Tensor, null: Tensor)
 
 
 class TULPointer(nn.Module):
-    def __init__(self, d: int, heads: int, dh: int = 64, cell_key: bool = False):
+    def __init__(self, d: int, heads: int, dh: int = 64, cell_key: bool = False,
+                 coverage: bool = False):
         super().__init__()
         self.h, self.dh, self.cell_key = int(heads), int(dh), bool(cell_key)
         self.q = nn.Linear(d, self.h * self.dh, bias=False)
@@ -92,6 +105,9 @@ class TULPointer(nn.Module):
             self.gate_norm_head.weight.zero_()
             self.gate_norm_head.bias.copy_(
                 torch.tensor([0.0] + [-3.2 - math.log(self.h)] * self.h))
+        self.coverage = bool(coverage)
+        if self.coverage:                                  # built LAST: no RNG draw
+            self.cov_gain_bias = nn.Parameter(torch.zeros(self.h))
         self._ternary_exclude = True
         for m in self.modules():
             m._ternary_exclude = True
@@ -99,7 +115,8 @@ class TULPointer(nn.Module):
     def attend(self, h: Tensor, cand: Tensor, slot_mask: Tensor, layout=None):
         """h [B, L, C] packed order; cand [B, L] token order (-1 = not a candidate).
         Returns (alpha [B, H, N, N] token order over real keys, null [B, H, N] token order
-        (the abstain mass; 1 where a query has no candidate), gate logits [B, L, 1+H] packed)."""
+        (the abstain mass; 1 where a query has no candidate), gate logits [B, L, 1+H] packed,
+        coverage loss per query [B, N] token order (mean over heads) or None)."""
         B, L, C = h.shape
         order = token_order(slot_mask)
         ht = h.gather(1, order[..., None].expand(-1, -1, C))
@@ -117,8 +134,15 @@ class TULPointer(nn.Module):
             s = s + self._cell_scores(h, q, layout, order, scale)
         s = s.masked_fill(~allow[:, None], float("-inf"))
         s_null = torch.einsum("bhid,hd->bhi", q, _rms(self.null_k_bias).float()) * scale[None, :, None]
+        if self.coverage:
+            a0 = torch.softmax(torch.cat([s, s_null[..., None]], -1), -1)[..., :-1]
+            c0 = a0.cumsum(2) - a0                     # attention paid by queries i' < i
+            s = s + self.cov_gain_bias.float()[None, :, None, None] * c0
         pr = torch.softmax(torch.cat([s, s_null[..., None]], -1), -1)
-        return pr[..., :-1], pr[..., -1], self.gate_norm_head(h)
+        alpha, cov = pr[..., :-1], None
+        if self.coverage:
+            cov = torch.minimum(alpha, alpha.cumsum(2) - alpha).sum(-1).mean(1)   # [B, N]
+        return alpha, pr[..., -1], self.gate_norm_head(h), cov
 
     def _cell_scores(self, h: Tensor, q: Tensor, layout, order: Tensor, scale: Tensor) -> Tensor:
         """[B, H, N, N] token order: q_i . kc(cells of span(j)) where span(j) < span(i), else 0."""
@@ -137,18 +161,21 @@ class TULPointer(nn.Module):
 
     def target_logprob(self, h: Tensor, logp_model: Tensor, labels: Tensor,
                        slot_mask: Tensor, layout=None) -> Tensor:
-        """Training: log p(y) under the mixture at every packed position [B, L]; positions that
-        are not labelled token positions return `logp_model` unchanged."""
+        """Training: (log p(y) under the mixture at every packed position [B, L], positions that
+        are not labelled token positions returning `logp_model` unchanged; the coverage loss
+        per packed position [B, L] (0 off labelled token positions) or None)."""
         order = token_order(slot_mask)
         inv = torch.argsort(order, dim=1)
         cand = candidates_from_labels(labels, slot_mask)                       # token order
-        alpha, null, gl = self.attend(h, cand, slot_mask, layout)
+        alpha, null, gl, cov = self.attend(h, cand, slot_mask, layout)
         same = (cand[:, :, None] == cand[:, None, :]) & (cand[:, :, None] >= 0)  # y_i = c_i
         p = (alpha * same[:, None].to(alpha.dtype)).sum(-1).transpose(1, 2)      # [B, N, H]
         g = inv[..., None].expand(-1, -1, self.h)
         lp = mix_target(logp_model, gl, p.gather(1, g), null.transpose(1, 2).gather(1, g))
         is_tok_lab = ~slot_mask & (labels >= 0)
-        return torch.where(is_tok_lab, lp, logp_model.float())
+        if cov is not None:
+            cov = torch.where(is_tok_lab, cov.gather(1, inv), 0.0)
+        return torch.where(is_tok_lab, lp, logp_model.float()), cov
 
     def mixed_logprobs(self, h: Tensor, logits: Tensor, input_ids: Tensor,
                        slot_mask: Tensor, layout=None) -> Tensor:
@@ -158,7 +185,7 @@ class TULPointer(nn.Module):
         order = token_order(slot_mask)
         inv = torch.argsort(order, dim=1)
         cand = candidates_from_ids(input_ids, slot_mask)
-        alpha, null, gl = self.attend(h, cand, slot_mask, layout)
+        alpha, null, gl, _cov = self.attend(h, cand, slot_mask, layout)
         gl_t = gl.gather(1, order[..., None].expand(-1, -1, 1 + self.h)).float()
         a = torch.softmax(gl_t, -1)                                             # [B, N, 1+H]
         w0 = a[..., :1] + (a[..., 1:] * null.transpose(1, 2)).sum(-1, keepdim=True)
