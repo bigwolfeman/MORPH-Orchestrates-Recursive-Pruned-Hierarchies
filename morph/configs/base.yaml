@@ -530,7 +530,18 @@ training:
                                  # false = today's eager path (GradScaler, host scalars).
                                  # Task list: .agents/notes/proposed/architecture/
                                  # 2026-10-07-graph-captured-training-step.md (1.4, 1.5).
-  ademamix_eps_inside: false     # (b1zero) false = √(ν/bc2)+ε true-Adam normalization (default).
+  graph_step: false              # true = the training step (forward, backward, clip, found-inf
+                                 # flag, optimizer step, tul_fan_after_step) is recorded ONCE per
+                                 # step kind (regular; the 20-step instrument/log step) as a CUDA
+                                 # graph and replayed every later step: one launch instead of
+                                 # ~31k (morph/training/graph_step.py). Needs
+                                 # capturable_optimizer and model.graph_safe; refuses
+                                 # ce_compact_rows, probes, step_mix, curriculum and in-run
+                                 # prune/carve/route (full list: graph_step_refusals). The first
+                                 # 3 steps run eager; eval and generation free the
+                                 # graphs, and the next step records them again.
+                                 # false = today's eager path.
+  ademamix_eps_inside: false    # (b1zero) false = √(ν/bc2)+ε true-Adam normalization (default).
                                  # true = √(ν/bc2+ε) safety floor (floored at √ε≈1e-4) —
                                  # required for the fused linear-int8 kernel where ν can underflow
                                  # to exactly 0; throttles live small-ν params on the de-fused

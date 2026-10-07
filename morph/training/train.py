@@ -11,6 +11,7 @@ All hyperparameters are logged to wandb at run start (full config dict).
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import math
 import random as _random
@@ -3313,6 +3314,61 @@ def main(cfg: DictConfig) -> None:
         scaler.step(optimizer)
         scaler.update()
 
+    # ── training.graph_step: the step as a replayed CUDA graph (morph/training/graph_step.py) ──
+    # One graph per step kind (regular; instrument = the 20-step log step), captured after a
+    # few eager steps and after the last phase switch, then replayed. The body is this loop's
+    # fwd .. opt sequence; the sections below skip it when `_gs` ran the step. Everything that
+    # would change the op sequence, read the device on the host or change the parameter set
+    # mid-run is refused here rather than silently run eager or baked into the recording.
+    _gs = None
+    _gs_release = contextlib.nullcontext
+    if bool(getattr(tr, "graph_step", False)):
+        from morph.training.graph_step import GraphStep, graph_step_refusals
+        from morph.training.pruning import _find_cms_layers
+        _why = graph_step_refusals(cfg, total_steps=total_steps, curriculum=curriculum_enabled)
+        _live = {"the ternary scale EMA (ternary_scale_ema_beta > 0)": bool(_tern_ema_pairs),
+                 "the spectral projection": _spec_proj is not None,
+                 "a live spectral penalty (lambda > 0)": (_spec_pen is not None
+                                                          and _spec_pen.lam != 0.0),
+                 "the Jacobian probe": _jac_probe is not None,
+                 "the pre-clip probe (grad_probe_every > 0, or an abort guard)":
+                     _gprobe_every > 0,
+                 "training.step_mix": _step_mix_cycle is not None,
+                 "the NTP-dropout loader": _ntp_loader is not None,
+                 "the TUL gate's audit": bool(_gate_pending),
+                 "tul.code_target_ema": _code_ema_m > 0.0,
+                 "a pruned CMS tile (apply_prune_mask writes every step)": any(
+                     _l._prune_mask is not None and not bool(_l._prune_mask.all())
+                     for _n, _l in _find_cms_layers(model)),
+                 }
+        _why += [f"{k} is on" for k, v in _live.items() if v]
+        _why += [f"env {k} is set" for k in ("MORPH_STATIC_GRAPHS", "MORPH_OPT_CUDA_GRAPH",
+                                              "MORPH_DEBUG_STEP", "MORPH_DIAG_FWD",
+                                              "MORPH_DIAG_OPT", "MORPH_DIAG_M2G")
+                 if os.environ.get(k, "0").lower() not in ("0", "", "false")]
+        if _why:
+            raise ValueError("training.graph_step=true is refused:\n  - " + "\n  - ".join(_why))
+        # Capture no earlier than 3 eager steps in, and not before the last phase switch (a
+        # switch rebuilds the loader and can change the layout and the bag size).
+        _gs_first = max([start_step + 3] + [s for s in (schedule.tst_phase1_steps,
+                                                       schedule.tul_step) if s > start_step])
+        _gs = GraphStep(
+            model, optimizer, grad_clip=grad_clip,
+            forward=lambda _x, _y, _l: model(_x, labels=_y, bag_size=phase.bag_size,
+                                             slot_layout=_l, tul_step_mode=None),
+            kinds=(False, True),        # `_train_instruments`: regular, instrument (log)
+            set_kind=lambda _k: setattr(_mdl0, "_train_instruments", _k),
+            loss_terms=_spec_pen.penalty if _spec_pen is not None else None,
+            after_step=_mdl0.tul_fan_after_step, first_capture=_gs_first,
+            keep_grads=(True,), compiled=use_compile)
+        # Eval and generation do not fit beside the graphs' pool on 32 GB: they run with the
+        # graphs released, and the next step records them again (GraphStep.released).
+        _gs_release = _gs.released
+        print(f"  [graph-step] ON: eager steps until {_gs_first} and until an instrument step "
+              f"has run, then both step kinds (regular, instrument) are recorded and every "
+              f"later step is a replay; the body is the forward, backward, clip, found-inf "
+              f"flag, optimizer step and tul_fan_after_step", flush=True)
+
     # ── Training loop ─────────────────────────────────────────────────────
     _train_mode()
     step_times: list[float] = []
@@ -3743,6 +3799,15 @@ def main(cfg: DictConfig) -> None:
                     f"training.frozen_eval: the frozen model is in TRAIN mode at step "
                     f"{step}. Some path called model.train() instead of _train_mode(); the "
                     f"head would be fitted on training-mode cells.")
+            if _gs is not None:
+                # The whole step (fwd .. opt, tul_fan_after_step), eager, captured or
+                # replayed. The previous step's autograd graph must be dead before a capture.
+                loss = out = None
+                with _rt.region("graph-step"):
+                    out, loss, _gnorm, _ = _gs.step(
+                        step, _mdl._train_instruments, x, y, _layout,
+                        context=(phase.bag_size, phase.tul_on))
+                continue        # grad_accum is 1 under the key: this ends the micro loop
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     out = model(x, labels=y, bag_size=phase.bag_size,
@@ -3786,7 +3851,9 @@ def main(cfg: DictConfig) -> None:
                       f"(recording stopped)", flush=True)
 
         with _rt.region("prune"):
-            prune_stats = pruning.step(model, step)
+            # graph_step: no event can fire in the run and no tile is dead (both refused at
+            # setup), so the call is a no-op; it would sit after the optimizer step here.
+            prune_stats = pruning.step(model, step) if _gs is None else None
 
         # A prune event rewrites _dead_mask contents → a captured optimizer CUDA graph
         # (MORPH_OPT_CUDA_GRAPH) holds stale dead masks; drop it so the next steps re-warm
@@ -3968,7 +4035,9 @@ def main(cfg: DictConfig) -> None:
             # The 2026-08-17 TUL divergence was invisible in wandb for exactly this reason —
             # the failure was a 1e8 gradient through the looped core, and the only surviving
             # evidence was a CMS saliency buffer inside a checkpoint. It is one scalar.
-            if _cap_opt:
+            if _gs is not None:
+                pass            # clipped inside the step; `_gnorm` is its device output
+            elif _cap_opt:
                 # No host read: the norm stays a device tensor (`float()` at the log and
                 # trace sites reads it) and flags a non-finite step for the optimizer.
                 _gnorm = nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
@@ -3977,7 +4046,8 @@ def main(cfg: DictConfig) -> None:
                 _gnorm = float(nn.utils.clip_grad_norm_(model.parameters(), grad_clip))
 
         with _rt.region("opt"):
-            _step_optimizer()
+            if _gs is None:
+                _step_optimizer()
             # Projected gradient: the constraint is enforced AFTER the update, so it cannot
             # be argued with by the data gradient. Optimizer moments are left alone — they
             # describe the unprojected step, which is what momentum should be built from.
@@ -3995,7 +4065,8 @@ def main(cfg: DictConfig) -> None:
             # the router's balance bias moves from this step's load. Same placement rule as
             # the code_ref EMA (after every other post-step constraint, on `_mdl0`). A
             # no-op method on every other model.
-            _mdl0.tul_fan_after_step()
+            if _gs is None:         # graph_step: part of the step body
+                _mdl0.tul_fan_after_step()
 
         # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
         # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and
@@ -4190,6 +4261,9 @@ def main(cfg: DictConfig) -> None:
                 "perf/peak_mem_alloc_mib": peak_alloc,
                 "perf/peak_mem_reserved_mib": peak_resv,
                 "perf/step": step,
+                # training.graph_step: the share of steps run eager so far (the warm-up)
+                **({"perf/graph_step_eager_share": _gs.stats.eager_share()}
+                   if _gs is not None else {}),
                 "train/tst_bag": phase.bag_size,
                 # Pre-clip global gradient norm and the factor grad_clip applied to it.
                 # clip_factor << 1 sustained means the reported loss curve is being driven
@@ -4555,7 +4629,10 @@ def main(cfg: DictConfig) -> None:
                     f"tok/s={log.get('perf/tokens_per_sec', 0):.0f}  "
                     f"proxy={log.get('perf/flop_proxy', 0):.2f}  "
                     f"tflops={log.get('perf/model_tflops', 0):.1f}  "
-                    f"peak={log.get('perf/peak_mem_alloc_mib', 0) / 1024:.2f}GB",
+                    f"peak={log.get('perf/peak_mem_alloc_mib', 0) / 1024:.2f}GB"
+                    # graph_step: replays allocate nothing, so the allocated peak leaves out
+                    # the graphs' pool; the reserved peak carries it.
+                    + (f"  reserved={peak_resv / 1024:.2f}GB" if _gs is not None else ""),
                     flush=True,
                 )
 
@@ -4567,9 +4644,12 @@ def main(cfg: DictConfig) -> None:
                           and _gm_e.cfg.tul.gate.drives_depth)
             if _curr_val_batches is not None:
                 val_loader = _make_val_loader(phase.tul_on)   # rewound: the same docs
-            val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                         tul=phase.tul_on, extra=_val_extra,
-                                         halt=_halt_eval)
+            if _gs is not None:
+                loss = out = _gnorm = None      # the graphs' outputs, freed with them
+            with _gs_release():
+                val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
+                                             tul=phase.tul_on, extra=_val_extra,
+                                             halt=_halt_eval)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
             if _lp_mode != "off":
                 # Stage 1: val/loss is the LATENT objective (no token CE exists), so a
@@ -4660,10 +4740,13 @@ def main(cfg: DictConfig) -> None:
 
         # ── Generation test ───────────────────────────────────────────────
         if gen_every > 0 and step % gen_every == 0 and step > 0:
-            gen_text, gen_metrics = run_generation_test(
-                model, device, tokenizer_name, seq_len, step,
-                tul_rt=tul_rt if phase.tul_on else None,
-            )
+            if _gs is not None:
+                loss = out = _gnorm = None      # the graphs' outputs, freed with them
+            with _gs_release():
+                gen_text, gen_metrics = run_generation_test(
+                    model, device, tokenizer_name, seq_len, step,
+                    tul_rt=tul_rt if phase.tul_on else None,
+                )
             wandb.log({"gen/sample": wandb.Html(f"<pre>{gen_text}</pre>"), **gen_metrics},
                       step=step)
             if gen_metrics:
@@ -4696,10 +4779,22 @@ def main(cfg: DictConfig) -> None:
             print(f"  [roll] {_rp}  (keeping {len(_roll_ring.paths)} of the last "
                   f"{_roll_ring.keep} × {_roll_every} steps)", flush=True)
 
+        if _gs is not None and ((step % eval_every == 0 and step > 0)
+                                or (gen_every > 0 and step % gen_every == 0 and step > 0)
+                                or (ckpt_every > 0 and step % ckpt_every == 0 and step > 0)
+                                or (_roll_every > 0 and step % _roll_every == 0 and step > 0)):
+            _gs.mark_dirty()    # eval / generation / a checkpoint ran eager GPU work
+
         # ── Reset step timer ───────────────────────────────────────────────
         # Anchor the next step's _dt here, AFTER logging/eval/gen/ckpt, so those
         # non-training blocks don't inflate steps_per_sec (see Timing block above).
         t_start = time.perf_counter()
+
+    if _gs is not None:
+        _st = _gs.stats
+        print(f"  [graph-step] steps: {_st.eager} eager, {_st.replayed} replayed "
+              f"({_st.captures} graphs recorded); eager share {_st.eager_share():.4f}",
+              flush=True)
 
     # ── Final checkpoint ──────────────────────────────────────────────────
     if _aborted:
@@ -4742,11 +4837,14 @@ def main(cfg: DictConfig) -> None:
     # eval is disabled (eval_every > total_steps) — a pure throughput/mem run has no
     # val_loader worth touching and the skip lets it exit promptly.
     if eval_every <= total_steps:
+        if _gs is not None:
+            loss = out = _gnorm = None          # the graphs' outputs, freed with them
         _val_extra = {}
         if _curr_val_batches is not None:
             val_loader = _make_val_loader(phase.tul_on)
-        val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                     tul=phase.tul_on, extra=_val_extra)
+        with _gs_release():
+            val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
+                                         tul=phase.tul_on, extra=_val_extra)
         _final = {"val/loss_final": val_loss, "val/ppl_final": val_ppl}
         if _lp_mode != "off":
             del _final["val/ppl_final"]   # stage 1: the latent objective has no perplexity
@@ -4758,10 +4856,11 @@ def main(cfg: DictConfig) -> None:
               + "".join(f"  {k}={v:.4f}" for k, v in sorted(_val_extra.items())))
 
     if gen_every > 0 or bool(getattr(tr, "gen_test", False)):
-        gen_text, gen_metrics = run_generation_test(
-            model, device, tokenizer_name, seq_len, total_steps, n_tokens=200,
-            tul_rt=tul_rt if phase.tul_on else None,
-        )
+        with _gs_release():
+            gen_text, gen_metrics = run_generation_test(
+                model, device, tokenizer_name, seq_len, total_steps, n_tokens=200,
+                tul_rt=tul_rt if phase.tul_on else None,
+            )
         wandb.log({"gen/final": wandb.Html(f"<pre>{gen_text}</pre>"),
                    **{f"{k}_final": v for k, v in gen_metrics.items()}}, step=total_steps)
         _emit_gen(f"FINAL step {total_steps}", gen_text)
