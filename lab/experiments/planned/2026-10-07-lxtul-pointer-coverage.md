@@ -47,6 +47,12 @@ two phases). No sweep number from a phase is compared with a 5k checkpoint's. Th
 reads its prompts at the trainer's val offset (skip 50,000), so predictions 3-5 are unaffected.
 Both phases run as configured; adding `training.data_skip_batches` now would unpair them.
 
+Method amendment, 2026-10-07 03:09 CDT, before any generation. The first generation eval ran out of GPU memory
+on the first LXTUL model (24 rows x 384 tokens in one batch; the eager generator also runs the
+training-only span decoder). It reruns with `--gen_batch 8`: the same 24 prompts, seeds and
+decodes, generated 8 rows at a time. Each row has its own seeded sampler, so the change touches
+outputs only through batch-size GPU numerics.
+
 ## Predictions
 
 1. The coverage loss falls during the phase: `tul/pointer_cov` over the last 100 steps at most

@@ -187,19 +187,29 @@ def gen_ppl_report(nlls: list[float]) -> dict:
 # ── one arm, one decode setting ─────────────────────────────────────────────────────
 def run_setting(model, tul_rt, rule_spec, prompts: list[list[int]], gen_len: int,
                 label: str, temp: float, top_k: int, top_p: float, seed: int,
-                device, tokenizer, plain_model, prompt_len: int) -> dict:
+                device, tokenizer, plain_model, prompt_len: int, gen_batch: int = 0) -> dict:
     seeds = [seed + i for i in range(len(prompts))] if temp > 0.0 else None
+    # Rows are generated in chunks of `gen_batch` (0 = all at once). Each row samples from
+    # its own seeded generator, so chunking changes a row only through batch-size GPU
+    # numerics (a greedy near-tie can flip). It bounds memory: the eager TUL generator runs
+    # the whole forward, training-only span decoder included, over prompt + gen_len every step.
+    step = gen_batch if gen_batch > 0 else len(prompts)
     t0 = time.time()
-    if tul_rt is None:
-        conts = generate_plain_batch(model, prompts, max_new_tokens=gen_len,
-                                     temperature=temp, top_k=top_k, top_p=top_p,
-                                     seeds=seeds, device=device)
-    else:
-        rule, spec = rule_spec
-        conts, _builders = generate_tul_batch(
-            model, prompts, rule, spec, max_new_tokens=gen_len, temperature=temp,
-            top_k=top_k, top_p=top_p, seeds=seeds, device=device,
-            emit_source=emit_source_for(tul_rt))
+    conts = []
+    for lo in range(0, len(prompts), step):
+        chunk = prompts[lo:lo + step]
+        cseeds = None if seeds is None else seeds[lo:lo + step]
+        if tul_rt is None:
+            conts += generate_plain_batch(model, chunk, max_new_tokens=gen_len,
+                                          temperature=temp, top_k=top_k, top_p=top_p,
+                                          seeds=cseeds, device=device)
+        else:
+            rule, spec = rule_spec
+            out, _builders = generate_tul_batch(
+                model, chunk, rule, spec, max_new_tokens=gen_len, temperature=temp,
+                top_k=top_k, top_p=top_p, seeds=cseeds, device=device,
+                emit_source=emit_source_for(tul_rt))
+            conts += out
     wall = time.time() - t0
 
     report = diversity_report(conts)
@@ -236,6 +246,8 @@ def main():
     ap.add_argument("--prompt_len", type=int, default=128)
     ap.add_argument("--gen_len", type=int, default=256)
     ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--gen_batch", type=int, default=0,
+                    help="rows per generation call (0 = all N at once); bounds memory")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", required=True)
     ap.add_argument("--examples_out", default="")
@@ -322,7 +334,8 @@ def main():
         for dlabel, temp, top_k, top_p, _greedy in DECODES:
             arm[dlabel] = run_setting(model, tul_rt, rule_spec, prompts, a.gen_len,
                                       dlabel, temp, top_k, top_p, a.seed, device,
-                                      tokenizer, plain_model, a.prompt_len)
+                                      tokenizer, plain_model, a.prompt_len,
+                                      gen_batch=a.gen_batch)
         payload["arms"][label] = arm
 
         if model is not plain_model:
