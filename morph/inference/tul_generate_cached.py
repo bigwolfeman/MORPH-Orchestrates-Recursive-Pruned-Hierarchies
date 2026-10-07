@@ -126,6 +126,9 @@ def _check_supported(model) -> None:
          "tul.loop_attn_center (the centered slot-loop attention)")
     need(getattr(tc, "loop_attn_hc", "cayley") == "cayley",
          "tul.loop_attn_hc (the uniform slot-loop attention residual)")
+    need(int(getattr(tc, "pointer_heads", 0)) == 0,
+         "tul.pointer_heads (the pointer head reads every earlier token's final state; the "
+         "eager generate_tul runs it)")
     need(not tc.slot_source_once, "tul.slot_source_once")
     need(not tc.tg_span_comp, "tul.tg_span_comp")
     need(not tc.center_bag_mean, "tul.center_bag_mean")

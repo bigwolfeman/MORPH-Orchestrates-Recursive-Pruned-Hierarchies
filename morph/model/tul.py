@@ -2635,6 +2635,16 @@ class TULConfig:
     loop_attn_center: str = "off"                # "off" | "ema"
     loop_attn_center_decay: float = 0.99
     loop_attn_hc: str = "cayley"                 # "cayley" | "uniform"
+    # pointer_heads (2026-10-06): > 0 builds `tul_pointer.TULPointer` — a learned pointer /
+    #   copy head, OUTPUT-ONLY: each head attends from a token's final hidden state over
+    #   earlier tokens' (token order, j < i) and reads the attention as a distribution over
+    #   the token that followed j; a gate mixes the heads with the model's head in the
+    #   training CE and in the eval / generation logits. Nothing enters a hidden state, so
+    #   the strict geometry's rule (only the loop crosses spans inside the model) holds.
+    #   Why: on the Parcae testbed ~90 % of strict LXTUL's CE gap to plain is copying, and
+    #   this head took that gap from +0.294 to -0.026 with the loop's K1-K6 unchanged
+    #   (parcae lxtul-testbed, docs/experiments/failures/2026-10-06-parcae-copy-heads.md).
+    pointer_heads: int = 0
 
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
@@ -2655,6 +2665,7 @@ class TULConfig:
         self._check_recon()
         # The slot loop's carrier constant (2026-10-05): the same rule, near the top.
         self._check_loop_attn()
+        self._check_pointer()
         # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
         # Checked FIRST, unconditionally: every other block below this point guards an
         # OFF-by-default feature with its own early `return` (see `tul.vq_codes` at the
@@ -5097,6 +5108,20 @@ class TULConfig:
                 f"`fan_k` aliases `slot_cells`, so a fan model is covered too), so the "
                 f"knob would be silently ignored. Set tul.slot_cells > 1 (or tul.fan_k > "
                 f"0) or drop it.")
+
+    def _check_pointer(self) -> None:
+        """``tul.pointer_heads``: the head scores TOKEN positions of a slot-layout forward
+        through `_tul_group_losses` / the eval logits; refuse the paths it does not cover."""
+        if int(self.pointer_heads) < 0:
+            raise ValueError(f"tul.pointer_heads must be >= 0, got {self.pointer_heads}")
+        if int(self.pointer_heads) == 0:
+            return
+        if self.tokens_through_core:
+            raise ValueError("tul.pointer_heads is built for the slot loop "
+                             "(tul.tokens_through_core: false)")
+        if int(self.code_enum_k) > 1:
+            raise ValueError("tul.pointer_heads with tul.code_enum_k > 1: the per-span Bayes "
+                             "read builds its own log-probs and losses")
 
     def _check_loop_attn(self) -> None:
         """``tul.loop_attn_center`` / ``tul.loop_attn_hc``: the slot loop's core attention.

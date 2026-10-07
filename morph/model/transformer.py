@@ -3793,6 +3793,25 @@ class MORPHTransformer(nn.Module):
         # graphed front/back callables + capture shapes. Deliberately NOT a submodule.
         self._static_graphs: dict = {}
 
+        # ── tul.pointer_heads: the learned pointer/copy head (morph/model/tul_pointer.py) ──
+        # Built LAST of all parameters: its draws come after every other module's, so every
+        # other weight is byte-identical to the same-seed model without the key. Output-only:
+        # it mixes into the training CE (`_tul_group_losses`) and the eval / generation logits,
+        # never into a hidden state. `TULConfig._check_pointer` refuses the paths it does not
+        # cover.
+        self.tul_pointer = None
+        if cfg.tul is not None and int(cfg.tul.pointer_heads) > 0:
+            from .tul_pointer import TULPointer
+            if self._code_enum_k:
+                raise NotImplementedError("tul.pointer_heads with tul.code_enum_k > 1: the "
+                                          "per-span Bayes read builds its own log-probs")
+            self.tul_pointer = TULPointer(cfg.d_model, int(cfg.tul.pointer_heads))
+            print(f"  TUL POINTER ON: {cfg.tul.pointer_heads} heads over earlier tokens' final "
+                  f"hidden states (token order, j < i), each read as a distribution over the "
+                  f"token that followed j, gated with the model's head; output-only; "
+                  f"{sum(p.numel() for p in self.tul_pointer.parameters()):,} params, never "
+                  f"ternary", flush=True)
+
         if cfg.retention_carry_mode == "acausal_final":
             print("  WARNING: retention_carry='acausal_final' — the cross-iteration GLA "
                   "carry feeds the WHOLE-SEQUENCE final state into loop iteration 2+, so "
@@ -12466,7 +12485,21 @@ class MORPHTransformer(nn.Module):
                     "n_targets": (lab != -100).sum().to(ce.dtype)}
 
         row_w, p_idx, z_idx = self._tul_half_weights(labels, layout)
-        if logit_l2 != 0.0:
+        if self.tul_pointer is not None:
+            # tul.pointer_heads: the per-token model log-prob (exact backward for any per-row
+            # upstream gradient), mixed with the pointer at the true target, then the SAME
+            # `row_w`-weighted mean the fused call takes: sum(w * nll) / sum(w) over labels.
+            if logit_l2 != 0.0:
+                raise NotImplementedError("tul.pointer_heads with tul.coda_logit_l2")
+            lp_model = fused_linear_label_logprob(flat, w_head, lab, ignore_index=-100,
+                                                  chunk_size=chunk, mask_token_id=mask_id)
+            lp = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
+                                                 layout.slot_mask).reshape(-1)
+            wv = row_w * (lab != -100).to(row_w.dtype)
+            loss = -(lp * wv).sum() / wv.sum().clamp_min(1e-9)
+            _ptr_tok = (~layout.slot_mask).reshape(-1) & (lab != -100)
+            _ptr_ce_tokens = (-(lp * _ptr_tok).sum() / _ptr_tok.sum().clamp_min(1)).detach()
+        elif logit_l2 != 0.0:
             # tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. arXiv 2011.09468):
             # an L2 penalty on the coda's raw token logits, folded into the SAME fused
             # CE kernel call — see morph/model/fused_ce.py for the exact derivation.
@@ -12512,6 +12545,10 @@ class MORPHTransformer(nn.Module):
         # comparable to the baseline's token PPL (spec §4).
         out["ce_tokens"] = ((ce_main * out["n_main"] + out["ce_plast"] * out["n_plast"])
                             / (out["n_main"] + out["n_plast"]).clamp(min=1.0))
+        if self.tul_pointer is not None:
+            # val/ppl_tokens reads the MIXTURE (the model's own CE stays as ce_tokens_model)
+            out["ce_tokens_model"] = out["ce_tokens"]
+            out["ce_tokens"] = _ptr_ce_tokens
         out["ce_first_tok"] = out["ce_emit"]
         out["ce_first_tok_plain"] = out["ce_plast"]
         out["first_tok_counterfactual"] = out["ce_plast"] - out["ce_emit"]
@@ -14888,6 +14925,12 @@ class MORPHTransformer(nn.Module):
             else:
                 out["logits"] = self.embed.attend(xh).index_fill(
                     -1, torch.tensor([tc.slot_id], device=xh.device), float("-inf"))
+                if self.tul_pointer is not None:
+                    # tul.pointer_heads: the model + pointer mixture as normalised
+                    # log-probs (a valid logit tensor; core_depth_sweep and the eager
+                    # generator read these)
+                    out["logits"] = self.tul_pointer.mixed_logprobs(
+                        xh, out["logits"], input_ids, layout.slot_mask)
             if self.mtp is not None:
                 # The heads' logits on the COMPACT token axis ([B, n_max, V], token order,
                 # a row's ragged tail past its token count is unscored garbage); the same
