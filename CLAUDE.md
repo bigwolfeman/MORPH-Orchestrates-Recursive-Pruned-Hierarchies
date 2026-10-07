@@ -102,7 +102,15 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 > it holds one seed of two, doubles the time to failure (step 1150 -> 2225) and reaches 0.78
 > and 0.46 nats better val CE on the two seeds.
 
-## ⭐ LXTUL PRIMARY CANDIDATE (locked 2026-10-04): `morph/configs/lxtul.yaml`
+## ⭐ WINNER (Wolfe, 2026-10-07): LXTUL + pointer + DITTO
+
+`morph/configs/lxtul_pointer.yaml` (5k: `lxtul.yaml` + `tul.pointer_heads: 4`, the output-only copy head)
+then the 1000-step `lxtul_pointer_ditto.yaml` phase (DITTO repetition rows). CE 3.9280 at 5k, 0.150 ahead
+of plain (plain has no pointer; a plain + pointer ruler is owed), K1-K6 +0.0155, head-off check clean;
+DITTO halves sampled repetition (0.307 -> 0.140) at +0.071 val. 11.8k tok/s vs Parcae's 23.5k.
+Decision record: [`2026-10-07-lxtul-pointer-ditto-winner.md`](.agents/notes/implemented/architecture/2026-10-07-lxtul-pointer-ditto-winner.md).
+
+### LXTUL base (locked 2026-10-04): `morph/configs/lxtul.yaml`
 
 Strict slot loop + 4-cell fan (the coda reads only the final winner cell per slot) + fixed-point 0.1 + latent-selected loop
 (router-followed, rank-only latent head) + per-pass cell RMSNorm (`tul.slot_cell_pass_norm: rms`).

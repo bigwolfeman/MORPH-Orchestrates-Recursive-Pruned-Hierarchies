@@ -81,3 +81,5 @@ a latent pull on the loop collapses the cells onto one direction under any norm
   arm). The fast decode path (`tul_generate_cached`, `_graphed`) refuses `fan_k > 0`, so
   TUL's decode speed is not yet measurable on this arm.
 - Training speed: [2026-10-04 speed note](../../proposed/architecture/2026-10-04-slot-loop-training-speed.md).
+- 2026-10-07: the winner builds on this base with the pointer head and a DITTO phase:
+  [2026-10-07 winner note](2026-10-07-lxtul-pointer-ditto-winner.md).
