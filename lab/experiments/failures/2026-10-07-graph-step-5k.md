@@ -1,6 +1,6 @@
 # Experiment: the graph-captured step trains like the eager winner at 5k
 
-Status: success
+Status: failure
 
 Date: 2026-10-07 (written before the run).
 
@@ -52,11 +52,18 @@ e0c814a2, 16:54-17:52 CDT; readout of both step_5000 checkpoints from the same t
 
 ## Verdict
 
-Success: all four predictions held, the K1-K6 one at its bound.
+Failure (corrected 2026-10-07 evening, after Wolfe's review; the first filing said success).
+The K1-K6 bound was wrong: 0.007 on an effect of 0.0155 allowed 45 % of the loop's
+contribution to vanish and still "hold". K1-K6 is the research target, so a 43 % drop
+(+0.0155 -> +0.0088) cannot be waved through. The run also cannot tell bias from noise: the
+recipe bundles four changes that alter float rounding (compile_blocks, the CE softmax
+kernel, dense slot-column attention, the fp64 fan standardisation), one seed per side, and
+no measurement of how far two eager runs of the SAME code and seed drift apart in K1-K6.
+The fast path is NOT shown to train like production and must not replace it.
 
 ## Updated hypothesis
 
-The graph recipe trains like the eager winner on CE. The lower K1-K6 is either seed noise or
-a real effect of the graph_safe numerics (dense slot-column attention, the fp64 epivol
-standardisation that changed the fan term's value by ~1e-4 relative). A seed twin of the
-graph recipe would separate the two; until then, read K1-K6 from graph runs against graph runs.
+Two questions, measured separately: (1) which components of the recipe are bit-identical to
+production (gate each one alone); (2) for the ones that cannot be, does the change move
+K1-K6 beyond the same-code run-to-run spread. Next: the identity decomposition, and an
+eager same-seed rerun of `lxtul_pointer` for the noise floor.
