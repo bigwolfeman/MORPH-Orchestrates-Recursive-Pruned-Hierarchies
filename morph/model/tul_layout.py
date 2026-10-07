@@ -558,6 +558,10 @@ class SlotLayout:
                     0 at pad slots (docs/tul-gate-spec.md §3.3). None ⇒ no gate.
         len_supervised: ``[B, max_slots]`` bool — True when ``span_len`` is the DATA's
                     answer; False at pad slots and at RNG-truncated ones (gate §6).
+        ditto_prev: ``[B, L]`` int64 — ``tul.ditto_rows`` (DITTO, Xu et al. 2022, arXiv
+                    2206.02369): on a pseudo-repetition row, the row position whose label
+                    is the SAME token one repetition earlier; -1 everywhere else (real
+                    rows, the prefix, the first copy, slots). None ⇒ no DITTO row.
     """
 
     slot_mask: Tensor
@@ -568,6 +572,7 @@ class SlotLayout:
     stats: dict[str, float] | None = None    # per-batch boundary statistics (spec §4)
     span_len: Tensor | None = None           # gate §3.3
     len_supervised: Tensor | None = None     # gate §3.3
+    ditto_prev: Tensor | None = None         # tul.ditto_rows
 
     def __post_init__(self) -> None:
         B, L = self.slot_mask.shape
@@ -584,6 +589,8 @@ class SlotLayout:
                     f"{_n} {tuple(_t.shape)} != slot_index {tuple(self.slot_index.shape)}")
         if (self.span_len is None) != (self.len_supervised is None):
             raise ValueError("span_len and len_supervised must both be set or both None")
+        if self.ditto_prev is not None and self.ditto_prev.shape != (B, L):
+            raise ValueError(f"ditto_prev {tuple(self.ditto_prev.shape)} != slot_mask {(B, L)}")
 
     @property
     def max_slots(self) -> int:
@@ -597,7 +604,8 @@ class SlotLayout:
         return SlotLayout(slot_mask=_r(self.slot_mask), bag_id=_r(self.bag_id),
                           slot_index=_r(self.slot_index), slot_valid=_r(self.slot_valid),
                           prefix_k=self.prefix_k, stats=self.stats,
-                          span_len=_r(self.span_len), len_supervised=_r(self.len_supervised))
+                          span_len=_r(self.span_len), len_supervised=_r(self.len_supervised),
+                          ditto_prev=_r(self.ditto_prev))
 
     def head_rows(self, n: int) -> "SlotLayout":
         """The first ``n`` rows (the base batch of a :meth:`repeat_rows` layout)."""
@@ -606,7 +614,8 @@ class SlotLayout:
         return SlotLayout(slot_mask=_h(self.slot_mask), bag_id=_h(self.bag_id),
                           slot_index=_h(self.slot_index), slot_valid=_h(self.slot_valid),
                           prefix_k=self.prefix_k, stats=self.stats,
-                          span_len=_h(self.span_len), len_supervised=_h(self.len_supervised))
+                          span_len=_h(self.span_len), len_supervised=_h(self.len_supervised),
+                          ditto_prev=_h(self.ditto_prev))
 
     @property
     def l_total(self) -> int:
@@ -621,7 +630,8 @@ class SlotLayout:
                           slot_index=_pm(self.slot_index), slot_valid=_pm(self.slot_valid),
                           prefix_k=self.prefix_k, stats=self.stats,
                           span_len=_pm(self.span_len),
-                          len_supervised=_pm(self.len_supervised))
+                          len_supervised=_pm(self.len_supervised),
+                          ditto_prev=_pm(self.ditto_prev))
 
     def to(self, device) -> "SlotLayout":
         _mv = lambda t: None if t is None else t.to(device, non_blocking=True)
@@ -637,6 +647,7 @@ class SlotLayout:
             stats=self.stats,
             span_len=_mv(self.span_len),
             len_supervised=_mv(self.len_supervised),
+            ditto_prev=_mv(self.ditto_prev),
         )
 
     @staticmethod
@@ -657,6 +668,7 @@ class SlotLayout:
             stats=agg,
             span_len=_st("span_len"),
             len_supervised=_st("len_supervised"),
+            ditto_prev=_st("ditto_prev"),
         )
 
 
@@ -1062,6 +1074,10 @@ class TulDataConfig:
     # on our augmentation RNG is not comparable to the reference arm's.
     gate: TulGateSpec | None = None
     seed: int = 0                     # seeds the truncation RNG; logged in the manifest
+    # tul.ditto_rows: rows per TRAIN batch rebuilt as DITTO pseudo-repetition rows
+    # (:func:`pack_ditto_row`). 0 ⇒ no row is rebuilt and no random number is drawn. The
+    # VAL loader always gets 0 (`TulRuntime.val_data_cfg`).
+    ditto_rows: int = 0
 
     def spec_for(self, seq_len: int) -> TulLayoutSpec:
         """The fixed-shape budget for a stage of ``seq_len`` tokens."""
@@ -1069,9 +1085,66 @@ class TulDataConfig:
                              max_slots=self.max_slots, slot_id=self.slot_id)
 
 
+def pack_ditto_row(ids: np.ndarray, rule: BoundaryRule, spec: TulLayoutSpec, rng,
+                   min_reps: int = 2) -> dict[str, np.ndarray] | None:
+    """One DITTO pseudo-repetition row (Xu et al. 2022, arXiv 2206.02369 §3) from ``ids``.
+
+    Picks one span of ``ids`` at random (never the first, so the row has a real prefix,
+    the paper's "previous context as the prefix") and builds ``ids[:start] + span * n``:
+    the real text up to and including the span, then the span repeated until the row is
+    full. A repeated span opens right after a boundary, so the rule cuts every copy the
+    way it cut the original (the cut depends only on the span's own tokens and a span
+    length that restarts at 0). The row is packed by :func:`pack_tul_row` unchanged.
+
+    ``ditto_prev[p]`` is set at every token position ``p`` whose LABEL lies in copy 1 or
+    later: the position whose label is the same token one copy earlier. Each pair is
+    checked to carry equal labels; a mismatch raises (a packer/rule change broke the
+    alignment, and a silent DITTO term on misaligned pairs would train on noise).
+
+    Candidates: not the first span, no EOS inside, and ``1 + min_reps`` copies plus the
+    prefix fit the row. Returns None when the buffer has no candidate (the caller packs
+    that row as an ordinary row and counts it).
+    """
+    L, K = spec.l_total, spec.prefix_k
+    bpos, _ = rule.cut(ids, span_len=0)
+    if bpos.size < 2:
+        return None
+    starts = np.concatenate([[0], bpos[:-1] + 1]).astype(np.int64)
+    lens = bpos - starts + 1
+    k_idx = np.arange(bpos.size)
+    # positions the prefix and the first (1 + min_reps) copies use, slots included
+    cost = starts + K * k_idx + (1 + min_reps) * (lens + K)
+    has_eos = np.array([bool(np.any(ids[s:e + 1] == rule.eos_id))
+                        for s, e in zip(starts, bpos)])
+    cand = np.flatnonzero((k_idx >= 1) & (cost <= L) & ~has_eos
+                          & (k_idx + 1 + min_reps <= spec.max_slots))
+    if cand.size == 0:
+        return None
+    k = int(cand[rng.integers(cand.size)])
+    start, S = int(starts[k]), int(lens[k])
+    span = ids[start:start + S]
+    reps = (L + 1 - start) // S + 2
+    pseudo = np.concatenate([ids[:start], np.tile(span, reps)]).astype(np.int64)
+    arrays, n_tok, _st = pack_tul_row(pseudo, rule, spec)
+    tok_pos = np.flatnonzero(~arrays["slot_mask"])[:n_tok]
+    prev = np.full(L, -1, dtype=np.int64)
+    # token m predicts pseudo[m + 1]; that target is in copy >= 1 iff m + 1 >= start + S,
+    # and the same target one copy earlier is predicted by token m - S.
+    m = np.arange(start + S - 1, n_tok, dtype=np.int64)
+    if m.size == 0:
+        return None
+    prev[tok_pos[m]] = tok_pos[m - S]
+    lab = arrays["labels"]
+    if not np.array_equal(lab[tok_pos[m]], lab[tok_pos[m - S]]):
+        raise AssertionError("pack_ditto_row: a repetition pair carries different labels")
+    arrays["ditto_prev"] = prev
+    return arrays
+
+
 def pack_tul_batch(buf: list[int], rule: BoundaryRule, spec: TulLayoutSpec,
                    batch_size: int, gate: TulGateSpec | None = None,
-                   rng=None) -> tuple[Tensor, Tensor, SlotLayout]:
+                   rng=None, ditto_rows: int = 0,
+                   ditto_rng=None) -> tuple[Tensor, Tensor, SlotLayout]:
     """Consume ``batch_size`` rows from ``buf`` (MUTATED in place) → one TUL batch.
 
     The single batching entry point for every loader. ``buf`` must hold at least
@@ -1086,15 +1159,34 @@ def pack_tul_batch(buf: list[int], rule: BoundaryRule, spec: TulLayoutSpec,
     need = batch_size * (spec.l_total + 1)
     if len(buf) < need:
         raise ValueError(f"buffer holds {len(buf)} tokens, need {need} for {batch_size} rows")
+    if ditto_rows:
+        if not 0 < ditto_rows < batch_size:
+            raise ValueError(f"ditto_rows={ditto_rows} must be in [1, batch_size-1={batch_size - 1}]")
+        if ditto_rng is None:
+            raise ValueError("ditto_rows > 0 needs ditto_rng")
+        if gate is not None and gate.truncate_p > 0:
+            raise NotImplementedError("tul.ditto_rows with the gate's truncation")
     rows, ins, labs, stats = [], [], [], []
-    for _ in range(batch_size):
+    n_ditto = 0
+    for r in range(batch_size):
         cur = np.asarray(buf[:spec.l_total + 1], dtype=np.int64)
         arrays, n_used, st = pack_tul_row(cur, rule, spec, gate=gate, rng=rng)
+        if ditto_rows:
+            # The DITTO row replaces the ordinary row but consumes the SAME tokens, so the
+            # stream position matches a run without DITTO row for row.
+            d = pack_ditto_row(cur, rule, spec, ditto_rng) if r < ditto_rows else None
+            if d is not None:
+                arrays, n_ditto = d, n_ditto + 1
+            else:
+                arrays["ditto_prev"] = np.full(spec.l_total, -1, dtype=np.int64)
         del buf[:n_used]
         rows.append(arrays)
         ins.append(arrays["input_ids"])
         labs.append(arrays["labels"])
         stats.append(st)
+    if ditto_rows:
+        for st in stats:
+            st["ditto_rows_built"] = float(n_ditto)
     return (
         torch.from_numpy(np.stack(ins)),
         torch.from_numpy(np.stack(labs)),

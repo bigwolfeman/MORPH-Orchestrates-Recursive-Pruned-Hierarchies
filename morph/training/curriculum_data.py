@@ -288,6 +288,10 @@ class MultiSourceCurriculumLoader:
                 # ONE generator for the life of this loader, seeded from the config
                 # (docs/tul-gate-spec.md §3.2). None when the gate is off ⇒ no draw and a
                 # byte-identical row, which is what keeps the reference arm reproducible.
+                if tul.ditto_rows:
+                    raise NotImplementedError(
+                        "tul.ditto_rows under the curriculum loader: only data.py builds "
+                        "DITTO rows")
                 if tul.gate is not None and getattr(self, "_tul_rng", None) is None:
                     self._tul_rng = np.random.default_rng(tul.seed)
                 out = pack_tul_batch(buf, tul.rule, spec, batch_size, gate=tul.gate,

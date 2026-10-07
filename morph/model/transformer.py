@@ -55,6 +55,7 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
                           swor_uniform)
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
+from .tul_ditto import ditto_loss
 from .host_shadow import any_true, derive as derive_shadow, masked_rows, shadow as host_shadow
 from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_repel_term,
                       fan_stream_rank, fan_vol_term, select_gate_loss, select_streams,
@@ -12488,22 +12489,42 @@ class MORPHTransformer(nn.Module):
                     "n_targets": (lab != -100).sum().to(ce.dtype)}
 
         row_w, p_idx, z_idx = self._tul_half_weights(labels, layout)
-        if self.tul_pointer is not None:
+        # tul.ditto_rows: DITTO rows mark, per position, the position one copy earlier
+        _ditto_prev = layout.ditto_prev
+        _ditto_pos = None if _ditto_prev is None else (_ditto_prev >= 0).reshape(-1)
+        if self.tul_pointer is not None or _ditto_prev is not None:
             # tul.pointer_heads: the per-token model log-prob (exact backward for any per-row
             # upstream gradient), mixed with the pointer at the true target, then the SAME
             # `row_w`-weighted mean the fused call takes: sum(w * nll) / sum(w) over labels.
+            # tul.ditto_rows takes the same per-token route (with or without the head): its
+            # term needs the final probability of each target.
             if logit_l2 != 0.0:
-                raise NotImplementedError("tul.pointer_heads with tul.coda_logit_l2")
+                raise NotImplementedError("tul.pointer_heads / tul.ditto_rows with "
+                                          "tul.coda_logit_l2")
             lp_model = fused_linear_label_logprob(flat, w_head, lab, ignore_index=-100,
                                                   chunk_size=chunk, mask_token_id=mask_id)
-            lp, _ptr_cov = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
-                                                           layout.slot_mask, layout)
+            if self.tul_pointer is not None:
+                lp, _ptr_cov = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
+                                                               layout.slot_mask, layout)
+            else:
+                lp, _ptr_cov = lp_model.view(B, L), None
             lp = lp.reshape(-1)
-            wv = row_w * (lab != -100).to(row_w.dtype)
+            _lab_ok = lab != -100
+            if _ditto_pos is not None:
+                # a copy-n >= 1 target of a DITTO row carries the DITTO term, never the CE
+                # (the CE would teach the repeat)
+                _lab_ok = _lab_ok & ~_ditto_pos
+            wv = row_w * _lab_ok.to(row_w.dtype)
             loss = -(lp * wv).sum() / wv.sum().clamp_min(1e-9)
-            _ptr_tok = (~layout.slot_mask).reshape(-1) & (lab != -100)
+            _ptr_tok = (~layout.slot_mask).reshape(-1) & _lab_ok
             _ptr_ce_tokens = (-(lp * _ptr_tok).sum() / _ptr_tok.sum().clamp_min(1)).detach()
-            if _ptr_cov is not None:
+            if _ditto_pos is not None:
+                # DITTO (tul_ditto.py): mean over DITTO positions, added at weight 1 (the
+                # paper's equal mix of DITTO and MLE)
+                _ditto_term, _ditto_ratio, _ = ditto_loss(
+                    lp.view(B, L), _ditto_prev, float(self.cfg.tul.ditto_lambda))
+                loss = loss + _ditto_term
+            if self.tul_pointer is not None and _ptr_cov is not None:
                 # tul.pointer_coverage_lambda (See et al. 2017 eq. 13): mean over labelled
                 # token positions of sum_j min(alpha, coverage), added to the CE
                 _ptr_cov = (_ptr_cov.reshape(-1) * _ptr_tok).sum() / _ptr_tok.sum().clamp_min(1)
@@ -12524,7 +12545,17 @@ class MORPHTransformer(nn.Module):
                                               weights=row_w,
                                               **self._ce_kw)
         valid = (lab != -100).to(row_w.dtype)
+        if _ditto_pos is not None:
+            valid = valid * (~_ditto_pos).to(valid.dtype)
         out = {"loss": loss, "n_targets": (row_w * valid).sum()}
+        if _ditto_pos is not None:
+            # inside out["loss"]; `ditto_weighted` lets train.py subtract it back out of
+            # train/loss (the `*_weighted` contract). ditto_p_ratio: sum p_n / sum p_{n-1}
+            # over DITTO positions; the loss drives it toward ditto_lambda.
+            out["ditto"] = _ditto_term.detach()
+            out["ditto_weighted"] = _ditto_term.detach()
+            out["ditto_p_ratio"] = _ditto_ratio.detach()
+            out["ditto_n"] = _ditto_pos.sum().to(loss.dtype)
         if self.tul_pointer is not None and _ptr_cov is not None:
             # inside out["loss"]; exposed detached so train.py subtracts it back out of
             # train/loss and val loss (the `*_weighted` contract)

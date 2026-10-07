@@ -89,6 +89,8 @@ KNOWN_TUL_KEYS = frozenset({
     "pointer_heads",
     "pointer_cell_key",
     "pointer_coverage_lambda",
+    # DITTO pseudo-repetition rows against self-reinforcing loops (2026-10-07)
+    "ditto_rows", "ditto_lambda",
     "fan_select_write", "fan_select_write_anneal",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
@@ -224,9 +226,10 @@ class TulRuntime:
         with the seed. Val therefore always scores the data's own segmentation — which is
         also the segmentation the generation metrics are checked against.
         """
+        # tul.ditto_rows is a training augmentation too: val never rebuilds a row.
         if self.data_cfg.gate is None:
-            return self.data_cfg
-        return _dc_replace(self.data_cfg,
+            return _dc_replace(self.data_cfg, ditto_rows=0)
+        return _dc_replace(self.data_cfg, ditto_rows=0,
                            gate=_dc_replace(self.data_cfg.gate, truncate_p=0.0))
 
     def activation_step(self, total_steps: int) -> int:
@@ -321,7 +324,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
 
     data_cfg = TulDataConfig(rule=rule, prefix_k=prefix_k, slot_id=int(slot_id),
                              max_slots=int(tc.get("max_slots", 0)),
-                             gate=gate_spec, seed=int(tc.get("gate_seed", 0)))
+                             gate=gate_spec, seed=int(tc.get("gate_seed", 0)),
+                             ditto_rows=int(tc.get("ditto_rows", 0)))
     model_cfg = TULConfig(
         gate=gate_cfg,
         prefix_k=prefix_k,
@@ -468,6 +472,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         pointer_heads=int(tc.get("pointer_heads", 0)),
         pointer_cell_key=bool(tc.get("pointer_cell_key", False)),
         pointer_coverage_lambda=float(tc.get("pointer_coverage_lambda", 0.0)),
+        ditto_rows=int(tc.get("ditto_rows", 0)),
+        ditto_lambda=float(tc.get("ditto_lambda", 0.5)),
         fan_trigger_every_pass=bool(tc.get("fan_trigger_every_pass", False)),
         fan_seed_noise=float(tc.get("fan_seed_noise", 0.0)),
         fan_lineage=str(tc.get("fan_lineage", "off")),
@@ -791,6 +797,8 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "pointer_heads": model_cfg.pointer_heads,
         "pointer_cell_key": model_cfg.pointer_cell_key,
         "pointer_coverage_lambda": model_cfg.pointer_coverage_lambda,
+        "ditto_rows": model_cfg.ditto_rows,
+        "ditto_lambda": model_cfg.ditto_lambda,
         "fan_trigger_every_pass": model_cfg.fan_trigger_every_pass,
         "fan_seed_noise": model_cfg.fan_seed_noise,
         "fan_lineage": model_cfg.fan_lineage,

@@ -134,6 +134,9 @@ def create_dataloader(
         # truncation point is our RNG, and a number that is not in the config is not a
         # number the run can be reproduced from). None when the gate is off: no draw.
         tul_rng = np.random.default_rng(tul.seed) if tul.gate is not None else None
+        # tul.ditto_rows: its own stream, so the gate's draws are unchanged by it
+        ditto_rng = (np.random.default_rng([int(tul.seed), 0xD1770])
+                     if tul.ditto_rows else None)
         # A TUL row spends at most L_total tokens and peeks one more for the last label;
         # the peek is left in the buffer to open the next row.
         chunk_len = batch_size * (tul_spec.l_total + 1)
@@ -178,7 +181,8 @@ def create_dataloader(
                     # Consumes only what the rows actually use (token count varies per
                     # row) and leaves the remainder — including the label peek — in buf.
                     yield pack_tul_batch(buf, tul.rule, tul_spec, batch_size,
-                                         gate=tul.gate, rng=tul_rng)
+                                         gate=tul.gate, rng=tul_rng,
+                                         ditto_rows=tul.ditto_rows, ditto_rng=ditto_rng)
                     continue
                 chunk = buf[:chunk_len]
                 buf = buf[chunk_len:]

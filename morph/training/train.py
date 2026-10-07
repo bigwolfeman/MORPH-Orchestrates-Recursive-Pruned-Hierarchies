@@ -194,6 +194,8 @@ def evaluate(
                           "coda_logit_l2_weighted",
                           # tul.pointer_coverage_lambda (2026-10-07): the coverage loss
                           "pointer_cov_weighted",
+                          # tul.ditto_rows (2026-10-07): the DITTO term on pseudo rows
+                          "ditto_weighted",
                           # tul.spandec_parallel (LXTUL-E, 2026-09-23): the parallel
                           # head's mixture term, so val loss stays the MODEL's CE.
                           "par_weighted",
@@ -4083,6 +4085,7 @@ def main(cfg: DictConfig) -> None:
                                                      # decoupling, 2026-09-23): folded
                                                      # into the fused CE kernel
                         "pointer_cov_weighted",  # tul.pointer_coverage_lambda, 2026-10-07
+                        "ditto_weighted",        # tul.ditto_rows, 2026-10-07
                         "recon_weighted"):   # tul.recon_weight: own-span reconstruction
                                               # (CE queue item 10, 2026-10-05)
                 if isinstance(out, dict) and out.get(_ak) is not None:
@@ -4263,7 +4266,9 @@ def main(cfg: DictConfig) -> None:
                            # `tul/coda_logit_sq` (the raw stat) and its weighted twin.
                            "coda_logit_sq", "coda_logit_l2_weighted",
                            # tul.pointer_coverage_lambda (2026-10-07)
-                           "pointer_cov", "pointer_cov_weighted"):
+                           "pointer_cov", "pointer_cov_weighted",
+                           # tul.ditto_rows (2026-10-07)
+                           "ditto", "ditto_weighted", "ditto_p_ratio", "ditto_n"):
                     if _k in out and out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
                 # tul.latent_pre_target (stage 1): the latent term and its exit readings

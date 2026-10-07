@@ -1,0 +1,24 @@
+# The DITTO phase (Xu et al. 2022, arXiv 2206.02369) against the pointer's self-reinforcing
+# loops: 3 of each batch's 6 rows are rebuilt as pseudo-repetition rows (real text up to a
+# span, then that span repeated; morph/model/tul_layout.py::pack_ditto_row). On copy n >= 1
+# the CE is replaced by -log(1 - |p_n - 0.5 * sg(p_{n-1})|) on the final (pointer-mixed)
+# probability (morph/model/tul_ditto.py); the paper's lambda 0.5 and its equal DITTO / MLE
+# mix. The same 1000-step phase from the same 5k checkpoint as lxtul_pointer_ft.yaml, its
+# matched control; a DITTO row consumes the same stream tokens as the row it replaces.
+# Replaces the coverage phase, which made repetition worse
+# (lab/experiments/failures/2026-10-07-lxtul-pointer-coverage.md).
+defaults:
+  - lxtul_pointer
+  - _self_
+
+tul:
+  ditto_rows: 3
+  ditto_lambda: 0.5
+
+training:
+  init_from: /home/wolfe/morph-to/checkpoints/morph/lxtul-pointer/step_5000.pt
+  steps: 1000
+  warmup: 200
+
+wandb:
+  name: lxtul-pointer-ditto

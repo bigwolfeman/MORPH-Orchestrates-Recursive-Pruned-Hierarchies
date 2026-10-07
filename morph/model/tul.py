@@ -2652,6 +2652,17 @@ class TULConfig:
     pointer_heads: int = 0
     pointer_cell_key: bool = False
     pointer_coverage_lambda: float = 0.0
+    # ditto_rows: rows per TRAIN batch the loader rebuilds as DITTO pseudo-repetition rows
+    #   (Xu et al. 2022, arXiv 2206.02369; `tul_layout.pack_ditto_row`): real text up to a
+    #   span, then that span repeated. On those rows a token in copy n >= 1 carries no CE and
+    #   instead the loss -log(1 - |p_n - ditto_lambda * sg(p_{n-1})|) on the model's FINAL
+    #   probability (the pointer mixture when the head is on), added at weight 1: the
+    #   paper's equal mix of DITTO and MLE. Why: See et al. coverage made the pointer's
+    #   sampled repetition 29 % worse (lab/experiments/failures/2026-10-07-lxtul-pointer-
+    #   coverage.md): an LM loop copies from fresh positions, which a position count cannot
+    #   see; DITTO trains on the repeat itself.
+    ditto_rows: int = 0
+    ditto_lambda: float = 0.5
 
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
@@ -2673,6 +2684,7 @@ class TULConfig:
         # The slot loop's carrier constant (2026-10-05): the same rule, near the top.
         self._check_loop_attn()
         self._check_pointer()
+        self._check_ditto()
         # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
         # Checked FIRST, unconditionally: every other block below this point guards an
         # OFF-by-default feature with its own early `return` (see `tul.vq_codes` at the
@@ -5115,6 +5127,23 @@ class TULConfig:
                 f"`fan_k` aliases `slot_cells`, so a fan model is covered too), so the "
                 f"knob would be silently ignored. Set tul.slot_cells > 1 (or tul.fan_k > "
                 f"0) or drop it.")
+
+    def _check_ditto(self) -> None:
+        """``tul.ditto_rows``: the loss lives in `_tul_group_losses`; refuse what it skips."""
+        if int(self.ditto_rows) < 0:
+            raise ValueError(f"tul.ditto_rows must be >= 0, got {self.ditto_rows}")
+        if not 0.0 <= float(self.ditto_lambda) <= 1.0:
+            raise ValueError(f"tul.ditto_lambda must be in [0, 1], got {self.ditto_lambda}")
+        if int(self.ditto_rows) == 0:
+            return
+        if int(self.code_enum_k) > 1:
+            raise ValueError("tul.ditto_rows with tul.code_enum_k > 1: the per-span Bayes "
+                             "read builds its own log-probs and losses")
+        if float(self.coda_logit_l2) != 0.0:
+            raise ValueError("tul.ditto_rows with tul.coda_logit_l2")
+        if self.gate is not None:
+            raise ValueError("tul.ditto_rows with tul.gate: the gate's truncation re-cuts "
+                             "spans and breaks the copy alignment")
 
     def _check_pointer(self) -> None:
         """``tul.pointer_heads``: the head scores TOKEN positions of a slot-layout forward
