@@ -94,6 +94,7 @@ from .tul_layout import (SlotLayout, span_reach_allow, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
                          tg_reset_mask, tg_segment_ids, tg_strict_allow)
+from morph.kernels.triton.tg_strict_attention import tg_strict_index
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
@@ -419,6 +420,13 @@ class MORPHConfig:
     # form above changes. NOT bit-identical: the masked reductions sum in a different
     # order, pinned against fp64 in tests/test_graph_safe.py. False = today.
     graph_safe: bool = False
+    # Fused strict-geometry TG attention (graph-step task 2.1): every prelude / coda / core
+    # attention call of a strict slot-loop model runs its window AND compressed branch in one
+    # Triton kernel pair (morph/kernels/triton/tg_strict_attention.py), the relation read
+    # from the layout's index tensors instead of dense [B, 1, L, L] masks. NOT bit-identical
+    # (a flash online softmax sums the same terms in another order); pinned against fp64 in
+    # tests/test_tg_strict_attention.py. False = today.
+    tg_fused_attention: bool = False
     # The ternary STE's bf16 weights computed once per forward and shared by every read
     # (morph/model/ternary_qat.py, TernaryStepCache; bound by the trainer after compile).
     # Bit-identical to False. False = today: every read re-quantises and re-casts.
@@ -1934,6 +1942,27 @@ class MORPHTransformer(nn.Module):
             raise ValueError(
                 "model.tg_scoped_kernels=true requires tul.tg_restrict=true: outside TG "
                 "restriction use model.use_kernels for the full fused path instead.")
+        if cfg.tg_fused_attention:
+            # The kernel implements exactly the strict prelude / coda relations and the
+            # register core at reach 0; every other geometry would be silently wrong there.
+            _tc = cfg.tul
+            _why = ("tul.tg_restrict=true with tul.tg_geometry=strict" if not (
+                        self._tg_restrict and self._tg_strict)
+                    else "tul.tokens_through_core=false" if _tc.tokens_through_core
+                    else "tul.tg_coda_prefix_reach=all" if _tc.tg_coda_prefix_reach != "all"
+                    else "tul.tg_coda_token_reach=0" if _tc.tg_coda_token_reach
+                    else "tul.tg_strict_prelude=span" if _tc.tg_strict_prelude != "span"
+                    else "tul.tg_span_comp=false" if _tc.tg_span_comp
+                    else "tul.slot_cells>1 (the register core)" if int(_tc.slot_cells) < 2
+                    else "tul.loop_reach=0" if int(_tc.loop_reach)
+                    else "tul.fan_lineage=off" if _tc.fan_lineage != "off"
+                    else "tul.fan_history_streams=0" if int(_tc.fan_history_streams)
+                    else "tul.loop_carry=none" if _tc.loop_carry != "none"
+                    else None)
+            if _why is not None:
+                raise ValueError(f"model.tg_fused_attention needs {_why}: the fused kernel "
+                                 "implements the strict prelude / coda relations and the "
+                                 "register core at reach 0 only.")
         if self._tg_restrict and cfg.use_kernels:
             raise ValueError(
                 "model.tul.tg_restrict=true requires model.use_kernels=false "
@@ -6593,7 +6622,8 @@ class MORPHTransformer(nn.Module):
             # reach arm's are, except that "position" is the SLOT: a cell keeps its own
             # slot's cells, which is what makes the register a register and not M
             # independent loops.
-            _kw0 = {"tg_relation": _mask0}
+            _kw0 = ({"tg_index": tg_strict_index("cells", cells=_m_cells)}
+                    if self.cfg.tg_fused_attention else {"tg_relation": _mask0})
             _kwr = {"tg_relation": _same}
             if _reach > 0:
                 # The paragraph above ("the CCA conv and the value shift are left alone")
@@ -12974,19 +13004,27 @@ class MORPHTransformer(nn.Module):
             # keyword reaches `tg_strict_allow` unless the knob is actually in use
             # (the `tg_coda_token_reach` precedent just below).
             _pre_history_kw = {"prelude_history": "causal"} if _causal_pre else {}
-            _pre_allow = tg_strict_allow(layout, "prelude", **_pre_history_kw)
+            _fused = bool(self.cfg.tg_fused_attention)   # index tensors, no dense masks
+            _pre_allow = None if _fused else tg_strict_allow(layout, "prelude",
+                                                             **_pre_history_kw)
             _front_seg = None if _causal_pre else _seg
             _front_reset = None if _causal_pre else tg_reset_from_ids(_seg)
             # At reach 0 the call is the tree's call, argument for argument.
             _reach_kw = ({"coda_token_reach": tc.tg_coda_token_reach}
                          if tc.tg_coda_token_reach else {})
-            _coda_allow = tg_strict_allow(layout, "coda",
-                                          coda_prefix_reach=tc.tg_coda_prefix_reach,
-                                          **_reach_kw)
+            _coda_allow = None if _fused else tg_strict_allow(
+                layout, "coda", coda_prefix_reach=tc.tg_coda_prefix_reach, **_reach_kw)
             _strict_front_kw = {"tg_allow": _pre_allow, "tg_slot_mask": layout.slot_mask,
                                 "tg_comp_allow": _pre_allow, "tg_seg": _front_seg}
             tg_attn_kwargs = {"tg_allow": _coda_allow, "tg_slot_mask": layout.slot_mask,
                               "tg_comp_allow": _coda_allow, "tg_seg": _seg}
+            if _fused:
+                # model.tg_fused_attention: the same two relations as `tg_strict_index`
+                # tensors; the fused kernel evaluates them for both branches.
+                _strict_front_kw = {"tg_index": tg_strict_index(
+                    "prelude", layout.bag_id, layout.slot_mask), "tg_seg": _front_seg}
+                tg_attn_kwargs = {"tg_index": tg_strict_index(
+                    "coda", layout.bag_id, layout.slot_mask), "tg_seg": _seg}
             tg_reset = tg_reset_from_ids(_seg)
         elif self._tg_restrict:
             # tg_restrict_scope="coda" (TULConfig): the mask reaches the coda only and

@@ -721,6 +721,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
         # MORPHConfig.graph_safe: a training forward with no host sync and fixed shapes.
         graph_safe=bool(getattr(m, "graph_safe", False)),
+        # MORPHConfig.tg_fused_attention: both strict TG attention branches in one kernel.
+        tg_fused_attention=bool(getattr(m, "tg_fused_attention", False)),
         # MORPHConfig.ternary_step_cache: bf16 ternary weights once per forward (bound below,
         # after torch.compile).
         ternary_step_cache=bool(getattr(m, "ternary_step_cache", False)),

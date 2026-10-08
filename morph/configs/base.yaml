@@ -217,6 +217,13 @@ model:
   #   readers become masked reductions over the fixed row count. NOT bit-identical (masked
   #   sums run in another order; tests/test_graph_safe.py). false = today's path.
   graph_safe: false
+  # tg_fused_attention: a strict slot-loop model (tul.tg_geometry strict, register core at
+  #   reach 0) runs both TG attention branches of every prelude / coda / core call in one
+  #   Triton kernel pair (morph/kernels/triton/tg_strict_attention.py): the relation read from
+  #   the layout's index tensors, no dense [B,1,L,L] masks. NOT bit-identical (a flash online
+  #   softmax sums the same terms in another order; fp64 parity in
+  #   tests/test_tg_strict_attention.py). Opt-in; false = today's path.
+  tg_fused_attention: false
   # ternary_step_cache: compute each ternary STE weight's bf16 form ONCE per forward and
   #   share it across every read (8 slot passes, the gain hinge, checkpoint recompute); the
   #   STE gradient still reaches the fp32 shadow per read. Weights inside compiled blocks are

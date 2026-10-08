@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 
 import torch
 import torch.nn as nn
@@ -63,6 +62,9 @@ from morph.kernels.triton.fused_csa_attention import fused_csa_attention
 # build, or an in-process A/B). The window path consults it at call time; the
 # other fused entry points check it internally.
 from morph.kernels.triton._eager_flag import force_eager
+# model.tg_fused_attention: both strict-geometry TG branches in one Triton kernel pair (fwd/bwd),
+# the relation computed in-kernel from the layout's index tensors (see that module).
+from morph.kernels.triton.tg_strict_attention import tg_strict_attention
 
 
 # ─── Fused input-projection batching (perf: launch-count + GEMM SOL) ──────────
@@ -575,6 +577,30 @@ def _tg_relation_guard(tg_relation: Tensor | None, tg_allow: Tensor | None,
             "builds its causal relation over gathered slot columns. tg_relation is "
             "defined on the compact CELL axis only, where every position is a cell and "
             "slot_mask is None.")
+
+
+def _tg_index_guard(tg_index: dict | None, tg_allow: Tensor | None,
+                    tg_comp_allow: Tensor | None, tg_relation: Tensor | None,
+                    tg_slot_mask: Tensor | None, tg_span: dict | None, tg_restrict: bool,
+                    n_skip_rope: int) -> None:
+    """``tg_index`` (``model.tg_fused_attention``) REPLACES every dense TG mask of both branches.
+
+    It carries the strict relation as index tensors (``tg_strict_index``) and the fused kernel
+    evaluates it for the window AND the compressed branch, so a dense mask passed beside it
+    would be silently ignored on both. Every such pair raises instead.
+    """
+    if tg_index is None:
+        return
+    if not tg_restrict:
+        raise NotImplementedError("tg_index needs tul.tg_restrict=true (the restricted "
+                                  "attention build is the only one with a slot branch).")
+    if any(t is not None for t in (tg_allow, tg_comp_allow, tg_relation, tg_slot_mask,
+                                   tg_span)):
+        raise ValueError("tg_index with a dense TG mask (tg_allow / tg_comp_allow / "
+                         "tg_relation / tg_slot_mask / tg_span): the index replaces them all.")
+    if n_skip_rope:
+        raise NotImplementedError("tg_index with n_skip_rope > 0: the fused kernel has no "
+                                  "suffix rows / columns.")
 
 
 def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
@@ -1133,9 +1159,10 @@ class _CCACSAAttention(nn.Module):
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
                 tg_relation: Tensor | None = None,
-                tg_win_capture: dict | None = None) -> Tensor:
+                tg_win_capture: dict | None = None,
+                tg_index: dict | None = None) -> Tensor:
         B, S, _ = x.shape
-        H, D = self.cca.n_heads, self.cca.d_head
+        D = self.cca.d_head
         scale = D ** -0.5
 
         # tg_relation is the ONE kwarg that widens. The guard raises for every branch
@@ -1143,6 +1170,8 @@ class _CCACSAAttention(nn.Module):
         # the F1 defect class (a restricted arm running unrestricted, or the reverse).
         _tg_relation_guard(tg_relation, tg_allow, tg_comp_allow, tg_span, tg_slot_mask,
                            self.tg_restrict)
+        _tg_index_guard(tg_index, tg_allow, tg_comp_allow, tg_relation, tg_slot_mask, tg_span,
+                        self.tg_restrict, n_skip_rope)
         if tg_win_capture is not None and not self.tg_restrict:
             raise NotImplementedError(
                 "tg_win_capture (tul.loop_carry) outside tg_restrict: the unrestricted "
@@ -1169,6 +1198,14 @@ class _CCACSAAttention(nn.Module):
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
                 x, n_skip_rope, return_klat=True, pre=pre_cca, seg=tg_seg)
+            if tg_index is not None:
+                # model.tg_fused_attention: the compressed and the window branch from one
+                # score tile, the strict relation read from the layout's index tensors.
+                out_comp, out_win = tg_strict_attention(q, k, v, self.cca.sink_logits, tg_index,
+                                                        self.cca.window_size, scale)
+                return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
+                                                 gate_pre=gate_pre,
+                                                 win_capture=tg_win_capture)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
                                               scale=scale,
@@ -1317,9 +1354,10 @@ class _CCAHCAAttention(nn.Module):
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
                 tg_relation: Tensor | None = None,
-                tg_win_capture: dict | None = None) -> Tensor:
+                tg_win_capture: dict | None = None,
+                tg_index: dict | None = None) -> Tensor:
         B, S, _ = x.shape
-        H, D = self.cca.n_heads, self.cca.d_head
+        D = self.cca.d_head
         scale = D ** -0.5
 
         # tg_relation is the ONE kwarg that widens. The guard raises for every branch
@@ -1327,6 +1365,8 @@ class _CCAHCAAttention(nn.Module):
         # the F1 defect class (a restricted arm running unrestricted, or the reverse).
         _tg_relation_guard(tg_relation, tg_allow, tg_comp_allow, tg_span, tg_slot_mask,
                            self.tg_restrict)
+        _tg_index_guard(tg_index, tg_allow, tg_comp_allow, tg_relation, tg_slot_mask, tg_span,
+                        self.tg_restrict, n_skip_rope)
         if tg_win_capture is not None and not self.tg_restrict:
             raise NotImplementedError(
                 "tg_win_capture (tul.loop_carry) outside tg_restrict: the unrestricted "
@@ -1349,6 +1389,14 @@ class _CCAHCAAttention(nn.Module):
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
                 x, n_skip_rope, return_klat=True, pre=pre_cca, seg=tg_seg)
+            if tg_index is not None:
+                # model.tg_fused_attention: the compressed and the window branch from one
+                # score tile, the strict relation read from the layout's index tensors.
+                out_comp, out_win = tg_strict_attention(q, k, v, self.cca.sink_logits, tg_index,
+                                                        self.cca.window_size, scale)
+                return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
+                                                 gate_pre=gate_pre,
+                                                 win_capture=tg_win_capture)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
                                               scale=scale,
@@ -1462,6 +1510,11 @@ class MORPHAttention(nn.Module):
         tg_win_capture: dict | None — tul.loop_carry only. Writes the WINDOW branch's own
                 gated contribution in d_model space to ["win"]; see
                 _CCABase._gate_combine_up. Needs tg_restrict (it raises otherwise).
+        tg_index: dict | None — model.tg_fused_attention. The strict relation as index
+                tensors (`tg_strict_index`: prelude / coda bag + slot ids, or the core's
+                cell count); both branches then run in the fused kernel
+                (morph/kernels/triton/tg_strict_attention.py). Replaces every dense mask
+                above (_tg_index_guard).
         → [B, S, d_model]
     """
 
@@ -1510,8 +1563,10 @@ class MORPHAttention(nn.Module):
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
                 tg_relation: Tensor | None = None,
-                tg_win_capture: dict | None = None) -> Tensor:
+                tg_win_capture: dict | None = None,
+                tg_index: dict | None = None) -> Tensor:
         return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv,
                           tg_allow=tg_allow, tg_slot_mask=tg_slot_mask, tg_span=tg_span,
                           tg_seg=tg_seg, tg_comp_allow=tg_comp_allow,
-                          tg_relation=tg_relation, tg_win_capture=tg_win_capture)
+                          tg_relation=tg_relation, tg_win_capture=tg_win_capture,
+                          tg_index=tg_index)
