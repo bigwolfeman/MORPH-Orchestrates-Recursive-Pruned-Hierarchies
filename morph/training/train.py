@@ -749,6 +749,10 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
         hc_fused_norm=bool(getattr(m, "hc_fused_norm", False)),
         hc_fused_grad=bool(getattr(m, "hc_fused_grad", False)),
+        # model.hc_region_fused / model.cca_prologue_tiled (blockfuse 2026-10-08)
+        hc_region_fused=bool(getattr(m, "hc_region_fused", False)),
+        cca_prologue_tiled=bool(getattr(m, "cca_prologue_tiled", False)),
+        inject_fold=bool(getattr(m, "inject_fold", False)),      # model.inject_fold
         l2_persist=bool(getattr(m, "l2_persist", False)),
         retention=bool(getattr(m, "retention", True)),
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),

@@ -894,6 +894,11 @@ class _CCABase(nn.Module):
         # CCA up-projection from compressed latent back to d_model
         self.W_up = nn.Linear(self.latent_q_dim, d_model, bias=False)
 
+        # model.cca_prologue_tiled: the prologue runs on the row-tiled kernels
+        # (fused_cca_prologue(tiled=True)). Set by the owning attention module at build; a
+        # Python constant per instance, so the call below traces out.
+        self.prologue_tiled = False
+
     def _causal_conv(self, x_t: Tensor,
                      conv_dw: nn.Module, conv_gp: nn.Module) -> Tensor:
         # Fused depthwise+grouped causal conv (one Triton kernel, sm_120).
@@ -980,6 +985,7 @@ class _CCABase(nn.Module):
             self.q_norm.weight, self.k_norm.weight, self.temp,
             cos, sin,
             H, Hkv, D, n_skip_rope=n_skip_rope, eps=self.q_norm.eps,
+            tiled=self.prologue_tiled,
         )
 
         if return_klat:
@@ -1121,7 +1127,7 @@ class _CCACSAAttention(nn.Module):
                  d_indexer: int, max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
                  tg_restrict: bool = False, tg_span_gate: bool = False,
-                 graph_safe: bool = False):
+                 graph_safe: bool = False, cca_prologue_tiled: bool = False):
         super().__init__()
         self.top_k = top_k
         self.compress_ratio = csa_compress_ratio
@@ -1131,6 +1137,7 @@ class _CCACSAAttention(nn.Module):
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
                             max_seq_len, context_len, window_size,
                             init_alpha, conv_kernel)
+        self.cca.prologue_tiled = cca_prologue_tiled   # model.cca_prologue_tiled
 
         if tg_restrict:
             # docs/tul-tg-spec.md §3: the compressed branch attends directly to slot
@@ -1334,7 +1341,7 @@ class _CCAHCAAttention(nn.Module):
                  max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
                  tg_restrict: bool = False, tg_span_gate: bool = False,
-                 graph_safe: bool = False):
+                 graph_safe: bool = False, cca_prologue_tiled: bool = False):
         super().__init__()
         self.compress_ratio = hca_compress_ratio
         self.tg_restrict = tg_restrict
@@ -1343,6 +1350,7 @@ class _CCAHCAAttention(nn.Module):
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
                             max_seq_len, context_len, window_size,
                             init_alpha, conv_kernel)
+        self.cca.prologue_tiled = cca_prologue_tiled   # model.cca_prologue_tiled
 
         if tg_restrict:
             # docs/tul-tg-spec.md §3: see _CCACSAAttention's twin comment. HCA has no
@@ -1510,6 +1518,8 @@ class MORPHAttention(nn.Module):
         graph_safe:         model.graph_safe — the compressed branch's slot columns take
                             the dense fixed-shape form (_tg_slot_attention's
                             ``dense_slot_cols``), in train and eval mode alike.
+        cca_prologue_tiled: model.cca_prologue_tiled — the CCA prologue runs on the
+                            row-tiled kernels (fused_cca_prologue(tiled=True)).
 
     Forward:
         x: [B, S, d_model]
@@ -1559,6 +1569,7 @@ class MORPHAttention(nn.Module):
         tg_restrict: bool = False,
         tg_span_gate: bool = False,
         graph_safe: bool = False,
+        cca_prologue_tiled: bool = False,
     ):
         super().__init__()
 
@@ -1568,7 +1579,7 @@ class MORPHAttention(nn.Module):
             context_len=context_len, window_size=window_size,
             init_alpha=init_alpha, conv_kernel=conv_kernel,
             tg_restrict=tg_restrict, tg_span_gate=tg_span_gate,
-            graph_safe=graph_safe,
+            graph_safe=graph_safe, cca_prologue_tiled=cca_prologue_tiled,
         )
 
         if layer_idx % 2 == 0:

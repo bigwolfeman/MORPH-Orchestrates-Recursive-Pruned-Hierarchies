@@ -364,6 +364,25 @@ model:
   hc_fused_grad: false     # true ⇒ the HC pre-map backward adds the projection-path carrier grad
                            # in place (addmm_) instead of mm + a carrier-sized add. Needs
                            # hc_use_kernel. Graph-step task 2.2.
+  hc_region_fused: false   # true ⇒ the HC residual runs on region kernels: the entry projects the
+                           # carrier in-kernel (no bf16 copy, no GEMV), the exit backward reads
+                           # gout once, the entry backward writes the whole carrier grad once (8
+                           # carrier passes per sublayer backward instead of 11, no carrier-sized
+                           # adds). Rounding-only change (summation orders), NOT bit-identical;
+                           # tests/test_hc_region_fused.py. Needs hc_use_kernel, n=4, CUDA + bf16
+                           # autocast (else the reference path); overrides hc_fused_grad.
+                           # .agents/notes/proposed/architecture/2026-10-08-block-glue-fusion.md
+  cca_prologue_tiled: false  # true ⇒ the CCA prologue (qk-mean, q/k RMSNorm, temp, CoPE-RoPE,
+                           # GQA expand, value-shift cat) runs on row-tiled kernels: one launch
+                           # each way instead of one 64-element program per (row, head), strided
+                           # inputs (no .contiguous() copies). Rounding-only (RMSNorm and weight
+                           # grad sum orders), NOT bit-identical; tests/test_cca_prologue_tiled.py.
+                           # blockfuse 2026-10-08.
+  inject_fold: false       # true ⇒ the prelude's and the coda's per-block injection add is folded
+                           # into the previous block's HC exit write (prelude block 0's into the
+                           # stream expand): one carrier read + write less per block. Forward
+                           # bit-identical; the term's grad is summed in the exit kernel. Needs
+                           # hc_region_fused. tests/test_hc_region_fused.py. blockfuse 2026-10-08.
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.

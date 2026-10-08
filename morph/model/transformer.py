@@ -624,6 +624,18 @@ class MORPHConfig:
     # model.hc_fused_grad: the HC pre-map backward adds the projection-path carrier grad in
     # place (addmm_, beta=1) instead of mm + add (needs hc_use_kernel). Default off.
     hc_fused_grad: bool = False
+    # model.hc_region_fused: each HC sublayer side as one region kernel (entry fwd reads the
+    # carrier once; the backward writes the carrier grad once). Rounding-only, not
+    # bit-identical (hyper_connections.py, fused_hyper_connection.py). Default off.
+    hc_region_fused: bool = False
+    # model.cca_prologue_tiled: the CCA prologue on row-tiled kernels (fused_cca_prologue.py).
+    # Rounding-only, not bit-identical. Default off.
+    cca_prologue_tiled: bool = False
+    # model.inject_fold: the prelude's and the coda's per-block injection add is folded into
+    # the previous block's HC exit write (and the first prelude one into the stream expand).
+    # Forward bit-identical; the term's grad is summed in the exit kernel. Needs
+    # hc_region_fused. Default off.
+    inject_fold: bool = False
 
     # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
     # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
@@ -2207,6 +2219,7 @@ class MORPHTransformer(nn.Module):
             tg_span_gate=(bool(cfg.tul.tg_span_gate) if cfg.tul is not None
                           else False),
             graph_safe=bool(cfg.graph_safe) and "slot_cols" in cfg.graph_safe_parts,
+            cca_prologue_tiled=bool(cfg.cca_prologue_tiled),     # model.cca_prologue_tiled
         )
 
         # ── Residual = n-stream Hyper-Connection (Cayley/JPmHC), the sole residual ──
@@ -2218,7 +2231,11 @@ class MORPHTransformer(nn.Module):
             cayley_iters=cfg.hc_cayley_iters, cayley_alpha=cfg.hc_cayley_alpha,
             init_gain=cfg.hc_init_gain, use_kernel=cfg.hc_use_kernel,
             fused_norm=cfg.hc_fused_norm, fused_grad=cfg.hc_fused_grad,
+            region_fused=cfg.hc_region_fused,                    # model.hc_region_fused
         )
+        if cfg.inject_fold and not cfg.hc_region_fused:          # model.inject_fold
+            raise ValueError("model.inject_fold needs model.hc_region_fused=true (the old "
+                             "post kernel returns the term's grad in bf16)")
 
         # The core alone may re-block its HCA branch; see `core_hca_compress_ratio`.
         core_attn_kw = dict(attn_kw)
@@ -4618,6 +4635,23 @@ class MORPHTransformer(nn.Module):
         # All streams start equal, so with the ≈identity HC init the network reduces to a
         # plain residual at step 0 (verified). Injections (x0/ve/bigram/diagonal) are
         # single-stream signals that broadcast into every stream (ndim-adaptive modules).
+        if self.cfg.inject_fold:
+            # model.inject_fold: block i's injection is added by block i-1's HC exit kernel
+            # (`next_inject_term`) and block 0's by the stream expand: the same fp32 adds,
+            # without a separate carrier read + write per block.
+            terms = [self._build_injection_term(
+                i, _x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype,
+                ve_bagged=ve_bagged) for i in range(len(_prelude))]
+            with _prof("carrier::expand_contig"):
+                x = (x + terms[0]).unsqueeze(2).expand(
+                    B, T, self._n_streams, x.shape[-1]).contiguous()
+            for i, layer in enumerate(_prelude):
+                _akw = (attn_kwargs_at[i] if attn_kwargs_at and i in attn_kwargs_at
+                        else attn_kwargs)
+                x = layer(x, attn_kwargs=_akw, ret_reset_mask=ret_reset_mask,
+                          next_inject_term=terms[i + 1] if i + 1 < len(terms) else None)
+            return x, x0
+
         if self._is_hc:
             with _prof("carrier::expand_contig"):
                 x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
@@ -4753,6 +4787,28 @@ class MORPHTransformer(nn.Module):
         every other caller → the loop below is unchanged, bit-identical."""
         if (extra_term is None) != (extra_gates is None):
             raise ValueError("_back_region: extra_term and extra_gates go together")
+        if self.cfg.inject_fold and not checkpoint_blocks:
+            # model.inject_fold: coda block i>0's injection is added by block i-1's HC exit
+            # kernel (`next_inject_term`); block 0's stays a separate add (its input is the
+            # core's output). The terms are the loop below's, built in the same order.
+            terms = []
+            for i in range(len(self.coda)):
+                gi = self.cfg.n_prelude + self.cfg.n_core + i
+                term = self._build_injection_term(
+                    gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype)
+                if inject_keep is not None:
+                    term = term * inject_keep.to(term.dtype)
+                if extra_term is not None:
+                    term = term + extra_gates[i].to(term.dtype) * extra_term.to(term.dtype)
+                terms.append(term)
+            x = self._apply_injection(x, terms[0])
+            for i, layer in enumerate(self.coda):
+                gi = self.cfg.n_prelude + self.cfg.n_core + i
+                _akw = (attn_kwargs_at[gi] if attn_kwargs_at and gi in attn_kwargs_at
+                        else attn_kwargs)
+                x = layer(x, attn_kwargs=_akw, ret_reset_mask=ret_reset_mask,
+                          next_inject_term=terms[i + 1] if i + 1 < len(terms) else None)
+            return self._readout(x)
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             term = self._build_injection_term(

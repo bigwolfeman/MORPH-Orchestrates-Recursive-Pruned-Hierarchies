@@ -1098,6 +1098,627 @@ if TRITON_AVAILABLE:
 
 
 # ===========================================================================
+# model.hc_region_fused — the HC residual as region kernels.
+#
+# Why (blockfuse census 2026-10-08, FAST2 graph replay): the HC kernels run near DRAM
+# bandwidth, but each sublayer touched the [T, 4, C] fp32 carrier 3 times on entry (a bf16
+# copy for the projection GEMM, the GEMM, the pre-map kernel) and 11 times in the backward
+# (post bwd wrote gh_post; the pre-map bwd wrote gh_pre; `addmm_` read and wrote it; autograd
+# read both and wrote the sum; grad_w read h). HC was 55 ms of a 354 ms step. Here:
+#   entry fwd  _hcr_fwd_proj_kernel: one carrier read gives each stream's sum of squares and
+#              its part of the 48-wide projection (tl.dot on bf16 operands, fp32 accumulate);
+#              _hcr_fwd_map_kernel sums the 4 parts, rounds the projection to bf16 (the
+#              autocast `mm`'s result), runs the mapping and writes x_bar (second read, L2).
+#   exit fwd   _hc_post_fwd_kernel, unchanged.
+#   exit bwd   _hcr_exit_bwd_kernel: reads gout once: grad_y, grad_term, grad_Hpost_row.
+#              It does NOT form Hres^T gout: gout itself travels to the entry backward as the
+#              grad of the entry's carrier alias output (`_HCRegionEntry` returns h.view_as(h)).
+#   entry bwd  _hcr_bwd_reduce_kernel (one read of h, gout, grad_x_bar: the 20 C-reductions),
+#              _hcr_bwd_map_kernel (per token: the mapping VJP -> graw and the pass-2
+#              coefficients), _hcr_bwd_carrier_kernel (ONE write of the whole carrier grad:
+#              Hres^T gout + x_bar path + rms path + graw @ W).
+#   grad_w     graw^T @ h, the fp32 GEMM the fused pre-map backward already ran.
+# Carrier passes per sublayer: entry 2, exit 2, backward 1 (exit) + 3 + 4.
+#
+# Arithmetic: the forward mapping, Cayley, softmaxes and their VJPs are the per-token code of
+# _hc_premap_fwd_kernel / _hc_premap_bwd_tok on [BT] token vectors, op for op. What differs
+# is summation order only: rms and the projection are accumulated per stream over channel
+# chunks (tl.dot instead of cuBLAS), the backward's C-reductions over chunks, graw @ W is an
+# fp32 FMA tl.dot, and the carrier grad is summed as gh_post + ((gh_xbar + gh_rms) + graw @ W).
+# Not bit-identical; tests/test_hc_region_fused.py scores both paths against fp64.
+# ===========================================================================
+
+if TRITON_AVAILABLE:
+
+    @triton.jit
+    def _hcr_col(tile, kcol, k: tl.constexpr):
+        """Column k of a [BT, 64] tile as a [BT] vector (one nonzero term per row: exact)."""
+        return tl.sum(tl.where(kcol[None, :] == k, tile, 0.0), axis=1)
+
+    # -----------------------------------------------------------------------
+    # Entry forward, two kernels. (A one-kernel form, projection then x_bar from the
+    # L2-resident rows, matched this at 7680 positions and was 1.6x slower at the core's
+    # 1536: 96 programs of 16 tokens for 170 SMs, each streaming the whole W.)
+    #   _hcr_fwd_proj_kernel  grid (token blocks, stream j): the stream's rows times W's
+    #                         stream-j columns (bf16 tl.dot, fp32 acc) and the stream's sum of
+    #                         squares, as per-stream partials;
+    #   _hcr_fwd_map_kernel   grid (token blocks, C splits): sums the 4 partials in a fixed
+    #                         order, rounds the projection to bf16 (the autocast mm's
+    #                         result), runs the mapping, and writes x_bar for its C range.
+    # -----------------------------------------------------------------------
+    @triton.jit
+    def _hcr_fwd_proj_kernel(
+        h_ptr,            # [T, N*C] carrier
+        w_ptr,            # [48, N*C] proj weight, bf16
+        part_ptr,         # [N, T, 64] fp32 out: per-stream projection partials
+        ssq_ptr,          # [N, T] fp32 out: per-stream sum of squares
+        T,
+        N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
+    ):
+        NC: tl.constexpr = N * C
+        j = tl.program_id(1)
+        t = tl.program_id(0) * BT + tl.arange(0, BT)
+        tmask = t < T
+        cc = tl.arange(0, BC)
+        kc = tl.arange(0, 64)
+        kmask = kc < 48
+        sq = tl.zeros((BT, BC), dtype=tl.float32)
+        acc = tl.zeros((BT, 64), dtype=tl.float32)
+        for c0 in range(0, C, BC):
+            col = j * C + c0 + cc
+            hv = tl.load(h_ptr + t[:, None] * NC + col[None, :], mask=tmask[:, None],
+                         other=0.0).to(tl.float32)
+            sq += hv * hv
+            wt = tl.load(w_ptr + kc[None, :] * NC + col[:, None], mask=kmask[None, :],
+                         other=0.0)
+            acc = tl.dot(hv.to(tl.bfloat16), wt, acc)
+        tl.store(part_ptr + (j * T + t)[:, None] * 64 + kc[None, :], acc, mask=tmask[:, None])
+        tl.store(ssq_ptr + j * T + t, tl.sum(sq, axis=1), mask=tmask)
+
+    @triton.jit
+    def _hcr_fwd_map_kernel(
+        h_ptr,            # [T, N*C] carrier
+        part_ptr,         # [N, T, 64] per-stream projection partials
+        ssq_ptr,          # [N, T] per-stream sums of squares
+        pb_ptr,           # [48] fp32 proj bias
+        xbar_ptr,         # [T, C] out (carrier dtype)
+        hres_ptr,         # [T, 16] fp32 out
+        hpr_ptr,          # [T, 4] fp32 out
+        raw_ptr,          # [T, 48] fp32 out
+        rms_ptr,          # [T] fp32 out
+        T,
+        TAU: tl.constexpr, ALPHA: tl.constexpr, EPS: tl.constexpr,
+        N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
+        CS: tl.constexpr,  # x_bar columns per program (grid axis 1)
+    ):
+        NC: tl.constexpr = N * C
+        t = tl.program_id(0) * BT + tl.arange(0, BT)
+        tmask = t < T
+        smask = tmask & (tl.program_id(1) == 0)   # per-token outputs: written once
+        cc = tl.arange(0, BC)
+        kc = tl.arange(0, 64)
+        kmask = kc < 48
+        pp = part_ptr + t[:, None] * 64 + kc[None, :]
+        acc = tl.load(pp, mask=tmask[:, None], other=0.0)
+        acc += tl.load(pp + 1 * T * 64, mask=tmask[:, None], other=0.0)
+        acc += tl.load(pp + 2 * T * 64, mask=tmask[:, None], other=0.0)
+        acc += tl.load(pp + 3 * T * 64, mask=tmask[:, None], other=0.0)
+        ssq = tl.load(ssq_ptr + t, mask=tmask, other=0.0)
+        ssq += tl.load(ssq_ptr + 1 * T + t, mask=tmask, other=0.0)
+        ssq += tl.load(ssq_ptr + 2 * T + t, mask=tmask, other=0.0)
+        ssq += tl.load(ssq_ptr + 3 * T + t, mask=tmask, other=0.0)
+        rms = tl.sqrt(ssq / NC + EPS)
+        inv_rms = 1.0 / rms
+        raw = acc.to(tl.bfloat16).to(tl.float32)      # the autocast mm's bf16 result
+        tl.store(rms_ptr + t, rms, mask=smask)
+        tl.store(raw_ptr + t[:, None] * 48 + kc[None, :], raw,
+                 mask=smask[:, None] & kmask[None, :])
+        inv_tau = 1.0 / TAU
+
+        # ---- the mapping, per token (vectors over the BT tokens) ----
+        hprecm0 = tl.zeros((BT,), dtype=tl.float32)
+        hprecm1 = tl.zeros((BT,), dtype=tl.float32)
+        hprecm2 = tl.zeros((BT,), dtype=tl.float32)
+        hprecm3 = tl.zeros((BT,), dtype=tl.float32)
+        for i in tl.static_range(4):
+            p0 = (_hcr_col(raw, kc, i * 4 + 0) * inv_rms + tl.load(pb_ptr + i * 4 + 0)) * inv_tau
+            p1 = (_hcr_col(raw, kc, i * 4 + 1) * inv_rms + tl.load(pb_ptr + i * 4 + 1)) * inv_tau
+            p2 = (_hcr_col(raw, kc, i * 4 + 2) * inv_rms + tl.load(pb_ptr + i * 4 + 2)) * inv_tau
+            p3 = (_hcr_col(raw, kc, i * 4 + 3) * inv_rms + tl.load(pb_ptr + i * 4 + 3)) * inv_tau
+            s0, s1, s2, s3 = _sm4(p0, p1, p2, p3)
+            hprecm0 += s0
+            hprecm1 += s1
+            hprecm2 += s2
+            hprecm3 += s3
+        hprecm0 *= 0.25; hprecm1 *= 0.25; hprecm2 *= 0.25; hprecm3 *= 0.25
+
+        hpr0 = tl.zeros((BT,), dtype=tl.float32)
+        hpr1 = tl.zeros((BT,), dtype=tl.float32)
+        hpr2 = tl.zeros((BT,), dtype=tl.float32)
+        hpr3 = tl.zeros((BT,), dtype=tl.float32)
+        for j in tl.static_range(4):
+            q0 = (_hcr_col(raw, kc, 16 + 0 * 4 + j) * inv_rms + tl.load(pb_ptr + 16 + 0 * 4 + j)) * inv_tau
+            q1 = (_hcr_col(raw, kc, 16 + 1 * 4 + j) * inv_rms + tl.load(pb_ptr + 16 + 1 * 4 + j)) * inv_tau
+            q2 = (_hcr_col(raw, kc, 16 + 2 * 4 + j) * inv_rms + tl.load(pb_ptr + 16 + 2 * 4 + j)) * inv_tau
+            q3 = (_hcr_col(raw, kc, 16 + 3 * 4 + j) * inv_rms + tl.load(pb_ptr + 16 + 3 * 4 + j)) * inv_tau
+            s0, s1, s2, s3 = _sm4(q0, q1, q2, q3)
+            hpr0 += s0
+            hpr1 += s1
+            hpr2 += s2
+            hpr3 += s3
+        tl.store(hpr_ptr + t * 4 + 0, hpr0, mask=smask)
+        tl.store(hpr_ptr + t * 4 + 1, hpr1, mask=smask)
+        tl.store(hpr_ptr + t * 4 + 2, hpr2, mask=smask)
+        tl.store(hpr_ptr + t * 4 + 3, hpr3, mask=smask)
+
+        a00 = _hcr_col(raw, kc, 32 + 0) * inv_rms + tl.load(pb_ptr + 32 + 0)
+        a01 = _hcr_col(raw, kc, 32 + 1) * inv_rms + tl.load(pb_ptr + 32 + 1)
+        a02 = _hcr_col(raw, kc, 32 + 2) * inv_rms + tl.load(pb_ptr + 32 + 2)
+        a03 = _hcr_col(raw, kc, 32 + 3) * inv_rms + tl.load(pb_ptr + 32 + 3)
+        a10 = _hcr_col(raw, kc, 32 + 4) * inv_rms + tl.load(pb_ptr + 32 + 4)
+        a11 = _hcr_col(raw, kc, 32 + 5) * inv_rms + tl.load(pb_ptr + 32 + 5)
+        a12 = _hcr_col(raw, kc, 32 + 6) * inv_rms + tl.load(pb_ptr + 32 + 6)
+        a13 = _hcr_col(raw, kc, 32 + 7) * inv_rms + tl.load(pb_ptr + 32 + 7)
+        a20 = _hcr_col(raw, kc, 32 + 8) * inv_rms + tl.load(pb_ptr + 32 + 8)
+        a21 = _hcr_col(raw, kc, 32 + 9) * inv_rms + tl.load(pb_ptr + 32 + 9)
+        a22 = _hcr_col(raw, kc, 32 + 10) * inv_rms + tl.load(pb_ptr + 32 + 10)
+        a23 = _hcr_col(raw, kc, 32 + 11) * inv_rms + tl.load(pb_ptr + 32 + 11)
+        a30 = _hcr_col(raw, kc, 32 + 12) * inv_rms + tl.load(pb_ptr + 32 + 12)
+        a31 = _hcr_col(raw, kc, 32 + 13) * inv_rms + tl.load(pb_ptr + 32 + 13)
+        a32 = _hcr_col(raw, kc, 32 + 14) * inv_rms + tl.load(pb_ptr + 32 + 14)
+        a33 = _hcr_col(raw, kc, 32 + 15) * inv_rms + tl.load(pb_ptr + 32 + 15)
+        (y00, y01, y02, y03, y10, y11, y12, y13,
+         y20, y21, y22, y23, y30, y31, y32, y33) = _cayley4_fwd(
+            a00, a01, a02, a03, a10, a11, a12, a13,
+            a20, a21, a22, a23, a30, a31, a32, a33, ALPHA)
+        hb = t * 16
+        tl.store(hres_ptr + hb + 0, y00, mask=smask);  tl.store(hres_ptr + hb + 1, y01, mask=smask)
+        tl.store(hres_ptr + hb + 2, y02, mask=smask);  tl.store(hres_ptr + hb + 3, y03, mask=smask)
+        tl.store(hres_ptr + hb + 4, y10, mask=smask);  tl.store(hres_ptr + hb + 5, y11, mask=smask)
+        tl.store(hres_ptr + hb + 6, y12, mask=smask);  tl.store(hres_ptr + hb + 7, y13, mask=smask)
+        tl.store(hres_ptr + hb + 8, y20, mask=smask);  tl.store(hres_ptr + hb + 9, y21, mask=smask)
+        tl.store(hres_ptr + hb + 10, y22, mask=smask); tl.store(hres_ptr + hb + 11, y23, mask=smask)
+        tl.store(hres_ptr + hb + 12, y30, mask=smask); tl.store(hres_ptr + hb + 13, y31, mask=smask)
+        tl.store(hres_ptr + hb + 14, y32, mask=smask); tl.store(hres_ptr + hb + 15, y33, mask=smask)
+
+        # ---- x_bar = sum_j Hpre_cm[j] h[j] on this program's C range ----
+        m2 = tmask[:, None]
+        c1 = hprecm0[:, None]; c2 = hprecm1[:, None]; c3 = hprecm2[:, None]; c4 = hprecm3[:, None]
+        c_lo = tl.program_id(1) * CS
+        for c0 in range(c_lo, c_lo + CS, BC):
+            off = t[:, None] * NC + c0 + cc[None, :]
+            h0 = tl.load(h_ptr + off + 0 * C, mask=m2, other=0.0).to(tl.float32)
+            h1 = tl.load(h_ptr + off + 1 * C, mask=m2, other=0.0).to(tl.float32)
+            h2 = tl.load(h_ptr + off + 2 * C, mask=m2, other=0.0).to(tl.float32)
+            h3 = tl.load(h_ptr + off + 3 * C, mask=m2, other=0.0).to(tl.float32)
+            xb = c1 * h0 + c2 * h1 + c3 * h2 + c4 * h3
+            tl.store(xbar_ptr + t[:, None] * C + c0 + cc[None, :],
+                     xb.to(xbar_ptr.dtype.element_ty), mask=m2)
+
+    # -----------------------------------------------------------------------
+    # Exit backward: grad_y, grad_term, grad_Hpost_row from ONE read of gout. Per token,
+    # the y / term / Hpost_row half of _hc_post_bwd_kernel, op for op (bit-identical
+    # values); grad_y is stored straight in y's dtype (the old path rounded the same fp32
+    # value in a separate cast kernel).
+    # -----------------------------------------------------------------------
+    @triton.jit
+    def _hcr_exit_bwd_kernel(
+        gout_ptr, hpost_ptr, y_ptr,
+        gy_ptr, ghpost_ptr, gterm_ptr,
+        N: tl.constexpr, C: tl.constexpr,
+        BLOCK_C: tl.constexpr, HAS_TERM: tl.constexpr,
+    ):
+        tok = tl.program_id(0)
+        c = tl.arange(0, BLOCK_C)
+        cmask = c < C
+        h_base = tok * (N * C)
+        yv = tl.load(y_ptr + tok * C + c, mask=cmask, other=0.0).to(tl.float32)
+        gy = tl.zeros((BLOCK_C,), dtype=tl.float32)
+        gterm = tl.zeros((BLOCK_C,), dtype=tl.float32)
+        for i in tl.static_range(N):
+            go = tl.load(gout_ptr + h_base + i * C + c, mask=cmask, other=0.0).to(tl.float32)
+            post_i = tl.load(hpost_ptr + tok * N + i).to(tl.float32)
+            gy += post_i * go
+            gterm += go
+            tl.store(ghpost_ptr + tok * N + i, tl.sum(go * yv, axis=0))
+        tl.store(gy_ptr + tok * C + c, gy.to(gy_ptr.dtype.element_ty), mask=cmask)
+        if HAS_TERM:
+            tl.store(gterm_ptr + tok * C + c, gterm.to(gterm_ptr.dtype.element_ty), mask=cmask)
+
+    # -----------------------------------------------------------------------
+    # Entry backward: the whole carrier grad of one HC sublayer in ONE write.
+    # -----------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # Entry backward, model.hc_region_fused. Three kernels (blockfuse 2026-10-08):
+    #   _hcr_bwd_reduce_kernel  streams gx, gout, h once and writes the 20 C-reductions per
+    #                           token (gcm_j = sum gx*h_j, gY_ij = sum gout_i*h_j) as NSPLIT
+    #                           partial sums (grid = token blocks x C splits; no atomics);
+    #   _hcr_bwd_map_kernel     per token: sums the partials in a fixed order and runs the
+    #                           mapping VJP (_hc_premap_bwd_tok's math on [BT] vectors) ->
+    #                           graw [T, 48] and the pass-2 coefficients (Hres, cm, scale);
+    #   _hcr_bwd_carrier_kernel streams gx, gout, h again and writes the carrier grad once:
+    #                           gh_j = Hres^T gout + cm_j gx + scale h_j + graw @ W_j.
+    # One fused kernel (tried first) held the ~200 per-token mapping values in registers
+    # (255 regs, 1 program per SM) and ran at half bandwidth; split, both streaming kernels
+    # run at high occupancy and the mapping costs a few microseconds.
+    # -----------------------------------------------------------------------
+    @triton.jit
+    def _hcr_bwd_reduce_kernel(
+        gx_ptr,           # [T, C]    grad x_bar
+        go_ptr,           # [T, N*C]  gout
+        h_ptr,            # [T, N*C]
+        red_ptr,          # [NSPLIT, T, 20] fp32 out: partial (gcm0..3, gY00..gY33)
+        T,
+        N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
+        CS: tl.constexpr,  # columns per split (C // NSPLIT)
+    ):
+        NC: tl.constexpr = N * C
+        pid = tl.program_id(0)
+        sp = tl.program_id(1)
+        t = pid * BT + tl.arange(0, BT)
+        tmask = t < T
+        m2 = tmask[:, None]
+        cc = tl.arange(0, BC)
+        z = tl.zeros((BT, BC), dtype=tl.float32)
+        acm0 = z; acm1 = z; acm2 = z; acm3 = z
+        aY00 = z; aY01 = z; aY02 = z; aY03 = z
+        aY10 = z; aY11 = z; aY12 = z; aY13 = z
+        aY20 = z; aY21 = z; aY22 = z; aY23 = z
+        aY30 = z; aY31 = z; aY32 = z; aY33 = z
+        for c0 in range(sp * CS, sp * CS + CS, BC):
+            off = t[:, None] * NC + c0 + cc[None, :]
+            gx = tl.load(gx_ptr + t[:, None] * C + c0 + cc[None, :], mask=m2,
+                         other=0.0).to(tl.float32)
+            h0 = tl.load(h_ptr + off + 0 * C, mask=m2, other=0.0).to(tl.float32)
+            h1 = tl.load(h_ptr + off + 1 * C, mask=m2, other=0.0).to(tl.float32)
+            h2 = tl.load(h_ptr + off + 2 * C, mask=m2, other=0.0).to(tl.float32)
+            h3 = tl.load(h_ptr + off + 3 * C, mask=m2, other=0.0).to(tl.float32)
+            acm0 += gx * h0; acm1 += gx * h1; acm2 += gx * h2; acm3 += gx * h3
+            g0 = tl.load(go_ptr + off + 0 * C, mask=m2, other=0.0).to(tl.float32)
+            aY00 += g0 * h0; aY01 += g0 * h1; aY02 += g0 * h2; aY03 += g0 * h3
+            g1 = tl.load(go_ptr + off + 1 * C, mask=m2, other=0.0).to(tl.float32)
+            aY10 += g1 * h0; aY11 += g1 * h1; aY12 += g1 * h2; aY13 += g1 * h3
+            g2 = tl.load(go_ptr + off + 2 * C, mask=m2, other=0.0).to(tl.float32)
+            aY20 += g2 * h0; aY21 += g2 * h1; aY22 += g2 * h2; aY23 += g2 * h3
+            g3 = tl.load(go_ptr + off + 3 * C, mask=m2, other=0.0).to(tl.float32)
+            aY30 += g3 * h0; aY31 += g3 * h1; aY32 += g3 * h2; aY33 += g3 * h3
+        rb = red_ptr + (sp * T + t) * 20
+        tl.store(rb + 0, tl.sum(acm0, axis=1), mask=tmask)
+        tl.store(rb + 1, tl.sum(acm1, axis=1), mask=tmask)
+        tl.store(rb + 2, tl.sum(acm2, axis=1), mask=tmask)
+        tl.store(rb + 3, tl.sum(acm3, axis=1), mask=tmask)
+        tl.store(rb + 4, tl.sum(aY00, axis=1), mask=tmask)
+        tl.store(rb + 5, tl.sum(aY01, axis=1), mask=tmask)
+        tl.store(rb + 6, tl.sum(aY02, axis=1), mask=tmask)
+        tl.store(rb + 7, tl.sum(aY03, axis=1), mask=tmask)
+        tl.store(rb + 8, tl.sum(aY10, axis=1), mask=tmask)
+        tl.store(rb + 9, tl.sum(aY11, axis=1), mask=tmask)
+        tl.store(rb + 10, tl.sum(aY12, axis=1), mask=tmask)
+        tl.store(rb + 11, tl.sum(aY13, axis=1), mask=tmask)
+        tl.store(rb + 12, tl.sum(aY20, axis=1), mask=tmask)
+        tl.store(rb + 13, tl.sum(aY21, axis=1), mask=tmask)
+        tl.store(rb + 14, tl.sum(aY22, axis=1), mask=tmask)
+        tl.store(rb + 15, tl.sum(aY23, axis=1), mask=tmask)
+        tl.store(rb + 16, tl.sum(aY30, axis=1), mask=tmask)
+        tl.store(rb + 17, tl.sum(aY31, axis=1), mask=tmask)
+        tl.store(rb + 18, tl.sum(aY32, axis=1), mask=tmask)
+        tl.store(rb + 19, tl.sum(aY33, axis=1), mask=tmask)
+
+    @triton.jit
+    def _hcr_red(red_ptr, t, tmask, T, k, NSPLIT: tl.constexpr):
+        acc = tl.load(red_ptr + t * 20 + k, mask=tmask, other=0.0)
+        for sp in tl.static_range(1, NSPLIT):
+            acc += tl.load(red_ptr + (sp * T + t) * 20 + k, mask=tmask, other=0.0)
+        return acc
+
+    @triton.jit
+    def _hcr_bwd_map_kernel(
+        red_ptr,          # [NSPLIT, T, 20] partial reductions
+        ghpr_ptr,         # [T, 4]    grad Hpost_row (from the exit backward)
+        pb_ptr,           # [48]      fp32 proj bias
+        raw_ptr,          # [T, 48]
+        rms_ptr,          # [T]
+        graw_ptr,         # [T, 48]   out: grad wrt x.W^T
+        coef_ptr,         # [T, 24]   out: Hres (16, row-major), cm (4), scale (1), pad
+        T,
+        TAU: tl.constexpr, ALPHA: tl.constexpr,
+        N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, NSPLIT: tl.constexpr,
+    ):
+        t = tl.program_id(0) * BT + tl.arange(0, BT)
+        tmask = t < T
+        gcm0 = _hcr_red(red_ptr, t, tmask, T, 0, NSPLIT)
+        gcm1 = _hcr_red(red_ptr, t, tmask, T, 1, NSPLIT)
+        gcm2 = _hcr_red(red_ptr, t, tmask, T, 2, NSPLIT)
+        gcm3 = _hcr_red(red_ptr, t, tmask, T, 3, NSPLIT)
+        gY00 = _hcr_red(red_ptr, t, tmask, T, 4, NSPLIT)
+        gY01 = _hcr_red(red_ptr, t, tmask, T, 5, NSPLIT)
+        gY02 = _hcr_red(red_ptr, t, tmask, T, 6, NSPLIT)
+        gY03 = _hcr_red(red_ptr, t, tmask, T, 7, NSPLIT)
+        gY10 = _hcr_red(red_ptr, t, tmask, T, 8, NSPLIT)
+        gY11 = _hcr_red(red_ptr, t, tmask, T, 9, NSPLIT)
+        gY12 = _hcr_red(red_ptr, t, tmask, T, 10, NSPLIT)
+        gY13 = _hcr_red(red_ptr, t, tmask, T, 11, NSPLIT)
+        gY20 = _hcr_red(red_ptr, t, tmask, T, 12, NSPLIT)
+        gY21 = _hcr_red(red_ptr, t, tmask, T, 13, NSPLIT)
+        gY22 = _hcr_red(red_ptr, t, tmask, T, 14, NSPLIT)
+        gY23 = _hcr_red(red_ptr, t, tmask, T, 15, NSPLIT)
+        gY30 = _hcr_red(red_ptr, t, tmask, T, 16, NSPLIT)
+        gY31 = _hcr_red(red_ptr, t, tmask, T, 17, NSPLIT)
+        gY32 = _hcr_red(red_ptr, t, tmask, T, 18, NSPLIT)
+        gY33 = _hcr_red(red_ptr, t, tmask, T, 19, NSPLIT)
+
+        # ---- the mapping VJP: _hc_premap_bwd_tok on [BT] vectors ----
+        rms = tl.load(rms_ptr + t, mask=tmask, other=1.0)
+        inv_rms = 1.0 / rms
+        inv_tau = 1.0 / TAU
+        rb = t * 48
+        pre00 = (tl.load(raw_ptr+rb+0, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+0))*inv_tau;  pre01 = (tl.load(raw_ptr+rb+1, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+1))*inv_tau
+        pre02 = (tl.load(raw_ptr+rb+2, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+2))*inv_tau;  pre03 = (tl.load(raw_ptr+rb+3, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+3))*inv_tau
+        pre10 = (tl.load(raw_ptr+rb+4, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+4))*inv_tau;  pre11 = (tl.load(raw_ptr+rb+5, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+5))*inv_tau
+        pre12 = (tl.load(raw_ptr+rb+6, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+6))*inv_tau;  pre13 = (tl.load(raw_ptr+rb+7, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+7))*inv_tau
+        pre20 = (tl.load(raw_ptr+rb+8, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+8))*inv_tau;  pre21 = (tl.load(raw_ptr+rb+9, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+9))*inv_tau
+        pre22 = (tl.load(raw_ptr+rb+10, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+10))*inv_tau; pre23 = (tl.load(raw_ptr+rb+11, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+11))*inv_tau
+        pre30 = (tl.load(raw_ptr+rb+12, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+12))*inv_tau; pre31 = (tl.load(raw_ptr+rb+13, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+13))*inv_tau
+        pre32 = (tl.load(raw_ptr+rb+14, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+14))*inv_tau; pre33 = (tl.load(raw_ptr+rb+15, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+15))*inv_tau
+        P00, P01, P02, P03 = _sm4(pre00, pre01, pre02, pre03)
+        P10, P11, P12, P13 = _sm4(pre10, pre11, pre12, pre13)
+        P20, P21, P22, P23 = _sm4(pre20, pre21, pre22, pre23)
+        P30, P31, P32, P33 = _sm4(pre30, pre31, pre32, pre33)
+        po00 = (tl.load(raw_ptr+rb+16+0, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+0))*inv_tau;  po01 = (tl.load(raw_ptr+rb+16+1, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+1))*inv_tau
+        po02 = (tl.load(raw_ptr+rb+16+2, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+2))*inv_tau;  po03 = (tl.load(raw_ptr+rb+16+3, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+3))*inv_tau
+        po10 = (tl.load(raw_ptr+rb+16+4, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+4))*inv_tau;  po11 = (tl.load(raw_ptr+rb+16+5, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+5))*inv_tau
+        po12 = (tl.load(raw_ptr+rb+16+6, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+6))*inv_tau;  po13 = (tl.load(raw_ptr+rb+16+7, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+7))*inv_tau
+        po20 = (tl.load(raw_ptr+rb+16+8, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+8))*inv_tau;  po21 = (tl.load(raw_ptr+rb+16+9, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+9))*inv_tau
+        po22 = (tl.load(raw_ptr+rb+16+10, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+10))*inv_tau; po23 = (tl.load(raw_ptr+rb+16+11, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+11))*inv_tau
+        po30 = (tl.load(raw_ptr+rb+16+12, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+12))*inv_tau; po31 = (tl.load(raw_ptr+rb+16+13, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+13))*inv_tau
+        po32 = (tl.load(raw_ptr+rb+16+14, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+14))*inv_tau; po33 = (tl.load(raw_ptr+rb+16+15, mask=tmask, other=0.0)*inv_rms+tl.load(pb_ptr+16+15))*inv_tau
+        Q00, Q10, Q20, Q30 = _sm4(po00, po10, po20, po30)
+        Q01, Q11, Q21, Q31 = _sm4(po01, po11, po21, po31)
+        Q02, Q12, Q22, Q32 = _sm4(po02, po12, po22, po32)
+        Q03, Q13, Q23, Q33 = _sm4(po03, po13, po23, po33)
+        aw00 = tl.load(raw_ptr+rb+32+0, mask=tmask, other=0.0)*inv_rms;  aw01 = tl.load(raw_ptr+rb+32+1, mask=tmask, other=0.0)*inv_rms
+        aw02 = tl.load(raw_ptr+rb+32+2, mask=tmask, other=0.0)*inv_rms;  aw03 = tl.load(raw_ptr+rb+32+3, mask=tmask, other=0.0)*inv_rms
+        aw10 = tl.load(raw_ptr+rb+32+4, mask=tmask, other=0.0)*inv_rms;  aw11 = tl.load(raw_ptr+rb+32+5, mask=tmask, other=0.0)*inv_rms
+        aw12 = tl.load(raw_ptr+rb+32+6, mask=tmask, other=0.0)*inv_rms;  aw13 = tl.load(raw_ptr+rb+32+7, mask=tmask, other=0.0)*inv_rms
+        aw20 = tl.load(raw_ptr+rb+32+8, mask=tmask, other=0.0)*inv_rms;  aw21 = tl.load(raw_ptr+rb+32+9, mask=tmask, other=0.0)*inv_rms
+        aw22 = tl.load(raw_ptr+rb+32+10, mask=tmask, other=0.0)*inv_rms; aw23 = tl.load(raw_ptr+rb+32+11, mask=tmask, other=0.0)*inv_rms
+        aw30 = tl.load(raw_ptr+rb+32+12, mask=tmask, other=0.0)*inv_rms; aw31 = tl.load(raw_ptr+rb+32+13, mask=tmask, other=0.0)*inv_rms
+        aw32 = tl.load(raw_ptr+rb+32+14, mask=tmask, other=0.0)*inv_rms; aw33 = tl.load(raw_ptr+rb+32+15, mask=tmask, other=0.0)*inv_rms
+        a00 = aw00 + tl.load(pb_ptr+32+0);  a01 = aw01 + tl.load(pb_ptr+32+1)
+        a02 = aw02 + tl.load(pb_ptr+32+2);  a03 = aw03 + tl.load(pb_ptr+32+3)
+        a10 = aw10 + tl.load(pb_ptr+32+4);  a11 = aw11 + tl.load(pb_ptr+32+5)
+        a12 = aw12 + tl.load(pb_ptr+32+6);  a13 = aw13 + tl.load(pb_ptr+32+7)
+        a20 = aw20 + tl.load(pb_ptr+32+8);  a21 = aw21 + tl.load(pb_ptr+32+9)
+        a22 = aw22 + tl.load(pb_ptr+32+10); a23 = aw23 + tl.load(pb_ptr+32+11)
+        a30 = aw30 + tl.load(pb_ptr+32+12); a31 = aw31 + tl.load(pb_ptr+32+13)
+        a32 = aw32 + tl.load(pb_ptr+32+14); a33 = aw33 + tl.load(pb_ptr+32+15)
+
+        cm0 = 0.25*(P00+P10+P20+P30); cm1 = 0.25*(P01+P11+P21+P31)
+        cm2 = 0.25*(P02+P12+P22+P32); cm3 = 0.25*(P03+P13+P23+P33)
+        gg0 = 0.25*gcm0; gg1 = 0.25*gcm1; gg2 = 0.25*gcm2; gg3 = 0.25*gcm3
+        gpre00,gpre01,gpre02,gpre03 = _smjac4(gg0,gg1,gg2,gg3, P00,P01,P02,P03)
+        gpre10,gpre11,gpre12,gpre13 = _smjac4(gg0,gg1,gg2,gg3, P10,P11,P12,P13)
+        gpre20,gpre21,gpre22,gpre23 = _smjac4(gg0,gg1,gg2,gg3, P20,P21,P22,P23)
+        gpre30,gpre31,gpre32,gpre33 = _smjac4(gg0,gg1,gg2,gg3, P30,P31,P32,P33)
+        gpre00*=inv_tau; gpre01*=inv_tau; gpre02*=inv_tau; gpre03*=inv_tau
+        gpre10*=inv_tau; gpre11*=inv_tau; gpre12*=inv_tau; gpre13*=inv_tau
+        gpre20*=inv_tau; gpre21*=inv_tau; gpre22*=inv_tau; gpre23*=inv_tau
+        gpre30*=inv_tau; gpre31*=inv_tau; gpre32*=inv_tau; gpre33*=inv_tau
+        gpr0 = tl.load(ghpr_ptr + t*4 + 0, mask=tmask, other=0.0)
+        gpr1 = tl.load(ghpr_ptr + t*4 + 1, mask=tmask, other=0.0)
+        gpr2 = tl.load(ghpr_ptr + t*4 + 2, mask=tmask, other=0.0)
+        gpr3 = tl.load(ghpr_ptr + t*4 + 3, mask=tmask, other=0.0)
+        gpo00,gpo10,gpo20,gpo30 = _smjac4(gpr0,gpr1,gpr2,gpr3, Q00,Q10,Q20,Q30)
+        gpo01,gpo11,gpo21,gpo31 = _smjac4(gpr0,gpr1,gpr2,gpr3, Q01,Q11,Q21,Q31)
+        gpo02,gpo12,gpo22,gpo32 = _smjac4(gpr0,gpr1,gpr2,gpr3, Q02,Q12,Q22,Q32)
+        gpo03,gpo13,gpo23,gpo33 = _smjac4(gpr0,gpr1,gpr2,gpr3, Q03,Q13,Q23,Q33)
+        gpo00*=inv_tau; gpo01*=inv_tau; gpo02*=inv_tau; gpo03*=inv_tau
+        gpo10*=inv_tau; gpo11*=inv_tau; gpo12*=inv_tau; gpo13*=inv_tau
+        gpo20*=inv_tau; gpo21*=inv_tau; gpo22*=inv_tau; gpo23*=inv_tau
+        gpo30*=inv_tau; gpo31*=inv_tau; gpo32*=inv_tau; gpo33*=inv_tau
+        (gres00,gres01,gres02,gres03,gres10,gres11,gres12,gres13,
+         gres20,gres21,gres22,gres23,gres30,gres31,gres32,gres33) = _cayley4_vjp(
+            a00,a01,a02,a03,a10,a11,a12,a13,a20,a21,a22,a23,a30,a31,a32,a33,
+            gY00,gY01,gY02,gY03,gY10,gY11,gY12,gY13,gY20,gY21,gY22,gY23,gY30,gY31,gY32,gY33, ALPHA)
+        grms = gpre00*(pre00*TAU-tl.load(pb_ptr+0))+gpre01*(pre01*TAU-tl.load(pb_ptr+1))+gpre02*(pre02*TAU-tl.load(pb_ptr+2))+gpre03*(pre03*TAU-tl.load(pb_ptr+3))
+        grms += gpre10*(pre10*TAU-tl.load(pb_ptr+4))+gpre11*(pre11*TAU-tl.load(pb_ptr+5))+gpre12*(pre12*TAU-tl.load(pb_ptr+6))+gpre13*(pre13*TAU-tl.load(pb_ptr+7))
+        grms += gpre20*(pre20*TAU-tl.load(pb_ptr+8))+gpre21*(pre21*TAU-tl.load(pb_ptr+9))+gpre22*(pre22*TAU-tl.load(pb_ptr+10))+gpre23*(pre23*TAU-tl.load(pb_ptr+11))
+        grms += gpre30*(pre30*TAU-tl.load(pb_ptr+12))+gpre31*(pre31*TAU-tl.load(pb_ptr+13))+gpre32*(pre32*TAU-tl.load(pb_ptr+14))+gpre33*(pre33*TAU-tl.load(pb_ptr+15))
+        grms += gpo00*(po00*TAU-tl.load(pb_ptr+16+0))+gpo01*(po01*TAU-tl.load(pb_ptr+16+1))+gpo02*(po02*TAU-tl.load(pb_ptr+16+2))+gpo03*(po03*TAU-tl.load(pb_ptr+16+3))
+        grms += gpo10*(po10*TAU-tl.load(pb_ptr+16+4))+gpo11*(po11*TAU-tl.load(pb_ptr+16+5))+gpo12*(po12*TAU-tl.load(pb_ptr+16+6))+gpo13*(po13*TAU-tl.load(pb_ptr+16+7))
+        grms += gpo20*(po20*TAU-tl.load(pb_ptr+16+8))+gpo21*(po21*TAU-tl.load(pb_ptr+16+9))+gpo22*(po22*TAU-tl.load(pb_ptr+16+10))+gpo23*(po23*TAU-tl.load(pb_ptr+16+11))
+        grms += gpo30*(po30*TAU-tl.load(pb_ptr+16+12))+gpo31*(po31*TAU-tl.load(pb_ptr+16+13))+gpo32*(po32*TAU-tl.load(pb_ptr+16+14))+gpo33*(po33*TAU-tl.load(pb_ptr+16+15))
+        grms += gres00*aw00+gres01*aw01+gres02*aw02+gres03*aw03
+        grms += gres10*aw10+gres11*aw11+gres12*aw12+gres13*aw13
+        grms += gres20*aw20+gres21*aw21+gres22*aw22+gres23*aw23
+        grms += gres30*aw30+gres31*aw31+gres32*aw32+gres33*aw33
+        grms = -inv_rms * grms
+
+        # graw = grad wrt x.W^T (the scaled grads times 1/rms): grad_w / grad_b and the
+        # carrier kernel's projection term read it.
+        gw00 = gpre00 * inv_rms
+        tl.store(graw_ptr + rb + 0, gw00, mask=tmask)
+        gw01 = gpre01 * inv_rms
+        tl.store(graw_ptr + rb + 1, gw01, mask=tmask)
+        gw02 = gpre02 * inv_rms
+        tl.store(graw_ptr + rb + 2, gw02, mask=tmask)
+        gw03 = gpre03 * inv_rms
+        tl.store(graw_ptr + rb + 3, gw03, mask=tmask)
+        gw04 = gpre10 * inv_rms
+        tl.store(graw_ptr + rb + 4, gw04, mask=tmask)
+        gw05 = gpre11 * inv_rms
+        tl.store(graw_ptr + rb + 5, gw05, mask=tmask)
+        gw06 = gpre12 * inv_rms
+        tl.store(graw_ptr + rb + 6, gw06, mask=tmask)
+        gw07 = gpre13 * inv_rms
+        tl.store(graw_ptr + rb + 7, gw07, mask=tmask)
+        gw08 = gpre20 * inv_rms
+        tl.store(graw_ptr + rb + 8, gw08, mask=tmask)
+        gw09 = gpre21 * inv_rms
+        tl.store(graw_ptr + rb + 9, gw09, mask=tmask)
+        gw10 = gpre22 * inv_rms
+        tl.store(graw_ptr + rb + 10, gw10, mask=tmask)
+        gw11 = gpre23 * inv_rms
+        tl.store(graw_ptr + rb + 11, gw11, mask=tmask)
+        gw12 = gpre30 * inv_rms
+        tl.store(graw_ptr + rb + 12, gw12, mask=tmask)
+        gw13 = gpre31 * inv_rms
+        tl.store(graw_ptr + rb + 13, gw13, mask=tmask)
+        gw14 = gpre32 * inv_rms
+        tl.store(graw_ptr + rb + 14, gw14, mask=tmask)
+        gw15 = gpre33 * inv_rms
+        tl.store(graw_ptr + rb + 15, gw15, mask=tmask)
+        gw16 = gpo00 * inv_rms
+        tl.store(graw_ptr + rb + 16, gw16, mask=tmask)
+        gw17 = gpo01 * inv_rms
+        tl.store(graw_ptr + rb + 17, gw17, mask=tmask)
+        gw18 = gpo02 * inv_rms
+        tl.store(graw_ptr + rb + 18, gw18, mask=tmask)
+        gw19 = gpo03 * inv_rms
+        tl.store(graw_ptr + rb + 19, gw19, mask=tmask)
+        gw20 = gpo10 * inv_rms
+        tl.store(graw_ptr + rb + 20, gw20, mask=tmask)
+        gw21 = gpo11 * inv_rms
+        tl.store(graw_ptr + rb + 21, gw21, mask=tmask)
+        gw22 = gpo12 * inv_rms
+        tl.store(graw_ptr + rb + 22, gw22, mask=tmask)
+        gw23 = gpo13 * inv_rms
+        tl.store(graw_ptr + rb + 23, gw23, mask=tmask)
+        gw24 = gpo20 * inv_rms
+        tl.store(graw_ptr + rb + 24, gw24, mask=tmask)
+        gw25 = gpo21 * inv_rms
+        tl.store(graw_ptr + rb + 25, gw25, mask=tmask)
+        gw26 = gpo22 * inv_rms
+        tl.store(graw_ptr + rb + 26, gw26, mask=tmask)
+        gw27 = gpo23 * inv_rms
+        tl.store(graw_ptr + rb + 27, gw27, mask=tmask)
+        gw28 = gpo30 * inv_rms
+        tl.store(graw_ptr + rb + 28, gw28, mask=tmask)
+        gw29 = gpo31 * inv_rms
+        tl.store(graw_ptr + rb + 29, gw29, mask=tmask)
+        gw30 = gpo32 * inv_rms
+        tl.store(graw_ptr + rb + 30, gw30, mask=tmask)
+        gw31 = gpo33 * inv_rms
+        tl.store(graw_ptr + rb + 31, gw31, mask=tmask)
+        gw32 = gres00 * inv_rms
+        tl.store(graw_ptr + rb + 32, gw32, mask=tmask)
+        gw33 = gres01 * inv_rms
+        tl.store(graw_ptr + rb + 33, gw33, mask=tmask)
+        gw34 = gres02 * inv_rms
+        tl.store(graw_ptr + rb + 34, gw34, mask=tmask)
+        gw35 = gres03 * inv_rms
+        tl.store(graw_ptr + rb + 35, gw35, mask=tmask)
+        gw36 = gres10 * inv_rms
+        tl.store(graw_ptr + rb + 36, gw36, mask=tmask)
+        gw37 = gres11 * inv_rms
+        tl.store(graw_ptr + rb + 37, gw37, mask=tmask)
+        gw38 = gres12 * inv_rms
+        tl.store(graw_ptr + rb + 38, gw38, mask=tmask)
+        gw39 = gres13 * inv_rms
+        tl.store(graw_ptr + rb + 39, gw39, mask=tmask)
+        gw40 = gres20 * inv_rms
+        tl.store(graw_ptr + rb + 40, gw40, mask=tmask)
+        gw41 = gres21 * inv_rms
+        tl.store(graw_ptr + rb + 41, gw41, mask=tmask)
+        gw42 = gres22 * inv_rms
+        tl.store(graw_ptr + rb + 42, gw42, mask=tmask)
+        gw43 = gres23 * inv_rms
+        tl.store(graw_ptr + rb + 43, gw43, mask=tmask)
+        gw44 = gres30 * inv_rms
+        tl.store(graw_ptr + rb + 44, gw44, mask=tmask)
+        gw45 = gres31 * inv_rms
+        tl.store(graw_ptr + rb + 45, gw45, mask=tmask)
+        gw46 = gres32 * inv_rms
+        tl.store(graw_ptr + rb + 46, gw46, mask=tmask)
+        gw47 = gres33 * inv_rms
+        tl.store(graw_ptr + rb + 47, gw47, mask=tmask)
+
+        # Hres (the forward's mixer) for the skip path's Hres^T gout
+        (y00, y01, y02, y03, y10, y11, y12, y13,
+         y20, y21, y22, y23, y30, y31, y32, y33) = _cayley4_fwd(
+            a00, a01, a02, a03, a10, a11, a12, a13,
+            a20, a21, a22, a23, a30, a31, a32, a33, ALPHA)
+        scale = grms / (N * C * rms)
+
+        cb = coef_ptr + t * 24
+        tl.store(cb + 0, y00, mask=tmask); tl.store(cb + 1, y01, mask=tmask)
+        tl.store(cb + 2, y02, mask=tmask); tl.store(cb + 3, y03, mask=tmask)
+        tl.store(cb + 4, y10, mask=tmask); tl.store(cb + 5, y11, mask=tmask)
+        tl.store(cb + 6, y12, mask=tmask); tl.store(cb + 7, y13, mask=tmask)
+        tl.store(cb + 8, y20, mask=tmask); tl.store(cb + 9, y21, mask=tmask)
+        tl.store(cb + 10, y22, mask=tmask); tl.store(cb + 11, y23, mask=tmask)
+        tl.store(cb + 12, y30, mask=tmask); tl.store(cb + 13, y31, mask=tmask)
+        tl.store(cb + 14, y32, mask=tmask); tl.store(cb + 15, y33, mask=tmask)
+        tl.store(cb + 16, cm0, mask=tmask); tl.store(cb + 17, cm1, mask=tmask)
+        tl.store(cb + 18, cm2, mask=tmask); tl.store(cb + 19, cm3, mask=tmask)
+        tl.store(cb + 20, scale, mask=tmask)
+
+    @triton.jit
+    def _hcr_bwd_carrier_kernel(
+        gx_ptr,           # [T, C]
+        go_ptr,           # [T, N*C]
+        h_ptr,            # [T, N*C]
+        w_ptr,            # [48, N*C] proj weight (fp32)
+        graw_ptr,         # [T, 48]
+        coef_ptr,         # [T, 24]
+        gh_ptr,           # [T, N*C] out: the carrier grad
+        T,
+        N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
+        CS: tl.constexpr,  # columns per program along C (grid axis 1)
+    ):
+        NC: tl.constexpr = N * C
+        t = tl.program_id(0) * BT + tl.arange(0, BT)
+        tmask = t < T
+        m2 = tmask[:, None]
+        cc = tl.arange(0, BC)
+        kc = tl.arange(0, 64)
+        gt = tl.load(graw_ptr + t[:, None] * 48 + kc[None, :],
+                     mask=m2 & (kc < 48)[None, :], other=0.0)          # [BT, 64]
+        cb = coef_ptr + t * 24
+        y00 = tl.load(cb + 0, mask=tmask, other=0.0); y01 = tl.load(cb + 1, mask=tmask, other=0.0)
+        y02 = tl.load(cb + 2, mask=tmask, other=0.0); y03 = tl.load(cb + 3, mask=tmask, other=0.0)
+        y10 = tl.load(cb + 4, mask=tmask, other=0.0); y11 = tl.load(cb + 5, mask=tmask, other=0.0)
+        y12 = tl.load(cb + 6, mask=tmask, other=0.0); y13 = tl.load(cb + 7, mask=tmask, other=0.0)
+        y20 = tl.load(cb + 8, mask=tmask, other=0.0); y21 = tl.load(cb + 9, mask=tmask, other=0.0)
+        y22 = tl.load(cb + 10, mask=tmask, other=0.0); y23 = tl.load(cb + 11, mask=tmask, other=0.0)
+        y30 = tl.load(cb + 12, mask=tmask, other=0.0); y31 = tl.load(cb + 13, mask=tmask, other=0.0)
+        y32 = tl.load(cb + 14, mask=tmask, other=0.0); y33 = tl.load(cb + 15, mask=tmask, other=0.0)
+        cm0 = tl.load(cb + 16, mask=tmask, other=0.0); cm1 = tl.load(cb + 17, mask=tmask, other=0.0)
+        cm2 = tl.load(cb + 18, mask=tmask, other=0.0); cm3 = tl.load(cb + 19, mask=tmask, other=0.0)
+        scale = tl.load(cb + 20, mask=tmask, other=0.0)[:, None]
+        c_lo = tl.program_id(1) * CS
+        for c0 in range(c_lo, c_lo + CS, BC):
+            off = t[:, None] * NC + c0 + cc[None, :]
+            gx = tl.load(gx_ptr + t[:, None] * C + c0 + cc[None, :], mask=m2,
+                         other=0.0).to(tl.float32)
+            g0 = tl.load(go_ptr + off + 0 * C, mask=m2, other=0.0).to(tl.float32)
+            g1 = tl.load(go_ptr + off + 1 * C, mask=m2, other=0.0).to(tl.float32)
+            g2 = tl.load(go_ptr + off + 2 * C, mask=m2, other=0.0).to(tl.float32)
+            g3 = tl.load(go_ptr + off + 3 * C, mask=m2, other=0.0).to(tl.float32)
+            for j in tl.static_range(4):
+                hj = tl.load(h_ptr + off + j * C, mask=m2, other=0.0).to(tl.float32)
+                if j == 0:
+                    gpost = y00[:, None] * g0 + y10[:, None] * g1 + y20[:, None] * g2 + y30[:, None] * g3
+                    cmj = cm0[:, None]
+                elif j == 1:
+                    gpost = y01[:, None] * g0 + y11[:, None] * g1 + y21[:, None] * g2 + y31[:, None] * g3
+                    cmj = cm1[:, None]
+                elif j == 2:
+                    gpost = y02[:, None] * g0 + y12[:, None] * g1 + y22[:, None] * g2 + y32[:, None] * g3
+                    cmj = cm2[:, None]
+                else:
+                    gpost = y03[:, None] * g0 + y13[:, None] * g1 + y23[:, None] * g2 + y33[:, None] * g3
+                    cmj = cm3[:, None]
+                # graw @ W on this chunk: fp32 FMA dot ("ieee"), one W tile per program
+                # and chunk reused across the BT tokens.
+                wt = tl.load(w_ptr + kc[:, None] * NC + (j * C + c0 + cc)[None, :],
+                             mask=(kc < 48)[:, None], other=0.0).to(tl.float32)
+                proj = tl.dot(gt, wt, input_precision="ieee")
+                gh = gpost + ((cmj * gx + scale * hj) + proj)
+                tl.store(gh_ptr + off + j * C, gh.to(gh_ptr.dtype.element_ty), mask=m2)
+
+
+# ===========================================================================
 # autograd.Function — PRE (x_bar contraction)
 # ===========================================================================
 
@@ -1436,6 +2057,174 @@ class _FusedHCPost(torch.autograd.Function):
 
 
 # ===========================================================================
+# autograd.Functions — model.hc_region_fused (the region kernels above)
+#
+# The entry returns (x_bar, Hres, Hpost_row, h_link) with h_link = h.view_as(h). The exit
+# takes h_link in place of h, so the exit's carrier grad — gout itself — arrives at the entry
+# backward as h_link's grad, through autograd, and the entry writes the whole carrier grad
+# (skip path Hres^T gout included) in one pass. The exit returns None for Hres: the entry
+# backward forms grad Hres from h and gout itself (both are in its one read).
+# ===========================================================================
+
+# Launch shapes of the region kernels (measured on the 5090 at 7680 and 1536 positions;
+# perf/graph/blockfuse/tune_split.py, tune_fsplit.py). A kernel splits C across a second
+# grid axis while its token blocks alone give fewer than 2 programs per SM (the core).
+_HCR_TUNE = dict(bc=64,
+                 fsp_bt=32, fsp_bc=64, fsp_warps=2, fsp_stages=3,
+                 fmap_bt=16, fmap_bc=128, fmap_warps=4, fmap_max_split=4,
+                 red_bt=16, red_bc=64, red_warps=8, red_stages=2, red_max_split=2,
+                 map_bt=32, map_warps=2,
+                 car_bc=128, car_warps=8, car_stages=1, car_max_split=8)
+
+
+def _dev_idx(device: torch.device) -> int:
+    idx = device.index if device.index is not None else torch.cuda.current_device()
+    if idx not in _FOLD_SM_COUNT:
+        _FOLD_SM_COUNT[idx] = torch.cuda.get_device_properties(idx).multi_processor_count
+    return idx
+
+
+class _HCRegionEntry(torch.autograd.Function):
+    """HC entry (rms + projection + mapping + x_bar) from one carrier read."""
+
+    @staticmethod
+    def forward(ctx, h, proj_w, proj_b, tau, alpha, eps):
+        B, S, N, C = h.shape
+        assert N == 4, "model.hc_region_fused: the mapping unroll assumes n=4"
+        assert C % _HCR_TUNE["bc"] == 0, (f"model.hc_region_fused: C={C} must be a multiple of "
+                                          f"{_HCR_TUNE['bc']}")
+        h = h.contiguous()
+        T = B * S
+        dev = h.device
+        f32 = torch.float32
+        w = proj_w.contiguous()
+        pb = proj_b.float().contiguous()
+        xbar = torch.empty(B, S, C, device=dev, dtype=h.dtype)
+        hres = torch.empty(B, S, N, N, device=dev, dtype=f32)
+        hpr = torch.empty(B, S, N, device=dev, dtype=f32)
+        raw = torch.empty(B, S, 48, device=dev, dtype=f32)
+        rms = torch.empty(B, S, 1, device=dev, dtype=f32)
+        tu = _HCR_TUNE
+        sms = _FOLD_SM_COUNT[_dev_idx(dev)]
+        # The projection weight is cast to bf16 once, as the autocast mm cast it; the
+        # kernels then stream half the weight bytes.
+        wbf = w.to(torch.bfloat16)
+        part = torch.empty(N, T, 64, device=dev, dtype=f32)
+        ssq = torch.empty(N, T, device=dev, dtype=f32)
+        pbt = tu["fsp_bt"]
+        _hcr_fwd_proj_kernel[(triton.cdiv(T, pbt), N)](
+            h, wbf, part, ssq, T, N=N, C=C, BT=pbt, BC=min(tu["fsp_bc"], C),
+            num_warps=tu["fsp_warps"], num_stages=tu["fsp_stages"] if C >= 4 * tu["fsp_bc"] else 1,
+        )
+        mbt, mbc = tu["fmap_bt"], min(tu["fmap_bc"], C)
+        msplit = 1
+        while (triton.cdiv(T, mbt) * msplit < 2 * sms and C % (2 * msplit * mbc) == 0
+               and msplit < tu["fmap_max_split"]):
+            msplit *= 2
+        _hcr_fwd_map_kernel[(triton.cdiv(T, mbt), msplit)](
+            h, part, ssq, pb, xbar, hres, hpr, raw, rms, T,
+            TAU=float(tau), ALPHA=float(alpha), EPS=float(eps),
+            N=N, C=C, BT=mbt, BC=mbc, CS=C // msplit,
+            num_warps=tu["fmap_warps"], num_stages=1,
+        )
+        ctx.save_for_backward(h, w, pb, raw, rms)
+        ctx.cfg = (float(tau), float(alpha), proj_w.dtype, proj_b.dtype)
+        ctx.set_materialize_grads(False)
+        return xbar, hres, hpr, h.view_as(h)
+
+    @staticmethod
+    def backward(ctx, g_xbar, g_hres, g_hpr, g_link):
+        # g_hres is None (the exit forms no grad for it; this kernel computes it).
+        h, w, pb, raw, rms = ctx.saved_tensors
+        tau, alpha, w_dtype, b_dtype = ctx.cfg
+        B, S, N, C = h.shape
+        T = B * S
+        g_xbar = (torch.zeros(B, S, C, device=h.device, dtype=h.dtype) if g_xbar is None
+                  else g_xbar.contiguous())
+        g_hpr = (torch.zeros(B, S, N, device=h.device, dtype=torch.float32) if g_hpr is None
+                 else g_hpr.contiguous().float())
+        g_link = torch.zeros_like(h) if g_link is None else g_link.contiguous()
+        gh = torch.empty_like(h)
+        graw = torch.empty(B, S, 48, device=h.device, dtype=torch.float32)
+        coef = torch.empty(B, S, 24, device=h.device, dtype=torch.float32)
+        tu = _HCR_TUNE
+        sms = _FOLD_SM_COUNT[_dev_idx(h.device)]
+        # C splits only while the token blocks alone leave SMs idle (fixed per shape, so
+        # the partial-sum order is fixed: deterministic).
+        rbt, rbc = tu["red_bt"], min(tu["red_bc"], C)
+        nsplit = 1
+        while (triton.cdiv(T, rbt) * nsplit < 2 * sms and C % (2 * nsplit * rbc) == 0
+               and nsplit < tu["red_max_split"]):
+            nsplit *= 2
+        red = torch.empty(nsplit, T, 20, device=h.device, dtype=torch.float32)
+        _hcr_bwd_reduce_kernel[(triton.cdiv(T, rbt), nsplit)](
+            g_xbar, g_link, h, red, T, N=N, C=C, BT=rbt, BC=rbc, CS=C // nsplit,
+            num_warps=tu["red_warps"], num_stages=tu["red_stages"],
+        )
+        _hcr_bwd_map_kernel[(triton.cdiv(T, tu["map_bt"]),)](
+            red, g_hpr, pb, raw, rms, graw, coef, T,
+            TAU=tau, ALPHA=alpha, N=N, C=C, BT=tu["map_bt"], NSPLIT=nsplit,
+            num_warps=tu["map_warps"], num_stages=1,
+        )
+        cbc = min(tu["car_bc"], C)
+        csplit = 1
+        while (triton.cdiv(T, 16) * csplit < 2 * sms and C % (2 * csplit * cbc) == 0
+               and csplit < tu["car_max_split"]):
+            csplit *= 2
+        _hcr_bwd_carrier_kernel[(triton.cdiv(T, 16), csplit)](
+            g_xbar, g_link, h, w, graw, coef, gh, T,
+            N=N, C=C, BT=16, BC=cbc, CS=C // csplit,
+            num_warps=tu["car_warps"], num_stages=tu["car_stages"],
+        )
+        # grad_w / grad_b exactly as _FusedHCPreMap.backward (fp32 GEMM over the carrier).
+        graw2 = graw.reshape(T, 48)
+        x_flat = h.reshape(T, N * C)
+        grad_w = (graw2.to(h.dtype).t() @ x_flat).float()
+        grad_b = (graw2 * rms.reshape(T, 1)).sum(0)
+        return gh, grad_w.to(w_dtype), grad_b.to(b_dtype), None, None, None
+
+
+class _HCRegionExit(torch.autograd.Function):
+    """HC exit: out = Hres·h + Hpost_row ⊗ y (+ term). The backward reads gout once and
+    hands gout itself to the entry as the grad of ``h_link``."""
+
+    @staticmethod
+    def forward(ctx, hres, hpost_row, h_link, y, term=None):
+        B, S, N, C = h_link.shape
+        hres = hres.contiguous()
+        hpost_row = hpost_row.contiguous()
+        h_link = h_link.contiguous()
+        y = y.contiguous()
+        has_term = term is not None
+        term_arg = term.contiguous() if has_term else y      # dummy ptr when unused
+        out = torch.empty(B, S, N, C, device=h_link.device, dtype=h_link.dtype)
+        _hc_post_fwd_kernel[(B * S,)](
+            hres, hpost_row, h_link, y, out, term_arg,
+            N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, **_LAUNCH,
+        )
+        ctx.save_for_backward(hpost_row, y)
+        ctx.term_dtype = term.dtype if has_term else None
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        hpost_row, y = ctx.saved_tensors
+        grad_out = grad_out.contiguous()
+        B, S, N, C = grad_out.shape
+        has_term = ctx.term_dtype is not None
+        gy = torch.empty_like(y)
+        ghpost = torch.empty(B, S, N, device=y.device, dtype=torch.float32)
+        gterm = (torch.empty(B, S, C, device=y.device, dtype=ctx.term_dtype) if has_term
+                 else gy)
+        _hcr_exit_bwd_kernel[(B * S,)](
+            grad_out, hpost_row, y, gy, ghpost, gterm,
+            N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, **_LAUNCH,
+        )
+        return (None, ghpost.to(hpost_row.dtype), grad_out, gy,
+                gterm if has_term else None)
+
+
+# ===========================================================================
 # Dynamo fences — the Triton autograd Functions are opaque to Dynamo (tracing
 # INTO their Triton IR mis-launches the kernel / feeds fp64 to tl.dot). These
 # @kernel_fence dispatchers force a graph break AT the kernel so the
@@ -1473,6 +2262,18 @@ def _hc_pre_map_fold_dispatch(h: Tensor, proj_w: Tensor, proj_b: Tensor,
                               out_dtype: torch.dtype) -> tuple[Tensor, Tensor, Tensor]:
     return _FusedHCPreMapFold.apply(h, proj_w, proj_b, norm_w, tau, alpha, iters, eps,
                                     norm_eps, out_dtype)
+
+
+@kernel_fence
+def _hc_region_entry_dispatch(h: Tensor, proj_w: Tensor, proj_b: Tensor, tau: float,
+                              alpha: float, eps: float):
+    return _HCRegionEntry.apply(h, proj_w, proj_b, tau, alpha, eps)
+
+
+@kernel_fence
+def _hc_region_exit_dispatch(hres: Tensor, hpost_row: Tensor, h_link: Tensor, y: Tensor,
+                             term: Tensor | None) -> Tensor:
+    return _HCRegionExit.apply(hres, hpost_row, h_link, y, term)
 
 
 # ===========================================================================
@@ -1587,6 +2388,47 @@ def hc_pre_map_fold(
                                         norm_w, norm_eps, out_dtype)
     return _hc_pre_map_fold_dispatch(h, proj_w, proj_b, norm_w, tau, alpha, iters, eps,
                                      norm_eps, out_dtype)
+
+
+def _hc_region_active(h: Tensor) -> bool:
+    """The ONE branch test of ``hc_region_entry`` and ``hc_region_exit``. The exit's backward
+    is only correct after the region entry ran (it hands gout to the entry as h_link's grad),
+    so both must decide the same way on the same forward: CUDA + Triton, n=4, an fp32 carrier,
+    and bf16 autocast on (the region entry's projection is the bf16 GEMM that autocast would
+    run; with autocast off the old path's projection is fp32, so the reference path runs)."""
+    from morph.kernels.triton._eager_flag import hc_force_eager
+    return (not hc_force_eager() and TRITON_AVAILABLE and h.is_cuda and h.shape[2] == 4
+            and h.dtype == torch.float32 and torch.is_autocast_enabled("cuda")
+            and torch.get_autocast_dtype("cuda") == torch.bfloat16)
+
+
+def hc_region_entry(
+    h: Tensor, proj_w: Tensor, proj_b: Tensor, tau: float, alpha: float, iters: int, eps: float,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """model.hc_region_fused entry: ``(x_bar, Hres, Hpost_row, h_link)``.
+
+    ``hc_pre_map``'s outputs plus ``h_link``, the carrier the exit must read (pass it to
+    ``hc_region_exit`` in place of ``h``). Where ``_hc_region_active``: ``_HCRegionEntry``.
+    Anywhere else: ``hc_pre_map`` and ``h`` itself, so there the key changes nothing.
+    """
+    if int(iters) != 3:
+        # The exit cannot tell which entry ran: both must take the same branch, and the
+        # exit's test has no `iters`. HyperConnectionResidual refuses this at build.
+        raise ValueError("model.hc_region_fused needs hc_cayley_iters=3")
+    if not _hc_region_active(h):
+        x_bar, Hres, Hpost_row = hc_pre_map(h, proj_w, proj_b, tau, alpha, iters, eps)
+        return x_bar, Hres.to(h.dtype), Hpost_row.to(h.dtype), h
+    return _hc_region_entry_dispatch(h, proj_w, proj_b, tau, alpha, eps)
+
+
+def hc_region_exit(hres: Tensor, hpost_row: Tensor, h_link: Tensor, y: Tensor,
+                   term: Tensor | None = None) -> Tensor:
+    """model.hc_region_fused exit: ``hc_post`` on the entry's ``h_link``. On CUDA:
+    ``_HCRegionExit`` (its backward hands gout to the entry's backward). Anywhere else:
+    ``hc_post``. The branch test is ``hc_region_entry``'s, so both take the same one."""
+    if not _hc_region_active(h_link):
+        return hc_post(hres, hpost_row, h_link, y, term)
+    return _hc_region_exit_dispatch(hres, hpost_row, h_link, y, term)
 
 
 def hc_pre_map_fold_composed(

@@ -123,6 +123,11 @@ class HyperConnectionResidual(nn.Module):
         fused_grad:    model.hc_fused_grad. The pre-map backward accumulates the
                        projection-path carrier grad in place (``addmm_``) instead of ``mm``
                        plus an add. Needs ``use_kernel``. Same fp32 sum as the default.
+        region_fused:  model.hc_region_fused. The entry and the exit are region kernels
+                       (``hc_region_entry`` / ``hc_region_exit``): the entry reads the carrier
+                       once, the backward writes the carrier grad once. Needs ``use_kernel``,
+                       n=4, cayley_iters=3; replaces ``fused_grad``; not with ``fused_norm``.
+                       Rounding-only change (summation orders), not bit-identical.
     """
 
     def __init__(
@@ -136,6 +141,7 @@ class HyperConnectionResidual(nn.Module):
         use_kernel: bool = True,
         fused_norm: bool = False,
         fused_grad: bool = False,
+        region_fused: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -185,6 +191,16 @@ class HyperConnectionResidual(nn.Module):
         if fused_norm or fused_grad:
             from morph.kernels.triton.fused_hyper_connection import hc_pre_map_fold
             self._hc_pre_map_fold = hc_pre_map_fold
+        # model.hc_region_fused (a Python constant per instance: traced out under compile).
+        self._region_fused = bool(region_fused)
+        if region_fused:
+            if not use_kernel or fused_norm or n_streams != 4 or int(cayley_iters) != 3:
+                raise ValueError("model.hc_region_fused needs hc_use_kernel=true, "
+                                 "hc_fused_norm=false, hc_streams=4, hc_cayley_iters=3")
+            from morph.kernels.triton.fused_hyper_connection import (
+                hc_region_entry, hc_region_exit)
+            self._hc_region_entry = hc_region_entry
+            self._hc_region_exit = hc_region_exit
 
     def _mappings(self, X: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Compute (Hpre, Hpost, Hres) per token from the n-stream carrier X [B,S,n,C]."""
@@ -230,6 +246,16 @@ class HyperConnectionResidual(nn.Module):
         Returns:
             [B, S, n, C] updated carrier.
         """
+        if self._region_fused:
+            # model.hc_region_fused: the exit reads `h_link` (the entry's view of h), so the
+            # exit's carrier grad reaches the entry backward, which writes the whole carrier
+            # grad in one pass (fused_hyper_connection.py, "model.hc_region_fused").
+            x_bar, Hres, Hpost_row, h_link = self._hc_region_entry(
+                h, self.proj.weight, self.proj.bias,
+                self.tau, self.cayley_alpha, self.cayley_iters, self.eps,
+            )
+            y = sublayer_fn(x_bar, *args, **kwargs)
+            return self._hc_region_exit(Hres, Hpost_row, h_link, y, post_inject)
         dt = h.dtype
         if norm is not None or self._fused_grad:
             # model.hc_fused_norm / model.hc_fused_grad (Python constants per call: traced
