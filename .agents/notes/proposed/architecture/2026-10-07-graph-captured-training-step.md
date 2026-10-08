@@ -81,6 +81,13 @@ final state SHA-256).
 - [ ] 2.3 Per-step bf16 weight cache for the shared core weights (8 passes cast the same
       fp32 weights again; copy/cast is 59 ms per step on O1). The 2026-10-04 parametrize
       cache diverged for an unknown reason; find that cause first.
+      Result (castcache): the 10-04 cause was parametrize's cache key (the id of the module
+      the property was injected on, so the deepcopied EMA twin read the live prelude's
+      weights). `model.ternary_step_cache` refreshes a bf16 copy once per forward, a compiled
+      fill for weights inside compiled blocks (an eager fill differs from Inductor at step 0);
+      45-step gate byte-identical; bench 416.1 -> 409.7 ms/step, reserved 20.00 -> 19.60 GB.
+      The copy/cast category is activation casts: the weight casts were already fused into
+      the in-block quantiser, which was 8.7 ms/step of GPU time.
 - [ ] 2.4 CE heads through the existing `model.ce_softmax_kernel` (built 2026-10-04);
       its open check is a paired long run, which 1.10's run can carry.
 - [ ] 2.5 Re-profile and re-rank what is left before writing any further kernel.
