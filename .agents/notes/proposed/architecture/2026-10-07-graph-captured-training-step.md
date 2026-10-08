@@ -88,8 +88,18 @@ final state SHA-256).
       45-step gate byte-identical; bench 416.1 -> 409.7 ms/step, reserved 20.00 -> 19.60 GB.
       The copy/cast category is activation casts: the weight casts were already fused into
       the in-block quantiser, which was 8.7 ms/step of GPU time.
-- [ ] 2.4 CE heads through the existing `model.ce_softmax_kernel` (built 2026-10-04);
+- [x] 2.4 CE heads through the existing `model.ce_softmax_kernel` (built 2026-10-04);
       its open check is a paired long run, which 1.10's run can carry.
+      Result (cehead, 2026-10-08): the key never reached the winner's token loss, which goes
+      through `fused_linear_label_logprob` (pointer / DITTO mix the per-row log-prob), so it
+      now also runs that function's forward log-sum-exp and backward softmax gradient as
+      Triton passes, and both kernel paths accumulate grad_w inside the GEMM (fp32 output).
+      Span decoder: the detached head's grad_w GEMM is skipped (always on, exact: 45-step
+      gate byte-identical; bench -12.8 ms) and `model.spandec_ce_row_cap` runs its vocab CE on
+      the labelled rows at a fixed cap proven from the shapes (1132 of 2048 per row; real max
+      1120), NaN on overflow, no host sync. Keys on vs off (ABAB, 420 steps, FAST): 373.0 /
+      372.5 -> 324.3 / 323.9 ms/step; graph profile: LM head + CE 49.2 -> 25.3 ms, span
+      decoder 53.5 -> 28.3 ms. fp64 tests in tests/test_ce_logprob_kernel.py.
 - [ ] 2.5 Re-profile and re-rank what is left before writing any further kernel.
 
 ## Alternatives considered

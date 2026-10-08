@@ -401,7 +401,14 @@ class MORPHConfig:
     # (morph/kernels/triton/ce_softmax_grad.py) at every `fused_linear_cross_entropy` call
     # of the model. False = the eager body (the tree before the key). Not bit-identical: a
     # few fp32 ulps before the gradient's bf16 rounding (tests/test_ce_softmax_grad.py).
+    # Since 2026-10-08 it also runs the pointer / DITTO token loss's per-row log-prob
+    # (`fused_linear_label_logprob` in `_tul_group_losses`) as two Triton passes.
     ce_softmax_kernel: bool = False
+    # The span decoder's vocab CE on the labelled rows only, at a FIXED row count proven from
+    # the shapes (`MORPHTransformer._spandec_row_cap`): no host sync, CUDA-graph safe. About
+    # half the decoder's rows are past their span's end. Not bit-identical (the loss and
+    # grad sums run over different chunks). False = every row (the tree before the key).
+    spandec_ce_row_cap: bool = False
     # Run the chunked CE on the labelled rows only (ignored and zero-weight rows are
     # dropped before the vocab GEMMs; their gradient is exactly zero either way). One host
     # sync per CE call for the row count. Not bit-identical (the loss and grad_w sums run
@@ -11620,6 +11627,30 @@ class MORPHTransformer(nn.Module):
                 stats[f"oracle_z_l{t}"] = v
         return out
 
+    @staticmethod
+    def _spandec_row_cap(B: int, L: int, layout: SlotLayout, dec) -> int:
+        """An upper bound, from SHAPES alone, on the span decoder's labelled rows per batch
+        (``model.spandec_ce_row_cap``): the fixed row count its vocab CE runs at.
+
+        The proof, per row, for one decoded block at shift ``h`` (slot ``s`` graded on span
+        ``s + h``, :func:`morph.model.tul_spandec.span_slots`). Let ``n`` be the row's valid
+        slots (a prefix of the ``S`` slots). (1) A label is a TOKEN position, and ``(slot,
+        offset)`` is unique per position, so labels <= token positions <= ``L - K n``: each
+        valid slot holds ``K = prefix_k`` slot positions. (2) A label needs its span's own
+        slot AND the graded slot to exist, so only slots ``0 .. n-1-h`` are graded, each on
+        at most ``J`` offsets: labels <= ``J max(n - h, 0)``. The row's labels are at most
+        ``max_n min(L - K n, J max(n - h, 0))``; a horizon decoder sums its blocks' bounds.
+        At the lxtul shapes (L 1280, K 4, J 32, S 64, h 1) that is 1132 of 2048 per row
+        (55 %; measured mean 50 %). A batch that beat it would mean the proof is wrong, and
+        `_FusedLinearCE` turns that batch's loss into NaN rather than drop rows.
+        """
+        K, S = int(layout.prefix_k), int(layout.max_slots)
+        J = int(dec.per_span_tokens)
+        per_row = 0
+        for h in range(int(dec.target_offset), int(dec.target_offset) + int(dec.horizon)):
+            per_row += max(min(L - K * n, J * max(n - h, 0)) for n in range(S + 1))
+        return B * min(per_row, S * J * int(dec.horizon))
+
     def _tul_spandec_loss(self, h_slots: Tensor, input_ids: Tensor,
                           layout: SlotLayout, stats: dict | None = None,
                           cells: Tensor | None = None) -> Tensor:
@@ -11660,11 +11691,10 @@ class MORPHTransformer(nn.Module):
 
         Cost, stated because it is not free. The readout is
         ``[B, S, J, V]`` — 2.4 GB fp32 at B=6, S=64, J=32, V=49169 — so it goes through
-        :func:`fused_linear_cross_entropy`, which never materialises it. That kernel
-        always accumulates a ``[V, d]`` fp32 ``grad_w`` (201 MB at V=49169, d=1024) and
-        saves it for the backward, and with a DETACHED head that accumulator is computed
-        and thrown away. It is the price of having one chunked-CE implementation in the
-        tree rather than two.
+        :func:`fused_linear_cross_entropy`, which never materialises it. With the head
+        DETACHED that kernel skips the ``[V, d]`` ``grad_w`` GEMM and accumulator
+        (2026-10-08; before that they were computed and thrown away), and
+        ``model.spandec_ce_row_cap`` runs its GEMMs on the labelled rows only.
         """
         tc = self.cfg.tul
         dec = self.tul_spandec
@@ -11711,6 +11741,8 @@ class MORPHTransformer(nn.Module):
         loss = fused_linear_cross_entropy(
             st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
             chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
+            row_cap=(self._spandec_row_cap(input_ids.shape[0], input_ids.shape[1], layout,
+                                           dec) if self.cfg.spandec_ce_row_cap else 0),
             **self._ce_kw)
         if stats is not None:
             # THE DECODE-CHEAP READOUT. `spandec_ce` is a per-TOKEN conditional CE over the
@@ -12989,8 +13021,9 @@ class MORPHTransformer(nn.Module):
             if logit_l2 != 0.0:
                 raise NotImplementedError("tul.pointer_heads / tul.ditto_rows with "
                                           "tul.coda_logit_l2")
-            lp_model = fused_linear_label_logprob(flat, w_head, lab, ignore_index=-100,
-                                                  chunk_size=chunk, mask_token_id=mask_id)
+            lp_model = fused_linear_label_logprob(
+                flat, w_head, lab, ignore_index=-100, chunk_size=chunk, mask_token_id=mask_id,
+                softmax_kernel=self._ce_kw["softmax_kernel"])
             if self.tul_pointer is not None:
                 lp, _ptr_cov = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
                                                                layout.slot_mask, layout)

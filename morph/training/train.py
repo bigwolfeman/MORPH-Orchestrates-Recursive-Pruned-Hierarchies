@@ -719,6 +719,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         ce_softmax_kernel=bool(getattr(m, "ce_softmax_kernel", False)),
         ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
+        # MORPHConfig.spandec_ce_row_cap: the span decoder's CE on a fixed, proven row cap.
+        spandec_ce_row_cap=bool(getattr(m, "spandec_ce_row_cap", False)),
         # MORPHConfig.graph_safe: a training forward with no host sync and fixed shapes.
         graph_safe=bool(getattr(m, "graph_safe", False)),
         # MORPHConfig.graph_safe_parts: which pieces graph_safe turns on (default: all).

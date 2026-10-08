@@ -228,8 +228,17 @@ model:
   # ce_softmax_kernel: the chunk's softmax-gradient body as one Triton pass over the bf16
   #   logits tile instead of ~10 eager passes over an fp32 copy. NOT bit-identical (a few
   #   fp32 ulps before the bf16 rounding of the gradient; accuracy pinned against fp64 in
-  #   tests/test_ce_softmax_grad.py). false = the eager body.
+  #   tests/test_ce_softmax_grad.py). false = the eager body. Also the pointer / DITTO token
+  #   loss's per-row log-prob (fused_linear_label_logprob): Triton lse forward, Triton
+  #   softmax-gradient backward (tests/test_ce_logprob_kernel.py). Both kernel paths
+  #   accumulate grad_w inside the GEMM (fp32 output, no bf16 product, no separate add pass).
   ce_softmax_kernel: false
+  # spandec_ce_row_cap: the span decoder's vocab CE runs on its labelled rows only, packed on
+  #   the device into a FIXED row count proven from the shapes (55 % of the rows at the lxtul
+  #   shapes; about 50 % carry a label). No host sync, so it is legal under training.graph_step
+  #   (ce_compact_rows is not). A batch over the bound gives a NaN loss, never a silent drop.
+  #   NOT bit-identical (sum order). false = every row.
+  spandec_ce_row_cap: false
   # ce_compact_rows: run the CE's vocab GEMMs on the labelled rows only (about half the span
   #   decoder's rows are pads). One host sync per CE call; NOT bit-identical (sum order),
   #   pinned against fp64 in tests/test_ce_softmax_grad.py. false = every row.
