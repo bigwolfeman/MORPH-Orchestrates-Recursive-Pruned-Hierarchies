@@ -32,3 +32,9 @@ Two continuations, c and d, from `checkpoints/morph/lxtul-pointer-rerun/step_250
 `training.resume=<ckpt> training.steps=3500`, recipe FAST2 (`/home/wolfe/morph-scratch/perf/graph/BRIEF.md`)
 plus `model.fan_target_online=true`, tree = git archive of efb5bf7a, WANDB offline. Readout as the
 baseline: `core_depth_sweep.py --depths 1,6 --rows 480 --batch 3` on each final checkpoint.
+
+Method amended 2026-10-08 05:33: the tree is 31542ea9, not efb5bf7a. The first launch failed at
+load (an eager checkpoint could not resume into a `compile_blocks` model); 31542ea9 fixes the key
+alignment and changes nothing else on the training path. A second launch was stopped at step 2600
+by mistake (its logged total loss 10.17 was read as CE; the eager continuations log 10.16 there).
+
