@@ -55,8 +55,11 @@ Measured 2026-10-08 08:36 (bench pairs, frozen tree, 420 steps): FAST2 343.0 / 3
 (17.9k tok/s); every committed key together, `morph/configs/lxtul_pointer_fast.yaml`: 266.7 /
 266.8 ms = **23.0k tok/s**, about 2x eager production (~525 ms) and level with Parcae's testbed
 (23.5k). Compaction (f1ac1b9c, `slot_compact: gather` + `slot_depth_stratified`) is part of it.
-Left: block glue (`blockfuse`, in progress), LM-head slot rows (Lemma 3), the logits recompute
-GEMM, the hinge's inactive-step backward.
+Block glue (caab8d86, `hc_region_fused` + `cca_prologue_tiled` + `inject_fold`): -41.8 ms on
+FAST2, and on the fast recipe 265 -> **230.0 / 229.8 ms = 26.7k tok/s** (09:43 bench pairs; the
+trainer's replay rate reads ~30.5k). Left: LM-head slot rows (Lemma 3), the logits recompute GEMM,
+the hinge's inactive-step backward (CUDA conditional node), a fused exit-plus-next-entry HC kernel
+(~2 ms), core injection fold, and the carrier itself (HC with 1 stream was worth 60 ms at FAST).
 
 ### B. Carrier and sublayer glue (the HC/CCA Triton kernels are about 75 ms; copies/casts and
 fp32 adds/muls about 100 ms across the step)

@@ -1,11 +1,12 @@
 # The winner (lxtul_pointer) with every speed key that passed its check on 2026-10-08:
-# 266.7 ms/step = 23.0k tok/s on the 5090 (bench pairs 266.7 / 266.8), against 343 ms for the
-# graph step alone and ~525 ms eager. Plan and per-key evidence:
+# 230.0 ms/step = 26.7k tok/s on the 5090 (bench pairs 230.0 / 229.8; the trainer's replay rate
+# reads ~30.5k), against 265 ms without the block-glue keys, 343 ms for the graph step alone and
+# ~525 ms eager. Plan and per-key evidence:
 # .agents/notes/proposed/architecture/2026-10-08-lxtul-training-speed-plan.md
 #   exact (byte-identical gates): ckpt_grad_iters 0, slot_gain_no_ckpt, the dW skip (no key)
 #   rounding only (fp64 parity + fixed-weight readout): tg_fused_attention, hc_fused_grad,
 #     ternary_step_cache, fan_twin_compile, fan_div_fast, fan_lsel_pick_bf16, ce_softmax_kernel,
-#     spandec_ce_row_cap
+#     spandec_ce_row_cap, hc_region_fused, cca_prologue_tiled, inject_fold (forward bit-identical)
 #   training-function changes, paired continuations (lab/experiments/mixed|successes/2026-10-08-*):
 #     fan_target_online (package check, mixed), slot_depth_stratified + slot_compact (success;
 #     possible ~0.001 nat CE cost)
@@ -26,6 +27,9 @@ model:
   slot_depth_stratified: true
   slot_compact: gather
   spandec_ce_row_cap: true
+  hc_region_fused: true
+  cca_prologue_tiled: true
+  inject_fold: true
 
 wandb:
   name: lxtul-pointer-fast
