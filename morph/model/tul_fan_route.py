@@ -143,13 +143,18 @@ class FanTargetFront(nn.Module):
     @staticmethod
     def live_tensors(model: nn.Module, n_prelude: int) -> dict[str, Tensor]:
         """``{canonical name: tensor}`` of the live modules the twin mirrors, every
-        parameter and buffer, in the twin's own naming."""
+        parameter and buffer, in the twin's own naming. A live ternary STE's step cache
+        (``model.ternary_step_cache``) is left out: derived from the weight, and the twin's
+        STEs are never bound (``TernarySTE.__deepcopy__``)."""
+        from morph.model.ternary_qat import is_step_cache_buffer
         out: dict[str, Tensor] = {}
         groups = (("prelude", model.prelude),
                   ("x0_injects", nn.ModuleList(list(model.x0_injects)[:n_prelude])),
                   ("value_embeds", model.value_embeds))
         for gname, mod in groups:
             for n, t in list(mod.named_parameters()) + list(mod.named_buffers()):
+                if is_step_cache_buffer(mod, n):
+                    continue
                 out[_canon(f"{gname}.{n}")] = t
         return out
 

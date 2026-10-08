@@ -721,6 +721,9 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
         # MORPHConfig.graph_safe: a training forward with no host sync and fixed shapes.
         graph_safe=bool(getattr(m, "graph_safe", False)),
+        # MORPHConfig.ternary_step_cache: bf16 ternary weights once per forward (bound below,
+        # after torch.compile).
+        ternary_step_cache=bool(getattr(m, "ternary_step_cache", False)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         tg_scoped_kernels=bool(getattr(m, "tg_scoped_kernels", False)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
@@ -2551,6 +2554,21 @@ def main(cfg: DictConfig) -> None:
     # slot-loop arm with compile_blocks (2026-10-04). A model whose core shrinks its
     # active set (the plain Parcae path) wants the default.
     core_dynamic = bool(getattr(tr, "compile_core_dynamic", True))
+
+    # model.ternary_step_cache (2026-10-07): bound AFTER the blocks are wrapped (a weight inside
+    # a compiled block gets the compiled fill, so every read keeps its bits) and BEFORE the
+    # eager_on_recompile stance (the fill compiles here, in the thread-free window).
+    def _bind_ternary_step_cache(mode: str | None) -> None:
+        if not bool(model.cfg.ternary_step_cache):
+            return
+        _cs = int(getattr(tr, "compact_step", 10**9))
+        if _cs < total_steps:
+            raise ValueError(f"model.ternary_step_cache is refused: training.compact_step={_cs} "
+                             f"< steps={total_steps}; the carve removes the STEs it caches")
+        from morph.model.ternary_qat import bind_ternary_step_cache
+        _tsc = bind_ternary_step_cache(model, mode)
+        print(f"  [ternary-step-cache] ON: {_tsc.summary()}, refreshed once per forward",
+              flush=True)
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
             # Core MLPs see a VARIABLE batch each loop iteration (active-set
@@ -2592,6 +2610,7 @@ def main(cfg: DictConfig) -> None:
         else:
             print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)"
                   + (", attention compiled" if compile_attention else ""))
+        _bind_ternary_step_cache(compile_mode)
 
         # ── Warmup compile — runs in the THREAD-FREE window (pre-wandb, pre-dataloader) ──
         # Two compilation systems fork subprocesses here and must finish before any thread
@@ -2642,6 +2661,8 @@ def main(cfg: DictConfig) -> None:
         # slightly-slow step, never a hang. Common shapes keep their compiled kernels.
         torch.compiler.set_stance("eager_on_recompile")
         print("  torch.compiler stance = eager_on_recompile (rare uncovered shapes run eager, never recompile/fork)", flush=True)
+    else:
+        _bind_ternary_step_cache(None)
 
     # ── W&B init — log FULL config dict ──────────────────────────────────
     # DEFERRED until AFTER the warmup: the compile/gcc-fork window above must be

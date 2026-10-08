@@ -419,6 +419,10 @@ class MORPHConfig:
     # form above changes. NOT bit-identical: the masked reductions sum in a different
     # order, pinned against fp64 in tests/test_graph_safe.py. False = today.
     graph_safe: bool = False
+    # The ternary STE's bf16 weights computed once per forward and shared by every read
+    # (morph/model/ternary_qat.py, TernaryStepCache; bound by the trainer after compile).
+    # Bit-identical to False. False = today: every read re-quantises and re-casts.
+    ternary_step_cache: bool = False
 
     # Parallel multi-token prediction on the coda readout (Gloeckle et al. 2024, arXiv
     # 2404.19737; arc E8, 2026-09-07 [W]). mtp_heads = the number of future tokens each
@@ -16151,6 +16155,13 @@ class MORPHTransformer(nn.Module):
                         _gram_sample_seed: int | None = None,
                         _code_policy_pick: str | None = None,
                         _lsel_follow: str | None = None) -> dict:
+        # model.ternary_step_cache: every forward enters here, so the bf16 ternary weights
+        # are recomputed once per forward from the weights as they are now (after the last
+        # optimizer step, load or EMA write), and every read inside it hits the cache
+        # (morph/model/ternary_qat.py, TernaryStepCache). Not bound: nothing runs.
+        _tsc = self.__dict__.get("_ternary_step_cache")
+        if _tsc is not None:
+            _tsc.refresh()
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "

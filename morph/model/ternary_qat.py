@@ -69,6 +69,8 @@ _forward_fn reference set at init. torch.compile sees a clean static graph.
 
 from __future__ import annotations
 
+import copy
+
 import torch
 import torch.nn as nn
 import torch.nn.utils.parametrize as parametrize
@@ -282,6 +284,49 @@ def _apply_grouped_ste(
     return torch.cat(parts, dim=0)
 
 
+def _norm_match_ste(
+    w: Tensor,
+    threshold: float,
+    group: int,
+    encode_scale: Callable[[Tensor], Tensor],
+) -> Tensor:
+    """Symmetric codes with a norm-matching scale per group (pure straight-through).
+
+    The rule lives in ``morph.model.ternary_rule.ternary_codes_and_scale`` (shared with
+    the carved MORTAR path and the deploy packer): codes are the ``symmetric`` codes at
+    the encoded absmean, the scale is ``||W_g||_F / sqrt(nnz_g)`` so that the ternary
+    weight's Frobenius norm equals the latent's. Per-tensor when ``group <= 0`` or
+    ``>= out_dim``; per output-row group otherwise (a ragged last group on its own).
+    """
+    out_dim = w.shape[0]
+    if group <= 0 or group >= out_dim:
+        q, s = ternary_codes_and_scale(w, threshold, "norm_match", encode_scale)
+        return w + (s * q - w).detach()
+    parts: list[Tensor] = []
+    for start in range(0, out_dim, group):
+        w_g = w[start:start + group]
+        q, s = ternary_codes_and_scale(w_g, threshold, "norm_match", encode_scale)
+        parts.append(w_g + (s * q - w_g).detach())
+    return torch.cat(parts, dim=0)
+
+
+class _StepCachedWeight(torch.autograd.Function):
+    """``forward(w, wq) = wq`` (the step cache, no kernel); ``backward(g) = g`` in ``w``'s
+    dtype. One node PER READ, so each read's bf16 gradient is cast to fp32 before the reads
+    are summed into ``w.grad``, in the order they were read: exactly what the per-access
+    path does (its autocast cast's backward, then the STE add's identity). A single cached
+    autograd node would sum the reads' gradients in bf16."""
+
+    @staticmethod
+    def forward(ctx, w: Tensor, wq: Tensor) -> Tensor:
+        ctx.w_dtype = w.dtype
+        return wq
+
+    @staticmethod
+    def backward(ctx, g: Tensor):
+        return g.to(ctx.w_dtype), None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TernarySTE parametrization
 # ─────────────────────────────────────────────────────────────────────────────
@@ -464,25 +509,70 @@ class TernarySTE(nn.Module):
                                   scale_override=self._scale_ema)
 
     def _forward_norm_match(self, w: Tensor) -> Tensor:
-        """Symmetric codes with a norm-matching scale per group (pure straight-through).
+        """Symmetric codes with a norm-matching scale per group (pure straight-through):
+        :func:`_norm_match_ste`."""
+        return _norm_match_ste(w, self.threshold, self.group, self._encode_scale)
 
-        The rule lives in ``morph.model.ternary_rule.ternary_codes_and_scale`` (shared with
-        the carved MORTAR path and the deploy packer): codes are the ``symmetric`` codes at
-        the encoded absmean, the scale is ``||W_g||_F / sqrt(nnz_g)`` so that the ternary
-        weight's Frobenius norm equals the latent's. Per-tensor when ``group <= 0`` or
-        ``>= out_dim``; per output-row group otherwise (a ragged last group on its own).
-        """
-        out_dim = w.shape[0]
-        if self.group <= 0 or self.group >= out_dim:
-            q, s = ternary_codes_and_scale(w, self.threshold, "norm_match", self._encode_scale)
-            return w + (s * q - w).detach()
-        gs = self.group
-        parts: list[Tensor] = []
-        for start in range(0, out_dim, gs):
-            w_g = w[start:start + gs]
-            q, s = ternary_codes_and_scale(w_g, self.threshold, "norm_match", self._encode_scale)
-            parts.append(w_g + (s * q - w_g).detach())
-        return torch.cat(parts, dim=0)
+    # ── model.ternary_step_cache (2026-10-07) ─────────────────────────────────
+    # The quantised weight is a pure function of the shadow weight, and a training step
+    # reads each core weight ~10-14 times (8 passes, the gain hinge, checkpoint recompute),
+    # each read re-running the quantiser and autocast's bf16 cast. Bound, the STE returns a
+    # bf16 buffer that `TernaryStepCache.refresh` fills ONCE per forward (at the top of
+    # `MORPHTransformer._forward_single`, inside a captured step). Unbound (the default and
+    # every deepcopy) it is the per-access path above, untouched.
+
+    def quantise_spec(self) -> tuple[Callable[..., Tensor], tuple]:
+        """``(fn, args)`` with ``fn(w, *args)`` == ``self.forward(w)`` for the unbound STE:
+        the pure module-level function the refresh calls (a compiled refresh traces ONE
+        function for every STE instead of recompiling per bound method). Only the two
+        closed-form rules: ttq / dual carry learnable scales with real gradients, which a
+        cached weight would cut."""
+        if self.mode == "norm_match":
+            return _norm_match_ste, (self.threshold, self.group, self._encode_scale)
+        if self.mode == "symmetric":
+            return _apply_grouped_ste, (self.group, self.threshold, self._encode_scale,
+                                        self._scale_cap, self._scale_ema)
+        raise ValueError(f"model.ternary_step_cache: scale_mode {self.mode!r} has learnable "
+                         f"scales; only {EXPORTABLE_SCALE_MODES} can be cached")
+
+    def bind_step_cache(self, original: Tensor) -> None:
+        """Allocate the bf16 cache for ``original`` (the shadow weight) and route the
+        forward through it. Non-persistent: the checkpoint format does not change."""
+        self.quantise_spec()                    # raises for ttq / dual
+        if "_wq" in self._buffers:
+            raise RuntimeError("TernarySTE.bind_step_cache: already bound")
+        self.register_buffer("_wq", torch.empty(original.shape, dtype=torch.bfloat16,
+                                                device=original.device), persistent=False)
+        self._forward_live = self._forward_fn
+        self._forward_fn = self._forward_step_cached
+
+    def _forward_step_cached(self, w: Tensor) -> Tensor:
+        """The cache under bf16 autocast (where every consumer's first op is autocast's
+        bf16 cast of the per-access value, so the buffer IS that cast); the per-access
+        path anywhere else (an fp32 read: saliency scoring, diagnostics, a test without
+        autocast) so no reader sees a dtype it did not see before."""
+        dev = w.device.type
+        if torch.is_autocast_enabled(dev) and torch.get_autocast_dtype(dev) == torch.bfloat16:
+            return _StepCachedWeight.apply(w, self._wq)
+        return self._forward_live(w)
+
+    def __deepcopy__(self, memo: dict) -> "TernarySTE":
+        """A copy is never bound: only `TernaryStepCache.refresh` writes a cache, and it
+        holds the ORIGINAL's. (The fan target's EMA twin deep-copies the parametrised
+        prelude; a bound copy would read a buffer nobody refreshes.) Otherwise the default
+        deepcopy: ``__dict__`` copied through ``memo``, restored with ``__setstate__``."""
+        new = self.__class__.__new__(self.__class__)
+        memo[id(self)] = new
+        state = {}
+        for k, v in self.__dict__.items():
+            if k == "_buffers":
+                v = {n: b for n, b in v.items() if n != "_wq"}
+            if k != "_forward_live":
+                state[k] = copy.deepcopy(v, memo)
+        if "_forward_live" in self.__dict__:
+            state["_forward_fn"] = copy.deepcopy(self._forward_live, memo)
+        new.__setstate__(state)
+        return new
 
     def _forward_ttq(self, w: Tensor) -> Tensor:
         """TTQ: separate LEARNABLE γ₊, γ₋ per group (real grad through both).
@@ -713,6 +803,93 @@ def update_scale_emas(pairs: list[tuple["TernarySTE", nn.Module]]) -> None:
     """Post-optimizer-step hook body: advance every gamma EMA by one step."""
     for ste, module in pairs:
         ste.update_scale_ema(module.parametrizations.weight.original)
+
+
+def _fill_step_cache(fn: Callable[..., Tensor], buf: Tensor, w: Tensor, args: tuple) -> None:
+    """``buf <- bf16(fn(w, *args))``: the per-access value and autocast's cast of it."""
+    buf.copy_(fn(w, *args).to(buf.dtype))
+
+
+class TernaryStepCache:
+    """``model.ternary_step_cache``: every bound STE's bf16 weight, refreshed once per forward.
+
+    EXACTNESS. A cached value must carry the bits the per-access path would have computed
+    at that read. Those bits depend on WHO computes them: Inductor (inside a compiled
+    block) sums the scale's fp32 reductions in another order than ATen, so its scale can
+    sit 1 ulp away, which moves a code across the threshold or a bf16 rounding (measured
+    2026-10-07: 3 of 30 random MLP weight draws differ eager vs in-block). A STANDALONE
+    compiled quantiser matched the in-block one in 30 of 30. So a weight whose module sits
+    inside a ``torch.compile`` wrapper (``_orig_mod`` in its path) is filled by a compiled
+    fill, every other weight by the eager one: each read sees the bits it saw before.
+
+    A deepcopy of the cache is None (the copy's STEs are unbound, ``TernarySTE.__deepcopy__``).
+    """
+
+    def __init__(self, entries: list[tuple[bool, Callable, Tensor, Tensor, tuple, str]],
+                 compiled_fill: Callable | None):
+        self.entries = entries
+        self._compiled_fill = compiled_fill
+
+    @torch.no_grad()
+    def refresh(self) -> None:
+        for compiled, fn, buf, w, args, _name in self.entries:
+            (self._compiled_fill if compiled else _fill_step_cache)(fn, buf, w, args)
+
+    def summary(self) -> str:
+        n_c = sum(1 for e in self.entries if e[0])
+        nbytes = sum(e[2].numel() * e[2].element_size() for e in self.entries)
+        return (f"{len(self.entries)} weights ({n_c} filled compiled, "
+                f"{len(self.entries) - n_c} eager), {nbytes / 2**20:.1f} MiB bf16")
+
+    def __deepcopy__(self, memo: dict) -> None:
+        return None
+
+
+def is_step_cache_buffer(root: nn.Module, name: str) -> bool:
+    """True iff ``root``'s buffer ``name`` is a bound STE's step cache: derived state (a
+    function of the shadow weight, refilled every forward), never mirrored or averaged."""
+    owner, _, leaf = name.rpartition(".")
+    return leaf == "_wq" and isinstance(root.get_submodule(owner), TernarySTE)
+
+
+def bind_ternary_step_cache(model: nn.Module, compile_mode: str | None) -> TernaryStepCache:
+    """Bind every registered ``TernarySTE`` of ``model`` to a step cache and attach it as
+    ``model._ternary_step_cache`` (read by ``MORPHTransformer._forward_single``).
+
+    Call AFTER ``torch.compile`` has wrapped the blocks (the fill is chosen by whether a
+    weight's module sits inside a compiled wrapper) and BEFORE the compiler stance turns to
+    ``eager_on_recompile`` (the compiled fill is compiled here, by one refresh, in the
+    thread-free warmup window; compiled later it would silently run eager). Unregistered
+    copies (the fan's EMA twin) are not walked and stay per-access. ``compile_mode`` None:
+    nothing is compiled, and a compiled wrapper in the tree raises."""
+    if model.__dict__.get("_ternary_step_cache") is not None:
+        raise RuntimeError("bind_ternary_step_cache: the model is already bound")
+    entries = []
+    for name, module in model.named_modules():
+        if not parametrize.is_parametrized(module, "weight"):
+            continue
+        plist = module.parametrizations.weight
+        stes = [p for p in plist if isinstance(p, TernarySTE)]
+        if not stes:
+            continue
+        if len(plist) != 1:
+            raise ValueError(f"model.ternary_step_cache: {name}.weight stacks "
+                             f"{[type(p).__name__ for p in plist]}; only a lone TernarySTE "
+                             f"can be cached")
+        compiled = "_orig_mod" in name.split(".")
+        if compiled and compile_mode is None:
+            raise ValueError(f"bind_ternary_step_cache: {name} sits in a compiled wrapper "
+                             f"but no compile_mode was given")
+        ste = stes[0]
+        fn, args = ste.quantise_spec()
+        ste.bind_step_cache(plist.original)
+        entries.append((compiled, fn, ste._wq, plist.original, args, name))
+    compiled_fill = (torch.compile(_fill_step_cache, mode=compile_mode, dynamic=False)
+                     if any(e[0] for e in entries) else None)
+    cache = TernaryStepCache(entries, compiled_fill)
+    cache.refresh()
+    model._ternary_step_cache = cache
+    return cache
 
 
 def apply_ternary_qat(
