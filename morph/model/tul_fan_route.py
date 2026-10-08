@@ -135,6 +135,25 @@ class FanTargetFront(nn.Module):
         for prm in self.parameters():
             prm.requires_grad_(False)
         self.eval()
+        # The callables the forward runs the prelude blocks through: the blocks themselves,
+        # or their `torch.compile` wrappers after `compile_blocks_` (`model.fan_twin_compile`).
+        # A plain list in `__dict__`, NOT a ModuleList: a registered wrapper would rename every
+        # parameter `prelude.i._orig_mod.*` in `state_dict()`, and the checkpoint key
+        # `fan_target` must load into a twin built with or without the key.
+        self.__dict__["_run_blocks"] = None
+
+    def run_blocks(self) -> list:
+        """The prelude blocks as the forward calls them (compiled wrappers or the modules;
+        either holds the SAME parameters, so the EMA update reaches both)."""
+        rb = self.__dict__["_run_blocks"]
+        return list(self.prelude) if rb is None else rb
+
+    def compile_blocks_(self, compile_block) -> None:
+        """``model.fan_twin_compile``: run every prelude block through
+        ``compile_block(block)`` (the trainer's own block compile, so the twin's blocks get
+        the online prelude's Inductor treatment). The modules, their names and their
+        parameters are unchanged; only the callables the forward uses are replaced."""
+        self.__dict__["_run_blocks"] = [compile_block(b) for b in self.prelude]
 
     def train(self, mode: bool = True):
         """Always eval: the target is deterministic (no dropout draws, no RNG use)."""
@@ -185,11 +204,19 @@ class FanTargetFront(nn.Module):
         no meaningful average. Called once per optimizer step, after the step."""
         if not 0.0 <= m < 1.0:
             raise ValueError(f"FanTargetFront.ema_update_: m must be in [0, 1), got {m}")
+        tw_f: list[Tensor] = []
+        lv_f: list[Tensor] = []
         for twin, live in self._pairs(model, n_prelude):
             if twin.is_floating_point():
-                twin.lerp_(live.detach().to(twin.dtype), 1.0 - m)
+                tw_f.append(twin)
+                lv_f.append(live.detach().to(twin.dtype))
             else:
                 twin.copy_(live)
+        # One multi-tensor lerp for every float tensor: the same per-element `lerp` as
+        # `Tensor.lerp_` (`tests/test_tul_fan_twin_speed.py` pins the bits), in a few
+        # launches instead of one per tensor.
+        if tw_f:
+            torch._foreach_lerp_(tw_f, lv_f, 1.0 - m)
 
     @torch.no_grad()
     def sync_from_(self, model: nn.Module, n_prelude: int) -> None:
@@ -488,6 +515,20 @@ class FanLatentHead(nn.Module):
         with torch.autocast(device_type=cells.device.type, enabled=False):
             a = F.gelu(F.linear(_ln(cells), self.fc1.weight.float(), self.fc1.bias.float()))
             return F.linear(a, self.fc2.weight.float(), self.fc2.bias.float())
+
+    @torch.no_grad()
+    def forward_bf16(self, cells: Tensor) -> Tensor:
+        """The same map with both GEMMs in bf16 (fp32 accumulate), for a no-grad PICK
+        (``model.fan_lsel_pick_bf16``): the LayerNorm and GELU stay fp32, the output is
+        fp32. The 8 per-pass picks run the head on every cell (1536 x 1024 x 1024 twice per
+        pass); in fp32 the GEMMs fall to SIMT kernels. Not bit-identical: a pick can flip
+        where two cells' distances agree to bf16 precision."""
+        with torch.autocast(device_type=cells.device.type, enabled=False):
+            a = F.linear(_ln(cells).to(torch.bfloat16), self.fc1.weight.to(torch.bfloat16),
+                         self.fc1.bias.to(torch.bfloat16))
+            a = F.gelu(a.float()).to(torch.bfloat16)
+            return F.linear(a, self.fc2.weight.to(torch.bfloat16),
+                            self.fc2.bias.to(torch.bfloat16)).float()
 
 
 def lsel_distance(gz: Tensor, z: Tensor) -> Tensor:

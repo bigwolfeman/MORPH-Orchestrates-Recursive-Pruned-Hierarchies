@@ -63,7 +63,8 @@ from morph.model.host_shadow import (exact_col_mean, exact_col_std, exact_mean_1
                                      masked_rows, valid_first)
 
 __all__ = ["TULFanMix", "select_streams", "select_winners", "select_gate_loss", "fan_stream_stats", "fan_stream_cos", "fan_repel_term",
-           "FanReservoir", "ridge_map", "epi_score", "fan_epi_term", "fan_vol_term", "plan_streams"]
+           "FanReservoir", "ridge_map", "epi_score", "fan_epi_term", "fan_vol_term", "plan_streams",
+           "logdet_i_wwt", "ridge_map_fast", "fan_epi_term_fast", "fan_vol_term_fast"]
 
 
 def _cell_readout(cells: Tensor) -> Tensor:
@@ -700,3 +701,180 @@ def fan_vol_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
     if stats is not None:
         stats["repel_terms"] = float(len(live))       # a Python int count, no GPU sync
     return -torch.stack(live).mean()
+
+
+# ── model.fan_div_fast (2026-10-08): the epi and vol terms in fp32, every pass batched ──
+# WHY. On the FAST step the two terms cost 7.2 ms for ~0.5 GFLOP (perf/flame/LEDGER.md):
+# the epi readout ran in fp64 (the 5090's fp64 rate is 1/64 of fp32), one [F, R] x [R, C]
+# product, one Gram and one LU per (pass, stream), and the ridge map as a Householder QR.
+# Here every (pass, stream) is ONE batched product and ONE batched Cholesky, in fp32.
+# WHY fp32 IS ENOUGH. Every determinant here is of an SPD matrix ``I + eta W Wᵀ`` (its
+# eigenvalues are >= 1), and the ridge system ``Hᵀ H + lam I`` on standardised features has
+# condition <= 1 + N / (F lam) (~3 at the FAST shape: 384 rows, 64 features, lam 3). The
+# fp64 reference test (tests/test_tul_fan_div_fast.py) bounds the term's and every
+# gradient's error against the fp64 path, next to the change the bf16 carrier's own
+# rounding makes in the fp64 term.
+# WHAT IS THE SAME. The functions: the ridge map is (Hᵀ H + lam I)^-1 Hᵀ (what the QR form
+# computes), the scores and their per-pass means are the same formulas, rows past the valid
+# count are exact zeros as in the ``fixed`` forms, and a batch with fewer than two valid
+# slots scores an exact 0. NOT the same: the bits (another precision and another order).
+
+
+class _LogdetIWWt(torch.autograd.Function):
+    """``log det(I + eta W Wᵀ)`` for ``W`` ``[..., K, C]`` fp32, one value per leading index.
+
+    Forward: the ``[K, K]`` matrix and its Cholesky factor ``L`` (``cholesky_ex``: no host
+    sync); ``log det = 2 sum log diag L``. Backward: ``d/dW = 2 eta (I + eta W Wᵀ)^-1 W``,
+    two batched triangular solves against the saved factor (no inverse is formed)."""
+
+    @staticmethod
+    def forward(ctx, w: Tensor, eta: float) -> Tensor:
+        k = torch.matmul(w, w.transpose(-1, -2)) * eta
+        k.diagonal(dim1=-2, dim2=-1).add_(1.0)
+        lo, _ = torch.linalg.cholesky_ex(k)
+        ctx.save_for_backward(w, lo)
+        ctx.eta = float(eta)
+        return 2.0 * lo.diagonal(dim1=-2, dim2=-1).log().sum(-1)
+
+    @staticmethod
+    def backward(ctx, g: Tensor):
+        w, lo = ctx.saved_tensors
+        return (2.0 * ctx.eta) * g[..., None, None] * _chol_solve(lo, w), None
+
+
+def _chol_solve(lo: Tensor, b: Tensor) -> Tensor:
+    """``(L Lᵀ)^-1 B`` by two batched triangular solves (``L`` lower)."""
+    y = torch.linalg.solve_triangular(lo, b, upper=False)
+    return torch.linalg.solve_triangular(lo.transpose(-1, -2), y, upper=True)
+
+
+def logdet_i_wwt(w: Tensor, eta: float) -> Tensor:
+    """``log det(I + eta W Wᵀ)`` over ``W``'s last two dims, fp32, autocast off."""
+    with torch.autocast(device_type=w.device.type, enabled=False):
+        return _LogdetIWWt.apply(w.float().contiguous(), float(eta))
+
+
+def ridge_map_fast(h: Tensor, lam: float, n_fit: Tensor) -> Tensor:
+    """:func:`ridge_map`'s ``n_valid`` form in fp32 by the normal equations: ``h`` ``[R, F]``
+    with its first ``n_fit`` rows live (a 0-dim device count), the same column centring and
+    batch-std scaling over the live rows, then ``(Hᵀ H + lam I)^-1 Hᵀ`` by Cholesky. ``[F, R]``;
+    the columns past ``n_fit`` are exactly 0. No graph (the caller holds ``no_grad``)."""
+    r, f = h.shape
+    with torch.autocast(device_type=h.device.type, enabled=False):
+        hf = h.float()
+        live = (torch.arange(r, device=h.device) < n_fit).unsqueeze(1)
+        n = n_fit.to(torch.float32)
+        mean = torch.where(live, hf, torch.zeros_like(hf)).sum(0) / n
+        cen = torch.where(live, hf - mean, torch.zeros_like(hf))
+        std = (cen.square().sum(0) / n).sqrt()
+        hs = cen / std.clamp_min(1e-6) / math.sqrt(f)
+        a = hs.t() @ hs
+        a.diagonal().add_(float(lam))
+        lo, _ = torch.linalg.cholesky_ex(a)
+        return _chol_solve(lo, hs.t().contiguous())
+
+
+def _pass_rows(traj: list[Tensor], ts: list[int], valid: Tensor,
+               m_cells: int) -> tuple[Tensor, Tensor]:
+    """``(dev [R, P, M, C] fp32, n)``: passes ``ts`` of the trajectory, every slot's K cells
+    as their scale-free deviations from the slot mean (the epi and vol terms' common
+    input), the valid slots' rows first (``valid_first``'s order), the rest exact 0."""
+    b, sm = traj[0].shape[0], traj[0].shape[1]
+    s = valid.shape[1]
+    if sm != s * m_cells:
+        raise ValueError(f"fan diversity terms: compact axis {sm} != S*M = {s}*{m_cells}")
+    z = torch.stack([_cell_readout(traj[t].reshape(b, s, m_cells, *traj[t].shape[2:]))
+                     for t in ts], dim=2)                               # [B, S, P, M, C]
+    sel, n = valid_first(z, valid)                                     # [R, P, M, C]
+    sel = sel.float()
+    dev = sel - sel.mean(dim=2, keepdim=True)
+    scale = sel.norm(dim=-1).mean(dim=2, keepdim=True).unsqueeze(-1).clamp_min(1e-6)
+    return dev / scale, n
+
+
+def _epi_scores_fast(traj: list[Tensor], ts: list[int], valid: Tensor, m_cells: int,
+                     a: Tensor, eta: float) -> Tensor:
+    """``[P]``: :func:`_fan_epi_pass` of each pass in ``ts``, one batched computation."""
+    with torch.autocast(device_type=a.device.type, enabled=False):
+        dev, n = _pass_rows(traj, ts, valid, m_cells)                  # [R, P, M, C]
+        r, p, m, c = dev.shape
+        # No column centring of `dev` (epi_score subtracts the live rows' mean): `a`'s
+        # rows are combinations of the standardised features' columns, which are centred
+        # over the same live rows, so `a @ 1 = 0` and the mean drops out in exact
+        # arithmetic (the uncentred form passes tests/test_tul_fan_div_fast.py's fp64
+        # bounds; so did the centred one).
+        w = (a @ dev.reshape(r, p * m * c)).view(-1, p, m, c).permute(1, 2, 0, 3)
+        f = float(a.shape[0])
+        e = (0.5 / math.log(2) / f) * logdet_i_wwt(w, eta).mean(dim=-1)   # [P]
+        return torch.where(n >= 2, e, torch.zeros_like(e))
+
+
+def _vol_scores_fast(traj: list[Tensor], ts: list[int], valid: Tensor, m_cells: int,
+                     eta: float) -> Tensor:
+    """``[P]``: :func:`_fan_vol_pass` of each pass in ``ts``, one batched computation."""
+    with torch.autocast(device_type=traj[0].device.type, enabled=False):
+        dev, n = _pass_rows(traj, ts, valid, m_cells)                  # [R, P, M, C]
+        v = (0.5 / math.log(2) / float(m_cells - 1)) * logdet_i_wwt(dev, eta)   # [R, P]
+        live = (torch.arange(v.shape[0], device=v.device) < n).unsqueeze(1)
+        return torch.where(live, v, torch.zeros_like(v)).sum(0) / n.clamp(min=1).to(v.dtype)
+
+
+def _batched_term(score_fn, traj: list[Tensor], n_passes: int, key: str,
+                  stats: dict | None, instruments: bool) -> Tensor | None:
+    """The :func:`fan_epi_term` / :func:`fan_vol_term` contract over a batched scorer:
+    passes ``1..n_passes`` in ONE call with grad, every other pass (instruments) in ONE
+    call under ``no_grad``; ``stats[f"{key}_t{t}"]`` for every scored pass."""
+    if not traj:
+        return None
+    if n_passes < 1:
+        raise ValueError(f"fan_repel_passes must be >= 1, got {n_passes}")
+    pen = [t for t in range(len(traj)) if 1 <= t <= n_passes]
+    other = [t for t in range(len(traj)) if not 1 <= t <= n_passes] if instruments else []
+    out: dict[int, Tensor] = {}
+    live = score_fn(pen) if pen else None
+    if pen:
+        out.update({t: live[i] for i, t in enumerate(pen)})
+    if other:
+        with torch.no_grad():
+            ins = score_fn(other)
+        out.update({t: ins[i] for i, t in enumerate(other)})
+    if stats is not None:
+        for t in sorted(out):
+            stats[f"{key}_t{t}"] = out[t].detach().to(traj[t].dtype)
+    if live is None:
+        return None
+    if stats is not None:
+        stats["repel_terms"] = float(len(pen))
+    return -live.mean().to(traj[0].dtype)
+
+
+def fan_epi_term_fast(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
+                      reservoir: FanReservoir, ridge: float, eta: float,
+                      stats: dict[str, float] | None = None,
+                      instruments: bool = True) -> Tensor | None:
+    """:func:`fan_epi_term` under ``model.fan_div_fast``: the same term and readings, fp32,
+    batched (block comment above). Fixed shapes and no host sync, with or without
+    ``model.graph_safe``."""
+    if not traj:
+        return None
+    b, sm = traj[0].shape[0], traj[0].shape[1]
+    s = valid.shape[1]
+    if sm != s * m_cells:
+        raise ValueError(f"fan_epi_term: compact axis {sm} != S*M = {s}*{m_cells}")
+    with torch.no_grad():
+        seed = _cell_readout(traj[0].reshape(b, s, m_cells, *traj[0].shape[2:]))
+        seed, sw = valid_first(seed.mean(dim=2), valid)                # [B*S, C]
+        n_fit = sw.clamp(min=2)
+        a = ridge_map_fast(reservoir(seed), ridge, n_fit)              # [F, B*S] fp32
+    return _batched_term(
+        lambda ts: _epi_scores_fast(traj, ts, valid, m_cells, a, eta),
+        traj, n_passes, "epi", stats, instruments)
+
+
+def fan_vol_term_fast(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
+                      eta: float, stats: dict[str, float] | None = None,
+                      instruments: bool = True) -> Tensor | None:
+    """:func:`fan_vol_term` under ``model.fan_div_fast``: the same term and readings, every
+    pass in one batched Cholesky (block comment above)."""
+    return _batched_term(lambda ts: _vol_scores_fast(traj, ts, valid, m_cells, eta),
+                         traj, n_passes, "vol", stats, instruments)

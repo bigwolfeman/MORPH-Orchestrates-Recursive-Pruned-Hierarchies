@@ -59,7 +59,8 @@ from .tul_ditto import ditto_loss
 from .host_shadow import (any_true, aten_rowsum_width, derive as derive_shadow,
                           exact_mean_1d, masked_rows, rowsum_by_width,
                           shadow as host_shadow, valid_first)
-from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_repel_term,
+from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_epi_term_fast,
+                      fan_repel_term, fan_vol_term_fast,
                       fan_stream_rank, fan_vol_term, select_gate_loss, select_streams,
                       select_winners, fan_stream_stats, plan_streams)
 from .tul_fan_route import (FanLatentHead, FanOPF, FanRouter, FanTargetFront, FanTeacherMap,
@@ -442,6 +443,27 @@ class MORPHConfig:
     # (morph/model/ternary_qat.py, TernaryStepCache; bound by the trainer after compile).
     # Bit-identical to False. False = today: every read re-quantises and re-casts.
     ternary_step_cache: bool = False
+    # The fan's EMA target twin (tul_fan_route.FanTargetFront) runs its prelude blocks
+    # through the trainer's block compile (training.compile_blocks), like the live prelude.
+    # NOT bit-identical (Inductor's fused rounding vs the eager twin). False = eager twin.
+    fan_twin_compile: bool = False
+    # The fan's epi / vol diversity terms (tul.fan_repel_mode epi / vol / epivol) batched
+    # over every (pass, stream) in fp32 with a Cholesky log-det and ridge solve, instead of
+    # one fp64 product + LU per (pass, stream) and a Householder ridge map
+    # (tul_fan.fan_epi_term_fast / fan_vol_term_fast). NOT bit-identical; fp64-referenced
+    # in tests/test_tul_fan_div_fast.py. False = today.
+    fan_div_fast: bool = False
+    # The latent-selected loop's per-pass teacher PICK (no grad, an argmin over the M cells)
+    # runs the head g's two GEMMs in bf16 (FanLatentHead.forward_bf16) instead of fp32
+    # SIMT. The exit loss and every graded reading keep the fp32 head. NOT bit-identical (a
+    # near-tie pick can flip). False = today.
+    fan_lsel_pick_bf16: bool = False
+    # The fan's latent target z (tul.fan_opf / fan_route latent / fan_loop_select) is the
+    # ONLINE prelude's pooled span state under stop-gradient instead of the EMA twin's: the
+    # twin's prelude forward (19 ms on the FAST step) is not run. CHANGES THE OBJECTIVE (no
+    # EMA). The twin is still built, EMA-updated and checkpointed, so the key can be turned
+    # off on resume. False = the EMA twin's target (today).
+    fan_target_online: bool = False
 
     # Parallel multi-token prediction on the coda readout (Gloeckle et al. 2024, arXiv
     # 2404.19737; arc E8, 2026-09-07 [W]). mtp_heads = the number of future tokens each
@@ -2915,6 +2937,16 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_epi: FanReservoir | None = None
         if self.tul_fan is not None and cfg.tul.fan_repel_mode in ("epi", "epivol"):
             self.tul_fan_epi = FanReservoir(d, cfg.tul.fan_epi_features, seed=0)
+        # `model.fan_div_fast`: the epi / vol terms batched in fp32 (`tul_fan.py`, the
+        # `fan_*_term_fast` forms). Built only where those forms are wired: the plain fan
+        # (no history streams) with an epi / vol / epivol term.
+        if cfg.fan_div_fast and not (
+                self.tul_fan is not None
+                and cfg.tul.fan_repel_mode in ("epi", "vol", "epivol")
+                and int(cfg.tul.fan_history_streams) == 0):
+            raise ValueError("model.fan_div_fast needs a fan (tul.fan_k) with "
+                             "tul.fan_repel_mode epi / vol / epivol and no "
+                             "tul.fan_history_streams")
         # ── the fan's OPF / router arms (2026-09-30; morph/model/tul_fan_route.py) ──
         # `tul.fan_opf` (arm F), `tul.fan_route` "reader" (arm R) / "latent" (arm T). All
         # default off: nothing is built, the three attributes stay None and every branch on
@@ -2967,6 +2999,17 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_lsel_head: FanLatentHead | None = None
         self.tul_fan_lsel_router: FanRouter | None = None
         self._lsel_out: dict | None = None
+        # `model.fan_target_online` is analysed for ONE case: the latent-selected loop with
+        # the router driving the loop (`fan_lsel_train_follow: router`). There the teacher
+        # pick only trains the router and the exit loss, so the forward the model's CE reads
+        # never follows the target (perf/lean/PROOFS.md, rank 8). Refused elsewhere.
+        if cfg.fan_target_online and not (
+                self._lsel_mode != "off" and cfg.tul.fan_lsel_train_follow == "router"):
+            raise ValueError("model.fan_target_online needs tul.fan_loop_select with "
+                             "tul.fan_lsel_train_follow=router (the only analysed case)")
+        if cfg.fan_lsel_pick_bf16 and self._lsel_mode == "off":
+            raise ValueError("model.fan_lsel_pick_bf16 needs tul.fan_loop_select (the "
+                             "latent-selected loop's per-pass pick)")
         if self._lsel_mode != "off":
             if self.tul_fan is None or self.tul_fan.mode != "all":
                 raise RuntimeError("tul.fan_loop_select built without the write-all fan; "
@@ -4505,7 +4548,7 @@ class MORPHTransformer(nn.Module):
         inputs and the same masks. ``None`` on every other call → the live modules, the
         loop above unchanged.
         """
-        _prelude = self.prelude if twin is None else twin.prelude
+        _prelude = self.prelude if twin is None else twin.run_blocks()
         _x0_injects = self.x0_injects if twin is None else twin.x0_injects
         B, T = x.shape[0], x.shape[1]
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
@@ -5725,10 +5768,31 @@ class MORPHTransformer(nn.Module):
     # Reached only when a `slot_layout` is passed. Every helper below is a no-op for
     # the plain path because the plain path never calls it.
 
+    def _tul_front_lookups(self, input_ids: Tensor,
+                           layout: SlotLayout) -> tuple[Tensor, Tensor | None, list[Tensor]]:
+        """The front's TABLE reads, ``(tok_emb, bigram_emb, ve_tab)``: the slot-input token
+        embedding BEFORE ``embed_drop``, the slot-input bigram signal (None without a
+        bigram table) and every value-embedding table's raw output (before its projection).
+
+        The ONE home of these reads. :meth:`_tul_front` runs them for the live front, and
+        the fan's EMA twin (:meth:`_tul_fan_target`) reuses the live front's tuple instead
+        of reading the tables a second time: the twin shares the live tables
+        (:class:`FanTargetFront`), so its reads would be the same ops on the same weights
+        and ids, and each read re-quantises the WHOLE table (``embed_quant``: 4.3 ms of the
+        twin's 19.2 ms on the FAST step). No RNG is drawn here (dropout is the caller's)."""
+        tok_emb = self.tul.slot_input(self.embed(input_ids), layout, add_e_slot=True)
+        _bg = self.embed.get_bigram(input_ids)
+        bigram_emb = (self.tul.slot_input(_bg, layout, add_e_slot=False)
+                      if _bg is not None else None)
+        ve_tab = [self.value_embed_tables[k](input_ids)
+                  for k in range(len(self._ve_layer_map))]
+        return tok_emb, bigram_emb, ve_tab
+
     def _tul_front(self, input_ids: Tensor, layout: SlotLayout,
                    attn_kwargs: dict | None = None,
                    ret_reset_mask: Tensor | None = None,
-                   twin: FanTargetFront | None = None):
+                   twin: FanTargetFront | None = None,
+                   lookups: tuple | None = None):
         """Embed + slot inputs + prelude over ALL positions (spec §3.2).
 
         The slot's input embedding is ``E_slot + mean_j embed(t_j)`` over its span's
@@ -5746,20 +5810,20 @@ class MORPHTransformer(nn.Module):
         (the target is deterministic; this call draws no RNG, so the live forward's stream
         is the one it would be without the target). ``None`` — every other call — is the
         body above, unchanged.
+
+        ``lookups``: a :meth:`_tul_front_lookups` tuple of THIS row, reused instead of
+        reading the tables again (the live forward hands its own to the twin). ``None``
+        reads them here. The values are the same either way: the reads are deterministic
+        and draw no RNG.
         """
-        tok_emb = self.tul.slot_input(self.embed(input_ids), layout, add_e_slot=True)
+        tok_emb, bigram_emb, ve_tab = (self._tul_front_lookups(input_ids, layout)
+                                       if lookups is None else lookups)
         x = self.embed_drop(tok_emb) if twin is None else tok_emb
-        _bg = self.embed.get_bigram(input_ids)
-        bigram_emb = (self.tul.slot_input(_bg, layout, add_e_slot=False)
-                      if _bg is not None else None)
-        n_ve = len(self._ve_layer_map)
         _ve_proj = self.value_embeds if twin is None else twin.value_embeds
         ve_bagged = ([
-            self.tul.slot_input(
-                _ve_proj[k].precompute(self.value_embed_tables[k](input_ids)),
-                layout, add_e_slot=False)
-            for k in range(n_ve)
-        ] if n_ve > 0 else None)
+            self.tul.slot_input(_ve_proj[k].precompute(ve_tab[k]), layout, add_e_slot=False)
+            for k in range(len(ve_tab))
+        ] if ve_tab else None)
         x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged,
                                  attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask,
                                  **({"twin": twin} if twin is not None else {}))
@@ -9787,7 +9851,7 @@ class MORPHTransformer(nn.Module):
 
     def _tul_fan_target(self, input_ids: Tensor, labels: Tensor, layout: SlotLayout,
                         front_kw: dict | None, front_reset: Tensor | None,
-                        x_online: Tensor) -> dict:
+                        x_online: Tensor, lookups: tuple | None = None) -> dict:
         """The EMA-prelude target of every slot (arms F and T) and the online twin of it.
 
         Returns ``{"z", "ok", "zo"}``: ``z`` ``[B, S, C]`` fp32, no graph — the TWIN
@@ -9805,6 +9869,10 @@ class MORPHTransformer(nn.Module):
         (``tests/test_tul_fan_opf.py`` perturbs every other span and reads it unchanged).
         It is ONLY a target: nothing built from it is written into the loop or the coda.
         ``labels`` enter only as the scored-position mask (``labels >= 0``: pads out).
+
+        ``lookups``: the live front's :meth:`_tul_front_lookups` tuple of the same row (the
+        forward passes it; the twin shares the tables, so the values are the same). None
+        reads the tables again.
         """
         twin = self.__dict__.get("_fan_target")
         if twin is None:
@@ -9813,14 +9881,22 @@ class MORPHTransformer(nn.Module):
                 "Call model.tul_fan_target_build() after quantisation (the trainer does, "
                 "before torch.compile) and before any labelled forward.")
         gid, keep_tok, _lab, g_bins = span_ce_index(labels, layout)
-        with torch.no_grad():
-            xt, _, _ = self._tul_front(input_ids, layout, attn_kwargs=front_kw,
-                                       ret_reset_mask=front_reset, twin=twin)
-            z = pooled_span_states(xt, gid, keep_tok, g_bins)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]
         ok = layout.slot_valid & (n_tok > 0)
         zo = (pooled_span_states(x_online, gid, keep_tok, g_bins)
               if (self.tul_fan_opf is not None or self._lsel_mode != "off") else None)
+        if self.cfg.fan_target_online:
+            # `model.fan_target_online`: the target is the ONLINE prelude's pooling under
+            # stop-gradient, not the EMA twin's (no second prelude forward). A different
+            # objective (BYOL without the EMA), not a faster form of this one.
+            z = (zo.detach() if zo is not None else
+                 pooled_span_states(x_online.detach(), gid, keep_tok, g_bins))
+            return {"z": z, "ok": ok, "zo": zo}
+        with torch.no_grad():
+            xt, _, _ = self._tul_front(input_ids, layout, attn_kwargs=front_kw,
+                                       ret_reset_mask=front_reset, twin=twin,
+                                       lookups=lookups)
+            z = pooled_span_states(xt, gid, keep_tok, g_bins)
         return {"z": z, "ok": ok, "zo": zo}
 
     def _tul_fan_opf(self, cells: Tensor, tgt: dict, stats: dict) -> Tensor:
@@ -10008,7 +10084,10 @@ class MORPHTransformer(nn.Module):
         tpick = None
         if st["z"] is not None:
             with torch.no_grad():
-                tpick = lsel_distance(self.tul_fan_lsel_head(cr), st["z"]).argmin(dim=-1)
+                # `model.fan_lsel_pick_bf16`: the pick's head GEMMs in bf16 (not exact).
+                gz = (self.tul_fan_lsel_head.forward_bf16(cr) if self.cfg.fan_lsel_pick_bf16
+                      else self.tul_fan_lsel_head(cr))
+                tpick = lsel_distance(gz, st["z"]).argmin(dim=-1)
             okp = act & st["ok"]
             okf = okp.float()
             ce = F.cross_entropy(scores.reshape(B * S, m), tpick.reshape(B * S),
@@ -13342,9 +13421,12 @@ class MORPHTransformer(nn.Module):
         # must read (2026-09-13: the horizon grid rebuilt it bare and scored a
         # strict model from an unrestricted prelude).
         _front_kw, _front_reset, tg_attn_kwargs, tg_reset = self._tul_tg_kwargs(layout)
+        # The table reads are taken out so the fan's twin below can reuse them.
+        _front_lk = self._tul_front_lookups(input_ids, layout)
         x, x0, bigram_emb = self._tul_front(input_ids, layout,
                                             attn_kwargs=_front_kw,
-                                            ret_reset_mask=_front_reset)
+                                            ret_reset_mask=_front_reset,
+                                            lookups=_front_lk)
         # ── the fan's EMA-prelude target (tul.fan_opf / tul.fan_route: latent) ─────────
         # Built HERE, on the base batch right after the live front, because the twin runs
         # the SAME front on the SAME row under the SAME strict masks. Labelled forwards in
@@ -13355,7 +13437,8 @@ class MORPHTransformer(nn.Module):
         _fan_tgt = None
         if self._fan_target_needed and labels is not None and plan_mode == "normal":
             _fan_tgt = self._tul_fan_target(input_ids, labels, layout, _front_kw,
-                                            _front_reset, x)
+                                            _front_reset, x, lookups=_front_lk)
+        del _front_lk
 
         # ── tul.gram_objective="iw" (LXTUL-GK): K prior rollouts per row ─────────────
         # The front above ran ONCE on the base batch. From here the batch is expanded
@@ -13886,14 +13969,24 @@ class MORPHTransformer(nn.Module):
                                                        int(tc.fan_repel_passes),
                                                        stats=fan_stats, fixed=_gs_cos)
                                 _parts = []
+                                # `model.fan_div_fast`: the same two terms, batched in
+                                # fp32 (`tul_fan.py`); NOT bit-identical.
+                                _fast_div = bool(self.cfg.fan_div_fast)
                                 if _mode in ("epi", "epivol"):
-                                    _parts.append(fan_epi_term(
+                                    _parts.append(fan_epi_term_fast(
+                                        db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                        self.tul_fan_epi, _epi_ridge,
+                                        float(tc.fan_epi_eta), stats=fan_stats,
+                                        instruments=_inst) if _fast_div else fan_epi_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         self.tul_fan_epi, _epi_ridge,
                                         float(tc.fan_epi_eta), stats=fan_stats,
                                         instruments=_inst, fixed=_gs_epi))
                                 if _mode in ("vol", "epivol"):
-                                    _parts.append(fan_vol_term(
+                                    _parts.append(fan_vol_term_fast(
+                                        db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                        float(tc.fan_epi_eta), stats=fan_stats,
+                                        instruments=_inst) if _fast_div else fan_vol_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         float(tc.fan_epi_eta), stats=fan_stats,
                                         instruments=_inst, fixed=_gs_vol))

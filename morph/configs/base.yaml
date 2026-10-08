@@ -237,6 +237,27 @@ model:
   #   (morph/model/ternary_qat.py TernaryStepCache; tests/test_ternary_step_cache.py).
   #   Refused with an in-run carve. false = every read re-quantises and re-casts.
   ternary_step_cache: false
+  # fan_twin_compile: the fan's EMA target twin (tul.fan_opf / fan_route latent /
+  #   fan_loop_select) runs its prelude blocks through training.compile_blocks' block compile,
+  #   as the live prelude does (FanTargetFront.compile_blocks_; state_dict names unchanged).
+  #   NOT bit-identical to the eager twin. Needs training.compile_blocks. false = eager twin.
+  fan_twin_compile: false
+  # fan_div_fast: the fan's epi / vol diversity terms (tul.fan_repel_mode epi / vol / epivol)
+  #   with every (pass, stream) in ONE batched fp32 product and Cholesky log-det, and the ridge
+  #   map by fp32 normal equations, instead of fp64 products + LU per (pass, stream) and a
+  #   Householder QR (morph/model/tul_fan.py fan_epi_term_fast / fan_vol_term_fast). NOT
+  #   bit-identical; fp64 reference in tests/test_tul_fan_div_fast.py. false = today.
+  fan_div_fast: false
+  # fan_lsel_pick_bf16: the latent-selected loop's per-pass teacher pick (no grad, argmin over
+  #   the M cells) runs the head's two GEMMs in bf16 (FanLatentHead.forward_bf16); the exit
+  #   loss keeps the fp32 head. NOT bit-identical (near ties can flip). false = fp32 SIMT GEMMs.
+  fan_lsel_pick_bf16: false
+  # fan_target_online: the fan's latent target z is the ONLINE prelude's pooled span state
+  #   under stop-gradient, not the EMA twin's (the twin's prelude forward is skipped; the twin
+  #   is still built, EMA-updated and checkpointed). CHANGES THE OBJECTIVE (BYOL without the
+  #   EMA); fixed-weight teacher picks agree 93-98 % per pass (perf/audit/AUDIT.md). Needs a
+  #   training run to qualify. false = the EMA twin's target.
+  fan_target_online: false
   # Parallel multi-token prediction on the coda readout (arc E8, 2026-09-07). 1 = the plain
   # next-token head only (bit-identical; no module built). k > 1 adds k-1 heads (RMSNorm ->
   # identity-init Linear -> the tied LM head) trained on labels shifted by 1..k-1, loss

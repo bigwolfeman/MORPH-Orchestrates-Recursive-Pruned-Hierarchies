@@ -729,6 +729,14 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         # MORPHConfig.ternary_step_cache: bf16 ternary weights once per forward (bound below,
         # after torch.compile).
         ternary_step_cache=bool(getattr(m, "ternary_step_cache", False)),
+        # MORPHConfig.fan_twin_compile: the fan's EMA twin prelude blocks compiled (below).
+        fan_twin_compile=bool(getattr(m, "fan_twin_compile", False)),
+        # MORPHConfig.fan_div_fast: the fan's epi / vol terms batched in fp32.
+        fan_div_fast=bool(getattr(m, "fan_div_fast", False)),
+        # MORPHConfig.fan_lsel_pick_bf16: the per-pass teacher pick's head GEMMs in bf16.
+        fan_lsel_pick_bf16=bool(getattr(m, "fan_lsel_pick_bf16", False)),
+        # MORPHConfig.fan_target_online: the fan target from the online prelude (no twin pass).
+        fan_target_online=bool(getattr(m, "fan_target_online", False)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         tg_scoped_kernels=bool(getattr(m, "tg_scoped_kernels", False)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
@@ -2577,6 +2585,13 @@ def main(cfg: DictConfig) -> None:
         print(f"  [ternary-step-cache] ON: {_tsc.summary()}, refreshed once per forward",
               flush=True)
 
+    def _compile_block(layer, dyn):
+        """training.compile_blocks' compile of ONE MORPHBlock (the GLA retention branch
+        stays a graph break, see the comment at the call below)."""
+        if getattr(layer, "retention", None) is not None:
+            layer.retention.forward = torch.compiler.disable(layer.retention.forward)
+        return torch.compile(layer, mode=compile_mode, dynamic=dyn)
+
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
             # Core MLPs see a VARIABLE batch each loop iteration (active-set
@@ -2597,10 +2612,7 @@ def main(cfg: DictConfig) -> None:
                     # runs): Inductor hits an upstream SplitScan codegen bug on its
                     # chunked cumsum. Eager-only path (use_kernels=false) — the fused
                     # Triton kernels are not compilable and do not need this.
-                    if getattr(layer, "retention", None) is not None:
-                        layer.retention.forward = torch.compiler.disable(
-                            layer.retention.forward)
-                    group[i] = torch.compile(layer, mode=compile_mode, dynamic=dyn)
+                    group[i] = _compile_block(layer, dyn)
                     continue
                 if hasattr(layer, "mlp"):
                     layer.mlp = torch.compile(layer.mlp, mode=compile_mode, dynamic=dyn)
@@ -2615,6 +2627,19 @@ def main(cfg: DictConfig) -> None:
         if compile_blocks:
             print(f"  BLOCKS compiled (mode={compile_mode}, core dynamic-batch, "
                   "GLA graph-broken)")
+        # model.fan_twin_compile (2026-10-08): the fan's EMA twin prelude blocks through the
+        # SAME block compile as the live prelude (fixed batch, forward only, no_grad). The
+        # twin is built eager above; its modules and state_dict names stay as they are
+        # (`FanTargetFront.compile_blocks_`). Not bit-identical to the eager twin.
+        if bool(model.cfg.fan_twin_compile):
+            _twin = model.__dict__.get("_fan_target")
+            if _twin is None or not compile_blocks:
+                raise ValueError("model.fan_twin_compile needs the fan's EMA twin (tul.fan_opf "
+                                 "/ fan_route latent / fan_loop_select) and "
+                                 "training.compile_blocks=true")
+            _twin.compile_blocks_(lambda b: _compile_block(b, None))
+            print(f"  [fan-target] EMA twin: {len(_twin.prelude)} prelude blocks compiled",
+                  flush=True)
         else:
             print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)"
                   + (", attention compiled" if compile_attention else ""))
