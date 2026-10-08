@@ -1,0 +1,45 @@
+[      0/5000] loss=24.3617  ppl=485165195.4  lr=0.00e+00  sps=0.91  tok/s=5583  proxy=10.15  tflops=8.0  peak=16.75GB  reserved=26.98GB
+[    200/5000] loss=15.6821  ppl=6466121.0  lr=2.00e-05  sps=4.06  tok/s=24927  proxy=10.13  tflops=35.8  peak=4.13GB  reserved=19.19GB
+  [VAL     250] loss=6.7130  ppl=823.04  ppl_tok=823.04  first_tok=7.3949  cf=-1.5816  lp/tok=15.33
+[    400/5000] loss=12.6619  ppl=315497.6  lr=4.00e-05  sps=4.05  tok/s=24904  proxy=10.19  tflops=35.8  peak=17.94GB  reserved=19.19GB
+  [VAL     500] loss=5.8180  ppl=336.30  ppl_tok=336.30  first_tok=7.9273  cf=-2.7117  lp/tok=15.18
+[    600/5000] loss=7.5859  ppl=1970.2  lr=6.00e-05  sps=3.92  tok/s=24091  proxy=11.32  tflops=37.8  peak=17.94GB  reserved=19.19GB
+  [VAL     750] loss=5.2144  ppl=183.89  ppl_tok=183.89  first_tok=8.8335  cf=-4.3685  lp/tok=15.38
+[    800/5000] loss=11.9582  ppl=156094.3  lr=8.00e-05  sps=3.98  tok/s=24436  proxy=10.13  tflops=35.0  peak=17.94GB  reserved=19.19GB
+[   1000/5000] loss=11.2440  ppl=76420.5  lr=1.00e-04  sps=4.06  tok/s=24917  proxy=10.15  tflops=35.7  peak=17.94GB  reserved=19.19GB
+  [VAL    1000] loss=4.8672  ppl=129.95  ppl_tok=129.95  first_tok=9.5405  cf=-5.3457  lp/tok=15.29
+[   1200/5000] loss=11.7987  ppl=133077.3  lr=1.00e-04  sps=4.06  tok/s=24920  proxy=10.11  tflops=35.6  peak=17.94GB  reserved=19.19GB
+  [VAL    1250] loss=4.6628  ppl=105.93  ppl_tok=105.93  first_tok=9.4902  cf=-5.3530  lp/tok=15.13
+[   1400/5000] loss=10.8358  ppl=50805.1  lr=1.00e-04  sps=4.06  tok/s=24917  proxy=10.17  tflops=35.8  peak=17.94GB  reserved=19.19GB
+  [VAL    1500] loss=4.5513  ppl=94.75  ppl_tok=94.75  first_tok=9.3264  cf=-4.8149  lp/tok=15.96
+[   1600/5000] loss=10.9558  ppl=57287.3  lr=1.00e-04  sps=3.92  tok/s=24079  proxy=10.16  tflops=34.6  peak=17.94GB  reserved=19.19GB
+  [VAL    1750] loss=4.5411  ppl=93.79  ppl_tok=93.79  first_tok=9.8424  cf=-5.5250  lp/tok=14.96
+[   1800/5000] loss=11.1576  ppl=70092.1  lr=1.00e-04  sps=3.98  tok/s=24424  proxy=10.16  tflops=35.0  peak=17.94GB  reserved=19.19GB
+[   2000/5000] loss=11.3782  ppl=87397.4  lr=1.00e-04  sps=4.05  tok/s=24907  proxy=10.10  tflops=35.6  peak=17.94GB  reserved=19.19GB
+  [VAL    2000] loss=4.4197  ppl=83.07  ppl_tok=83.07  first_tok=9.1624  cf=-5.0601  lp/tok=15.40
+[   2200/5000] loss=10.9286  ppl=55750.6  lr=1.00e-04  sps=4.05  tok/s=24910  proxy=10.13  tflops=35.7  peak=17.94GB  reserved=19.19GB
+  [VAL    2250] loss=4.2889  ppl=72.88  ppl_tok=72.88  first_tok=8.5539  cf=-4.6658  lp/tok=15.43
+[   2400/5000] loss=10.1972  ppl=26827.7  lr=1.00e-04  sps=4.05  tok/s=24905  proxy=10.17  tflops=35.8  peak=17.94GB  reserved=19.19GB
+  [VAL    2500] loss=4.2426  ppl=69.59  ppl_tok=69.59  first_tok=8.8562  cf=-4.9594  lp/tok=15.38
+[   2600/5000] loss=10.2693  ppl=28834.3  lr=1.00e-04  sps=3.91  tok/s=24032  proxy=10.18  tflops=34.6  peak=17.94GB  reserved=19.19GB
+  [VAL    2750] loss=4.2608  ppl=70.87  ppl_tok=70.87  first_tok=8.7110  cf=-4.6118  lp/tok=15.24
+[   2800/5000] loss=10.1817  ppl=26414.2  lr=1.00e-04  sps=3.98  tok/s=24431  proxy=10.19  tflops=35.1  peak=17.94GB  reserved=19.19GB
+[   3000/5000] loss=9.6166  ppl=15011.5  lr=1.00e-04  sps=4.05  tok/s=24904  proxy=10.25  tflops=36.0  peak=17.94GB  reserved=19.19GB
+  [VAL    3000] loss=4.0300  ppl=56.26  ppl_tok=56.26  first_tok=8.9188  cf=-5.0233  lp/tok=15.39
+[   3200/5000] loss=10.3042  ppl=29858.4  lr=1.00e-04  sps=4.05  tok/s=24907  proxy=10.16  tflops=35.7  peak=17.94GB  reserved=19.19GB
+  [VAL    3250] loss=4.1138  ppl=61.18  ppl_tok=61.18  first_tok=8.5118  cf=-4.7879  lp/tok=15.23
+[   3400/5000] loss=10.4039  ppl=32986.8  lr=1.00e-04  sps=4.05  tok/s=24913  proxy=10.27  tflops=36.0  peak=17.94GB  reserved=19.19GB
+  [VAL    3500] loss=4.1763  ppl=65.12  ppl_tok=65.12  first_tok=8.3224  cf=-4.3662  lp/tok=15.28
+[   3600/5000] loss=10.4618  ppl=34955.0  lr=1.00e-04  sps=3.91  tok/s=24052  proxy=10.14  tflops=34.5  peak=17.94GB  reserved=19.19GB
+  [VAL    3750] loss=4.0510  ppl=57.46  ppl_tok=57.46  first_tok=8.2857  cf=-4.1402  lp/tok=15.44
+[   3800/5000] loss=10.1350  ppl=25211.1  lr=1.00e-04  sps=3.94  tok/s=24219  proxy=10.16  tflops=34.7  peak=17.94GB  reserved=19.19GB
+[   4000/5000] loss=10.1571  ppl=25773.6  lr=1.00e-04  sps=4.05  tok/s=24908  proxy=10.17  tflops=35.8  peak=17.94GB  reserved=19.19GB
+  [VAL    4000] loss=3.9906  ppl=54.09  ppl_tok=54.09  first_tok=8.6296  cf=-4.9546  lp/tok=15.55
+[   4200/5000] loss=10.6189  ppl=40899.3  lr=1.00e-04  sps=4.06  tok/s=24939  proxy=10.20  tflops=36.0  peak=17.94GB  reserved=19.19GB
+  [VAL    4250] loss=3.8437  ppl=46.70  ppl_tok=46.70  first_tok=8.6112  cf=-5.1122  lp/tok=15.29
+[   4400/5000] loss=9.7575  ppl=17284.0  lr=1.00e-04  sps=4.06  tok/s=24933  proxy=10.18  tflops=35.9  peak=17.94GB  reserved=19.19GB
+  [VAL    4500] loss=3.9533  ppl=52.11  ppl_tok=52.11  first_tok=8.6042  cf=-4.8335  lp/tok=15.24
+[   4600/5000] loss=10.2390  ppl=27972.3  lr=1.00e-04  sps=3.92  tok/s=24114  proxy=10.13  tflops=34.6  peak=17.94GB  reserved=19.19GB
+  [VAL    4750] loss=4.1047  ppl=60.62  ppl_tok=60.62  first_tok=8.5677  cf=-4.6969  lp/tok=15.40
+[   4800/5000] loss=9.7040  ppl=16383.8  lr=1.00e-04  sps=3.98  tok/s=24470  proxy=10.10  tflops=35.0  peak=17.94GB  reserved=19.19GB
+Final val_loss=3.9161  ppl=50.21  fan/lsel_teacher_pick_ce=3.9238  fan/lsel_teacher_pick_gap=-0.0077  fan/mixed_ce=4.5499  fan/oracle_ce=4.5246  fan/oracle_gap=0.0309  fan/oracle_n_spans=333.2500  fan
