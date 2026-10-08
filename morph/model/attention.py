@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 
 import torch
 import torch.nn as nn
@@ -63,6 +62,10 @@ from morph.kernels.triton.fused_csa_attention import fused_csa_attention
 # build, or an in-process A/B). The window path consults it at call time; the
 # other fused entry points check it internally.
 from morph.kernels.triton._eager_flag import force_eager
+# model.tg_fused_attention: both strict-geometry TG branches in one Triton kernel pair (fwd/bwd),
+# the relation computed in-kernel from the layout's index tensors (see that module).
+from morph.kernels.triton.tg_strict_attention import tg_strict_attention
+from morph.model.slot_compact import take_rows
 
 
 # ─── Fused input-projection batching (perf: launch-count + GEMM SOL) ──────────
@@ -577,10 +580,62 @@ def _tg_relation_guard(tg_relation: Tensor | None, tg_allow: Tensor | None,
             "slot_mask is None.")
 
 
+def _tg_index_guard(tg_index: dict | None, tg_allow: Tensor | None,
+                    tg_comp_allow: Tensor | None, tg_relation: Tensor | None,
+                    tg_slot_mask: Tensor | None, tg_span: dict | None, tg_restrict: bool,
+                    n_skip_rope: int) -> None:
+    """``tg_index`` (``model.tg_fused_attention``) REPLACES every dense TG mask of both branches.
+
+    It carries the strict relation as index tensors (``tg_strict_index``) and the fused kernel
+    evaluates it for the window AND the compressed branch, so a dense mask passed beside it
+    would be silently ignored on both. Every such pair raises instead.
+    """
+    if tg_index is None:
+        return
+    if not tg_restrict:
+        raise NotImplementedError("tg_index needs tul.tg_restrict=true (the restricted "
+                                  "attention build is the only one with a slot branch).")
+    if any(t is not None for t in (tg_allow, tg_comp_allow, tg_relation, tg_slot_mask,
+                                   tg_span)):
+        raise ValueError("tg_index with a dense TG mask (tg_allow / tg_comp_allow / "
+                         "tg_relation / tg_slot_mask / tg_span): the index replaces them all.")
+    if n_skip_rope:
+        raise NotImplementedError("tg_index with n_skip_rope > 0: the fused kernel has no "
+                                  "suffix rows / columns.")
+
+
+def _tg_index_attend(cca: "_CCABase", x: Tensor, q: Tensor, k: Tensor, v: Tensor,
+                     q_lat: Tensor, gate_pre: Tensor | None, tg_index: dict, scale: float,
+                     win_capture: dict | None) -> Tensor:
+    """The ``tg_index`` (fused strict kernel) tail shared by both CCA attentions.
+
+    ``tg_index["qpos"]`` (``model.slot_compact: gather``): the layer's input ``x`` and its
+    keys / values cover every cell, the queries are the rows ``perm[:, :n]`` only, ``n =
+    qpos.shape[1]`` (``morph/model/slot_compact.py``). q, x, q_lat and the gate's
+    pre-activation are cut to those rows, the kernel reads each query's original position,
+    and the output has ``n`` rows. Without it: the call before the key.
+    """
+    qpos = tg_index.get("qpos")
+    if qpos is not None:
+        if win_capture is not None:
+            raise NotImplementedError("tg_win_capture (tul.loop_carry) with query rows by "
+                                      "position (model.slot_compact)")
+        perm, inv, n = tg_index["perm"], tg_index["inv"], qpos.shape[1]
+        q = take_rows(q, perm, inv, n, dim=2)
+        x = take_rows(x, perm, inv, n)
+        q_lat = take_rows(q_lat, perm, inv, n)
+        gate_pre = None if gate_pre is None else take_rows(gate_pre, perm, inv, n)
+    out_comp, out_win = tg_strict_attention(q, k, v, cca.sink_logits, tg_index,
+                                            cca.window_size, scale)
+    return cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat, gate_pre=gate_pre,
+                                win_capture=win_capture)
+
+
 def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
                        sink_logits: Tensor, scale: float,
                        extra_mask: Tensor | None = None,
-                       relation: Tensor | None = None) -> Tensor:
+                       relation: Tensor | None = None,
+                       dense_slot_cols: bool = False) -> Tensor:
     """TG compressed branch (docs/tul-tg-spec.md §3): direct attention over slot
     positions instead of pooled compression, under ``tg_restrict``.
 
@@ -617,9 +672,27 @@ def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None
     SUPERSET of flattened causal, which an AND can never express. Dense form only: with a
     ``slot_mask`` it raises (see :func:`_tg_relation_guard`). Mutually exclusive with
     ``extra_mask``.
+    dense_slot_cols: ``model.graph_safe``, in every mode: a training step also runs this
+    branch in EVAL mode, inside the fan target's EMA twin of the prelude
+    (``MORPHTransformer._tul_fan_target``), and that forward is captured with the rest of the
+    step. With a ``slot_mask``, score EVERY column of the row
+    and mask the non-slot ones (``allow = causal AND slot_mask[j] AND extra_mask``)
+    instead of gathering the batch's largest per-row slot count, whose value is a host
+    read and whose shape changes per batch. The same function: a column masked to -inf
+    gets weight exactly 0 in either form. Not bit-identical: the softmax and the value
+    product sum over more (zero) terms, in a different order.
     """
     B, H, S, D = q.shape
     device = q.device
+    if slot_mask is not None and dense_slot_cols:
+        if relation is not None:                 # unreachable via _tg_relation_guard
+            raise NotImplementedError(
+                "_tg_slot_attention: relation is defined on the compact cell axis only.")
+        # The gathered form's relation over every column: causal, a slot column, and
+        # whatever `extra_mask` narrows. Handed to the dense form below as its extra mask.
+        _cols = slot_mask[:, None, None, :]                                    # [B,1,1,S]
+        extra_mask = _cols if extra_mask is None else extra_mask & _cols      # [B,1,S,S]
+        slot_mask = None
     if slot_mask is None:
         # Core region: every position is a slot and S is the (small) slot count —
         # the dense causal form is already compact there. Under model.span_mask this
@@ -821,6 +894,11 @@ class _CCABase(nn.Module):
         # CCA up-projection from compressed latent back to d_model
         self.W_up = nn.Linear(self.latent_q_dim, d_model, bias=False)
 
+        # model.cca_prologue_tiled: the prologue runs on the row-tiled kernels
+        # (fused_cca_prologue(tiled=True)). Set by the owning attention module at build; a
+        # Python constant per instance, so the call below traces out.
+        self.prologue_tiled = False
+
     def _causal_conv(self, x_t: Tensor,
                      conv_dw: nn.Module, conv_gp: nn.Module) -> Tensor:
         # Fused depthwise+grouped causal conv (one Triton kernel, sm_120).
@@ -907,6 +985,7 @@ class _CCABase(nn.Module):
             self.q_norm.weight, self.k_norm.weight, self.temp,
             cos, sin,
             H, Hkv, D, n_skip_rope=n_skip_rope, eps=self.q_norm.eps,
+            tiled=self.prologue_tiled,
         )
 
         if return_klat:
@@ -1047,15 +1126,18 @@ class _CCACSAAttention(nn.Module):
                  compression: int, csa_compress_ratio: int, top_k: int,
                  d_indexer: int, max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
-                 tg_restrict: bool = False, tg_span_gate: bool = False):
+                 tg_restrict: bool = False, tg_span_gate: bool = False,
+                 graph_safe: bool = False, cca_prologue_tiled: bool = False):
         super().__init__()
         self.top_k = top_k
         self.compress_ratio = csa_compress_ratio
         self.tg_restrict = tg_restrict
+        self.graph_safe = graph_safe          # model.graph_safe (see _tg_slot_attention)
 
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
                             max_seq_len, context_len, window_size,
                             init_alpha, conv_kernel)
+        self.cca.prologue_tiled = cca_prologue_tiled   # model.cca_prologue_tiled
 
         if tg_restrict:
             # docs/tul-tg-spec.md §3: the compressed branch attends directly to slot
@@ -1112,9 +1194,10 @@ class _CCACSAAttention(nn.Module):
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
                 tg_relation: Tensor | None = None,
-                tg_win_capture: dict | None = None) -> Tensor:
+                tg_win_capture: dict | None = None,
+                tg_index: dict | None = None) -> Tensor:
         B, S, _ = x.shape
-        H, D = self.cca.n_heads, self.cca.d_head
+        D = self.cca.d_head
         scale = D ** -0.5
 
         # tg_relation is the ONE kwarg that widens. The guard raises for every branch
@@ -1122,6 +1205,8 @@ class _CCACSAAttention(nn.Module):
         # the F1 defect class (a restricted arm running unrestricted, or the reverse).
         _tg_relation_guard(tg_relation, tg_allow, tg_comp_allow, tg_span, tg_slot_mask,
                            self.tg_restrict)
+        _tg_index_guard(tg_index, tg_allow, tg_comp_allow, tg_relation, tg_slot_mask, tg_span,
+                        self.tg_restrict, n_skip_rope)
         if tg_win_capture is not None and not self.tg_restrict:
             raise NotImplementedError(
                 "tg_win_capture (tul.loop_carry) outside tg_restrict: the unrestricted "
@@ -1148,6 +1233,11 @@ class _CCACSAAttention(nn.Module):
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
                 x, n_skip_rope, return_klat=True, pre=pre_cca, seg=tg_seg)
+            if tg_index is not None:
+                # model.tg_fused_attention: the compressed and the window branch from one
+                # score tile, the strict relation read from the layout's index tensors.
+                return _tg_index_attend(self.cca, x, q, k, v, q_lat, gate_pre, tg_index,
+                                        scale, tg_win_capture)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
                                               scale=scale,
@@ -1156,7 +1246,8 @@ class _CCACSAAttention(nn.Module):
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
                                               self.cca.sink_logits, scale,
                                               extra_mask=tg_comp_allow,
-                                              relation=tg_relation)
+                                              relation=tg_relation,
+                                              dense_slot_cols=self.graph_safe)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
                                             extra_mask=tg_allow,
                                             relation=tg_relation)
@@ -1249,14 +1340,17 @@ class _CCAHCAAttention(nn.Module):
                  compression: int, hca_compress_ratio: int,
                  max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
-                 tg_restrict: bool = False, tg_span_gate: bool = False):
+                 tg_restrict: bool = False, tg_span_gate: bool = False,
+                 graph_safe: bool = False, cca_prologue_tiled: bool = False):
         super().__init__()
         self.compress_ratio = hca_compress_ratio
         self.tg_restrict = tg_restrict
+        self.graph_safe = graph_safe          # model.graph_safe (see _tg_slot_attention)
 
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
                             max_seq_len, context_len, window_size,
                             init_alpha, conv_kernel)
+        self.cca.prologue_tiled = cca_prologue_tiled   # model.cca_prologue_tiled
 
         if tg_restrict:
             # docs/tul-tg-spec.md §3: see _CCACSAAttention's twin comment. HCA has no
@@ -1293,9 +1387,10 @@ class _CCAHCAAttention(nn.Module):
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
                 tg_relation: Tensor | None = None,
-                tg_win_capture: dict | None = None) -> Tensor:
+                tg_win_capture: dict | None = None,
+                tg_index: dict | None = None) -> Tensor:
         B, S, _ = x.shape
-        H, D = self.cca.n_heads, self.cca.d_head
+        D = self.cca.d_head
         scale = D ** -0.5
 
         # tg_relation is the ONE kwarg that widens. The guard raises for every branch
@@ -1303,6 +1398,8 @@ class _CCAHCAAttention(nn.Module):
         # the F1 defect class (a restricted arm running unrestricted, or the reverse).
         _tg_relation_guard(tg_relation, tg_allow, tg_comp_allow, tg_span, tg_slot_mask,
                            self.tg_restrict)
+        _tg_index_guard(tg_index, tg_allow, tg_comp_allow, tg_relation, tg_slot_mask, tg_span,
+                        self.tg_restrict, n_skip_rope)
         if tg_win_capture is not None and not self.tg_restrict:
             raise NotImplementedError(
                 "tg_win_capture (tul.loop_carry) outside tg_restrict: the unrestricted "
@@ -1325,6 +1422,11 @@ class _CCAHCAAttention(nn.Module):
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
                 x, n_skip_rope, return_klat=True, pre=pre_cca, seg=tg_seg)
+            if tg_index is not None:
+                # model.tg_fused_attention: the compressed and the window branch from one
+                # score tile, the strict relation read from the layout's index tensors.
+                return _tg_index_attend(self.cca, x, q, k, v, q_lat, gate_pre, tg_index,
+                                        scale, tg_win_capture)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
                                               scale=scale,
@@ -1333,7 +1435,8 @@ class _CCAHCAAttention(nn.Module):
                 out_comp = _tg_slot_attention(q, k, v, tg_slot_mask,
                                               self.cca.sink_logits, scale,
                                               extra_mask=tg_comp_allow,
-                                              relation=tg_relation)
+                                              relation=tg_relation,
+                                              dense_slot_cols=self.graph_safe)
             out_win = self.cca._window_attn(q, k, v, x.device, scale, n_skip_rope,
                                             extra_mask=tg_allow,
                                             relation=tg_relation)
@@ -1412,6 +1515,11 @@ class MORPHAttention(nn.Module):
                             pooled block spans several spans and cannot be cut at a
                             boundary), and it then drives tg_allow / tg_comp_allow /
                             tg_seg from the span ids instead of a slot layout.
+        graph_safe:         model.graph_safe — the compressed branch's slot columns take
+                            the dense fixed-shape form (_tg_slot_attention's
+                            ``dense_slot_cols``), in train and eval mode alike.
+        cca_prologue_tiled: model.cca_prologue_tiled — the CCA prologue runs on the
+                            row-tiled kernels (fused_cca_prologue(tiled=True)).
 
     Forward:
         x: [B, S, d_model]
@@ -1434,6 +1542,11 @@ class MORPHAttention(nn.Module):
         tg_win_capture: dict | None — tul.loop_carry only. Writes the WINDOW branch's own
                 gated contribution in d_model space to ["win"]; see
                 _CCABase._gate_combine_up. Needs tg_restrict (it raises otherwise).
+        tg_index: dict | None — model.tg_fused_attention. The strict relation as index
+                tensors (`tg_strict_index`: prelude / coda bag + slot ids, or the core's
+                cell count); both branches then run in the fused kernel
+                (morph/kernels/triton/tg_strict_attention.py). Replaces every dense mask
+                above (_tg_index_guard).
         → [B, S, d_model]
     """
 
@@ -1455,6 +1568,8 @@ class MORPHAttention(nn.Module):
         conv_kernel: int = 4,
         tg_restrict: bool = False,
         tg_span_gate: bool = False,
+        graph_safe: bool = False,
+        cca_prologue_tiled: bool = False,
     ):
         super().__init__()
 
@@ -1464,6 +1579,7 @@ class MORPHAttention(nn.Module):
             context_len=context_len, window_size=window_size,
             init_alpha=init_alpha, conv_kernel=conv_kernel,
             tg_restrict=tg_restrict, tg_span_gate=tg_span_gate,
+            graph_safe=graph_safe, cca_prologue_tiled=cca_prologue_tiled,
         )
 
         if layer_idx % 2 == 0:
@@ -1480,8 +1596,10 @@ class MORPHAttention(nn.Module):
                 tg_span: dict | None = None, tg_seg: Tensor | None = None,
                 tg_comp_allow: Tensor | None = None,
                 tg_relation: Tensor | None = None,
-                tg_win_capture: dict | None = None) -> Tensor:
+                tg_win_capture: dict | None = None,
+                tg_index: dict | None = None) -> Tensor:
         return self._impl(x, n_skip_rope, cla_capture=cla_capture, cla_kv=cla_kv,
                           tg_allow=tg_allow, tg_slot_mask=tg_slot_mask, tg_span=tg_span,
                           tg_seg=tg_seg, tg_comp_allow=tg_comp_allow,
-                          tg_relation=tg_relation, tg_win_capture=tg_win_capture)
+                          tg_relation=tg_relation, tg_win_capture=tg_win_capture,
+                          tg_index=tg_index)

@@ -141,6 +141,30 @@ model:
   #   the hinge reads f (arc E14's hinge + renorm pairing). First arms: plan C1b,
   #   tul_slot_spandec_strict_e4probe_fp01_xhc_c1b{,_ta}.yaml.
   slot_gain_renorm: false
+  # slot_gain_no_ckpt: the hinge's two core applications keep their activations instead of
+  #   running under torch.utils.checkpoint (no backward recompute; +1.54 GB peak on the
+  #   lxtul_pointer FAST step). EXACT: loss and grads bit-identical. false = checkpointed.
+  slot_gain_no_ckpt: false
+  # slot_gain_reuse_f0: the hinge's f(h) is the loop's own step output at the sampled pass and
+  #   f(h + d) replays that step's RNG state (one core application saved). NOT exact: the
+  #   hinge's gradient through f(h) also reaches earlier passes and the prelude. false = two
+  #   applications at the detached point.
+  slot_gain_reuse_f0: false
+  # slot_depth_stratified: the slot loop's training depths are, per row, a systematic sample of
+  #   clamp(Poisson(mean), 1, max) permuted over the slots. Each slot's marginal law is the same,
+  #   the JOINT law is not (a row cannot draw many deep slots at once), and at most C_t slots
+  #   of a row are active at pass t (64 63 61 55 46 36 26 17 at 64 slots, mean 6, max 8; proof
+  #   in morph/model/slot_compact.py). CHANGES THE TRAINING FUNCTION. Eval keeps the mean depth.
+  #   false = the independent per-slot draw.
+  slot_depth_stratified: false
+  # slot_compact: off | full | gather. A finished cell serves each core layer's attention from a
+  #   cache of that layer's input written at its last active pass, instead of recomputing its
+  #   keys from the current state of the slots before it (CHANGES THE TRAINING FUNCTION). "full"
+  #   still computes every cell (the reference form); "gather" computes the C_t * M active
+  #   rows of each pass only (same function to kernel rounding, tests/test_slot_compact.py).
+  #   Training forward only. Needs slot_depth_stratified, tg_fused_attention, graph_safe,
+  #   ckpt_grad_iters 0, slot_gain_no_ckpt (refuses the rest at build). off = today.
+  slot_compact: "off"
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).
@@ -204,12 +228,69 @@ model:
   # ce_softmax_kernel: the chunk's softmax-gradient body as one Triton pass over the bf16
   #   logits tile instead of ~10 eager passes over an fp32 copy. NOT bit-identical (a few
   #   fp32 ulps before the bf16 rounding of the gradient; accuracy pinned against fp64 in
-  #   tests/test_ce_softmax_grad.py). false = the eager body.
+  #   tests/test_ce_softmax_grad.py). false = the eager body. Also the pointer / DITTO token
+  #   loss's per-row log-prob (fused_linear_label_logprob): Triton lse forward, Triton
+  #   softmax-gradient backward (tests/test_ce_logprob_kernel.py). Both kernel paths
+  #   accumulate grad_w inside the GEMM (fp32 output, no bf16 product, no separate add pass).
   ce_softmax_kernel: false
+  # spandec_ce_row_cap: the span decoder's vocab CE runs on its labelled rows only, packed on
+  #   the device into a FIXED row count proven from the shapes (55 % of the rows at the lxtul
+  #   shapes; about 50 % carry a label). No host sync, so it is legal under training.graph_step
+  #   (ce_compact_rows is not). A batch over the bound gives a NaN loss, never a silent drop.
+  #   NOT bit-identical (sum order). false = every row.
+  spandec_ce_row_cap: false
   # ce_compact_rows: run the CE's vocab GEMMs on the labelled rows only (about half the span
   #   decoder's rows are pads). One host sync per CE call; NOT bit-identical (sum order),
   #   pinned against fp64 in tests/test_ce_softmax_grad.py. false = every row.
   ce_compact_rows: false
+  # graph_safe: a TRAINING forward with no host sync and no host read of a device value, and
+  #   one op sequence at one set of shapes for every batch of a config (the graph-captured
+  #   step): the slot loop runs slot_max_depth passes (not the drawn max), the prelude/coda
+  #   slot-column attention scores every column (train and eval), and the host-shadow
+  #   readers keep every row, live rows first, and reproduce the gathered result. Every piece
+  #   but the slot-column attention is bit-identical to false (45-step gate 2026-10-07,
+  #   tests/test_graph_safe_exact.py); that one is not (cuBLAS sums the value product in a
+  #   width-dependent order). false = today's path.
+  graph_safe: false
+  # graph_safe_parts: the pieces graph_safe turns on, for gating each one alone against the
+  #   eager path (MORPHConfig.graph_safe_parts names them). null = every piece; a graph_step
+  #   needs every piece (a piece left out reads the host).
+  graph_safe_parts: null
+  # tg_fused_attention: a strict slot-loop model (tul.tg_geometry strict, register core at
+  #   reach 0) runs both TG attention branches of every prelude / coda / core call in one
+  #   Triton kernel pair (morph/kernels/triton/tg_strict_attention.py): the relation read from
+  #   the layout's index tensors, no dense [B,1,L,L] masks. NOT bit-identical (a flash online
+  #   softmax sums the same terms in another order; fp64 parity in
+  #   tests/test_tg_strict_attention.py). Opt-in; false = today's path.
+  tg_fused_attention: false
+  # ternary_step_cache: compute each ternary STE weight's bf16 form ONCE per forward and
+  #   share it across every read (8 slot passes, the gain hinge, checkpoint recompute); the
+  #   STE gradient still reaches the fp32 shadow per read. Weights inside compiled blocks are
+  #   filled by a compiled quantiser so every read keeps its bits: bit-identical to false
+  #   (morph/model/ternary_qat.py TernaryStepCache; tests/test_ternary_step_cache.py).
+  #   Refused with an in-run carve. false = every read re-quantises and re-casts.
+  ternary_step_cache: false
+  # fan_twin_compile: the fan's EMA target twin (tul.fan_opf / fan_route latent /
+  #   fan_loop_select) runs its prelude blocks through training.compile_blocks' block compile,
+  #   as the live prelude does (FanTargetFront.compile_blocks_; state_dict names unchanged).
+  #   NOT bit-identical to the eager twin. Needs training.compile_blocks. false = eager twin.
+  fan_twin_compile: false
+  # fan_div_fast: the fan's epi / vol diversity terms (tul.fan_repel_mode epi / vol / epivol)
+  #   with every (pass, stream) in ONE batched fp32 product and Cholesky log-det, and the ridge
+  #   map by fp32 normal equations, instead of fp64 products + LU per (pass, stream) and a
+  #   Householder QR (morph/model/tul_fan.py fan_epi_term_fast / fan_vol_term_fast). NOT
+  #   bit-identical; fp64 reference in tests/test_tul_fan_div_fast.py. false = today.
+  fan_div_fast: false
+  # fan_lsel_pick_bf16: the latent-selected loop's per-pass teacher pick (no grad, argmin over
+  #   the M cells) runs the head's two GEMMs in bf16 (FanLatentHead.forward_bf16); the exit
+  #   loss keeps the fp32 head. NOT bit-identical (near ties can flip). false = fp32 SIMT GEMMs.
+  fan_lsel_pick_bf16: false
+  # fan_target_online: the fan's latent target z is the ONLINE prelude's pooled span state
+  #   under stop-gradient, not the EMA twin's (the twin's prelude forward is skipped; the twin
+  #   is still built, EMA-updated and checkpointed). CHANGES THE OBJECTIVE (BYOL without the
+  #   EMA); fixed-weight teacher picks agree 93-98 % per pass (perf/audit/AUDIT.md). Needs a
+  #   training run to qualify. false = the EMA twin's target.
+  fan_target_online: false
   # Parallel multi-token prediction on the coda readout (arc E8, 2026-09-07). 1 = the plain
   # next-token head only (bit-identical; no module built). k > 1 adds k-1 heads (RMSNorm ->
   # identity-init Linear -> the tied LM head) trained on labels shifted by 1..k-1, loss
@@ -260,7 +341,8 @@ model:
   core_gain_power_iters: 0       # within-step FD power steps before the reading (E10c: 2)
 
   # Master kernel switch: true = fused Triton attn + fused CE (optimised);
-  # false = eager references + full-logits CE (un-optimised A/B baseline).
+  # false = eager references + full-logits CE (un-optimised A/B baseline). The HC residual
+  # ignores it and runs its kernels on CUDA (2026-10-08; see hc_use_kernel).
   use_kernels: true
 
   # Residual = Hyper-Connection (JPmHC, Cayley) — the sole supported residual. Orthogonal
@@ -271,8 +353,36 @@ model:
   hc_cayley_iters: 3       # Cayley fixed-point steps (paper s=2; 3 = safety margin)
   hc_cayley_alpha: 0.1     # Cayley step size α
   hc_init_gain: 0.1        # W_fused init: smaller → closer to plain residual at init
-  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
-                           # slower) — the reference arm for the fused-vs-eager parity A/B.
+  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda): what every run trains. false ⇒
+                           # the eager references, a debug opt-in: slower, equal to the kernels to
+                           # fp32 roundoff, NOT bit-identical (tests/test_hc_kernel_vs_eager.py).
+                           # Before 2026-10-08 they rounded Hres and the skip to bf16 under
+                           # autocast: .agents/notes/implemented/bug-fix/2026-10-08-eager-hc-reference-bf16.md
+  hc_fused_norm: false     # true ⇒ the HC pre-map kernel applies the sublayer's RMSNorm and emits
+                           # its input in bf16 under autocast (fwd + bwd, norm weight grad incl.).
+                           # NOT bit-identical to the unfused compiled norm. Needs hc_use_kernel.
+  hc_fused_grad: false     # true ⇒ the HC pre-map backward adds the projection-path carrier grad
+                           # in place (addmm_) instead of mm + a carrier-sized add. Needs
+                           # hc_use_kernel. Graph-step task 2.2.
+  hc_region_fused: false   # true ⇒ the HC residual runs on region kernels: the entry projects the
+                           # carrier in-kernel (no bf16 copy, no GEMV), the exit backward reads
+                           # gout once, the entry backward writes the whole carrier grad once (8
+                           # carrier passes per sublayer backward instead of 11, no carrier-sized
+                           # adds). Rounding-only change (summation orders), NOT bit-identical;
+                           # tests/test_hc_region_fused.py. Needs hc_use_kernel, n=4, CUDA + bf16
+                           # autocast (else the reference path); overrides hc_fused_grad.
+                           # .agents/notes/proposed/architecture/2026-10-08-block-glue-fusion.md
+  cca_prologue_tiled: false  # true ⇒ the CCA prologue (qk-mean, q/k RMSNorm, temp, CoPE-RoPE,
+                           # GQA expand, value-shift cat) runs on row-tiled kernels: one launch
+                           # each way instead of one 64-element program per (row, head), strided
+                           # inputs (no .contiguous() copies). Rounding-only (RMSNorm and weight
+                           # grad sum orders), NOT bit-identical; tests/test_cca_prologue_tiled.py.
+                           # blockfuse 2026-10-08.
+  inject_fold: false       # true ⇒ the prelude's and the coda's per-block injection add is folded
+                           # into the previous block's HC exit write (prelude block 0's into the
+                           # stream expand): one carrier read + write less per block. Forward
+                           # bit-identical; the term's grad is summed in the exit kernel. Needs
+                           # hc_region_fused. tests/test_hc_region_fused.py. blockfuse 2026-10-08.
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
@@ -513,7 +623,28 @@ training:
                                  # 32-bit no-decay group, every sub-4096 tensor) update in ONE
                                  # Triton pass instead of ~25 _foreach passes. Bit-identical
                                  # (tests/test_ademamix_fp32_kernel.py, gate 2026-10-04).
-  ademamix_eps_inside: false     # (b1zero) false = √(ν/bc2)+ε true-Adam normalization (default).
+  capturable_optimizer: false    # (b1zero, fused + fused_fp32 only) true = everything after the
+                                 # backward up to the optimizer step is CUDA-graph capturable: no
+                                 # GradScaler (bf16 needs no loss scale); a non-finite grad norm
+                                 # sets a device flag and both optimizer kernels skip the step on
+                                 # it (step counter included, as GradScaler's skip); lr, step,
+                                 # alpha/beta3 schedules and bias corrections are device tensors.
+                                 # The grad norm stays on the device until a log step reads it.
+                                 # false = today's eager path (GradScaler, host scalars).
+                                 # Task list: .agents/notes/proposed/architecture/
+                                 # 2026-10-07-graph-captured-training-step.md (1.4, 1.5).
+  graph_step: false              # true = the training step (forward, backward, clip, found-inf
+                                 # flag, optimizer step, tul_fan_after_step) is recorded ONCE per
+                                 # step kind (regular; the 20-step instrument/log step) as a CUDA
+                                 # graph and replayed every later step: one launch instead of
+                                 # ~31k (morph/training/graph_step.py). Needs
+                                 # capturable_optimizer and model.graph_safe; refuses
+                                 # ce_compact_rows, probes, step_mix, curriculum and in-run
+                                 # prune/carve/route (full list: graph_step_refusals). The first
+                                 # 3 steps run eager; eval and generation free the
+                                 # graphs, and the next step records them again.
+                                 # false = today's eager path.
+  ademamix_eps_inside: false    # (b1zero) false = √(ν/bc2)+ε true-Adam normalization (default).
                                  # true = √(ν/bc2+ε) safety floor (floored at √ε≈1e-4) —
                                  # required for the fused linear-int8 kernel where ν can underflow
                                  # to exactly 0; throttles live small-ν params on the de-fused

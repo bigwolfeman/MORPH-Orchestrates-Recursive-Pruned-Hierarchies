@@ -307,6 +307,12 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
 
     use_8bit = bool(getattr(tr, "adam8bit", False))
     opt_name = str(getattr(tr, "optimizer", "adamw")).lower()
+    # training.capturable_optimizer: a step with no host read and every per-step scalar on
+    # the device (ademamix_b1zero.py, "capturable" notes). Only AdEMAMixB1Zero implements it.
+    capturable = bool(getattr(tr, "capturable_optimizer", False))
+    if capturable and opt_name != "ademamix_b1zero":
+        raise ValueError(f"training.capturable_optimizer=true is implemented for "
+                         f"optimizer=ademamix_b1zero only, got optimizer={opt_name}")
 
     if opt_name == "ademamix":
         raise ValueError(
@@ -378,7 +384,7 @@ def create_optimizer(model: nn.Module, cfg: DictConfig) -> torch.optim.Optimizer
             g_coef=g_coef, g_snr_gate_kappa=g_snr_gate_kappa,
             g_snr_gate_floor=g_snr_gate_floor, track_diag=track_diag,
             fused_dynamic_qmap=fused_dynamic_qmap, fused_nu_floor=fused_nu_floor,
-            fused_fp32=fused_fp32)
+            fused_fp32=fused_fp32, capturable=capturable)
     elif use_8bit:
         try:
             import bitsandbytes as bnb

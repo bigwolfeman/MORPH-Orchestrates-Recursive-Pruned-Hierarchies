@@ -50,13 +50,35 @@ def _ademamix_fp32_kernel(
     b3, one_m_b3, b2, one_m_b2, inv_bc2, eps,
     inv_kappa, one_m_floor, snr_floor, g_coef,
     alpha, cap_c, clip_c, wd, neg_lr,
+    sched_ptr, skip_ptr,
     EPS_INSIDE: tl.constexpr, HAS_GATE: tl.constexpr, HAS_GCOEF: tl.constexpr,
     HAS_CAP: tl.constexpr, HAS_CLIP: tl.constexpr, HAS_WD: tl.constexpr,
-    WRITE_G: tl.constexpr, BLOCK_SIZE: tl.constexpr,
+    WRITE_G: tl.constexpr, LOAD_SCHED: tl.constexpr, HAS_SKIP: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
 ):
+    if LOAD_SCHED:
+        # The capturable optimizer's per-group schedule vector (AdEMAMixB1Zero,
+        # `_SCHED_*` slots): the step-varying scalars are read from device memory, so a
+        # captured launch picks up each step's values. Each slot holds the fp32 value the
+        # launch argument would carry (formed in double on the host, then rounded), and
+        # -f32(lr) == f32(-lr) because rounding is sign-symmetric. Same values, same
+        # expressions below: the same bits.
+        neg_lr = -tl.load(sched_ptr + 0)
+        b2 = tl.load(sched_ptr + 1)
+        b3 = tl.load(sched_ptr + 2)
+        alpha = tl.load(sched_ptr + 3)
+        eps = tl.load(sched_ptr + 4)
+        wd = tl.load(sched_ptr + 6)
+        one_m_b3 = tl.load(sched_ptr + 7)
+        one_m_b2 = tl.load(sched_ptr + 8)
+        inv_bc2 = tl.load(sched_ptr + 9)
     pid = tl.program_id(0)
     offs = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offs < n
+    if HAS_SKIP:
+        # Device found-inf flag set → every store below is masked off: p, m2, nu and g
+        # stay exactly as they were (the capturable optimizer's skipped step).
+        mask = mask & (tl.load(skip_ptr) == 0.0)
     p = tl.load(p_ptr + offs, mask=mask, other=0.0)
     g = tl.load(g_ptr + offs, mask=mask, other=0.0)
     m2 = tl.load(m2_ptr + offs, mask=mask, other=0.0)
@@ -115,11 +137,16 @@ def _ademamix_fp32_kernel(
 
 def ademamix_fp32_step(p, g, m2, nu, *, beta3, beta2, bc2, eps, eps_inside, g_snr_gate_kappa,
                        g_snr_gate_floor, g_coef, alpha, stale_push_cap_coord, update_clip,
-                       wd, lr, write_g) -> None:
+                       wd, lr, write_g, sched=None, skip=None) -> None:
     """Update ``p``, ``m2``, ``nu`` (and ``g`` when ``write_g``) in place, exactly as the
     ``_foreach`` block of ``AdEMAMixB1Zero.step`` does for one fp32 tensor. All four are
     contiguous fp32 CUDA tensors of the same numel. Python scalars are passed as the fp32
-    values ATen would use (``1 - beta3`` etc. are formed in double first, as there)."""
+    values ATen would use (``1 - beta3`` etc. are formed in double first, as there).
+
+    ``sched`` (capturable mode): the optimizer group's fp32 schedule vector; the kernel then
+    reads lr, beta2, beta3, alpha, eps, wd and the derived ``1 - beta3``, ``1 - beta2``,
+    ``1 / bc2`` from it and ignores those arguments (``wd`` still picks ``HAS_WD``).
+    ``skip``: an fp32[1] found-inf flag; nonzero → the launch writes nothing."""
     for t in (p, g, m2, nu):
         if t.dtype != torch.float32 or not t.is_contiguous() or t.numel() != p.numel():
             raise ValueError("ademamix_fp32_step wants contiguous fp32 tensors of one numel")
@@ -135,7 +162,9 @@ def ademamix_fp32_step(p, g, m2, nu, *, beta3, beta2, bc2, eps, eps_inside, g_sn
         float(1.0 / g_snr_gate_kappa) if has_gate else 1.0,
         float(1.0 - g_snr_gate_floor), float(g_snr_gate_floor), float(g_coef),
         float(alpha), float(stale_push_cap_coord), float(update_clip), float(wd), float(-lr),
+        sched if sched is not None else p, skip if skip is not None else p,
         EPS_INSIDE=bool(eps_inside), HAS_GATE=has_gate, HAS_GCOEF=(g_coef != 1.0),
         HAS_CAP=stale_push_cap_coord > 0.0, HAS_CLIP=update_clip > 0.0, HAS_WD=wd != 0.0,
-        WRITE_G=bool(write_g), BLOCK_SIZE=BLOCK, enable_fp_fusion=False,
+        WRITE_G=bool(write_g), LOAD_SCHED=sched is not None, HAS_SKIP=skip is not None,
+        BLOCK_SIZE=BLOCK, enable_fp_fusion=False,
     )

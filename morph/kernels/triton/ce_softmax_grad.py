@@ -91,3 +91,113 @@ def ce_softmax_grad_(logits: torch.Tensor, labels: torch.Tensor, w: torch.Tensor
         BLOCK_V=2048, num_warps=8,
     )
     return loss
+
+
+# ── The label log-probability's two bodies (``fused_linear_label_logprob``, 2026-10-08) ──
+#
+# The pointer / DITTO token loss does not take a scalar CE: it reads ``log p_model(y)`` per row
+# and mixes it with the copy head before the reduction, so its upstream gradient ``g`` per row
+# is known only in the backward. The forward needs each row's log-partition and target logit;
+# the backward recomputes the logits tile and needs ``g * (onehot(y) - softmax)`` in its place.
+# Eager, each of those is ~6 full passes over an fp32 copy of the tile (``.float()``, two
+# masked column writes, ``logsumexp``, ``gather``; ``exp``, ``mul_``, ``scatter_add_``,
+# ``.to(bf16)``). Here the forward reads the bf16 tile once and the backward reads it once and
+# writes it once. Same masking contract as the kernel above.
+
+
+@triton.jit
+def _ce_row_lse_kernel(
+    logit_ptr, lab_ptr, valid_ptr, out_ptr, lse_ptr,
+    stride_row, V, V_pad, mask_id,
+    BLOCK_V: tl.constexpr,
+):
+    row = tl.program_id(0).to(tl.int64)
+    base = logit_ptr + row * stride_row
+    lab = tl.load(lab_ptr + row)
+    ok = tl.load(valid_ptr + row)
+    cols = tl.arange(0, BLOCK_V)
+    neg_inf = float("-inf")
+    m = tl.full((BLOCK_V,), neg_inf, tl.float32)
+    s = tl.zeros((BLOCK_V,), tl.float32)
+    for start in range(0, V_pad, BLOCK_V):
+        c = start + cols
+        x = tl.load(base + c, mask=c < V_pad, other=0.0).to(tl.float32)
+        x = tl.where((c < V) & (c != mask_id), x, neg_inf)
+        m_new = tl.maximum(m, x)
+        alpha = tl.where(m_new == neg_inf, 0.0, tl.exp2((m - m_new) * 1.4426950408889634))
+        s = s * alpha + tl.where(x == neg_inf, 0.0, tl.exp2((x - m_new) * 1.4426950408889634))
+        m = m_new
+    m_row = tl.max(m, axis=0)
+    s_row = tl.sum(tl.where(m == neg_inf, 0.0, s * tl.exp2((m - m_row) * 1.4426950408889634)),
+                   axis=0)
+    lse = m_row + tl.log(s_row)
+    x_y = tl.load(base + lab).to(tl.float32)
+    tl.store(lse_ptr + row, lse)
+    tl.store(out_ptr + row, tl.where(ok != 0, x_y - lse, 0.0))
+
+
+@triton.jit
+def _ce_logprob_grad_kernel(
+    logit_ptr, lab_ptr, g_ptr, lse_ptr,
+    stride_row, V, V_pad, mask_id,
+    BLOCK_V: tl.constexpr,
+):
+    row = tl.program_id(0).to(tl.int64)
+    base = logit_ptr + row * stride_row
+    lab = tl.load(lab_ptr + row)
+    g = tl.load(g_ptr + row)
+    lse = tl.load(lse_ptr + row)
+    cols = tl.arange(0, BLOCK_V)
+    for start in range(0, V_pad, BLOCK_V):
+        c = start + cols
+        inb = c < V_pad
+        x = tl.load(base + c, mask=inb, other=0.0).to(tl.float32)
+        live = (c < V) & (c != mask_id)
+        p = tl.where(live, tl.exp2((x - lse) * 1.4426950408889634), 0.0)
+        d = tl.where(c == lab, 1.0 - p, -p)
+        tl.store(base + c, (d * g).to(logit_ptr.dtype.element_ty), mask=inb)
+
+
+def _check_tile(logits: torch.Tensor, who: str) -> None:
+    if logits.dim() != 2 or logits.stride(1) != 1:
+        raise ValueError(f"{who} wants a row-contiguous [c, V_pad] tile")
+    if logits.dtype not in (torch.bfloat16, torch.float16):
+        raise ValueError(f"{who} wants a bf16/fp16 tile, got {logits.dtype}")
+
+
+def ce_row_lse(logits: torch.Tensor, labels: torch.Tensor, valid: torch.Tensor, V: int,
+               mask_id: int = -1) -> tuple[torch.Tensor, torch.Tensor]:
+    """``logits`` ``[c, V_pad]`` bf16/fp16 (read only) -> ``(out, lse)``, each ``[c]`` fp32:
+    ``lse`` the row's log-partition over the live columns (``< V`` and ``!= mask_id``) and
+    ``out = x_y - lse`` on a ``valid`` row, 0 elsewhere. ``labels`` clamped to ``>= 0``."""
+    _check_tile(logits, "ce_row_lse")
+    c, v_pad = logits.shape
+    out = torch.empty(c, device=logits.device, dtype=torch.float32)
+    lse = torch.empty(c, device=logits.device, dtype=torch.float32)
+    if c == 0:
+        return out, lse
+    _ce_row_lse_kernel[(c,)](
+        logits, labels.contiguous(), valid.contiguous().to(torch.int8), out, lse,
+        logits.stride(0), int(V), int(v_pad), int(mask_id),
+        BLOCK_V=2048, num_warps=8,
+    )
+    return out, lse
+
+
+def ce_logprob_grad_(logits: torch.Tensor, labels: torch.Tensor, g: torch.Tensor,
+                     lse: torch.Tensor, V: int, mask_id: int = -1) -> torch.Tensor:
+    """In place: ``logits`` ``[c, V_pad]`` becomes ``g_i * (onehot(y_i) - softmax_i)`` (0 on
+    the dead columns), the gradient of ``g . log p(y)`` w.r.t. the logits, with the softmax
+    read from the forward's ``lse``. ``g`` ``[c]`` fp32 (0 on an ignored row), ``labels``
+    clamped to ``>= 0``. Returns ``logits``."""
+    _check_tile(logits, "ce_logprob_grad_")
+    c, v_pad = logits.shape
+    if c == 0:
+        return logits
+    _ce_logprob_grad_kernel[(c,)](
+        logits, labels.contiguous(), g.contiguous().to(torch.float32),
+        lse.contiguous().to(torch.float32),
+        logits.stride(0), int(V), int(v_pad), int(mask_id),
+        BLOCK_V=2048, num_warps=8,
+    )
+    return logits

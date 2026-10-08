@@ -41,8 +41,10 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
+
+from morph.kernels.triton.fused_hyper_connection import (
+    hc_map_gemv, hc_post_reference, hc_pre_map_reference)
 
 
 def cayley_orthogonal(A: Tensor, iters: int = 2, alpha: float = 0.1) -> Tensor:
@@ -79,22 +81,26 @@ def cayley_orthogonal(A: Tensor, iters: int = 2, alpha: float = 0.1) -> Tensor:
     Returns:
         [..., n, n] orthogonal matrices (exact to fp roundoff).
     """
-    n = A.shape[-1]
-    I = torch.eye(n, dtype=A.dtype, device=A.device)
-    B = (alpha * 0.5) * (A - A.transpose(-1, -2))              # skew so(n)
-    B2 = B @ B                                                 # matmul 1
-    p = 0.5 * (B * B).sum(dim=(-1, -2))                        # ½‖B‖²_F  ≥ 0
-    if n == 4:
-        # Pfaffian of a 4×4 skew matrix: Pf = B01·B23 − B02·B13 + B03·B12 ; det(B) = Pf².
-        Pf = (B[..., 0, 1] * B[..., 2, 3]
-              - B[..., 0, 2] * B[..., 1, 3]
-              + B[..., 0, 3] * B[..., 1, 2])
-        q = Pf * Pf                                            # det(B) ≥ 0
-        num = (I + 2.0 * B + B2) @ ((1.0 + p)[..., None, None] * I + B2)   # (I+B)²·[(1+p)I+B²]
-        return num / (1.0 + p + q)[..., None, None]           # denom ≥ 1 → unconditionally stable
-    # n≠4: true Cayley Y = (I+B)(I−B)⁻¹ via solve — solve((I−B)ᵀ, (I+B)ᵀ)ᵀ. Orthogonal any ‖B‖.
-    Yt = torch.linalg.solve((I - B).transpose(-1, -2), (I + B).transpose(-1, -2))
-    return Yt.transpose(-1, -2)
+    # Autocast off: the map is exact only in A's dtype. Under bf16 autocast the two matmuls
+    # ran in bf16 and Hres lost orthogonality at 2e-3 (hcgap, 2026-10-08; the kernel
+    # computes this in fp32 registers). Without autocast this is the code from before.
+    with torch.autocast(A.device.type, enabled=False):
+        n = A.shape[-1]
+        I = torch.eye(n, dtype=A.dtype, device=A.device)
+        B = (alpha * 0.5) * (A - A.transpose(-1, -2))              # skew so(n)
+        B2 = B @ B                                                 # matmul 1
+        p = 0.5 * (B * B).sum(dim=(-1, -2))                        # ½‖B‖²_F  ≥ 0
+        if n == 4:
+            # Pfaffian of a 4×4 skew matrix: Pf = B01·B23 − B02·B13 + B03·B12 ; det(B) = Pf².
+            Pf = (B[..., 0, 1] * B[..., 2, 3]
+                  - B[..., 0, 2] * B[..., 1, 3]
+                  + B[..., 0, 3] * B[..., 1, 2])
+            q = Pf * Pf                                            # det(B) ≥ 0
+            num = (I + 2.0 * B + B2) @ ((1.0 + p)[..., None, None] * I + B2)  # (I+B)²·[(1+p)I+B²]
+            return num / (1.0 + p + q)[..., None, None]           # denom ≥ 1 → stable
+        # n≠4: true Cayley Y = (I+B)(I−B)⁻¹ via solve — solve((I−B)ᵀ, (I+B)ᵀ)ᵀ. Orthogonal any ‖B‖.
+        Yt = torch.linalg.solve((I - B).transpose(-1, -2), (I + B).transpose(-1, -2))
+        return Yt.transpose(-1, -2)
 
 
 class HyperConnectionResidual(nn.Module):
@@ -110,6 +116,18 @@ class HyperConnectionResidual(nn.Module):
         cayley_alpha:  Cayley step size α. Default 0.1.
         init_gain:     W_fused init std = init_gain / sqrt(n*d_model). Small ⇒ H̃≈0 ⇒
                        module ≈ plain residual at init. Default 0.1.
+        fused_norm:    model.hc_fused_norm. ``forward(..., norm=<attention.RMSNorm>)`` then
+                       applies that norm INSIDE the pre-map kernel and hands the sublayer
+                       ``norm(x_bar)`` in the autocast dtype. Needs ``use_kernel``. Not
+                       bit-identical to the unfused (compiled) norm.
+        fused_grad:    model.hc_fused_grad. The pre-map backward accumulates the
+                       projection-path carrier grad in place (``addmm_``) instead of ``mm``
+                       plus an add. Needs ``use_kernel``. Same fp32 sum as the default.
+        region_fused:  model.hc_region_fused. The entry and the exit are region kernels
+                       (``hc_region_entry`` / ``hc_region_exit``): the entry reads the carrier
+                       once, the backward writes the carrier grad once. Needs ``use_kernel``,
+                       n=4, cayley_iters=3; replaces ``fused_grad``; not with ``fused_norm``.
+                       Rounding-only change (summation orders), not bit-identical.
     """
 
     def __init__(
@@ -121,6 +139,9 @@ class HyperConnectionResidual(nn.Module):
         cayley_alpha: float = 0.1,
         init_gain: float = 0.1,
         use_kernel: bool = True,
+        fused_norm: bool = False,
+        fused_grad: bool = False,
+        region_fused: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -142,10 +163,12 @@ class HyperConnectionResidual(nn.Module):
 
         # Branch-free hot path: resolve the carrier-op implementation at construction.
         # The fused Triton kernels (PRE x_bar / POST x_mix+x_post) run on CUDA; hc_pre / hc_post
-        # fall back to their eager references on CPU / force_eager, so binding them here is safe
-        # and adds NO runtime flag check to the math. `use_kernel=False` forces the eager
-        # references even on cayley+cuda — the bit-faithful, slower reference arm for the
-        # fused-vs-eager A/B (and the wandb-logged eager baseline).
+        # fall back to their eager references on CPU (the global force_eager no longer reaches
+        # HC, 2026-10-08), so binding them here is safe and adds NO runtime flag check to the
+        # math. `use_kernel=False` forces the eager references even on cayley+cuda: a debug
+        # opt-in, slower, equal to the kernels to fp32 roundoff (not bit-identical;
+        # tests/test_hc_kernel_vs_eager.py). Before 2026-10-08 it rounded Hres and the skip
+        # to bf16 under autocast.
         if use_kernel:
             from morph.kernels.triton.fused_hyper_connection import hc_pre_map, hc_post
             # Round 2: hc_pre_map fuses the WHOLE pre phase (rms+proj+softmax×2+cayley+
@@ -156,10 +179,28 @@ class HyperConnectionResidual(nn.Module):
             self._hc_post = hc_post
             self._use_fused_premap = True
         else:
-            from morph.kernels.triton.fused_hyper_connection import hc_post_reference
             self._hc_pre_map = None
             self._hc_post = hc_post_reference
             self._use_fused_premap = False
+        if (fused_norm or fused_grad) and not use_kernel:
+            raise ValueError("model.hc_fused_norm / model.hc_fused_grad fold into the fused "
+                             "pre-map kernel; they need model.hc_use_kernel=true")
+        # Read by MORPHBlock (a Python constant per instance): pass `norm=` to forward.
+        self.folds_norm = bool(fused_norm)
+        self._fused_grad = bool(fused_grad)
+        if fused_norm or fused_grad:
+            from morph.kernels.triton.fused_hyper_connection import hc_pre_map_fold
+            self._hc_pre_map_fold = hc_pre_map_fold
+        # model.hc_region_fused (a Python constant per instance: traced out under compile).
+        self._region_fused = bool(region_fused)
+        if region_fused:
+            if not use_kernel or fused_norm or n_streams != 4 or int(cayley_iters) != 3:
+                raise ValueError("model.hc_region_fused needs hc_use_kernel=true, "
+                                 "hc_fused_norm=false, hc_streams=4, hc_cayley_iters=3")
+            from morph.kernels.triton.fused_hyper_connection import (
+                hc_region_entry, hc_region_exit)
+            self._hc_region_entry = hc_region_entry
+            self._hc_region_exit = hc_region_exit
 
     def _mappings(self, X: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Compute (Hpre, Hpost, Hres) per token from the n-stream carrier X [B,S,n,C]."""
@@ -170,7 +211,7 @@ class HyperConnectionResidual(nn.Module):
         # by the per-token 1/rms (Cayley-HC bias-under-rms bug, Ai-notes 07-02-2026). We divide
         # only the weight term by the stored per-token scalar rms and add the bias after.
         rms = x_flat.float().pow(2).mean(-1, keepdim=True).add(self.eps).sqrt()   # [B,S,1]
-        wx = F.linear(x_flat, self.proj.weight).float()                          # x·Wᵀ (no bias)
+        wx = hc_map_gemv(x_flat, self.proj.weight)                               # x·Wᵀ (no bias)
         h = (wx / rms + self.proj.bias.float()).reshape(B, S, 3, n, n)            # fp32 mappings
         pre_raw, post_raw, res_raw = h[:, :, 0], h[:, :, 1], h[:, :, 2]
 
@@ -185,6 +226,7 @@ class HyperConnectionResidual(nn.Module):
         sublayer_fn: Callable[..., Tensor],
         *args,
         post_inject: Tensor | None = None,
+        norm: nn.Module | None = None,
         **kwargs,
     ) -> Tensor:
         """Apply the HC residual.
@@ -195,13 +237,44 @@ class HyperConnectionResidual(nn.Module):
             post_inject: [B, S, C] | None — carrier-engine: the NEXT layer's single-stream
                          injection term, folded into the POST write (broadcast-added to every
                          output stream) so a separate _apply_injection carrier pass is skipped.
+            norm:        the sublayer's ``attention.RMSNorm`` (model.hc_fused_norm only). Given,
+                         ``sublayer_fn`` receives ``norm(x_bar)`` (computed in the pre-map
+                         kernel, in the autocast dtype when autocast is on) and must not
+                         apply the norm itself.
             *args/**kwargs: forwarded to sublayer_fn.
 
         Returns:
             [B, S, n, C] updated carrier.
         """
+        if self._region_fused:
+            # model.hc_region_fused: the exit reads `h_link` (the entry's view of h), so the
+            # exit's carrier grad reaches the entry backward, which writes the whole carrier
+            # grad in one pass (fused_hyper_connection.py, "model.hc_region_fused").
+            x_bar, Hres, Hpost_row, h_link = self._hc_region_entry(
+                h, self.proj.weight, self.proj.bias,
+                self.tau, self.cayley_alpha, self.cayley_iters, self.eps,
+            )
+            y = sublayer_fn(x_bar, *args, **kwargs)
+            return self._hc_region_exit(Hres, Hpost_row, h_link, y, post_inject)
         dt = h.dtype
-        if self._use_fused_premap:
+        if norm is not None or self._fused_grad:
+            # model.hc_fused_norm / model.hc_fused_grad (Python constants per call: traced
+            # out under compile). The normalised input is emitted in the dtype the
+            # sublayer's first GEMM would cast it to under autocast.
+            if norm is not None and not self.folds_norm:
+                raise ValueError("norm= passed to a HyperConnectionResidual built without "
+                                 "fused_norm")
+            odt = (torch.get_autocast_dtype("cuda")
+                   if h.is_cuda and torch.is_autocast_enabled("cuda") else dt)
+            x_bar, Hres, Hpost_row = self._hc_pre_map_fold(
+                h, self.proj.weight, self.proj.bias,
+                self.tau, self.cayley_alpha, self.cayley_iters, self.eps,
+                None if norm is None else norm.weight,
+                0.0 if norm is None else norm.eps, odt,
+            )
+            Hres = Hres.to(dt)
+            Hpost_row = Hpost_row.to(dt)
+        elif self._use_fused_premap:
             # Round 2: ONE fused kernel (+ cuBLAS GEMV) does rms+proj+softmax×2+cayley+
             # reductions+x_bar and returns (x_bar, Hres, Hpost_row) directly. Branch-free
             # on the cayley hot path (resolved at __init__); hc_pre_map itself falls back to
@@ -213,11 +286,12 @@ class HyperConnectionResidual(nn.Module):
             Hres = Hres.to(dt)
             Hpost_row = Hpost_row.to(dt)
         else:
-            # Sinkhorn / non-cayley: eager mapping (unchanged).
-            Hpre, Hpost, Hres = self._mappings(h)
-            Hpost_row = Hpost.sum(dim=-1).to(dt)
-            Hpre_cm = Hpre.mean(dim=-2).to(dt)
-            x_bar = torch.einsum("bsj,bsjc->bsc", Hpre_cm, h)
+            # model.hc_use_kernel=false: the kernels' own pure-PyTorch reference (the same
+            # math as `_mappings`, carrier ops in the carrier dtype like the kernel).
+            x_bar, Hres, Hpost_row = hc_pre_map_reference(
+                h, self.proj.weight, self.proj.bias,
+                self.tau, self.cayley_alpha, self.cayley_iters, self.eps,
+            )
             Hres = Hres.to(dt)
 
         y = sublayer_fn(x_bar, *args, **kwargs)            # [B,S,C]

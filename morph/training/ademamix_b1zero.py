@@ -60,6 +60,32 @@ _OPT_CUDA_GRAPH = os.environ.get("MORPH_OPT_CUDA_GRAPH", "0").lower() not in ("0
 _GRAPH_WARMUP_STEPS = 3  # eager (sched-tensor) steps before capture: state init + Triton
                          # compile of the LOAD_SCHED variant + allocator settle.
 
+# ── capturable=True (training.capturable_optimizer): a step with no host read ──
+# The graph-captured training step (.agents/notes/proposed/architecture/
+# 2026-10-07-graph-captured-training-step.md, tasks 1.4/1.5) records forward, backward, clip
+# and this step as ONE CUDA graph. A captured launch replays its arguments as recorded, so
+# step() may not hand any kernel a value that changes per step, and may not read the device.
+#   * Every step-varying scalar lives in a per-group fp32 SCHEDULE VECTOR on the device
+#     (slots below; 0-6 are the fused 8-bit kernel's LOAD_SCHED layout). lr is written by
+#     write_step_scalars() OUTSIDE the graph, since the trainer owns the LR schedule. Slots
+#     1-9 (α_t, β3_t, bc2, the derived 1-β3_t and 1/bc2, and the constants) are copied INSIDE
+#     the step from one row of a table the host builds once with the same _sched() expressions
+#     the eager path runs, indexed by a device step counter: each entry is the fp32 rounding
+#     of the eager double, so the same bits.
+#   * The step counter lives on the device and advances only when the found-inf flag
+#     (mark_found_inf) is clear. A flagged step writes nothing: both kernels mask every store
+#     on the flag. That is GradScaler's skipped optimizer.step(), decided with no host read.
+#   * State is allocated on first touch as exact zeros and the 8-bit kernel always takes its
+#     dequant branch (is_init=0): the signed map's zero code (value +0.0) for m2 and code 0
+#     (value +0.0) for ν decode to the zeros the init branch uses.
+_SCHED_LR, _SCHED_B2, _SCHED_B3, _SCHED_ALPHA, _SCHED_EPS, _SCHED_BC2, _SCHED_WD = range(7)
+_SCHED_1MB3, _SCHED_1MB2, _SCHED_INVBC2 = 7, 8, 9      # the fp32 kernel's derived values
+_SCHED_N = 10                  # a table row is slots 1..9 (everything but lr)
+# Group keys the table and the constant slots are built from. A change after the build
+# (a resume re-applies the config's values over the checkpoint's) must rebuild them.
+_SCHED_HP_KEYS = ("betas", "alpha", "alpha_cap", "t_alpha", "t_beta3", "beta3_warmup_start",
+                  "eps", "weight_decay")
+
 
 def set_opt_cuda_graph(enabled: bool) -> None:
     """In-process override of MORPH_OPT_CUDA_GRAPH (A/B testing without env replumbing)."""
@@ -94,6 +120,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         fused_dynamic_qmap: bool = False,
         fused_nu_floor: bool = True,
         fused_fp32: bool = False,
+        capturable: bool = False,
     ):
         if betas[0] != 0.0:
             raise ValueError(f"AdEMAMixB1Zero requires β1=0, got betas={betas}")
@@ -202,6 +229,37 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         # the persistent sched tensors, warmup counter and the capture-time signature.
         self._graph_state: dict[int, dict] = {}
         self._graph_warned = False
+        # capturable (training.capturable_optimizer): see the module notes above. Only the
+        # fused kernels read device scalars, so every param must take one of them: the
+        # fused 8-bit kernel or the fp32 one-pass kernel. The diagnostics read `_foreach`
+        # intermediates on the host and the env optimizer graph keeps its own host
+        # schedule, so both are refused rather than silently bypassed.
+        self.capturable = bool(capturable)
+        self._cap: list[dict] = []
+        if self.capturable:
+            if not (self.fused and self.fused_fp32):
+                raise ValueError("capturable=True needs fused=True and fused_fp32=True: only "
+                                 "the fused kernels read their scalars from the device")
+            if self.track_diag:
+                raise ValueError("capturable=True refuses track_diag (host-side counters)")
+            if _OPT_CUDA_GRAPH:
+                raise ValueError("capturable=True and MORPH_OPT_CUDA_GRAPH are two different "
+                                 "graph schemes; unset MORPH_OPT_CUDA_GRAPH")
+            if float(self._code_signed_cpu[self._signed_zero_idx]) != 0.0 or bool(
+                    torch.signbit(self._code_signed_cpu[self._signed_zero_idx])):
+                raise RuntimeError("signed dynamic map has no +0.0 code; the zero-state "
+                                   "init would not decode to the init branch's zeros")
+            dev = self.param_groups[0]["params"][0].device
+            if dev.type != "cuda":
+                raise ValueError("capturable=True needs CUDA params")
+            # The found-inf flag (fp32, 0 = finite). Written on the device by
+            # mark_found_inf; read by both kernels and by the step-counter advance.
+            self.found_inf = torch.zeros(1, dtype=torch.float32, device=dev)
+            self._cap = [self._cap_build(group, dev) for group in self.param_groups]
+            # The dynamic maps move to the device lazily on first use: an H2D copy that
+            # must not land inside a capture. Move them now.
+            self._code(dev, True)
+            self._code(dev, False)
 
     def _code(self, device, signed: bool):
         key = (device, signed)
@@ -220,6 +278,9 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         _diag_rows by step(); drain it from the train loop. Cheap (a few norm reductions per
         tracked tensor per step) but only enable for diagnostic runs.
         """
+        if enable and self.capturable:
+            raise RuntimeError("set_diag_capture reads `_foreach` intermediates on the host; "
+                               "the capturable optimizer has none")
         self._diag_capture = bool(enable)
         self._diag_names = {}
         if enable:
@@ -315,6 +376,19 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 print(f"  [ademamix] dequantized {n_conv} param states 8-bit→fp32 on resume "
                       f"(bits=32 optimizer; clean precision swap)")
 
+        # Capturable: the step counter the checkpoint carries moves onto the device. The
+        # replaced group hyperparameters are picked up by the next write_step_scalars().
+        for cb, group in zip(self._cap, self.param_groups):
+            cb["step"].fill_(int(group.get("step", 0)))
+
+    def state_dict(self):
+        """Capturable: the device step counters go into the groups' ``step`` (one host read
+        per group, checkpoint time only), so a checkpoint has the eager layout and resumes
+        on either path."""
+        for cb, group in zip(self._cap, self.param_groups):
+            group["step"] = int(cb["step"].item())
+        return super().state_dict()
+
     @staticmethod
     def _migrate_linear_nu_to_sqrt(st: dict, p: torch.Tensor, blocksize: int) -> None:
         """Convert legacy fused ν state from linear ν codes to sqrt(ν) codes in-place."""
@@ -337,7 +411,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         st["nu_sqrt_code"] = q.reshape(-1)[:n].to(torch.int8).contiguous()
         st["nu_sqrt_amax"] = amax.contiguous()
 
-    def _fused_step(self, params, lr, beta2, beta3, alpha, eps, bc2, wd, sched=None):
+    def _fused_step(self, params, lr, beta2, beta3, alpha, eps, bc2, wd, sched=None, skip=None):
         """Fused Triton path for 8-bit large params (linear-int8 blockwise state).
 
         State per param: int8 code tensors (m2_code, nu_sqrt_code) + fp32 per-block
@@ -349,6 +423,8 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         (the kernel loads the step-varying scalars by pointer instead of baked launch args;
         bit-exact, see kernel docstring). The scalar args are still passed for the
         LOAD_SCHED=False specialization and ignored otherwise.
+
+        skip: optional device found-inf flag (capturable mode); set → the kernels write nothing.
         """
         from morph.training.ademamix_b1zero_kernel import (
             fused_ademamix_b1zero_step, BLOCK,
@@ -391,6 +467,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                     code_signed=self._code(p.device, True),
                     code_unsigned=self._code(p.device, False),
                     sched=sched,
+                    skip=skip,
                 )
             else:
                 if is_init:
@@ -414,6 +491,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                     upd_clip=self.update_clip,
                     nu_floor=self.fused_nu_floor,
                     sched=sched,
+                    skip=skip,
                 )
 
     def _mask_dead_state(self, p) -> None:
@@ -554,12 +632,14 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
         lr, beta2, beta3_t, alpha_t, eps, bc2, wd = scalars
         self._fused_step(params, lr, beta2, beta3_t, alpha_t, eps, bc2, wd, sched=sched)
 
-    def _fp32_kernel_step(self, params, lr, beta2, beta3_t, alpha_t, eps, bc2, wd) -> list:
+    def _fp32_kernel_step(self, params, lr, beta2, beta3_t, alpha_t, eps, bc2, wd,
+                          sched=None, skip=None) -> list:
         """``fused_fp32``: update every eligible fp32-state param with the one-pass kernel
         and return the ones it cannot take (left to the ``_foreach`` path below, which is
         elementwise per param, so the split changes no bit). Eligible: a contiguous fp32
         CUDA param with a contiguous grad (fp32, or any float dtype, which the ``_foreach``
-        path upcasts into a COPY: then the gated g must not be written back)."""
+        path upcasts into a COPY: then the gated g must not be written back). ``sched`` /
+        ``skip``: the capturable mode's device schedule vector and found-inf flag."""
         from morph.training.ademamix_fp32_kernel import ademamix_fp32_step
         rest = []
         for p in params:
@@ -579,7 +659,7 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
                 eps_inside=self.eps_inside, g_snr_gate_kappa=self.g_snr_gate_kappa,
                 g_snr_gate_floor=self.g_snr_gate_floor, g_coef=self.g_coef, alpha=alpha_t,
                 stale_push_cap_coord=self.stale_push_cap_coord, update_clip=self.update_clip,
-                wd=wd, lr=lr, write_g=g.dtype == torch.float32)
+                wd=wd, lr=lr, write_g=g.dtype == torch.float32, sched=sched, skip=skip)
         return rest
 
     def _graphed_fused_step(self, gidx, params, scalars) -> None:
@@ -650,12 +730,201 @@ class AdEMAMixB1Zero(torch.optim.Optimizer):
               f"({len(dead_pairs)} dead-masked)", flush=True)
         graph.replay()
 
+    # ── capturable mode (training.capturable_optimizer; module notes above) ─────
+    @staticmethod
+    def _sched_hp(group) -> tuple:
+        return tuple(group.get(k) for k in _SCHED_HP_KEYS)
+
+    def _sched_table(self, group) -> torch.Tensor:
+        """fp32 rows of schedule slots 1..9 for t = 0..L-1, each computed in double by the
+        eager path's own expressions (``_sched``, ``1 - β2**t``, ``1 - β3_t``, ``1 / bc2``)
+        and rounded once to fp32, as the launch argument is. Row 0 repeats row 1: it is read
+        only by a step that is skipped before any step was taken, which writes nothing.
+
+        The device step indexes it clamped to L-1, so the last row must hold for every
+        later t. It does from the first t past both warmup horizons at which f32(bc2) and
+        f32(1/bc2) are both 1.0: α_t is min(α, cap) for t ≥ t_alpha; β3_t is β3 for
+        t > t_beta3 while the warmup start is below β3 (the schedule then rises through
+        β3 and min() holds it there); bc2 only grows toward 1. The final row is checked
+        against those limits, so a schedule outside this argument raises here instead of
+        drifting later.
+        """
+        import numpy as np
+        b2, b3 = float(group["betas"][1]), float(group["betas"][2])
+        ta, tb = group["t_alpha"], group["t_beta3"]
+        if tb and not float(group["beta3_warmup_start"]) < b3:
+            raise ValueError("capturable: the β3 table needs beta3_warmup_start < beta3")
+        horizon = max(int(ta or 0), int(tb or 0)) + 1
+        eps, wd = float(group["eps"]), float(group["weight_decay"])
+        rows, t = [], 1
+        while True:
+            alpha_t, _, beta3_t = self._sched(t, group)
+            bc2 = 1.0 - b2 ** t
+            row = [0.0] * _SCHED_N
+            row[_SCHED_B2], row[_SCHED_B3], row[_SCHED_ALPHA] = b2, beta3_t, alpha_t
+            row[_SCHED_EPS], row[_SCHED_BC2], row[_SCHED_WD] = eps, bc2, wd
+            row[_SCHED_1MB3], row[_SCHED_1MB2] = 1.0 - beta3_t, 1.0 - b2
+            row[_SCHED_INVBC2] = 1.0 / bc2
+            rows.append(row[1:])
+            if t > horizon and np.float32(bc2) == 1.0 and np.float32(1.0 / bc2) == 1.0:
+                break
+            t += 1
+            if t > 50_000_000:
+                raise ValueError(f"capturable: bc2 never reaches 1.0 in fp32 (beta2={b2})")
+        cap = float(group.get("alpha_cap", 0.0) or 0.0)
+        alpha_lim = min(float(group["alpha"]), cap) if cap > 0.0 else float(group["alpha"])
+        b3_end, alpha_end = rows[-1][_SCHED_B3 - 1], rows[-1][_SCHED_ALPHA - 1]
+        if b3_end != b3 or alpha_end != alpha_lim:
+            raise ValueError(f"capturable: schedule not at its limits by step {t} "
+                             f"(beta3_t={b3_end} vs {b3}, alpha_t={alpha_end} vs {alpha_lim})")
+        return torch.tensor([rows[0]] + rows, dtype=torch.float64).to(torch.float32)
+
+    def _cap_build(self, group, dev) -> dict:
+        """One group's device buffers: the schedule vector (lr filled; slots 1..9 come from
+        the table on every step), the table, the int64 step counter (from the group's
+        ``step``, so a rebuild after a resume keeps the count) and the host bookkeeping
+        step() checks."""
+        sched = torch.zeros(_SCHED_N, dtype=torch.float32)
+        sched[_SCHED_LR] = float(group["lr"])
+        return {
+            "sched": sched.to(dev),
+            "table": self._sched_table(group).to(dev),
+            "step": torch.full((1,), int(group.get("step", 0)), dtype=torch.long, device=dev),
+            "lr": group["lr"],
+            "hp": self._sched_hp(group),
+        }
+
+    def write_step_scalars(self) -> None:
+        """Capturable: bring the device schedule up to date with the host groups. Call it
+        after every LR-schedule write and before step(), OUTSIDE any captured region: it
+        launches one ``fill_`` per group whose lr changed (the value is baked into that
+        launch), and rebuilds a group's table if its hyperparameters changed (a resume
+        re-applies the config's values). step() raises if this was skipped."""
+        for gidx, group in enumerate(self.param_groups):
+            cb = self._cap[gidx]
+            if cb["hp"] != self._sched_hp(group):
+                self._cap[gidx] = cb = self._cap_build(group, cb["step"].device)
+            if cb["lr"] != group["lr"]:
+                cb["sched"][_SCHED_LR].fill_(group["lr"])
+                cb["lr"] = group["lr"]
+
+    def mark_found_inf(self, total_norm: torch.Tensor) -> None:
+        """Capturable: set the found-inf flag from the pre-clip global grad norm, on the
+        device (what ``clip_grad_norm_`` returns). A grad holding an inf or a NaN makes the
+        norm inf or NaN, so this flags every step GradScaler's per-element check flags. It
+        also flags one case the scaler steps through: finite grads whose norm overflows
+        fp32 (over 3.4e38), where the scaler stepped on grads the clip had multiplied by 0."""
+        self.found_inf.copy_(torch.logical_not(torch.isfinite(total_norm)).reshape(1))
+
+    def _cap_init_state(self, p, eight_bit: bool) -> None:
+        """Zero state on first touch (the eager path allocates it inside the first step)."""
+        st = self.state[p]
+        if len(st) and not st.get("init"):
+            return
+        st.pop("init", None)
+        if not eight_bit:
+            st["m2"] = torch.zeros_like(p, dtype=torch.float32)
+            st["nu"] = torch.zeros_like(p, dtype=torch.float32)
+            return
+        from morph.training.ademamix_b1zero_kernel import BLOCK
+        n = p.numel()
+        nblocks = (n + BLOCK - 1) // BLOCK
+        if self.fused_dynamic_qmap:
+            st["m2_dcode"] = torch.full((n,), self._signed_zero_idx, dtype=torch.uint8,
+                                        device=p.device)
+            st["nu_dcode"] = torch.zeros(n, dtype=torch.uint8, device=p.device)
+            st["m2_damax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+            st["nu_damax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+        else:                       # linear int8: code 0 decodes to 0 for both
+            st["m2_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
+            st["nu_sqrt_code"] = torch.zeros(n, dtype=torch.int8, device=p.device)
+            st["m2_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+            st["nu_sqrt_amax"] = torch.zeros(nblocks, dtype=torch.float32, device=p.device)
+
+    def init_state(self) -> None:
+        """Capturable: allocate the zero state of every param that has a grad now. step()
+        does this on first touch; a CUDA-graph capture calls it first (after a backward,
+        before the capture), so the allocation and its zero fill are not recorded into
+        the graph and replayed."""
+        for group in self.param_groups:
+            grp_bits = group.get("optim_bits", self.bits)
+            for p in group["params"]:
+                if p.grad is not None:
+                    self._cap_init_state(p, grp_bits == 8 and p.numel() >= self.min_8bit_size)
+
+    def _cap_mask_dead_state(self, p, live) -> None:
+        """``_mask_dead_state`` with no host read: ``masked_fill_`` on every tagged param
+        (an all-alive mask writes nothing new), and only on a live step, so a skipped step
+        leaves the state as it was."""
+        keep = getattr(p, "_dead_mask", None)
+        if keep is None:
+            return
+        st = self.state[p]
+        dead = (keep.reshape(-1).to(p.device) == 0) & live
+        if "m2_dcode" in st:
+            st["m2_dcode"].masked_fill_(dead, self._signed_zero_idx)
+            st["nu_dcode"].masked_fill_(dead, 0)
+        elif "m2_code" in st:
+            st["m2_code"].masked_fill_(dead, 0)
+            st["nu_sqrt_code" if "nu_sqrt_code" in st else "nu_code"].masked_fill_(dead, 0)
+        else:
+            st["m2"].view(-1).masked_fill_(dead, 0)
+            st["nu"].view(-1).masked_fill_(dead, 0)
+
+    def _step_capturable(self) -> None:
+        """The fused + fused_fp32 step with every per-step value on the device. Per param
+        it runs the same kernels on the same values as the eager path (the dead-state mask,
+        then one kernel launch), so a finite step gives the same bits."""
+        live = self.found_inf == 0.0                       # bool[1]
+        for gidx, group in enumerate(self.param_groups):
+            cb = self._cap[gidx]
+            if cb["lr"] != group["lr"] or cb["hp"] != self._sched_hp(group):
+                raise RuntimeError("AdEMAMixB1Zero(capturable): the group's lr or "
+                                   "hyperparameters changed since write_step_scalars(); call "
+                                   "it after every schedule write, before step()")
+            # Every group counts every step, as the eager path's group["step"] does.
+            cb["step"].add_(live)
+            row = cb["table"].index_select(0, cb["step"].clamp(max=cb["table"].shape[0] - 1))
+            cb["sched"][1:].copy_(row.view(-1))
+
+            params = [p for p in group["params"] if p.grad is not None]
+            if not params:
+                continue
+            grp_bits = group.get("optim_bits", self.bits)
+            eight = [grp_bits == 8 and p.numel() >= self.min_8bit_size for p in params]
+            for p, e in zip(params, eight):
+                self._cap_init_state(p, e)
+                self._cap_mask_dead_state(p, live)
+            fused = [p for p, e in zip(params, eight) if e]
+            if fused:
+                # The scalar arguments are placeholders: LOAD_SCHED reads all seven.
+                self._fused_step(fused, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                                 sched=cb["sched"], skip=self.found_inf)
+            rest = self._fp32_kernel_step(
+                [p for p, e in zip(params, eight) if not e], 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                group["weight_decay"], sched=cb["sched"], skip=self.found_inf)
+            if rest:
+                raise RuntimeError(
+                    f"AdEMAMixB1Zero(capturable): {len(rest)} param(s) fit neither fused "
+                    f"kernel (fp32-state params must be contiguous fp32 CUDA tensors with a "
+                    f"contiguous grad); first shape {tuple(rest[0].shape)}, dtype "
+                    f"{rest[0].dtype}")
+            if not cb.get("reported"):          # once per group: which kernel took what
+                cb["reported"] = True
+                print(f"  [opt-capturable] group {gidx}: {len(fused)} fused 8-bit + "
+                      f"{len(params) - len(fused)} fp32-kernel params; schedule table "
+                      f"{cb['table'].shape[0]} rows", flush=True)
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = None
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
+
+        if self.capturable:
+            self._step_capturable()
+            return loss
 
         for gidx, group in enumerate(self.param_groups):
             group["step"] = group.get("step", 0) + 1

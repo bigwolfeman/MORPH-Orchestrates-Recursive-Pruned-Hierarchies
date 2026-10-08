@@ -586,6 +586,330 @@ class _FusedCCAPrologue(torch.autograd.Function):
 
 
 # ===========================================================================
+# model.cca_prologue_tiled — the same prologue, row-tiled: ONE forward and ONE backward
+# launch, BR (b, s) rows x every head per program.
+#
+# Why (blockfuse census 2026-10-08, FAST2 graph replay): the per-(row, head) kernels above
+# run one 64-element program per (b, s, h) with 8 warps; at the prelude shape (7680 rows) the
+# Q forward alone took 294 us for ~27 MB of traffic, and the whole prologue was 25 ms of a
+# 354 ms step, launch geometry rather than bandwidth. Here a program holds a [BR, D] tile per
+# head, the RoPE partner comes from a second load at the rotated column (instead of an
+# O(D^2) masked sum), the backward combines the Q-path and K-path grads in registers and
+# writes every input grad once in its final dtype (no host-side adds, group sums or casts),
+# and the inputs are read through their strides (the fused GEMM's slices and the conv's
+# transposed output need no `.contiguous()` copy).
+#
+# Arithmetic: op for op the kernels above (the forward rounds to bf16 where the reference
+# does; the backward is fp32 from a recomputed forward). The differences are reduction
+# orders only: the RMSNorm sums over D (a [BR, D] tile reduces in a different order than
+# a [D] vector), and the norm-weight / temp grads, summed per program and then over
+# programs instead of over (row, head). Not bit-identical; tests/test_cca_prologue_tiled.py
+# scores both paths against an fp64 reference.
+# ===========================================================================
+
+if TRITON_AVAILABLE:
+
+    @triton.jit
+    def _rows_ptrs(ptr, b, s, sb, ss, sc, col):
+        """[BR, D] pointer tile: rows (b, s) [BR], columns col [D], strides in elements."""
+        return ptr + (b * sb + s * ss)[:, None] + (col * sc)[None, :]
+
+    @triton.jit
+    def _rope_bf16(y, y_p, cos, sin, is_lo, do_rope):
+        """_cca_q_fwd_kernel's RoPE on a tile: y, y_p (y at the rotated column) bf16."""
+        yp = y_p.to(tl.float32)
+        rot = tl.where(is_lo[None, :], -yp, yp).to(tl.bfloat16)
+        t1 = (y * cos).to(tl.bfloat16)
+        t2 = (rot * sin).to(tl.bfloat16)
+        return tl.where(do_rope[:, None], (t1 + t2).to(tl.bfloat16), y)
+
+    @triton.jit
+    def _cca_rows_fwd_kernel(
+        ql_ptr, kl_ptr, qc_ptr, kc_ptr, vc_ptr, vp_ptr,
+        wq_ptr, wk_ptr, temp_ptr, cos_ptr, sin_ptr,
+        oq_ptr, ok_ptr, ov_ptr,                      # [B, H, S, D] contiguous
+        n_rows, S, n_skip_rope,
+        s_ql_b, s_ql_s, s_ql_c, s_kl_b, s_kl_s, s_kl_c,
+        s_qc_b, s_qc_s, s_qc_c, s_kc_b, s_kc_s, s_kc_c,
+        s_vc_b, s_vc_s, s_vc_c, s_vp_b, s_vp_s, s_vp_c,
+        H: tl.constexpr, Hkv: tl.constexpr, D: tl.constexpr,
+        N_REP: tl.constexpr, EPS: tl.constexpr, VHALF: tl.constexpr,
+        BR: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        r = pid * BR + tl.arange(0, BR)
+        rmask = r < n_rows
+        b = r // S
+        s = r % S
+        d = tl.arange(0, D)
+        half = D // 2
+        is_lo = d < half
+        dp = tl.where(is_lo, d + half, d - half)          # rotate_half partner column
+        m2 = rmask[:, None]
+        do_rope = s < (S - n_skip_rope)
+        cos = tl.load(cos_ptr + s[:, None] * D + d[None, :], mask=m2, other=0.0).to(tl.bfloat16)
+        sin = tl.load(sin_ptr + s[:, None] * D + d[None, :], mask=m2, other=0.0).to(tl.bfloat16)
+        wq = tl.load(wq_ptr + d)
+        wq_p = tl.load(wq_ptr + dp)
+        wk = tl.load(wk_ptr + d)
+        wk_p = tl.load(wk_ptr + dp)
+        o_row = (b * H * S + s) * D                        # + h*S*D + d
+
+        for kv in tl.static_range(Hkv):
+            kl = tl.load(_rows_ptrs(kl_ptr, b, s, s_kl_b, s_kl_s, s_kl_c, kv * D + d),
+                         mask=m2, other=0.0)
+            kl_p = tl.load(_rows_ptrs(kl_ptr, b, s, s_kl_b, s_kl_s, s_kl_c, kv * D + dp),
+                           mask=m2, other=0.0)
+            klf = kl.to(tl.float32)
+            klf_p = kl_p.to(tl.float32)
+            qkm_sum = tl.zeros((BR, D), dtype=tl.float32)
+            qkm_sum_p = tl.zeros((BR, D), dtype=tl.float32)
+            for rr in tl.static_range(N_REP):
+                h = kv * N_REP + rr
+                ql = tl.load(_rows_ptrs(ql_ptr, b, s, s_ql_b, s_ql_s, s_ql_c, h * D + d),
+                             mask=m2, other=0.0)
+                ql_p = tl.load(_rows_ptrs(ql_ptr, b, s, s_ql_b, s_ql_s, s_ql_c, h * D + dp),
+                               mask=m2, other=0.0)
+                qc = tl.load(_rows_ptrs(qc_ptr, b, s, s_qc_b, s_qc_s, s_qc_c, h * D + d),
+                             mask=m2, other=0.0)
+                qc_p = tl.load(_rows_ptrs(qc_ptr, b, s, s_qc_b, s_qc_s, s_qc_c, h * D + dp),
+                               mask=m2, other=0.0)
+                # Q: _cca_q_fwd_kernel, per element
+                qkm = (((ql.to(tl.float32) + klf) * 0.5).to(tl.bfloat16))
+                qkm_p = (((ql_p.to(tl.float32) + klf_p) * 0.5).to(tl.bfloat16))
+                a = (qc + qkm).to(tl.bfloat16).to(tl.float32)
+                a_p = (qc_p + qkm_p).to(tl.bfloat16).to(tl.float32)
+                inv = 1.0 / tl.sqrt(tl.sum(a * a, axis=1) / D + EPS)
+                y = ((a * inv[:, None]).to(tl.bfloat16) * wq[None, :]).to(tl.bfloat16)
+                y_p = ((a_p * inv[:, None]).to(tl.bfloat16) * wq_p[None, :]).to(tl.bfloat16)
+                out = _rope_bf16(y, y_p, cos, sin, is_lo, do_rope)
+                tl.store(oq_ptr + o_row[:, None] + h * S * D + d[None, :],
+                         out.to(oq_ptr.dtype.element_ty), mask=m2)
+                # K: the group mean of the bf16 qk-means (_cca_k_fwd_kernel)
+                qkm_sum += qkm.to(tl.float32)
+                qkm_sum_p += qkm_p.to(tl.float32)
+
+            kc = tl.load(_rows_ptrs(kc_ptr, b, s, s_kc_b, s_kc_s, s_kc_c, kv * D + d),
+                         mask=m2, other=0.0)
+            kc_p = tl.load(_rows_ptrs(kc_ptr, b, s, s_kc_b, s_kc_s, s_kc_c, kv * D + dp),
+                           mask=m2, other=0.0)
+            a = (kc + (qkm_sum / N_REP).to(tl.bfloat16)).to(tl.bfloat16).to(tl.float32)
+            a_p = (kc_p + (qkm_sum_p / N_REP).to(tl.bfloat16)).to(tl.bfloat16).to(tl.float32)
+            inv = 1.0 / tl.sqrt(tl.sum(a * a, axis=1) / D + EPS)
+            etemp = tl.exp(tl.load(temp_ptr + kv).to(tl.float32)).to(tl.bfloat16)
+            yw = ((a * inv[:, None]).to(tl.bfloat16) * wk[None, :]).to(tl.bfloat16)
+            yw_p = ((a_p * inv[:, None]).to(tl.bfloat16) * wk_p[None, :]).to(tl.bfloat16)
+            y = (yw * etemp).to(tl.bfloat16)
+            y_p = (yw_p * etemp).to(tl.bfloat16)
+            outk = _rope_bf16(y, y_p, cos, sin, is_lo, do_rope).to(ok_ptr.dtype.element_ty)
+            # V: cat(v_curr, v_prev) column kv*D + d, GQA-broadcast like K
+            ci = kv * D + d
+            from_c = ci < VHALF
+            vcv = tl.load(_rows_ptrs(vc_ptr, b, s, s_vc_b, s_vc_s, s_vc_c, ci),
+                          mask=m2 & from_c[None, :], other=0.0)
+            vpv = tl.load(_rows_ptrs(vp_ptr, b, s, s_vp_b, s_vp_s, s_vp_c, ci - VHALF),
+                          mask=m2 & (~from_c)[None, :], other=0.0)
+            outv = tl.where(from_c[None, :], vcv, vpv).to(ov_ptr.dtype.element_ty)
+            for rr in tl.static_range(N_REP):
+                h = kv * N_REP + rr
+                optr = o_row[:, None] + h * S * D + d[None, :]
+                tl.store(ok_ptr + optr, outk, mask=m2)
+                tl.store(ov_ptr + optr, outv, mask=m2)
+
+    @triton.jit
+    def _rope_vjp(go, go_p, cos, sin, sin_p, is_lo, do_rope):
+        """Backward of out = y*cos + rotate_half(y)*sin on a tile (fp32); go_p, sin_p at the
+        rotated column. Equals _cca_q_bwd_kernel's masked-sum form exactly."""
+        gsin_p = go_p * sin_p
+        rot_t = tl.where(is_lo[None, :], gsin_p, -gsin_p)
+        return tl.where(do_rope[:, None], go * cos + rot_t, go)
+
+    @triton.jit
+    def _cca_rows_bwd_kernel(
+        gq_ptr, gk_ptr, gv_ptr,                      # [B, H, S, D] contiguous
+        ql_ptr, kl_ptr, qc_ptr, kc_ptr,
+        wq_ptr, wk_ptr, temp_ptr, cos_ptr, sin_ptr,
+        dql_ptr, dkl_ptr, dqc_ptr, dkc_ptr, dvc_ptr, dvp_ptr,
+        dwq_part_ptr, dwk_part_ptr, dtemp_part_ptr,  # [n_prog, D], [n_prog, D], [n_prog, Hkv]
+        n_rows, S, n_skip_rope,
+        s_ql_b, s_ql_s, s_ql_c, s_kl_b, s_kl_s, s_kl_c,
+        s_qc_b, s_qc_s, s_qc_c, s_kc_b, s_kc_s, s_kc_c,
+        s_dql_b, s_dql_s, s_dql_c, s_dkl_b, s_dkl_s, s_dkl_c,
+        s_dqc_b, s_dqc_s, s_dqc_c, s_dkc_b, s_dkc_s, s_dkc_c,
+        s_dvc_b, s_dvc_s, s_dvc_c, s_dvp_b, s_dvp_s, s_dvp_c,
+        H: tl.constexpr, Hkv: tl.constexpr, D: tl.constexpr,
+        N_REP: tl.constexpr, EPS: tl.constexpr, VHALF: tl.constexpr,
+        BR: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        r = pid * BR + tl.arange(0, BR)
+        rmask = r < n_rows
+        b = r // S
+        s = r % S
+        d = tl.arange(0, D)
+        half = D // 2
+        is_lo = d < half
+        dp = tl.where(is_lo, d + half, d - half)
+        m2 = rmask[:, None]
+        do_rope = s < (S - n_skip_rope)
+        cos = tl.load(cos_ptr + s[:, None] * D + d[None, :], mask=m2, other=0.0).to(tl.float32)
+        sin = tl.load(sin_ptr + s[:, None] * D + d[None, :], mask=m2, other=0.0).to(tl.float32)
+        sin_p = tl.load(sin_ptr + s[:, None] * D + dp[None, :], mask=m2, other=0.0).to(tl.float32)
+        wq = tl.load(wq_ptr + d).to(tl.float32)
+        wk = tl.load(wk_ptr + d).to(tl.float32)
+        o_row = (b * H * S + s) * D
+        dwq = tl.zeros((D,), dtype=tl.float32)
+        dwk = tl.zeros((D,), dtype=tl.float32)
+        odt = dql_ptr.dtype.element_ty
+
+        for kv in tl.static_range(Hkv):
+            kl = tl.load(_rows_ptrs(kl_ptr, b, s, s_kl_b, s_kl_s, s_kl_c, kv * D + d),
+                         mask=m2, other=0.0).to(tl.float32)
+            # ---- K path (_cca_k_bwd_kernel) ----
+            kc = tl.load(_rows_ptrs(kc_ptr, b, s, s_kc_b, s_kc_s, s_kc_c, kv * D + d),
+                         mask=m2, other=0.0).to(tl.float32)
+            qmean = tl.zeros((BR, D), dtype=tl.float32)
+            go = tl.zeros((BR, D), dtype=tl.float32)
+            go_p = tl.zeros((BR, D), dtype=tl.float32)
+            gv = tl.zeros((BR, D), dtype=tl.float32)
+            for rr in tl.static_range(N_REP):
+                h = kv * N_REP + rr
+                qmean += tl.load(_rows_ptrs(ql_ptr, b, s, s_ql_b, s_ql_s, s_ql_c, h * D + d),
+                                 mask=m2, other=0.0).to(tl.float32)
+                gptr = o_row[:, None] + h * S * D
+                go += tl.load(gk_ptr + gptr + d[None, :], mask=m2, other=0.0).to(tl.float32)
+                go_p += tl.load(gk_ptr + gptr + dp[None, :], mask=m2, other=0.0).to(tl.float32)
+                gv += tl.load(gv_ptr + gptr + d[None, :], mask=m2, other=0.0).to(tl.float32)
+            qmean = qmean / N_REP
+            a = kc + 0.5 * (qmean + kl)
+            inv = 1.0 / tl.sqrt(tl.sum(a * a, axis=1) / D + EPS)
+            n = a * inv[:, None]
+            etemp = tl.exp(tl.load(temp_ptr + kv).to(tl.float32))
+            y = n * wk[None, :] * etemp
+            dy = _rope_vjp(go, go_p, cos, sin, sin_p, is_lo, do_rope)
+            d_yw = dy * etemp
+            tl.store(dtemp_part_ptr + pid * Hkv + kv, tl.sum(tl.sum(dy * y, axis=1), axis=0))
+            dn = d_yw * wk[None, :]
+            dwk += tl.sum(d_yw * n, axis=0)
+            sum_dn_a = tl.sum(dn * a, axis=1)
+            da_k = inv[:, None] * dn - (sum_dn_a / D)[:, None] * (inv * inv * inv)[:, None] * a
+            d_ql_each = (0.5 * da_k) / N_REP
+            tl.store(_rows_ptrs(dkc_ptr, b, s, s_dkc_b, s_dkc_s, s_dkc_c, kv * D + d),
+                     da_k.to(odt), mask=m2)
+            # ---- V: the GQA group sum of grad_v into the cat's halves ----
+            ci = kv * D + d
+            from_c = ci < VHALF
+            tl.store(_rows_ptrs(dvc_ptr, b, s, s_dvc_b, s_dvc_s, s_dvc_c, ci), gv.to(odt),
+                     mask=m2 & from_c[None, :])
+            tl.store(_rows_ptrs(dvp_ptr, b, s, s_dvp_b, s_dvp_s, s_dvp_c, ci - VHALF),
+                     gv.to(odt), mask=m2 & (~from_c)[None, :])
+            # ---- Q path per head (_cca_q_bwd_kernel), combined with the K path ----
+            d_kl_q = tl.zeros((BR, D), dtype=tl.float32)
+            for rr in tl.static_range(N_REP):
+                h = kv * N_REP + rr
+                ql = tl.load(_rows_ptrs(ql_ptr, b, s, s_ql_b, s_ql_s, s_ql_c, h * D + d),
+                             mask=m2, other=0.0).to(tl.float32)
+                qc = tl.load(_rows_ptrs(qc_ptr, b, s, s_qc_b, s_qc_s, s_qc_c, h * D + d),
+                             mask=m2, other=0.0).to(tl.float32)
+                a = qc + 0.5 * (ql + kl)
+                inv = 1.0 / tl.sqrt(tl.sum(a * a, axis=1) / D + EPS)
+                n = a * inv[:, None]
+                gptr = o_row[:, None] + h * S * D
+                gq = tl.load(gq_ptr + gptr + d[None, :], mask=m2, other=0.0).to(tl.float32)
+                gq_p = tl.load(gq_ptr + gptr + dp[None, :], mask=m2, other=0.0).to(tl.float32)
+                dy = _rope_vjp(gq, gq_p, cos, sin, sin_p, is_lo, do_rope)
+                dn = dy * wq[None, :]
+                dwq += tl.sum(dy * n, axis=0)
+                sum_dn_a = tl.sum(dn * a, axis=1)
+                da = inv[:, None] * dn - (sum_dn_a / D)[:, None] * (inv * inv * inv)[:, None] * a
+                tl.store(_rows_ptrs(dqc_ptr, b, s, s_dqc_b, s_dqc_s, s_dqc_c, h * D + d),
+                         da.to(odt), mask=m2)
+                tl.store(_rows_ptrs(dql_ptr, b, s, s_dql_b, s_dql_s, s_dql_c, h * D + d),
+                         (0.5 * da + d_ql_each).to(odt), mask=m2)
+                d_kl_q += 0.5 * da
+            tl.store(_rows_ptrs(dkl_ptr, b, s, s_dkl_b, s_dkl_s, s_dkl_c, kv * D + d),
+                     (0.5 * da_k + d_kl_q).to(odt), mask=m2)
+
+        tl.store(dwq_part_ptr + pid * D + d, dwq)
+        tl.store(dwk_part_ptr + pid * D + d, dwk)
+
+
+_ROWS_BR = 16
+_ROWS_LAUNCH = dict(num_stages=1, num_warps=4)
+
+
+def _strides3(t: Tensor) -> tuple[int, int, int]:
+    return t.stride(0), t.stride(1), t.stride(2)
+
+
+class _FusedCCAPrologueRows(torch.autograd.Function):
+    """``_FusedCCAPrologue`` on the row-tiled kernels (model.cca_prologue_tiled). Same
+    inputs, outputs and gradient contract; inputs are read through their strides and each
+    input grad is allocated with its input's layout (``empty_like``: a transposed conv
+    output gets a transposed grad, so the conv backward's ``.contiguous()`` is free)."""
+
+    @staticmethod
+    def forward(ctx, q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
+                wq, wk, temp, cos, sin, H, Hkv, D, n_rep, n_skip_rope, eps):
+        B, S, _ = q_lat.shape
+        n_rows = B * S
+        dev, odt = q_lat.device, q_lat.dtype
+        out_q = torch.empty(B, H, S, D, device=dev, dtype=odt)
+        out_k = torch.empty(B, H, S, D, device=dev, dtype=odt)
+        out_v = torch.empty(B, H, S, D, device=dev, dtype=odt)
+        vhalf = v_curr.shape[-1]
+        _cca_rows_fwd_kernel[(triton.cdiv(n_rows, _ROWS_BR),)](
+            q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin,
+            out_q, out_k, out_v, n_rows, S, n_skip_rope,
+            *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
+            *_strides3(v_curr), *_strides3(v_prev),
+            H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
+            **_ROWS_LAUNCH,
+        )
+        ctx.save_for_backward(q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin)
+        ctx.dims = (H, Hkv, D, n_rep, n_skip_rope, eps, vhalf)
+        ctx.vdt = (v_curr.dtype, tuple(v_curr.shape), v_prev.dtype, tuple(v_prev.shape))
+        return out_q, out_k, out_v
+
+    @staticmethod
+    def backward(ctx, grad_q, grad_k, grad_v):
+        q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin = ctx.saved_tensors
+        H, Hkv, D, n_rep, n_skip_rope, eps, vhalf = ctx.dims
+        B, S, _ = q_lat.shape
+        n_rows = B * S
+        n_prog = triton.cdiv(n_rows, _ROWS_BR)
+        dev = q_lat.device
+        grad_q = grad_q.contiguous()
+        grad_k = grad_k.contiguous()
+        grad_v = grad_v.contiguous()
+        # Every grad lands in its input's dtype (q_lat's for v, as _FusedCCAPrologue does).
+        d_ql = torch.empty_like(q_lat)
+        d_kl = torch.empty_like(k_lat)
+        d_qc = torch.empty_like(q_conv)
+        d_kc = torch.empty_like(k_conv)
+        d_vc = torch.empty(B, S, vhalf, device=dev, dtype=q_lat.dtype)
+        d_vp = torch.empty(B, S, vhalf, device=dev, dtype=q_lat.dtype)
+        f32 = torch.float32
+        dwq_part = torch.empty(n_prog, D, device=dev, dtype=f32)
+        dwk_part = torch.empty(n_prog, D, device=dev, dtype=f32)
+        dtemp_part = torch.empty(n_prog, Hkv, device=dev, dtype=f32)
+        _cca_rows_bwd_kernel[(n_prog,)](
+            grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv,
+            wq, wk, temp, cos, sin, d_ql, d_kl, d_qc, d_kc, d_vc, d_vp,
+            dwq_part, dwk_part, dtemp_part, n_rows, S, n_skip_rope,
+            *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
+            *_strides3(d_ql), *_strides3(d_kl), *_strides3(d_qc), *_strides3(d_kc),
+            *_strides3(d_vc), *_strides3(d_vp),
+            H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
+            **_ROWS_LAUNCH,
+        )
+        return (d_ql, d_kl, d_qc, d_kc, d_vc, d_vp,
+                dwq_part.sum(0).to(wq.dtype), dwk_part.sum(0).to(wk.dtype),
+                dtemp_part.sum(0).to(temp.dtype),
+                None, None, None, None, None, None, None, None)
+
+
+# ===========================================================================
 # Public API
 # ===========================================================================
 
@@ -595,7 +919,7 @@ def fused_cca_prologue(
     q_norm_weight: Tensor, k_norm_weight: Tensor, temp: Tensor,
     cos: Tensor, sin: Tensor,
     n_heads: int, n_kv_heads: int, d_head: int,
-    n_skip_rope: int = 0, eps: float = 1e-6,
+    n_skip_rope: int = 0, eps: float = 1e-6, tiled: bool = False,
 ):
     """Fused CCA attention prologue (forward + backward in Triton).
 
@@ -610,6 +934,9 @@ def fused_cca_prologue(
         temp:   [n_kv_heads]
         cos / sin: rope caches, broadcastable to [S, d_head] (any leading singleton dims OK)
         n_skip_rope: number of trailing positions that skip RoPE.
+        tiled:  model.cca_prologue_tiled — run the row-tiled kernels
+                (``_FusedCCAPrologueRows``: one launch each way, strided inputs). Not
+                bit-identical to the per-(row, head) kernels (reduction orders only).
 
     Returns:
         q, k, v each [B, n_heads, S, d_head], dtype = q_lat.dtype.
@@ -627,6 +954,14 @@ def fused_cca_prologue(
             H, Hkv, D, n_skip_rope, eps,
         )  # traceable
 
+    if tiled:
+        # model.cca_prologue_tiled: D must be a power of two (the tile's column range).
+        assert D & (D - 1) == 0, f"cca_prologue_tiled needs a power-of-two d_head, got {D}"
+        return _cca_prologue_rows_dispatch(
+            q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
+            q_norm_weight, k_norm_weight, temp, cos2, sin2,
+            H, Hkv, D, n_rep, n_skip_rope, eps,
+        )
     return _cca_prologue_dispatch(
         q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
         q_norm_weight, k_norm_weight, temp, cos2, sin2,
@@ -637,6 +972,11 @@ def fused_cca_prologue(
 @kernel_fence  # Dynamo fence: kernel is opaque (autograd.Function)
 def _cca_prologue_dispatch(*args):
     return _FusedCCAPrologue.apply(*args)
+
+
+@kernel_fence  # Dynamo fence: kernel is opaque (autograd.Function)
+def _cca_prologue_rows_dispatch(*args):
+    return _FusedCCAPrologueRows.apply(*args)
 
 
 # ===========================================================================

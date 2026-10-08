@@ -281,7 +281,15 @@ What this means for the three options the coordinator listed:
   (scratch `pcache_patch.py`): -16 ms but +0.92 GiB peak (the cached weights live through
   the backward), and NOT bit-identical. The grad norm matched master for all 20 gate steps,
   but the loss differs from step 2 on and the final state hash differs. The cause was not
-  found, so it is not shipped.
+  found, so it is not shipped. **Cause found 2026-10-07** (graph-step task 2.3): parametrize
+  keys its cache by the id of the module the property was injected on, held in a closure
+  (`torch/nn/utils/parametrize.py`, `key = (id(module), tensor_name)`), and a deepcopy keeps
+  the injected class. The fan target's EMA twin deep-copies the parametrised prelude, so
+  inside `cached()` the twin read the LIVE prelude's quantised weights. The twin equals the
+  live prelude until the first nonzero-lr step, hence step 2. Proof: the same probe with the
+  twin's read uncached is byte-identical to the uncached baseline over 20 deterministic
+  steps (`lxtul_pointer_graph`, graph_step off). The replacement is `model.ternary_step_cache`
+  ([graph-step note](2026-10-07-graph-captured-training-step.md), task 2.3).
 - **CUDA graphs** (reduce-overhead): see above.
 - **HC fused backward / compiled MLP backward tuning**: not started (time).
 

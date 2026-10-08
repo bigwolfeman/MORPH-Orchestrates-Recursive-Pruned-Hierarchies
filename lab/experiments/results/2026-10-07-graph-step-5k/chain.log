@@ -1,0 +1,3 @@
+[10-07 16:54:21] train start e0c814a2
+[10-07 17:52:40] train exit=0 Final val_loss=3.9212
+[10-07 17:56:31] sweep exit=0 graph ce_tokens K1-K6: +0.0088 [+0.0082, +0.0094] over 480 rows graph spandec_ce K1-K6: +0.0118 [+0.0112, +0.0124] over 160 batches eager ce_tokens K1-K6: +0.0155 [+0.0147, +0.0164] over 480 rows eager spandec_ce K1-K6: +0.0133 [+0.0124, +0.0141] over 160 batches 

@@ -11,6 +11,7 @@ All hyperparameters are logged to wandb at run start (full config dict).
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import math
 import random as _random
@@ -718,6 +719,26 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         ce_chunk_size=int(getattr(m, "ce_chunk_size", 1024)),
         ce_softmax_kernel=bool(getattr(m, "ce_softmax_kernel", False)),
         ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
+        # MORPHConfig.spandec_ce_row_cap: the span decoder's CE on a fixed, proven row cap.
+        spandec_ce_row_cap=bool(getattr(m, "spandec_ce_row_cap", False)),
+        # MORPHConfig.graph_safe: a training forward with no host sync and fixed shapes.
+        graph_safe=bool(getattr(m, "graph_safe", False)),
+        # MORPHConfig.graph_safe_parts: which pieces graph_safe turns on (default: all).
+        graph_safe_parts=tuple(getattr(m, "graph_safe_parts", None)
+                               or MORPHConfig.graph_safe_parts),
+        # MORPHConfig.tg_fused_attention: both strict TG attention branches in one kernel.
+        tg_fused_attention=bool(getattr(m, "tg_fused_attention", False)),
+        # MORPHConfig.ternary_step_cache: bf16 ternary weights once per forward (bound below,
+        # after torch.compile).
+        ternary_step_cache=bool(getattr(m, "ternary_step_cache", False)),
+        # MORPHConfig.fan_twin_compile: the fan's EMA twin prelude blocks compiled (below).
+        fan_twin_compile=bool(getattr(m, "fan_twin_compile", False)),
+        # MORPHConfig.fan_div_fast: the fan's epi / vol terms batched in fp32.
+        fan_div_fast=bool(getattr(m, "fan_div_fast", False)),
+        # MORPHConfig.fan_lsel_pick_bf16: the per-pass teacher pick's head GEMMs in bf16.
+        fan_lsel_pick_bf16=bool(getattr(m, "fan_lsel_pick_bf16", False)),
+        # MORPHConfig.fan_target_online: the fan target from the online prelude (no twin pass).
+        fan_target_online=bool(getattr(m, "fan_target_online", False)),
         use_kernels=bool(getattr(m, "use_kernels", True)),
         tg_scoped_kernels=bool(getattr(m, "tg_scoped_kernels", False)),
         hc_streams=int(getattr(m, "hc_streams", 4)),
@@ -726,6 +747,12 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         hc_cayley_alpha=float(getattr(m, "hc_cayley_alpha", 0.1)),
         hc_init_gain=float(getattr(m, "hc_init_gain", 0.1)),
         hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
+        hc_fused_norm=bool(getattr(m, "hc_fused_norm", False)),
+        hc_fused_grad=bool(getattr(m, "hc_fused_grad", False)),
+        # model.hc_region_fused / model.cca_prologue_tiled (blockfuse 2026-10-08)
+        hc_region_fused=bool(getattr(m, "hc_region_fused", False)),
+        cca_prologue_tiled=bool(getattr(m, "cca_prologue_tiled", False)),
+        inject_fold=bool(getattr(m, "inject_fold", False)),      # model.inject_fold
         l2_persist=bool(getattr(m, "l2_persist", False)),
         retention=bool(getattr(m, "retention", True)),
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),
@@ -753,6 +780,11 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_floor_lambda=float(getattr(m, "slot_gain_floor_lambda", 0.0)),
         slot_gain_floor_target=float(getattr(m, "slot_gain_floor_target", 0.95)),
         slot_gain_renorm=bool(getattr(m, "slot_gain_renorm", False)),
+        slot_gain_no_ckpt=bool(getattr(m, "slot_gain_no_ckpt", False)),
+        slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
+        # MORPHConfig.slot_depth_stratified / slot_compact (morph/model/slot_compact.py)
+        slot_depth_stratified=bool(getattr(m, "slot_depth_stratified", False)),
+        slot_compact=str(getattr(m, "slot_compact", "off")),
         mtp_heads=int(getattr(m, "mtp_heads", 1)),
         injection_channels=str(getattr(m, "injection_channels", "ctx")),
         core_fixed_point_lambda=float(getattr(m, "core_fixed_point_lambda", 0.0)),
@@ -974,8 +1006,7 @@ def classify_plain_to_tul_keys(
     tul_pre = tul_owned_prefixes(model)
     tg_pre = tg_dropped_attention_prefixes(model)
 
-    def _canon(k: str) -> str:
-        return k.replace("._orig_mod.", ".").replace("_orig_mod.", "")
+    _canon = _canon_ckpt_key
 
     ok_m, bad_m, ok_u, bad_u = [], [], [], []
     for k in missing:
@@ -1006,6 +1037,28 @@ def _report_plain_to_tul(tag: str, path: str, ok_m: list[str], bad_m: list[str],
             print(f"    {label}: {len(keys)}", flush=True)
             for k in keys:
                 print(f"      {k}", flush=True)
+
+
+def _canon_ckpt_key(k: str) -> str:
+    """A state-dict key with every torch.compile `_orig_mod.` level removed."""
+    k = k.replace("._orig_mod.", ".")
+    return k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k
+
+
+def align_checkpoint_keys(raw: dict, model: nn.Module) -> dict:
+    """Map each checkpoint tensor onto the live model's ACTUAL key, ignoring compile wrappers.
+
+    torch.compile inserts `._orig_mod.` into the keys of every module it wraps, and the
+    checkpoint and the model may each carry it independently: compiled MLPs (always),
+    `training.compile_blocks` (whole blocks, opt-in), or neither. Canonical form on BOTH
+    sides covers every pairing; a key with no canonical match passes through unchanged so
+    `load_state_dict` reports it as unexpected (and the carve/router load hooks still see
+    every mortar_* key). Before 2026-10-08 `load_checkpoint` only stripped the checkpoint
+    side, so an eager checkpoint could not resume into a `compile_blocks` model (420 keys
+    without a home).
+    """
+    canon_to_model = {_canon_ckpt_key(k): k for k in model.state_dict().keys()}
+    return {canon_to_model.get(_canon_ckpt_key(k), k): v for k, v in raw.items()}
 
 
 def load_checkpoint(
@@ -1057,16 +1110,8 @@ def load_checkpoint(
     #    near-empty "resume" — latent theater). Fix: align the checkpoint's key CONVENTION to
     #    the model's, but pass ALL keys through INTACT so the carve/router load-hooks fire
     #    (pre-filtering to the dense model's keys would drop mortar_data before it exists).
-    ckpt_model = ckpt["model"]
-    model_keys = list(model.state_dict().keys())
-    model_has_orig = any("_orig_mod" in k for k in model_keys)
-    ckpt_has_orig = any("_orig_mod" in k for k in ckpt_model)
-    if ckpt_has_orig and not model_has_orig:
-        state = {k.replace("_orig_mod.", ""): v for k, v in ckpt_model.items()}
-    else:
-        # Same convention (both compiled, or neither) → as-is. (model-compiled/ckpt-not is
-        # not produced by this codebase — compile is applied unconditionally before save.)
-        state = dict(ckpt_model)
+    state = align_checkpoint_keys(ckpt["model"], model)
+    ckpt_pnames = set(state.keys())
     # Let load_state_dict report truthfully AFTER the hooks reconstruct mortar_data/routers.
     drop_retired_tul_keys(state, model, path)
     drop_code_thinker_keys(state, model, path)
@@ -1094,7 +1139,13 @@ def load_checkpoint(
                   f"{'...' if len(_benign_missing) > 8 else ''}")
 
     if "scaler" in ckpt:
-        scaler.load_state_dict(ckpt["scaler"])
+        if ckpt["scaler"] or not scaler.is_enabled():
+            scaler.load_state_dict(ckpt["scaler"])
+        else:
+            # Written under training.capturable_optimizer (a disabled scaler saves {}):
+            # there is no scale to restore, so this run's scaler starts at its default.
+            print("  [ckpt] checkpoint has no GradScaler state (capturable_optimizer run); "
+                  "the scaler starts fresh", flush=True)
 
     # 3. RNG — continue the SAME stochastic stream (Poisson depth draws, dropout).
     if ckpt.get("rng_cpu") is not None:
@@ -1123,7 +1174,7 @@ def load_checkpoint(
     # The checkpoint's MODEL parameter names travel with the optimizer state so the caller
     # can re-index it when the live model has parameters the checkpoint does not (an
     # intervention arm that adds a module). See optimizer.align_optimizer_state.
-    return step, ckpt["optimizer"], needs_rebuild, set(ckpt["model"].keys())
+    return step, ckpt["optimizer"], needs_rebuild, ckpt_pnames
 
 
 def assert_code_target_front_frozen(model) -> list[str]:
@@ -1209,22 +1260,10 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device,
     """
     ckpt = torch.load(path, map_location=device, weights_only=False)
     raw = ckpt["model"]
-    # _orig_mod-robust key alignment, SYMMETRIC on both sides. torch.compile inserts
-    # `._orig_mod.` into wrapped-submodule keys; a checkpoint and this model may EACH carry it
-    # independently — compiled↔compiled (match natively), or an UNcompiled init_from seed loaded
-    # into a COMPILED model (the seed lacks `._orig_mod.` that the model's compiled MLP keys have).
-    # The old raw-vs-strip pick only stripped the checkpoint side, so the uncompiled-seed→compiled-
-    # model case silently dropped every compiled-submodule tensor to random init. Fix: canonicalize
-    # BOTH sides (strip `._orig_mod.`) and map each checkpoint tensor onto the model's ACTUAL key.
     model_keys = set(model.state_dict().keys())
-    def _canon(k):
-        return k.replace("._orig_mod.", ".")
-    canon_to_model = {_canon(k): k for k in model_keys}
-    state = {}
-    for k, v in raw.items():
-        state[canon_to_model.get(_canon(k), k)] = v   # onto the model's real key, else leave → unexpected
+    state = align_checkpoint_keys(raw, model)
     n_raw = sum(1 for k in raw if k in model_keys)
-    n_strip = sum(1 for k in raw if _canon(k) in canon_to_model)   # true canonical match count
+    n_strip = sum(1 for k in state if k in model_keys)   # true canonical match count
     drop_retired_tul_keys(state, model, path)
     drop_code_thinker_keys(state, model, path)
     missing, unexpected = model.load_state_dict(state, strict=False)
@@ -1290,8 +1329,7 @@ def check_init_from_keys(missing: list[str], unexpected: list[str], model: nn.Mo
     Prints the missing list in full and returns it."""
     prefixes = tuple(str(p) for p in new_modules)
 
-    def _canon(k: str) -> str:
-        return k.replace("._orig_mod.", ".").replace("_orig_mod.", "")
+    _canon = _canon_ckpt_key
 
     if unexpected:
         raise RuntimeError(
@@ -2542,6 +2580,29 @@ def main(cfg: DictConfig) -> None:
     # slot-loop arm with compile_blocks (2026-10-04). A model whose core shrinks its
     # active set (the plain Parcae path) wants the default.
     core_dynamic = bool(getattr(tr, "compile_core_dynamic", True))
+
+    # model.ternary_step_cache (2026-10-07): bound AFTER the blocks are wrapped (a weight inside
+    # a compiled block gets the compiled fill, so every read keeps its bits) and BEFORE the
+    # eager_on_recompile stance (the fill compiles here, in the thread-free window).
+    def _bind_ternary_step_cache(mode: str | None) -> None:
+        if not bool(model.cfg.ternary_step_cache):
+            return
+        _cs = int(getattr(tr, "compact_step", 10**9))
+        if _cs < total_steps:
+            raise ValueError(f"model.ternary_step_cache is refused: training.compact_step={_cs} "
+                             f"< steps={total_steps}; the carve removes the STEs it caches")
+        from morph.model.ternary_qat import bind_ternary_step_cache
+        _tsc = bind_ternary_step_cache(model, mode)
+        print(f"  [ternary-step-cache] ON: {_tsc.summary()}, refreshed once per forward",
+              flush=True)
+
+    def _compile_block(layer, dyn):
+        """training.compile_blocks' compile of ONE MORPHBlock (the GLA retention branch
+        stays a graph break, see the comment at the call below)."""
+        if getattr(layer, "retention", None) is not None:
+            layer.retention.forward = torch.compiler.disable(layer.retention.forward)
+        return torch.compile(layer, mode=compile_mode, dynamic=dyn)
+
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
             # Core MLPs see a VARIABLE batch each loop iteration (active-set
@@ -2562,10 +2623,7 @@ def main(cfg: DictConfig) -> None:
                     # runs): Inductor hits an upstream SplitScan codegen bug on its
                     # chunked cumsum. Eager-only path (use_kernels=false) — the fused
                     # Triton kernels are not compilable and do not need this.
-                    if getattr(layer, "retention", None) is not None:
-                        layer.retention.forward = torch.compiler.disable(
-                            layer.retention.forward)
-                    group[i] = torch.compile(layer, mode=compile_mode, dynamic=dyn)
+                    group[i] = _compile_block(layer, dyn)
                     continue
                 if hasattr(layer, "mlp"):
                     layer.mlp = torch.compile(layer.mlp, mode=compile_mode, dynamic=dyn)
@@ -2580,9 +2638,23 @@ def main(cfg: DictConfig) -> None:
         if compile_blocks:
             print(f"  BLOCKS compiled (mode={compile_mode}, core dynamic-batch, "
                   "GLA graph-broken)")
+        # model.fan_twin_compile (2026-10-08): the fan's EMA twin prelude blocks through the
+        # SAME block compile as the live prelude (fixed batch, forward only, no_grad). The
+        # twin is built eager above; its modules and state_dict names stay as they are
+        # (`FanTargetFront.compile_blocks_`). Not bit-identical to the eager twin.
+        if bool(model.cfg.fan_twin_compile):
+            _twin = model.__dict__.get("_fan_target")
+            if _twin is None or not compile_blocks:
+                raise ValueError("model.fan_twin_compile needs the fan's EMA twin (tul.fan_opf "
+                                 "/ fan_route latent / fan_loop_select) and "
+                                 "training.compile_blocks=true")
+            _twin.compile_blocks_(lambda b: _compile_block(b, None))
+            print(f"  [fan-target] EMA twin: {len(_twin.prelude)} prelude blocks compiled",
+                  flush=True)
         else:
             print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)"
                   + (", attention compiled" if compile_attention else ""))
+        _bind_ternary_step_cache(compile_mode)
 
         # ── Warmup compile — runs in the THREAD-FREE window (pre-wandb, pre-dataloader) ──
         # Two compilation systems fork subprocesses here and must finish before any thread
@@ -2600,7 +2672,14 @@ def main(cfg: DictConfig) -> None:
         # fork) rather than recompiling mid-loop. Raise the Dynamo cache limit so all variants
         # coexist without eviction.
         import torch._dynamo as _dynamo
-        _dynamo.config.cache_size_limit = max(getattr(_dynamo.config, "cache_size_limit", 8), 64)
+        # model.slot_compact=gather: the core blocks see C_t * M rows, one shape per slot-loop
+        # pass (8), and the HC residual's resume frame after its graph break guards on each
+        # block's own CMS parametrization type, so its entries are blocks x shapes x {attn,
+        # mlp}: about 120 for the core alone. At 64 the excess ran EAGER (bench 2026-10-08:
+        # `recompile_limit (64)` hit in the warm-up). The limit is raised for that key only.
+        _dyn_lim = 256 if str(getattr(model.cfg, "slot_compact", "off")) == "gather" else 64
+        _dynamo.config.cache_size_limit = max(getattr(_dynamo.config, "cache_size_limit", 8),
+                                              _dyn_lim)
         _dynamo.config.accumulated_cache_size_limit = max(
             getattr(_dynamo.config, "accumulated_cache_size_limit", 256), 512)
 
@@ -2633,6 +2712,8 @@ def main(cfg: DictConfig) -> None:
         # slightly-slow step, never a hang. Common shapes keep their compiled kernels.
         torch.compiler.set_stance("eager_on_recompile")
         print("  torch.compiler stance = eager_on_recompile (rare uncovered shapes run eager, never recompile/fork)", flush=True)
+    else:
+        _bind_ternary_step_cache(None)
 
     # ── W&B init — log FULL config dict ──────────────────────────────────
     # DEFERRED until AFTER the warmup: the compile/gcc-fork window above must be
@@ -2831,7 +2912,19 @@ def main(cfg: DictConfig) -> None:
     # ── Optimizer + LR schedule ───────────────────────────────────────────
     optimizer = create_optimizer(model, cfg)
     lr_fn = create_lr_schedule(cfg)
-    scaler = torch.amp.GradScaler("cuda")
+    # training.capturable_optimizer: no loss scale (bf16 autocast does not need one) and no
+    # GradScaler host read. A DISABLED scaler passes scale / unscale_ / step / update straight
+    # through, so the loop below is unchanged; the skip of a non-finite step moves onto the
+    # device (optimizer.mark_found_inf after the clip, read by the optimizer's kernels).
+    _cap_opt = bool(getattr(tr, "capturable_optimizer", False))
+    if _cap_opt:
+        scaler = torch.amp.GradScaler("cuda", enabled=False)
+        if os.environ.get("MORPH_DIAG_OPT") or os.environ.get("MORPH_DIAG_M2G"):
+            raise ValueError("MORPH_DIAG_OPT / MORPH_DIAG_M2G read the optimizer's host step "
+                             "counter, which training.capturable_optimizer keeps on the "
+                             "device; run those diagnostics with the key off")
+    else:
+        scaler = torch.amp.GradScaler("cuda")
 
     # ── Pruning schedule ──────────────────────────────────────────────────
     pruning = PruningSchedule.from_cfg(cfg)
@@ -3293,6 +3386,61 @@ def main(cfg: DictConfig) -> None:
         scaler.step(optimizer)
         scaler.update()
 
+    # ── training.graph_step: the step as a replayed CUDA graph (morph/training/graph_step.py) ──
+    # One graph per step kind (regular; instrument = the 20-step log step), captured after a
+    # few eager steps and after the last phase switch, then replayed. The body is this loop's
+    # fwd .. opt sequence; the sections below skip it when `_gs` ran the step. Everything that
+    # would change the op sequence, read the device on the host or change the parameter set
+    # mid-run is refused here rather than silently run eager or baked into the recording.
+    _gs = None
+    _gs_release = contextlib.nullcontext
+    if bool(getattr(tr, "graph_step", False)):
+        from morph.training.graph_step import GraphStep, graph_step_refusals
+        from morph.training.pruning import _find_cms_layers
+        _why = graph_step_refusals(cfg, total_steps=total_steps, curriculum=curriculum_enabled)
+        _live = {"the ternary scale EMA (ternary_scale_ema_beta > 0)": bool(_tern_ema_pairs),
+                 "the spectral projection": _spec_proj is not None,
+                 "a live spectral penalty (lambda > 0)": (_spec_pen is not None
+                                                          and _spec_pen.lam != 0.0),
+                 "the Jacobian probe": _jac_probe is not None,
+                 "the pre-clip probe (grad_probe_every > 0, or an abort guard)":
+                     _gprobe_every > 0,
+                 "training.step_mix": _step_mix_cycle is not None,
+                 "the NTP-dropout loader": _ntp_loader is not None,
+                 "the TUL gate's audit": bool(_gate_pending),
+                 "tul.code_target_ema": _code_ema_m > 0.0,
+                 "a pruned CMS tile (apply_prune_mask writes every step)": any(
+                     _l._prune_mask is not None and not bool(_l._prune_mask.all())
+                     for _n, _l in _find_cms_layers(model)),
+                 }
+        _why += [f"{k} is on" for k, v in _live.items() if v]
+        _why += [f"env {k} is set" for k in ("MORPH_STATIC_GRAPHS", "MORPH_OPT_CUDA_GRAPH",
+                                              "MORPH_DEBUG_STEP", "MORPH_DIAG_FWD",
+                                              "MORPH_DIAG_OPT", "MORPH_DIAG_M2G")
+                 if os.environ.get(k, "0").lower() not in ("0", "", "false")]
+        if _why:
+            raise ValueError("training.graph_step=true is refused:\n  - " + "\n  - ".join(_why))
+        # Capture no earlier than 3 eager steps in, and not before the last phase switch (a
+        # switch rebuilds the loader and can change the layout and the bag size).
+        _gs_first = max([start_step + 3] + [s for s in (schedule.tst_phase1_steps,
+                                                       schedule.tul_step) if s > start_step])
+        _gs = GraphStep(
+            model, optimizer, grad_clip=grad_clip,
+            forward=lambda _x, _y, _l: model(_x, labels=_y, bag_size=phase.bag_size,
+                                             slot_layout=_l, tul_step_mode=None),
+            kinds=(False, True),        # `_train_instruments`: regular, instrument (log)
+            set_kind=lambda _k: setattr(_mdl0, "_train_instruments", _k),
+            loss_terms=_spec_pen.penalty if _spec_pen is not None else None,
+            after_step=_mdl0.tul_fan_after_step, first_capture=_gs_first,
+            keep_grads=(True,), compiled=use_compile)
+        # Eval and generation do not fit beside the graphs' pool on 32 GB: they run with the
+        # graphs released, and the next step records them again (GraphStep.released).
+        _gs_release = _gs.released
+        print(f"  [graph-step] ON: eager steps until {_gs_first} and until an instrument step "
+              f"has run, then both step kinds (regular, instrument) are recorded and every "
+              f"later step is a replay; the body is the forward, backward, clip, found-inf "
+              f"flag, optimizer step and tul_fan_after_step", flush=True)
+
     # ── Training loop ─────────────────────────────────────────────────────
     _train_mode()
     step_times: list[float] = []
@@ -3635,6 +3783,9 @@ def main(cfg: DictConfig) -> None:
         lr = lr_fn(step)
         for pg in optimizer.param_groups:
             pg["lr"] = lr * pg.get("lr_mult", 1.0)
+        if _cap_opt:
+            # The device copy of the lr, written here, before any captured region.
+            optimizer.write_step_scalars()
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -3720,6 +3871,15 @@ def main(cfg: DictConfig) -> None:
                     f"training.frozen_eval: the frozen model is in TRAIN mode at step "
                     f"{step}. Some path called model.train() instead of _train_mode(); the "
                     f"head would be fitted on training-mode cells.")
+            if _gs is not None:
+                # The whole step (fwd .. opt, tul_fan_after_step), eager, captured or
+                # replayed. The previous step's autograd graph must be dead before a capture.
+                loss = out = None
+                with _rt.region("graph-step"):
+                    out, loss, _gnorm, _ = _gs.step(
+                        step, _mdl._train_instruments, x, y, _layout,
+                        context=(phase.bag_size, phase.tul_on))
+                continue        # grad_accum is 1 under the key: this ends the micro loop
             with _rt.region("fwd"):
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     out = model(x, labels=y, bag_size=phase.bag_size,
@@ -3763,7 +3923,9 @@ def main(cfg: DictConfig) -> None:
                       f"(recording stopped)", flush=True)
 
         with _rt.region("prune"):
-            prune_stats = pruning.step(model, step)
+            # graph_step: no event can fire in the run and no tile is dead (both refused at
+            # setup), so the call is a no-op; it would sit after the optimizer step here.
+            prune_stats = pruning.step(model, step) if _gs is None else None
 
         # A prune event rewrites _dead_mask contents → a captured optimizer CUDA graph
         # (MORPH_OPT_CUDA_GRAPH) holds stale dead masks; drop it so the next steps re-warm
@@ -3945,10 +4107,19 @@ def main(cfg: DictConfig) -> None:
             # The 2026-08-17 TUL divergence was invisible in wandb for exactly this reason —
             # the failure was a 1e8 gradient through the looped core, and the only surviving
             # evidence was a CMS saliency buffer inside a checkpoint. It is one scalar.
-            _gnorm = float(nn.utils.clip_grad_norm_(model.parameters(), grad_clip))
+            if _gs is not None:
+                pass            # clipped inside the step; `_gnorm` is its device output
+            elif _cap_opt:
+                # No host read: the norm stays a device tensor (`float()` at the log and
+                # trace sites reads it) and flags a non-finite step for the optimizer.
+                _gnorm = nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.mark_found_inf(_gnorm)
+            else:
+                _gnorm = float(nn.utils.clip_grad_norm_(model.parameters(), grad_clip))
 
         with _rt.region("opt"):
-            _step_optimizer()
+            if _gs is None:
+                _step_optimizer()
             # Projected gradient: the constraint is enforced AFTER the update, so it cannot
             # be argued with by the data gradient. Optimizer moments are left alone — they
             # describe the unprojected step, which is what momentum should be built from.
@@ -3966,7 +4137,8 @@ def main(cfg: DictConfig) -> None:
             # the router's balance bias moves from this step's load. Same placement rule as
             # the code_ref EMA (after every other post-step constraint, on `_mdl0`). A
             # no-op method on every other model.
-            _mdl0.tul_fan_after_step()
+            if _gs is None:         # graph_step: part of the step body
+                _mdl0.tul_fan_after_step()
 
         # ── Prune-divergence diagnostic (env MORPH_DIAG_OPT=<path>) ─────────
         # Post-step, grads still live (zero_grad is top-of-next-iter). Dequants m₂/ν and
@@ -4161,13 +4333,16 @@ def main(cfg: DictConfig) -> None:
                 "perf/peak_mem_alloc_mib": peak_alloc,
                 "perf/peak_mem_reserved_mib": peak_resv,
                 "perf/step": step,
+                # training.graph_step: the share of steps run eager so far (the warm-up)
+                **({"perf/graph_step_eager_share": _gs.stats.eager_share()}
+                   if _gs is not None else {}),
                 "train/tst_bag": phase.bag_size,
                 # Pre-clip global gradient norm and the factor grad_clip applied to it.
                 # clip_factor << 1 sustained means the reported loss curve is being driven
                 # by a gradient the clip is mostly discarding — read this BEFORE believing
                 # any loss comparison between arms.
-                "train/grad_norm": _gnorm,
-                "train/clip_factor": min(1.0, grad_clip / max(_gnorm, 1e-12)),
+                "train/grad_norm": float(_gnorm),
+                "train/clip_factor": min(1.0, grad_clip / max(float(_gnorm), 1e-12)),
             }
             # step_mix: per-mode cumulative step count + running mean loss (mission
             # spec keys, e.g. train/steps_db1, train/loss_db1). Cumulative across the
@@ -4526,7 +4701,10 @@ def main(cfg: DictConfig) -> None:
                     f"tok/s={log.get('perf/tokens_per_sec', 0):.0f}  "
                     f"proxy={log.get('perf/flop_proxy', 0):.2f}  "
                     f"tflops={log.get('perf/model_tflops', 0):.1f}  "
-                    f"peak={log.get('perf/peak_mem_alloc_mib', 0) / 1024:.2f}GB",
+                    f"peak={log.get('perf/peak_mem_alloc_mib', 0) / 1024:.2f}GB"
+                    # graph_step: replays allocate nothing, so the allocated peak leaves out
+                    # the graphs' pool; the reserved peak carries it.
+                    + (f"  reserved={peak_resv / 1024:.2f}GB" if _gs is not None else ""),
                     flush=True,
                 )
 
@@ -4538,9 +4716,12 @@ def main(cfg: DictConfig) -> None:
                           and _gm_e.cfg.tul.gate.drives_depth)
             if _curr_val_batches is not None:
                 val_loader = _make_val_loader(phase.tul_on)   # rewound: the same docs
-            val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                         tul=phase.tul_on, extra=_val_extra,
-                                         halt=_halt_eval)
+            if _gs is not None:
+                loss = out = _gnorm = None      # the graphs' outputs, freed with them
+            with _gs_release():
+                val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
+                                             tul=phase.tul_on, extra=_val_extra,
+                                             halt=_halt_eval)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
             if _lp_mode != "off":
                 # Stage 1: val/loss is the LATENT objective (no token CE exists), so a
@@ -4631,10 +4812,13 @@ def main(cfg: DictConfig) -> None:
 
         # ── Generation test ───────────────────────────────────────────────
         if gen_every > 0 and step % gen_every == 0 and step > 0:
-            gen_text, gen_metrics = run_generation_test(
-                model, device, tokenizer_name, seq_len, step,
-                tul_rt=tul_rt if phase.tul_on else None,
-            )
+            if _gs is not None:
+                loss = out = _gnorm = None      # the graphs' outputs, freed with them
+            with _gs_release():
+                gen_text, gen_metrics = run_generation_test(
+                    model, device, tokenizer_name, seq_len, step,
+                    tul_rt=tul_rt if phase.tul_on else None,
+                )
             wandb.log({"gen/sample": wandb.Html(f"<pre>{gen_text}</pre>"), **gen_metrics},
                       step=step)
             if gen_metrics:
@@ -4667,10 +4851,22 @@ def main(cfg: DictConfig) -> None:
             print(f"  [roll] {_rp}  (keeping {len(_roll_ring.paths)} of the last "
                   f"{_roll_ring.keep} × {_roll_every} steps)", flush=True)
 
+        if _gs is not None and ((step % eval_every == 0 and step > 0)
+                                or (gen_every > 0 and step % gen_every == 0 and step > 0)
+                                or (ckpt_every > 0 and step % ckpt_every == 0 and step > 0)
+                                or (_roll_every > 0 and step % _roll_every == 0 and step > 0)):
+            _gs.mark_dirty()    # eval / generation / a checkpoint ran eager GPU work
+
         # ── Reset step timer ───────────────────────────────────────────────
         # Anchor the next step's _dt here, AFTER logging/eval/gen/ckpt, so those
         # non-training blocks don't inflate steps_per_sec (see Timing block above).
         t_start = time.perf_counter()
+
+    if _gs is not None:
+        _st = _gs.stats
+        print(f"  [graph-step] steps: {_st.eager} eager, {_st.replayed} replayed "
+              f"({_st.captures} graphs recorded); eager share {_st.eager_share():.4f}",
+              flush=True)
 
     # ── Final checkpoint ──────────────────────────────────────────────────
     if _aborted:
@@ -4713,11 +4909,14 @@ def main(cfg: DictConfig) -> None:
     # eval is disabled (eval_every > total_steps) — a pure throughput/mem run has no
     # val_loader worth touching and the skip lets it exit promptly.
     if eval_every <= total_steps:
+        if _gs is not None:
+            loss = out = _gnorm = None          # the graphs' outputs, freed with them
         _val_extra = {}
         if _curr_val_batches is not None:
             val_loader = _make_val_loader(phase.tul_on)
-        val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                     tul=phase.tul_on, extra=_val_extra)
+        with _gs_release():
+            val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
+                                         tul=phase.tul_on, extra=_val_extra)
         _final = {"val/loss_final": val_loss, "val/ppl_final": val_ppl}
         if _lp_mode != "off":
             del _final["val/ppl_final"]   # stage 1: the latent objective has no perplexity
@@ -4729,10 +4928,11 @@ def main(cfg: DictConfig) -> None:
               + "".join(f"  {k}={v:.4f}" for k, v in sorted(_val_extra.items())))
 
     if gen_every > 0 or bool(getattr(tr, "gen_test", False)):
-        gen_text, gen_metrics = run_generation_test(
-            model, device, tokenizer_name, seq_len, total_steps, n_tokens=200,
-            tul_rt=tul_rt if phase.tul_on else None,
-        )
+        with _gs_release():
+            gen_text, gen_metrics = run_generation_test(
+                model, device, tokenizer_name, seq_len, total_steps, n_tokens=200,
+                tul_rt=tul_rt if phase.tul_on else None,
+            )
         wandb.log({"gen/final": wandb.Html(f"<pre>{gen_text}</pre>"),
                    **{f"{k}_final": v for k, v in gen_metrics.items()}}, step=total_steps)
         _emit_gen(f"FINAL step {total_steps}", gen_text)

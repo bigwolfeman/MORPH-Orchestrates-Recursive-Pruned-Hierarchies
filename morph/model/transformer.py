@@ -55,9 +55,14 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
                           swor_uniform)
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
+from .slot_compact import (compact_attn_input, compact_order, put_rows, slot_depth_capacity,
+                           stratified_slot_depths, take_rows, validate_slot_compact)
 from .tul_ditto import ditto_loss
-from .host_shadow import any_true, derive as derive_shadow, masked_rows, shadow as host_shadow
-from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_repel_term,
+from .host_shadow import (any_true, aten_rowsum_width, derive as derive_shadow,
+                          exact_mean_1d, masked_rows, rowsum_by_width,
+                          shadow as host_shadow, valid_first)
+from .tul_fan import (FanReservoir, TULFanMix, _cell_readout, fan_epi_term, fan_epi_term_fast,
+                      fan_repel_term, fan_vol_term_fast,
                       fan_stream_rank, fan_vol_term, select_gate_loss, select_streams,
                       select_winners, fan_stream_stats, plan_streams)
 from .tul_fan_route import (FanLatentHead, FanOPF, FanRouter, FanTargetFront, FanTeacherMap,
@@ -93,6 +98,7 @@ from .tul_layout import (SlotLayout, span_reach_allow, span_ids_from_ids,
                          slot_cell_inject_keep, span_start_mask, tg_allow_mask,
                          tg_reset_from_ids,
                          tg_reset_mask, tg_segment_ids, tg_strict_allow)
+from morph.kernels.triton.tg_strict_attention import tg_strict_index
 
 # Env-guarded profiler regions for carrier-copy attribution (default OFF → nullcontext,
 # zero production cost). Set MORPH_PROFILE_REGIONS=1 to name forward carrier sites so the
@@ -395,12 +401,78 @@ class MORPHConfig:
     # (morph/kernels/triton/ce_softmax_grad.py) at every `fused_linear_cross_entropy` call
     # of the model. False = the eager body (the tree before the key). Not bit-identical: a
     # few fp32 ulps before the gradient's bf16 rounding (tests/test_ce_softmax_grad.py).
+    # Since 2026-10-08 it also runs the pointer / DITTO token loss's per-row log-prob
+    # (`fused_linear_label_logprob` in `_tul_group_losses`) as two Triton passes.
     ce_softmax_kernel: bool = False
+    # The span decoder's vocab CE on the labelled rows only, at a FIXED row count proven from
+    # the shapes (`MORPHTransformer._spandec_row_cap`): no host sync, CUDA-graph safe. About
+    # half the decoder's rows are past their span's end. Not bit-identical (the loss and
+    # grad sums run over different chunks). False = every row (the tree before the key).
+    spandec_ce_row_cap: bool = False
     # Run the chunked CE on the labelled rows only (ignored and zero-weight rows are
     # dropped before the vocab GEMMs; their gradient is exactly zero either way). One host
     # sync per CE call for the row count. Not bit-identical (the loss and grad_w sums run
     # over different chunks); about half the span decoder's rows are pads. False = all rows.
     ce_compact_rows: bool = False
+    # A TRAINING forward with no host sync and no host read of a device value, whose op
+    # sequence and every tensor shape are fixed for every batch of a config, so a CUDA graph
+    # captured on one batch replays on any other (2026-10-07, the graph-captured training
+    # step, `.agents/notes/proposed/architecture/2026-10-07-graph-captured-training-step.md`).
+    # What changes under it, every site named at its line:
+    #   * the slot loop runs `slot_depth_fixed` or `slot_max_depth` passes, not the batch's
+    #     drawn maximum (no `depths.cpu()`); a pass no slot reaches is masked as today;
+    #   * the prelude/coda slot-column attention scores every column of the row (the dense
+    #     [S, S] form) instead of the batch's largest slot count, in train AND eval mode
+    #     (the fan target's EMA twin runs it in eval mode inside a training step);
+    #   * every host-shadow reader (`morph.model.host_shadow`) keeps every row, live rows
+    #     first, and reproduces the gathered result bit for bit (ATen's reduction order for
+    #     the device-held count): the fixed-point term, the fan's epi / vol / cosine terms,
+    #     the mix statistics; the loop-attention-center skip runs on the device.
+    # An eval forward keeps today's loop and readers (it runs eager), only the attention
+    # form above changes. Bit-identical to False except the slot-column attention (45-step
+    # gate 2026-10-07; tests/test_graph_safe_exact.py on CUDA, test_graph_safe.py on CPU).
+    graph_safe: bool = False
+    # Which of graph_safe's pieces are on when it is (read only under graph_safe). The
+    # identity decomposition (2026-10-07) gates each piece alone against the eager path:
+    # "passes" (slot_max_depth passes), "fixed_point" (the masked fixed-point term),
+    # "fan_epi" / "fan_vol" / "fan_cos" / "fan_mix" (the fan readers: epiplexity + ridge
+    # map, volume, stream cosine, mix entropy + w_max), "center" (the loop-attention-center
+    # skip on the device), "slot_cols" (the prelude/coda slot-column attention). A piece left
+    # out takes today's eager form, host reads included, so a graph_step needs every piece.
+    graph_safe_parts: tuple = ("passes", "fixed_point", "fan_epi", "fan_vol", "fan_cos",
+                               "fan_mix", "center", "slot_cols")
+    # Fused strict-geometry TG attention (graph-step task 2.1): every prelude / coda / core
+    # attention call of a strict slot-loop model runs its window AND compressed branch in one
+    # Triton kernel pair (morph/kernels/triton/tg_strict_attention.py), the relation read
+    # from the layout's index tensors instead of dense [B, 1, L, L] masks. NOT bit-identical
+    # (a flash online softmax sums the same terms in another order); pinned against fp64 in
+    # tests/test_tg_strict_attention.py. False = today.
+    tg_fused_attention: bool = False
+    # The ternary STE's bf16 weights computed once per forward and shared by every read
+    # (morph/model/ternary_qat.py, TernaryStepCache; bound by the trainer after compile).
+    # Bit-identical to False. False = today: every read re-quantises and re-casts.
+    ternary_step_cache: bool = False
+    # The fan's EMA target twin (tul_fan_route.FanTargetFront) runs its prelude blocks
+    # through the trainer's block compile (training.compile_blocks), like the live prelude.
+    # NOT bit-identical (Inductor's fused rounding vs the eager twin). False = eager twin.
+    fan_twin_compile: bool = False
+    # The fan's epi / vol diversity terms (tul.fan_repel_mode epi / vol / epivol) batched
+    # over every (pass, stream) in fp32 with a Cholesky log-det and ridge solve, instead of
+    # one fp64 product + LU per (pass, stream) and a Householder ridge map
+    # (tul_fan.fan_epi_term_fast / fan_vol_term_fast). NOT bit-identical; fp64-referenced
+    # in tests/test_tul_fan_div_fast.py. False = today.
+    fan_div_fast: bool = False
+    # The latent-selected loop's per-pass teacher PICK (no grad, an argmin over the M cells)
+    # runs the head g's two GEMMs in bf16 (FanLatentHead.forward_bf16) instead of fp32
+    # SIMT. The exit loss and every graded reading keep the fp32 head. NOT bit-identical (a
+    # near-tie pick can flip). False = today.
+    fan_lsel_pick_bf16: bool = False
+    # The fan's latent target z (tul.fan_opf / fan_route latent / fan_loop_select) is the
+    # ONLINE prelude's pooled span state under stop-gradient instead of the EMA twin's: the
+    # twin's prelude forward (19 ms on the FAST step) is not run. CHANGES THE OBJECTIVE (no
+    # EMA). The twin is still built, EMA-updated and checkpointed, so the key can be turned
+    # off on resume. False = the EMA twin's target (today).
+    fan_target_online: bool = False
 
     # Parallel multi-token prediction on the coda readout (Gloeckle et al. 2024, arXiv
     # 2404.19737; arc E8, 2026-09-07 [W]). mtp_heads = the number of future tokens each
@@ -545,6 +617,25 @@ class MORPHConfig:
     hc_init_gain: float = 0.1    # W_fused init std = gain/sqrt(n*d) → ≈ plain residual at init
     hc_use_kernel: bool = True   # fused Triton HC kernels (cayley+cuda). False ⇒ eager refs
                                  # (bit-faithful, slower) — for the fused-vs-eager A/B reference arm.
+    # model.hc_fused_norm: the HC pre-map kernel applies each sublayer's RMSNorm and emits the
+    # sublayer input in the autocast dtype (needs hc_use_kernel). NOT bit-identical to the
+    # unfused compiled norm (different reduction orders). Default off = the unfused path.
+    hc_fused_norm: bool = False
+    # model.hc_fused_grad: the HC pre-map backward adds the projection-path carrier grad in
+    # place (addmm_, beta=1) instead of mm + add (needs hc_use_kernel). Default off.
+    hc_fused_grad: bool = False
+    # model.hc_region_fused: each HC sublayer side as one region kernel (entry fwd reads the
+    # carrier once; the backward writes the carrier grad once). Rounding-only, not
+    # bit-identical (hyper_connections.py, fused_hyper_connection.py). Default off.
+    hc_region_fused: bool = False
+    # model.cca_prologue_tiled: the CCA prologue on row-tiled kernels (fused_cca_prologue.py).
+    # Rounding-only, not bit-identical. Default off.
+    cca_prologue_tiled: bool = False
+    # model.inject_fold: the prelude's and the coda's per-block injection add is folded into
+    # the previous block's HC exit write (and the first prelude one into the stream expand).
+    # Forward bit-identical; the term's grad is summed in the exit kernel. Needs
+    # hc_region_fused. Default off.
+    inject_fold: bool = False
 
     # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
     # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
@@ -701,6 +792,35 @@ class MORPHConfig:
     # False = the hinge before this existed.
     # Note: .agents/notes/proposed/architecture/2026-09-26-plan-c-xhc-slot-loop.md (C1b).
     slot_gain_renorm: bool = False
+    # slot_gain_no_ckpt — the hinge's two core applications keep their activations for the
+    # backward instead of running under `torch.utils.checkpoint` (no recompute: two core
+    # passes of backward work saved, one pass of activations held per application). EXACT:
+    # a checkpoint recomputes with the RNG state it saved, so the loss and every gradient
+    # are bit-identical (tests/test_slot_gain_reg.py). False = checkpointed, as before.
+    slot_gain_no_ckpt: bool = False
+    # slot_gain_reuse_f0 — the hinge's f(h) IS the loop's own step output at the sampled
+    # pass, and f(h + d) runs under that step's dropout masks (the RNG state before the
+    # step is replayed for it). Saves one of the hinge's two core applications. NOT exact:
+    # the value is the same map at the same point, but the loop's output is not detached
+    # at its input, so the hinge's gradient through f(h) also reaches earlier passes and
+    # the prelude (the separate application detaches them). False = two applications.
+    slot_gain_reuse_f0: bool = False
+    # slot_depth_stratified — the slot loop's training depth draw is, per row, a SYSTEMATIC
+    # sample of clamp(Poisson(mean), 1, max) randomly permuted over the slots: each slot's
+    # marginal law is unchanged, the joint law is not (a row cannot draw many deep slots at
+    # once), and at most C_t slots of a row are active at pass t (morph/model/slot_compact.py
+    # proves the bound). CHANGES THE TRAINING FUNCTION (the joint law). Eval keeps the mean
+    # depth. False = the independent per-slot draw.
+    slot_depth_stratified: bool = False
+    # slot_compact — "off" | "full" | "gather". A finished cell serves each core layer's
+    # attention from a cache of that layer's input written at its last active pass ("full":
+    # every cell is still computed; the reference form). "gather": the same function on the
+    # C_t * M active rows of each pass only (queries by original position in the strict
+    # attention kernel). Both CHANGE THE TRAINING FUNCTION against "off" (a frozen cell's keys
+    # no longer follow the slots before it); "full" and "gather" agree to kernel rounding
+    # (tests/test_slot_compact.py). Training forward only; needs slot_depth_stratified and the
+    # graph-step recipe (validate_slot_compact). "off" = today.
+    slot_compact: str = "off"
 
     @property
     def retention_carry_mode(self) -> str:
@@ -1722,6 +1842,49 @@ def slot_cell_relation(n_slots: int, m_cells: int, device, reach: int = 0,
     return blk.view(1, 1, sm, sm), (si == sj).view(1, 1, sm, sm)
 
 
+def _fp_term_exact(acc: tuple[Tensor, Tensor, Tensor, Tensor], h_star: Tensor | None,
+                   n_passes: int) -> Tensor:
+    """The slot loop's fixed-point term under ``model.graph_safe``, bit for bit the gathered
+    eager term (``_fp_terms``: per pass the finishing cells' rows, then
+    ``torch.cat(...).mean()``), from the per-cell accumulator ``acc = (u_T, h_{T-1},
+    charged, finishing pass)`` at fixed shapes and with no host read. Three steps carry the
+    eager bits (``morph.model.host_shadow``):
+
+    * the per-cell squared norms: ATen sums a row of an ``[R, F]`` tensor with a thread
+      count that depends on ``R`` below 16 rows, so each cell's row is summed with the
+      width of the eager call its pass made (``rowsum_by_width``);
+    * the mean's operand in the eager ``cat`` order: pass-major, then row-major;
+    * the 1-D mean over the charged count in ATen's order (``exact_mean_1d``).
+    Returns 0 when no cell was charged."""
+    u, hp, charged, tpass = acc
+    fn = u.flatten(2).float()
+    fo = hp.flatten(2).float()
+    fd = fn if h_star is None else fn + h_star.flatten(2).float()
+    sq_num = (fn - fo).pow(2).flatten(0, 1)                        # [B*S*M, F]
+    sq_den = fd.pow(2).flatten(0, 1)
+    ch, tp = charged.flatten(), tpass.flatten()
+    nc = ch.numel()
+    # Cells per pass, and each cell's pass count -> the width ATen sums its row with.
+    passes = torch.arange(n_passes, device=ch.device)
+    per_pass = ((tp.unsqueeze(0) == passes.unsqueeze(1)) & ch.unsqueeze(0)).sum(-1)
+    cnt = per_pass.index_select(0, tp.clamp(max=n_passes - 1))
+    f = sq_num.shape[1]
+    # Python-constant widths through `where` (a host-built index table would be a copy
+    # to the device inside the captured step). 16 rows and up share one width.
+    width = torch.full_like(cnt, aten_rowsum_width(16, f), dtype=torch.int32)
+    for r in range(15, 0, -1):
+        width = torch.where(cnt == r, aten_rowsum_width(r, f), width)
+    num, den = rowsum_by_width(sq_num, width), rowsum_by_width(sq_den, width)
+    rel = num / (den + 1e-6)                                       # [B*S*M]
+    # The eager operand order: pass-major, row-major within a pass; charged cells first.
+    key = torch.where(ch, tp * nc + torch.arange(nc, device=ch.device),
+                      torch.full_like(tp, n_passes * nc))
+    buf = rel.index_select(0, torch.argsort(key))
+    n = ch.sum()
+    fp = exact_mean_1d(buf, n)
+    return torch.where(n > 0, fp, torch.zeros_like(fp))
+
+
 class MORPHTransformer(nn.Module):
 
     # Operating-point capture for the core-map Jacobian probe
@@ -1905,6 +2068,27 @@ class MORPHTransformer(nn.Module):
             raise ValueError(
                 "model.tg_scoped_kernels=true requires tul.tg_restrict=true: outside TG "
                 "restriction use model.use_kernels for the full fused path instead.")
+        if cfg.tg_fused_attention:
+            # The kernel implements exactly the strict prelude / coda relations and the
+            # register core at reach 0; every other geometry would be silently wrong there.
+            _tc = cfg.tul
+            _why = ("tul.tg_restrict=true with tul.tg_geometry=strict" if not (
+                        self._tg_restrict and self._tg_strict)
+                    else "tul.tokens_through_core=false" if _tc.tokens_through_core
+                    else "tul.tg_coda_prefix_reach=all" if _tc.tg_coda_prefix_reach != "all"
+                    else "tul.tg_coda_token_reach=0" if _tc.tg_coda_token_reach
+                    else "tul.tg_strict_prelude=span" if _tc.tg_strict_prelude != "span"
+                    else "tul.tg_span_comp=false" if _tc.tg_span_comp
+                    else "tul.slot_cells>1 (the register core)" if int(_tc.slot_cells) < 2
+                    else "tul.loop_reach=0" if int(_tc.loop_reach)
+                    else "tul.fan_lineage=off" if _tc.fan_lineage != "off"
+                    else "tul.fan_history_streams=0" if int(_tc.fan_history_streams)
+                    else "tul.loop_carry=none" if _tc.loop_carry != "none"
+                    else None)
+            if _why is not None:
+                raise ValueError(f"model.tg_fused_attention needs {_why}: the fused kernel "
+                                 "implements the strict prelude / coda relations and the "
+                                 "register core at reach 0 only.")
         if self._tg_restrict and cfg.use_kernels:
             raise ValueError(
                 "model.tul.tg_restrict=true requires model.use_kernels=false "
@@ -2034,6 +2218,8 @@ class MORPHTransformer(nn.Module):
             tg_restrict=self._tg_restrict or self._span_mask,
             tg_span_gate=(bool(cfg.tul.tg_span_gate) if cfg.tul is not None
                           else False),
+            graph_safe=bool(cfg.graph_safe) and "slot_cols" in cfg.graph_safe_parts,
+            cca_prologue_tiled=bool(cfg.cca_prologue_tiled),     # model.cca_prologue_tiled
         )
 
         # ── Residual = n-stream Hyper-Connection (Cayley/JPmHC), the sole residual ──
@@ -2044,7 +2230,12 @@ class MORPHTransformer(nn.Module):
             n_streams=cfg.hc_streams, tau=cfg.hc_tau,
             cayley_iters=cfg.hc_cayley_iters, cayley_alpha=cfg.hc_cayley_alpha,
             init_gain=cfg.hc_init_gain, use_kernel=cfg.hc_use_kernel,
+            fused_norm=cfg.hc_fused_norm, fused_grad=cfg.hc_fused_grad,
+            region_fused=cfg.hc_region_fused,                    # model.hc_region_fused
         )
+        if cfg.inject_fold and not cfg.hc_region_fused:          # model.inject_fold
+            raise ValueError("model.inject_fold needs model.hc_region_fused=true (the old "
+                             "post kernel returns the term's grad in bf16)")
 
         # The core alone may re-block its HCA branch; see `core_hca_compress_ratio`.
         core_attn_kw = dict(attn_kw)
@@ -2801,6 +2992,16 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_epi: FanReservoir | None = None
         if self.tul_fan is not None and cfg.tul.fan_repel_mode in ("epi", "epivol"):
             self.tul_fan_epi = FanReservoir(d, cfg.tul.fan_epi_features, seed=0)
+        # `model.fan_div_fast`: the epi / vol terms batched in fp32 (`tul_fan.py`, the
+        # `fan_*_term_fast` forms). Built only where those forms are wired: the plain fan
+        # (no history streams) with an epi / vol / epivol term.
+        if cfg.fan_div_fast and not (
+                self.tul_fan is not None
+                and cfg.tul.fan_repel_mode in ("epi", "vol", "epivol")
+                and int(cfg.tul.fan_history_streams) == 0):
+            raise ValueError("model.fan_div_fast needs a fan (tul.fan_k) with "
+                             "tul.fan_repel_mode epi / vol / epivol and no "
+                             "tul.fan_history_streams")
         # ── the fan's OPF / router arms (2026-09-30; morph/model/tul_fan_route.py) ──
         # `tul.fan_opf` (arm F), `tul.fan_route` "reader" (arm R) / "latent" (arm T). All
         # default off: nothing is built, the three attributes stay None and every branch on
@@ -2853,6 +3054,17 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_lsel_head: FanLatentHead | None = None
         self.tul_fan_lsel_router: FanRouter | None = None
         self._lsel_out: dict | None = None
+        # `model.fan_target_online` is analysed for ONE case: the latent-selected loop with
+        # the router driving the loop (`fan_lsel_train_follow: router`). There the teacher
+        # pick only trains the router and the exit loss, so the forward the model's CE reads
+        # never follows the target (perf/lean/PROOFS.md, rank 8). Refused elsewhere.
+        if cfg.fan_target_online and not (
+                self._lsel_mode != "off" and cfg.tul.fan_lsel_train_follow == "router"):
+            raise ValueError("model.fan_target_online needs tul.fan_loop_select with "
+                             "tul.fan_lsel_train_follow=router (the only analysed case)")
+        if cfg.fan_lsel_pick_bf16 and self._lsel_mode == "off":
+            raise ValueError("model.fan_lsel_pick_bf16 needs tul.fan_loop_select (the "
+                             "latent-selected loop's per-pass pick)")
         if self._lsel_mode != "off":
             if self.tul_fan is None or self.tul_fan.mode != "all":
                 raise RuntimeError("tul.fan_loop_select built without the write-all fan; "
@@ -3550,6 +3762,17 @@ class MORPHTransformer(nn.Module):
             raise ValueError(
                 f"model.slot_gain_tail_lambda must be >= 0 (0 = off) and slot_gain_tail_target "
                 f"> 0, got {cfg.slot_gain_tail_lambda} / {cfg.slot_gain_tail_target}")
+        if (cfg.slot_gain_no_ckpt or cfg.slot_gain_reuse_f0) and cfg.slot_gain_lambda <= 0.0:
+            raise ValueError("model.slot_gain_no_ckpt / slot_gain_reuse_f0 need "
+                             "model.slot_gain_lambda > 0: they change how the hinge runs.")
+        # model.slot_depth_stratified / model.slot_compact: refused outside the recipe they
+        # were built for (morph/model/slot_compact.py).
+        validate_slot_compact(cfg)
+        if (cfg.slot_gain_reuse_f0 and cfg.tul is not None
+                and int(cfg.tul.xhc_streams) > 0):
+            # The expanded residuals' TopK route is recorded by the hinge's own f(h) and
+            # replayed by f(h + d); the loop's step records nothing to replay.
+            raise NotImplementedError("model.slot_gain_reuse_f0 under tul.xhc_streams")
         if cfg.slot_gain_tail_lambda > 0.0 and cfg.slot_gain_lambda <= 0.0:
             # The tail rides the row hinge's finite difference: with slot_gain_lambda 0 the
             # probe never runs, so a tail lambda alone would be a knob that does nothing.
@@ -4037,7 +4260,7 @@ class MORPHTransformer(nn.Module):
                          ret_state=None, iter_idx=0, inj_terms=None, source_free=False,
                          stage_cond=None, attn_kw=None, source_decay_only=False,
                          xhc_valid=None, xhc_route=None,
-                         ds_state_in=None, ds_capture=False):
+                         ds_state_in=None, ds_capture=False, compact_out=False):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention),
@@ -4087,6 +4310,11 @@ class MORPHTransformer(nn.Module):
         as a THIRD return value ``[n_core, B, S, C]``, for the NEXT pass's
         ``ds_state_in``. ``False`` (every pre-existing call site) returns the old
         2-tuple, unchanged.
+
+        ``compact_out`` (``model.slot_compact``, ``_slot_compact_step`` only): every layer's
+        ``attn_kw`` carries a ``"slot_compact"`` payload, so every block returns
+        ``(h, xa)``, ``xa`` its attention input over every cell (the next pass's cache); the
+        tuple of them is returned as a THIRD value ``(h, new_ret, xas)``.
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
@@ -4123,6 +4351,7 @@ class MORPHTransformer(nn.Module):
             h_injected = self.injection(h_in, e_in)
         ret_cap = {} if self._core_has_retention else None
         ds_out = [] if ds_capture else None
+        xa_out = [] if compact_out else None
         for i, layer in enumerate(self.core):
             gi = np_ + i
             if not (source_free or source_decay_only):
@@ -4159,6 +4388,9 @@ class MORPHTransformer(nn.Module):
                                attn_kwargs=_akw, pass_idx=iter_idx,
                                **({} if xhc_valid is None else {"xhc_valid": xhc_valid}),
                                **({} if xhc_route is None else {"xhc_route": xhc_route}))
+            if compact_out:
+                h_injected, _xa = h_injected
+                xa_out.append(_xa)
             if ds_capture:
                 ds_out.append(h_injected.mean(dim=2) if self._is_hc else h_injected)
         new_ret = ret_cap.get("state") if ret_cap is not None else None
@@ -4172,6 +4404,8 @@ class MORPHTransformer(nn.Module):
                 -1, -1, self._n_streams, -1).contiguous()
         if ds_capture:
             return h_injected, new_ret, torch.stack(ds_out, dim=0)
+        if compact_out:
+            return h_injected, new_ret, tuple(xa_out)
         return h_injected, new_ret
 
     # ── Static-region CUDA graphs (MORPH_STATIC_GRAPHS) ──────────────────────
@@ -4391,7 +4625,7 @@ class MORPHTransformer(nn.Module):
         inputs and the same masks. ``None`` on every other call → the live modules, the
         loop above unchanged.
         """
-        _prelude = self.prelude if twin is None else twin.prelude
+        _prelude = self.prelude if twin is None else twin.run_blocks()
         _x0_injects = self.x0_injects if twin is None else twin.x0_injects
         B, T = x.shape[0], x.shape[1]
         x0 = x.clone()      # single-stream skip signal (broadcast into HC streams)
@@ -4401,6 +4635,23 @@ class MORPHTransformer(nn.Module):
         # All streams start equal, so with the ≈identity HC init the network reduces to a
         # plain residual at step 0 (verified). Injections (x0/ve/bigram/diagonal) are
         # single-stream signals that broadcast into every stream (ndim-adaptive modules).
+        if self.cfg.inject_fold:
+            # model.inject_fold: block i's injection is added by block i-1's HC exit kernel
+            # (`next_inject_term`) and block 0's by the stream expand: the same fp32 adds,
+            # without a separate carrier read + write per block.
+            terms = [self._build_injection_term(
+                i, _x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype,
+                ve_bagged=ve_bagged) for i in range(len(_prelude))]
+            with _prof("carrier::expand_contig"):
+                x = (x + terms[0]).unsqueeze(2).expand(
+                    B, T, self._n_streams, x.shape[-1]).contiguous()
+            for i, layer in enumerate(_prelude):
+                _akw = (attn_kwargs_at[i] if attn_kwargs_at and i in attn_kwargs_at
+                        else attn_kwargs)
+                x = layer(x, attn_kwargs=_akw, ret_reset_mask=ret_reset_mask,
+                          next_inject_term=terms[i + 1] if i + 1 < len(terms) else None)
+            return x, x0
+
         if self._is_hc:
             with _prof("carrier::expand_contig"):
                 x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
@@ -4536,6 +4787,28 @@ class MORPHTransformer(nn.Module):
         every other caller → the loop below is unchanged, bit-identical."""
         if (extra_term is None) != (extra_gates is None):
             raise ValueError("_back_region: extra_term and extra_gates go together")
+        if self.cfg.inject_fold and not checkpoint_blocks:
+            # model.inject_fold: coda block i>0's injection is added by block i-1's HC exit
+            # kernel (`next_inject_term`); block 0's stays a separate add (its input is the
+            # core's output). The terms are the loop below's, built in the same order.
+            terms = []
+            for i in range(len(self.coda)):
+                gi = self.cfg.n_prelude + self.cfg.n_core + i
+                term = self._build_injection_term(
+                    gi, self.x0_injects[gi].precompute(x0), input_ids, bigram_emb, x.dtype)
+                if inject_keep is not None:
+                    term = term * inject_keep.to(term.dtype)
+                if extra_term is not None:
+                    term = term + extra_gates[i].to(term.dtype) * extra_term.to(term.dtype)
+                terms.append(term)
+            x = self._apply_injection(x, terms[0])
+            for i, layer in enumerate(self.coda):
+                gi = self.cfg.n_prelude + self.cfg.n_core + i
+                _akw = (attn_kwargs_at[gi] if attn_kwargs_at and gi in attn_kwargs_at
+                        else attn_kwargs)
+                x = layer(x, attn_kwargs=_akw, ret_reset_mask=ret_reset_mask,
+                          next_inject_term=terms[i + 1] if i + 1 < len(terms) else None)
+            return self._readout(x)
         for i, layer in enumerate(self.coda):
             gi = self.cfg.n_prelude + self.cfg.n_core + i
             term = self._build_injection_term(
@@ -5611,10 +5884,31 @@ class MORPHTransformer(nn.Module):
     # Reached only when a `slot_layout` is passed. Every helper below is a no-op for
     # the plain path because the plain path never calls it.
 
+    def _tul_front_lookups(self, input_ids: Tensor,
+                           layout: SlotLayout) -> tuple[Tensor, Tensor | None, list[Tensor]]:
+        """The front's TABLE reads, ``(tok_emb, bigram_emb, ve_tab)``: the slot-input token
+        embedding BEFORE ``embed_drop``, the slot-input bigram signal (None without a
+        bigram table) and every value-embedding table's raw output (before its projection).
+
+        The ONE home of these reads. :meth:`_tul_front` runs them for the live front, and
+        the fan's EMA twin (:meth:`_tul_fan_target`) reuses the live front's tuple instead
+        of reading the tables a second time: the twin shares the live tables
+        (:class:`FanTargetFront`), so its reads would be the same ops on the same weights
+        and ids, and each read re-quantises the WHOLE table (``embed_quant``: 4.3 ms of the
+        twin's 19.2 ms on the FAST step). No RNG is drawn here (dropout is the caller's)."""
+        tok_emb = self.tul.slot_input(self.embed(input_ids), layout, add_e_slot=True)
+        _bg = self.embed.get_bigram(input_ids)
+        bigram_emb = (self.tul.slot_input(_bg, layout, add_e_slot=False)
+                      if _bg is not None else None)
+        ve_tab = [self.value_embed_tables[k](input_ids)
+                  for k in range(len(self._ve_layer_map))]
+        return tok_emb, bigram_emb, ve_tab
+
     def _tul_front(self, input_ids: Tensor, layout: SlotLayout,
                    attn_kwargs: dict | None = None,
                    ret_reset_mask: Tensor | None = None,
-                   twin: FanTargetFront | None = None):
+                   twin: FanTargetFront | None = None,
+                   lookups: tuple | None = None):
         """Embed + slot inputs + prelude over ALL positions (spec §3.2).
 
         The slot's input embedding is ``E_slot + mean_j embed(t_j)`` over its span's
@@ -5632,32 +5926,36 @@ class MORPHTransformer(nn.Module):
         (the target is deterministic; this call draws no RNG, so the live forward's stream
         is the one it would be without the target). ``None`` — every other call — is the
         body above, unchanged.
+
+        ``lookups``: a :meth:`_tul_front_lookups` tuple of THIS row, reused instead of
+        reading the tables again (the live forward hands its own to the twin). ``None``
+        reads them here. The values are the same either way: the reads are deterministic
+        and draw no RNG.
         """
-        tok_emb = self.tul.slot_input(self.embed(input_ids), layout, add_e_slot=True)
+        tok_emb, bigram_emb, ve_tab = (self._tul_front_lookups(input_ids, layout)
+                                       if lookups is None else lookups)
         x = self.embed_drop(tok_emb) if twin is None else tok_emb
-        _bg = self.embed.get_bigram(input_ids)
-        bigram_emb = (self.tul.slot_input(_bg, layout, add_e_slot=False)
-                      if _bg is not None else None)
-        n_ve = len(self._ve_layer_map)
         _ve_proj = self.value_embeds if twin is None else twin.value_embeds
         ve_bagged = ([
-            self.tul.slot_input(
-                _ve_proj[k].precompute(self.value_embed_tables[k](input_ids)),
-                layout, add_e_slot=False)
-            for k in range(n_ve)
-        ] if n_ve > 0 else None)
+            self.tul.slot_input(_ve_proj[k].precompute(ve_tab[k]), layout, add_e_slot=False)
+            for k in range(len(ve_tab))
+        ] if ve_tab else None)
         x, x0 = self._front_tail(x, input_ids, bigram_emb, ve_bagged,
                                  attn_kwargs=attn_kwargs, ret_reset_mask=ret_reset_mask,
                                  **({"twin": twin} if twin is not None else {}))
         return x, x0, bigram_emb
 
-    def _sample_slot_depths(self, layout: SlotLayout, device) -> Tensor:
+    def _sample_slot_depths(self, layout: SlotLayout, device, cells: int = 1) -> Tensor:
         """``[B, max_slots]`` per-slot Poisson depth (spec §3.3 [W]).
 
         Parcae samples one depth per SEQUENCE; TUL samples one per SLOT — claim C1 is
         "depth per idea", so the depth must vary per idea. Eval is the deterministic
         mean depth. Pad slots get depth 1 so they never inflate ``total_iters``; their
         update is masked out regardless.
+
+        ``cells`` (``model.slot_depth_stratified`` only): the layout's slot axis holds
+        ``cells`` cells per slot (the Thought Register's cell view); the stratified draw is
+        made per SLOT and repeated over its cells. The independent draw ignores it.
         """
         tc = self.cfg.tul
         mean_d = tc.slot_mean_depth or self.cfg.mean_depth
@@ -5669,6 +5967,13 @@ class MORPHTransformer(nn.Module):
             # in training AND at eval, so the forced-depth sweep reads a model that never
             # saw another depth. bptt_depth < fixed truncates uniformly (Parcae's form).
             d = torch.full(shape, fixed, device=device, dtype=torch.long)
+        elif self.training and self.cfg.slot_depth_stratified:
+            # model.slot_depth_stratified: per row a systematic sample of the same clamped
+            # law, permuted over the row's slots (pads included; `_pad_slot_depths` below
+            # then sets them to 1). Same marginal per slot, at most `slot_depth_capacity`'s
+            # C_t active slots per row at pass t (morph/model/slot_compact.py).
+            d = stratified_slot_depths(shape[0], shape[1] // cells, float(mean_d), int(max_d),
+                                       device).repeat_interleave(cells, dim=1)
         elif self.training:
             d = torch.poisson(torch.full(shape, float(mean_d), device=device)).long()
             d = d.clamp(min=1, max=max_d)
@@ -5944,6 +6249,13 @@ class MORPHTransformer(nn.Module):
         # cell-level layout never reaches them.
         _m_cells = int(self.cfg.tul.slot_cells)
         _n_slots = layout.slot_index.shape[1]
+        # model.graph_safe: a Python-level constant for this forward. TRAINING only — an
+        # eval forward is never captured and keeps today's path, host reads included.
+        _gsafe = bool(self.cfg.graph_safe) and self.training
+        # Its pieces (MORPHConfig.graph_safe_parts): a piece left out runs today's form.
+        _gs_pass = _gsafe and "passes" in self.cfg.graph_safe_parts
+        _gs_fp = _gsafe and "fixed_point" in self.cfg.graph_safe_parts
+        _gs_ctr = _gsafe and "center" in self.cfg.graph_safe_parts
         _layout_slots = layout          # the PER-SLOT view, kept for the register and the
                                         # per-slot depth draw; `layout` becomes per-CELL
         if _m_cells > 1:
@@ -5957,7 +6269,7 @@ class MORPHTransformer(nn.Module):
             # The per-cell validity's host value, when the per-slot one has one
             # (`morph.model.host_shadow`): the fixed-point term below reads masks of it.
             _vh_slots = host_shadow(_layout_slots.slot_valid)
-            if _vh_slots is not None:
+            if _vh_slots is not None and not _gsafe:
                 derive_shadow(layout.slot_valid, np.repeat(_vh_slots, _m_cells, axis=1))
         gidx, gvalid = layout.slot_index, layout.slot_valid
 
@@ -6297,6 +6609,10 @@ class MORPHTransformer(nn.Module):
         # absolute state h* + Delta. `halt` (eval only) never reaches it.
         _fp_lam = float(self.cfg.core_fixed_point_lambda) if self.training else 0.0
         _fp_terms: list[Tensor] = []
+        # model.graph_safe's form of the same term: (u_T, h_{T-1}, charged, finishing pass)
+        # per cell, filled pass by pass with `torch.where` (see the term's site in the loop).
+        # None otherwise.
+        _fp_acc: tuple[Tensor, Tensor, Tensor, Tensor] | None = None
         _gain_reg: dict | None = None
         # tul.slot_cell_pass_norm's eval readings: reset at EVERY forward of a normed
         # model (a train forward leaves None, so a stale eval dict never reaches a train
@@ -6351,11 +6667,13 @@ class MORPHTransformer(nn.Module):
                 # tul.gram_objective="iw": ONE depth table per base row, shared by its K
                 # rollouts (drawn on the base rows, so it consumes a single draw's stream).
                 _lb = layout.head_rows(B // iw_rollouts)
-                depths = (self._sample_slot_depths(_lb, x.device) if slot_depths is None
+                depths = (self._sample_slot_depths(_lb, x.device, cells=_m_cells)
+                          if slot_depths is None
                           else self._slot_depth_override(_lb, slot_depths, x.device)
                           ).repeat(iw_rollouts, 1)
             else:
-                depths = (self._sample_slot_depths(layout, x.device) if slot_depths is None
+                depths = (self._sample_slot_depths(layout, x.device, cells=_m_cells)
+                          if slot_depths is None
                           else self._slot_depth_override(layout, slot_depths, x.device))
             if _m_cells > 1:
                 # ONE depth per SPAN, not per cell: the M cells of a slot are one register
@@ -6373,13 +6691,25 @@ class MORPHTransformer(nn.Module):
                         "within a slot. Raises rather than silently using cell 0's value.")
                 depths = _dv[:, :, :1].expand(B, _n_slots, _m_cells).reshape(
                     B, _n_slots * _m_cells).contiguous()
-            # THE one host sync the loop needs: its Python pass count is the table's max.
-            # The whole [B, S] table comes across in that same sync and rides on `depths`
-            # as its host shadow, so every per-pass mask below is known on the host and
-            # costs no further sync (2026-10-04).
-            _dh = depths.cpu().numpy()
-            derive_shadow(depths, _dh)
-            total_iters = int(_dh.max())
+            if _gs_pass:
+                # model.graph_safe: the pass count is the CONFIG's ceiling, not the drawn
+                # table's max, so nothing crosses to the host and every batch runs the
+                # same passes. A pass that no slot reaches is masked exactly as an
+                # inactive slot is (`active = depths > t`). Equal to the drawn max
+                # whenever some slot draws the ceiling: 1000 of 1000 real `lxtul_pointer`
+                # batches did (census 2026-10-07, P(not) ~1e-28 at 212 valid slots).
+                # `slot_depth_fixed` IS the max, so that panel is exact on every batch.
+                _fixed_d = int(self.cfg.tul.slot_depth_fixed)
+                total_iters = (_fixed_d if _fixed_d > 0
+                               else int(self.cfg.tul.slot_max_depth or self.cfg.max_depth))
+            else:
+                # THE one host sync the loop needs: its Python pass count is the table's
+                # max. The whole [B, S] table comes across in that same sync and rides on
+                # `depths` as its host shadow, so every per-pass mask below is known on the
+                # host and costs no further sync (2026-10-04).
+                _dh = depths.cpu().numpy()
+                derive_shadow(depths, _dh)
+                total_iters = int(_dh.max())
         # ── tul.fan_loop_select: the latent-selected loop's per-forward state ──────
         # A Python-level constant: "off" (every other model) binds None and the three
         # `_ls` sites below trace out. Built after the depth draw because the reset mask of
@@ -6404,6 +6734,13 @@ class MORPHTransformer(nn.Module):
         # it is a training mechanism, not an instrument, and it must vary per step.
         _prog_p = float(self.cfg.tul.progressive_p)
         _prog = _prog_p > 0.0 and self.training and torch.is_grad_enabled() and not halt
+        if _gsafe and (_prog or _pr_lam > 0.0):
+            # Both read a device mask on the host every pass (`bool(_gm.any())`,
+            # `bool(_prm.any())` and a boolean-mask gather below). Refused rather than
+            # left to sync inside a captured step.
+            raise NotImplementedError(
+                "model.graph_safe does not cover tul.progressive_p or "
+                "tul.pass_residual_lambda (host reads of a device mask every pass).")
         _pk = None
         if _prog:
             _sel = torch.rand(depths.shape, device=depths.device) < _prog_p
@@ -6430,6 +6767,7 @@ class MORPHTransformer(nn.Module):
         # stream and the stream put back, so the draw is free of side effects on the run.
         _t_gain = -1
         _gain_all = bool(self.cfg.slot_gain_all_iters)
+        _gain_reuse = _gain_on and bool(self.cfg.slot_gain_reuse_f0)
         if _gain_on and n_grad_iters > 0 and not _gain_all:
             _rs = torch.get_rng_state()
             _t_gain = n_nograd + int(torch.randint(n_grad_iters, (1,)).item())
@@ -6537,7 +6875,8 @@ class MORPHTransformer(nn.Module):
             # reach arm's are, except that "position" is the SLOT: a cell keeps its own
             # slot's cells, which is what makes the register a register and not M
             # independent loops.
-            _kw0 = {"tg_relation": _mask0}
+            _kw0 = ({"tg_index": tg_strict_index("cells", cells=_m_cells)}
+                    if self.cfg.tg_fused_attention else {"tg_relation": _mask0})
             _kwr = {"tg_relation": _same}
             if _reach > 0:
                 # The paragraph above ("the CCA conv and the value shift are left alone")
@@ -6637,7 +6976,13 @@ class MORPHTransformer(nn.Module):
                              + tuple(_core_akw[1:]))
 
         def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None,
-                       carry=None, want_carry=False, xhc_route=None):
+                       carry=None, want_carry=False, xhc_route=None, compact=None):
+            if compact is not None:
+                # model.slot_compact: this pass's plan and the layers' attention-input
+                # caches; returns (h, None, new caches). `_slot_compact_guard` (before the
+                # loop) refused every feature the branches below would add to the map.
+                return self._slot_compact_step(h_in, e_in, inj_terms, compact, _core_akw,
+                                               iter_idx)
             if _rr is not None:
                 h_in = self._apply_injection(
                     h_in, _rr.read(h_in, _rr_k, _rr_v, _rr_allow, layout.slot_valid))
@@ -6819,6 +7164,28 @@ class MORPHTransformer(nn.Module):
                 # record is that pass's mean of x_bar over the valid cells. [B, S*M]
                 _vf = layout.slot_valid.float()
                 _ctr_w = _vf / _vf.sum().clamp(min=1.0)
+        # ── model.slot_compact: one plan per pass (morph/model/slot_compact.py) ────────
+        # TRAINING only, a Python-level constant: "off" (and every eval forward) binds None
+        # and the loop below is the one from before the key. Every plan is built here on
+        # the device (no host read): the cells whose pass it is (`depths > t`, pads at t = 0
+        # only) and, in "gather" mode, the row order that puts them first and their
+        # original positions for the attention kernel (`qpos`, C_t * M rows). `_xa_cache`
+        # holds each core layer's attention input over every cell, rebound after each pass:
+        # a finished cell keeps serving the input of its last active pass.
+        _cpt_plans = None
+        _xa_cache = None
+        if self.training and self.cfg.slot_compact != "off":
+            self._slot_compact_guard(
+                halt=halt, iw_rollouts=iw_rollouts, n_nograd=n_nograd, n_ckpt=n_ckpt,
+                m_cells=_m_cells, gs_pass=_gs_pass, total_iters=total_iters,
+                per_pass=dict(reread=_rr, carry=_carry, scse=_scse, grad_pass=_gp,
+                              chain=_chain, denoise=_dn, code_enum=_enum, policy=_pol_codes,
+                              gram=_gctx, trigger=_trig, stage_iter=_iter_mode or None,
+                              retention=track_ret or None, centers=_ctrs or None,
+                              reach=_reach or None, source_once=_src_once or None,
+                              progressive=_prog or None, gain_reuse=_gain_reuse or None,
+                              gain_all=_gain_all or None, recur_gate=self.tul_recur_gate))
+            _cpt_plans = self._slot_compact_plans(depths, _n_slots, _m_cells, total_iters)
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
@@ -6991,11 +7358,22 @@ class MORPHTransformer(nn.Module):
             # has to be captured so the accumulator still grows (morph/model/tul_carry.py).
             _cy = _carry_state if (_carry_reinjects and t > 0) else None
             _want_carry = _carry is not None
+            # The gain hinge runs at this pass (its site below). `model.slot_gain_reuse_f0`:
+            # the RNG states the step is about to draw from, replayed for the hinge's f(h + d).
+            _gain_here = t == _t_gain or (_gain_on and _gain_all and t >= n_nograd)
+            _f0_rng = ((torch.get_rng_state(),
+                        torch.cuda.get_rng_state() if h.is_cuda else None)
+                       if _gain_here and _gain_reuse else None)
             if _ctr_w is not None:
                 # tul.loop_attn_center: record THIS pass's valid mean of x_bar (the forward
                 # of the step only; see the life-cycle block above the loop).
                 for _c in _ctrs:
                     _c.arm(_ctr_w)
+            # model.slot_compact: this pass's plan with the caches it reads (the guard
+            # keeps every pass a grad pass without a checkpoint, the third call below).
+            _xa_in = _xa_cache
+            _cpt_kw = ({} if _cpt_plans is None
+                       else {"compact": (*_cpt_plans[t], _xa_in)})
             if t < n_nograd:
                 with torch.no_grad():
                     _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
@@ -7009,12 +7387,14 @@ class MORPHTransformer(nn.Module):
             else:
                 _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
                                        iter_idx=t, stage_cond=_sc,
-                                       carry=_cy, want_carry=_want_carry)
+                                       carry=_cy, want_carry=_want_carry, **_cpt_kw)
             if _ctr_w is not None:
                 for _c in _ctrs:
                     _c.disarm()
             if _want_carry:
                 h_new, rs_new, _read = _step_out
+            elif _cpt_plans is not None:
+                h_new, rs_new, _xa_cache = _step_out
             else:
                 h_new, rs_new = _step_out
             if _prog:
@@ -7076,7 +7456,7 @@ class MORPHTransformer(nn.Module):
                         # — it is the check that the match is live, not a free reading.
                         _carry_stats[f"inject_ratio_t{t}"] = _carry_cap.pop("ratio")
 
-            if t == _t_gain or (_gain_on and _gain_all and t >= n_nograd):
+            if _gain_here:
                 # The hinge must read the map on the slots whose pass at t CARRIES
                 # gradient: its penalty is added to the loss and shapes the core weights,
                 # and applying it at prefix positions would constrain the map exactly
@@ -7093,7 +7473,16 @@ class MORPHTransformer(nn.Module):
                         _gm, _gain_lambda, carry=_cy,
                         # keyword passed only when on: the knob-off call is the old call
                         **({} if _gain_renorm_to is None
-                           else {"renorm_to": _gain_renorm_to})))
+                           else {"renorm_to": _gain_renorm_to}),
+                        # `model.slot_gain_reuse_f0`: the step's RAW output (before the
+                        # progressive cut, the renorm and the cell norm) is f(h).
+                        **({} if _f0_rng is None
+                           else {"f0": _step_out[0], "f0_rng": _f0_rng}),
+                        # model.slot_compact: the map of THIS pass, frozen cells served
+                        # from the caches it read, detached like every other source.
+                        **({} if _cpt_plans is None
+                           else {"compact": (*_cpt_plans[t], None if _xa_in is None
+                                             else tuple(c.detach() for c in _xa_in))})))
             if _renorm:
                 # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
                 # raw step output, BEFORE the gain governor and the recurrence gate, so it is
@@ -7295,13 +7684,31 @@ class MORPHTransformer(nn.Module):
                     # pass in the grad window) and kept explicit so the invariant is
                     # stated where it is relied on, not only where the draw is made.
                     _fin = _fin & ~_pfx
-                else:
+                elif not _gs_fp:
                     # The same mask's host value from the depth table's and the validity's
                     # shadows, so the test and the two gathers below run without a sync.
                     _dhs, _vhs = host_shadow(depths), host_shadow(layout.slot_valid)
                     if _dhs is not None and _vhs is not None:
                         derive_shadow(_fin, (_dhs > t) & _vhs & ~(_dhs > t + 1))
-                if any_true(_fin):
+                if _gs_fp:
+                    # model.graph_safe: no gather of a host-counted row set. `_fin` is
+                    # `depths == t + 1` on the valid cells, so the passes' finishing sets
+                    # are DISJOINT and each cell's (u_T, h_{T-1}) pair is written into the
+                    # full-width accumulator exactly once; the term is reduced ONCE after
+                    # the loop (`_fp_acc` below). `torch.where` saves only its mask, so the
+                    # backward holds one fp32 carrier pair, as the gather did, and its
+                    # gradient reaches each cell's own pass unchanged.
+                    _fv = _fin.view(*_fin.shape, *([1] * (h.dim() - 2)))
+                    _tp = torch.full_like(depths, t)
+                    if _fp_acc is None:
+                        _fp_acc = (torch.where(_fv, _h_det, torch.zeros_like(_h_det)),
+                                   torch.where(_fv, h, torch.zeros_like(h)), _fin,
+                                   torch.where(_fin, _tp, torch.zeros_like(_tp)))
+                    else:
+                        _fp_acc = (torch.where(_fv, _h_det, _fp_acc[0]),
+                                   torch.where(_fv, h, _fp_acc[1]), _fp_acc[2] | _fin,
+                                   torch.where(_fin, _tp, _fp_acc[3]))
+                elif any_true(_fin):
                     # `_h_det`: u_T, the deterministic part (tul.gram; `h_new` itself on
                     # every other arm) — ||u_T - h_{T-1}||^2 / ||u_T||^2.
                     # Gathered to the FINISHING slots before the fp32 casts (the pass
@@ -7396,9 +7803,16 @@ class MORPHTransformer(nn.Module):
             # valid cell in the batch the record is a mean of nothing: discard it rather
             # than pull mu toward 0. `_loop_attn_center_frozen` is the trainer's compile
             # warmup on random tokens: it records (the same code runs) and discards.
-            _ctr_skip = self._loop_attn_center_frozen or not any_true(layout.slot_valid)
-            for _c in _ctrs:
-                _c.apply(frozen=_ctr_skip)
+            if _gs_ctr:
+                # model.graph_safe: the "no valid cell" test stays on the device and
+                # zeroes the update instead of branching on it (`LoopAttnCenter.apply`).
+                _ctr_empty = ~layout.slot_valid.any()
+                for _c in _ctrs:
+                    _c.apply(frozen=self._loop_attn_center_frozen, skip=_ctr_empty)
+            else:
+                _ctr_skip = self._loop_attn_center_frozen or not any_true(layout.slot_valid)
+                for _c in _ctrs:
+                    _c.apply(frozen=_ctr_skip)
         if _cot_hooks and _cot_clip > 0.0 and h.requires_grad:
             # The reference for every iteration's clip: the cotangent that reaches the
             # loop's exit carrier. Registered on the carrier itself (not on the last
@@ -7489,6 +7903,13 @@ class MORPHTransformer(nn.Module):
             # write reads), the final winner and the readings, stashed on `_lsel_out`.
             self._lsel_finish(_ls, h)
         _aux: dict = {}
+        if _fp_acc is not None:
+            # model.graph_safe: the gathered term below, bit for bit, at a fixed shape
+            # (`_fp_term_exact`). A batch with no charged cell reads exactly 0 (the
+            # gathered path leaves the key out).
+            _fp = _fp_term_exact(_fp_acc, None if _scse is None else h_star, total_iters)
+            _aux["fixed_point"] = _fp.detach()
+            _aux["fp_weighted"] = _fp_lam * _fp
         if _fp_terms:
             _fp = torch.cat(_fp_terms).mean()
             _aux["fixed_point"] = _fp.detach()
@@ -7505,6 +7926,83 @@ class MORPHTransformer(nn.Module):
             # (`_slot_gain_reduce`).
             _gain_reg = self._slot_gain_reduce(_gain_terms)
         return xn, h, depths, g_traj, _db_traj, _gain_reg, _mep_keep
+
+    # ── model.slot_compact (morph/model/slot_compact.py) ─────────────────────────────
+
+    def _slot_compact_guard(self, *, halt: bool, iw_rollouts: int, n_nograd: int,
+                            n_ckpt: int, m_cells: int, gs_pass: bool, total_iters: int,
+                            per_pass: dict) -> None:
+        """The runtime half of ``validate_slot_compact``: the features the build check names
+        by config key, read here off the objects ``_tul_core`` resolved. Each one adds a
+        term to a pass, or reads its rows, that the compacted step does not carry."""
+        max_d = int(self.cfg.tul.slot_max_depth or self.cfg.max_depth)
+        bad = sorted(k for k, v in per_pass.items() if v is not None) + [k for k, ok in (
+            ("halt", not halt), ("iw_rollouts>1", iw_rollouts == 1),
+            ("a no-grad pass", n_nograd == 0), ("a checkpointed pass", n_ckpt == 0),
+            ("slot_cells==1", m_cells > 1), ("graph_safe passes off", gs_pass),
+            (f"total_iters {total_iters} != slot_max_depth {max_d}", total_iters == max_d))
+            if not ok]
+        if bad:
+            raise NotImplementedError(f"model.slot_compact on a slot loop with {bad}: the "
+                                      "compacted pass carries none of them.")
+
+    def _slot_compact_plans(self, depths: Tensor, n_slots: int, m_cells: int,
+                            total_iters: int) -> list[tuple]:
+        """One ``(perm, inv, qpos, active)`` per pass (``perm`` / ``inv`` / ``qpos`` None in
+        ``"full"`` mode). ``depths`` is the cell-level table ``[B, S * M]``, constant within
+        a slot. In ``"gather"`` mode pass ``t`` computes ``C_t * M`` rows, ``C_t`` the
+        stratified draw's capacity (``slot_depth_capacity``); a device assert (no host read)
+        stops the run if more cells than that are active, which would mean the draw and the
+        proved bound disagree."""
+        if self.cfg.slot_compact == "full":
+            return [(None, None, None, depths > t) for t in range(total_iters)]
+        tc = self.cfg.tul
+        caps = slot_depth_capacity(float(tc.slot_mean_depth or self.cfg.mean_depth),
+                                   int(tc.slot_max_depth or self.cfg.max_depth), n_slots)
+        plans = []
+        for t in range(total_iters):
+            act = depths > t
+            n = caps[t] * m_cells
+            torch._assert_async(act.sum(dim=1).max() <= n,
+                                "model.slot_compact: more active cells than the capacity C_t")
+            perm, inv = compact_order(act)
+            plans.append((perm, inv, perm[:, :n].to(torch.int32).contiguous(), act))
+        return plans
+
+    def _slot_compact_step(self, h_in: Tensor, e_in: Tensor, inj: Tensor, compact: tuple,
+                           akw: tuple, iter_idx: int) -> tuple[Tensor, None, tuple]:
+        """One slot-loop pass under ``model.slot_compact``: ``(h_out, None, caches)``.
+
+        ``compact`` is ``(perm, inv, qpos, active, caches)``: a ``_slot_compact_plans``
+        entry plus the per-layer attention-input caches (None at the first pass). In
+        ``"gather"`` mode the carrier, the injection source and the per-layer injection
+        terms are cut to the plan's rows, the core blocks run on them (the attention's keys
+        and values over every cell, from the caches with this pass's rows written in:
+        ``compact_attn_input``), and the result is written back at the active cells; every
+        other cell keeps ``h_in``. In ``"full"`` mode every cell is computed and the active
+        ones are kept, so both modes hand the loop the same tensor. ``akw`` is the loop's
+        per-layer attention kwargs; every core layer shares the cells index (the guard
+        refused ``loop_reach``)."""
+        perm, inv, qpos, act, caches = compact
+        tg = akw[0]["tg_index"]
+        if perm is not None:
+            n = qpos.shape[1]
+            h_c = take_rows(h_in, perm, inv, n)
+            e_c = take_rows(e_in, perm, inv, n)
+            inj_c = take_rows(inj, perm, inv, n, dim=2, bdim=1)
+            tg = {**tg, "qpos": qpos, "perm": perm, "inv": inv}
+        else:
+            h_c, e_c, inj_c = h_in, e_in, inj
+        kws = tuple({"tg_index": tg,
+                     "slot_compact": (None if caches is None else caches[i], act, perm, inv)}
+                    for i in range(self.cfg.n_core))
+        h_out, _, xa = self._apply_core_step(h_c, e_c, None, None, None, iter_idx=iter_idx,
+                                             inj_terms=inj_c, attn_kw=kws, compact_out=True)
+        if perm is not None:
+            h_out = put_rows(h_out, perm, inv, h_in, act)
+        else:
+            h_out = torch.where(act.view(*act.shape, *([1] * (h_in.dim() - 2))), h_out, h_in)
+        return h_out, None, xa
 
     @staticmethod
     def _slot_gain_reduce(terms: list[dict]) -> dict:
@@ -7537,8 +8035,20 @@ class MORPHTransformer(nn.Module):
         }
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
-                           mask, lam: float, carry=None, renorm_to=None) -> dict:
+                           mask, lam: float, carry=None, renorm_to=None,
+                           f0: Tensor | None = None, f0_rng: tuple | None = None,
+                           compact: tuple | None = None) -> dict:
         """Hinge penalty on the slot map's typical gain at the live operating point.
+
+        ``f0`` / ``f0_rng`` (``model.slot_gain_reuse_f0`` only): the loop's own step output
+        at this pass and the (CPU, CUDA) RNG states from before that step. None: the hinge
+        computes f(h) itself, as below.
+
+        ``compact`` (``model.slot_compact`` only): the pass's plan with its DETACHED
+        attention-input caches, handed to both applications, so the hinge probes the map
+        the pass ran (frozen cells served from the caches) on the pass's rows only. ``d`` is
+        zero off ``mask`` (the active valid cells), so the two applications differ only
+        through the cells the plan computes. None: the call before this existed.
 
         The gain read here INCLUDES `DiagonalInjection`, whose identity-plus-decay Jacobian
         alone gives 0.865 at `A`'s init; the slot map sits just above that floor. A term
@@ -7571,6 +8081,12 @@ class MORPHTransformer(nn.Module):
             torch.set_rng_state(cpu_rng)
             if cuda_rng is not None:
                 torch.cuda.set_rng_state(cuda_rng)
+        # `model.slot_gain_reuse_f0`: the reused f(h) is attached at its input, so f(h + d)
+        # must be too, at the SAME live point and sources. Then the two applications'
+        # gradients into the upstream graph cancel to first order, as their weight gradients
+        # do; detached, f(h)'s input gradient alone is O(1 / slot_gain_eps) (tiny fixture:
+        # 70.9 upstream against the hinge's own 0.28 on the core; live: 0.14).
+        _live = (h_in, e_arg, inj_arg, ret_state, carry)
         hp = h_in.detach()
         # The map's gain in h at a FIXED source: the injection source and the retention
         # state are detached too, so the penalty shapes the core's weights and nothing
@@ -7610,15 +8126,35 @@ class MORPHTransformer(nn.Module):
         # are the same function (bit-identical pins: tests/test_tul_lx_credit.py and
         # /home/wolfe/morph-scratch/credit/pin_compare.py). The cost is two core passes
         # recomputed in the backward, the price the loop's own passes already pay.
-        def _app(h_, xr):
-            return checkpoint(core_step, h_, e_arg, inj_arg, ret_state=ret_state,
-                              iter_idx=t, stage_cond=stage_cond, carry=carry,
+        # `model.slot_gain_no_ckpt`: the same calls without the checkpoint, so the backward
+        # reads the kept activations; with the RNG put back before each call the forward
+        # draws what the checkpoint's recompute would replay (bit-identical).
+        _ckpt = not bool(self.cfg.slot_gain_no_ckpt)
+        if compact is not None:
+            # model.slot_compact (refused with the checkpointed hinge): the step returns
+            # (h, None, caches); only h is read.
+            _xr0, _xr1 = {**_xr0, "compact": compact}, {**_xr1, "compact": compact}
+        def _app(h_, xr, e_, inj_, ret_, carry_):
+            if not _ckpt:
+                return core_step(h_, e_, inj_, ret_state=ret_, iter_idx=t,
+                                 stage_cond=stage_cond, carry=carry_, **xr)[:2]
+            return checkpoint(core_step, h_, e_, inj_, ret_state=ret_,
+                              iter_idx=t, stage_cond=stage_cond, carry=carry_,
                               use_reentrant=False, **xr)
         try:
-            _restore()
-            f0, _ = _app(hp, _xr0)
-            _restore()
-            f1, _ = _app(hp + d, _xr1)
+            if f0 is None:
+                _restore()
+                f0, _ = _app(hp, _xr0, e_arg, inj_arg, ret_state, carry)
+                _restore()
+                f1, _ = _app(hp + d, _xr1, e_arg, inj_arg, ret_state, carry)
+            else:
+                # `model.slot_gain_reuse_f0`: `f0` is the loop's own step output at this
+                # pass; f(h + d) replays that step's RNG state, so both see one set of masks,
+                # and runs at the live point (`_live` above).
+                torch.set_rng_state(f0_rng[0])
+                if f0_rng[1] is not None:
+                    torch.cuda.set_rng_state(f0_rng[1])
+                f1, _ = _app(_live[0] + d, _xr1, *_live[1:])
         finally:
             _restore()
         den = d.float().flatten(1).norm(dim=1) + 1e-6
@@ -9610,7 +10146,7 @@ class MORPHTransformer(nn.Module):
 
     def _tul_fan_target(self, input_ids: Tensor, labels: Tensor, layout: SlotLayout,
                         front_kw: dict | None, front_reset: Tensor | None,
-                        x_online: Tensor) -> dict:
+                        x_online: Tensor, lookups: tuple | None = None) -> dict:
         """The EMA-prelude target of every slot (arms F and T) and the online twin of it.
 
         Returns ``{"z", "ok", "zo"}``: ``z`` ``[B, S, C]`` fp32, no graph — the TWIN
@@ -9628,6 +10164,10 @@ class MORPHTransformer(nn.Module):
         (``tests/test_tul_fan_opf.py`` perturbs every other span and reads it unchanged).
         It is ONLY a target: nothing built from it is written into the loop or the coda.
         ``labels`` enter only as the scored-position mask (``labels >= 0``: pads out).
+
+        ``lookups``: the live front's :meth:`_tul_front_lookups` tuple of the same row (the
+        forward passes it; the twin shares the tables, so the values are the same). None
+        reads the tables again.
         """
         twin = self.__dict__.get("_fan_target")
         if twin is None:
@@ -9636,14 +10176,22 @@ class MORPHTransformer(nn.Module):
                 "Call model.tul_fan_target_build() after quantisation (the trainer does, "
                 "before torch.compile) and before any labelled forward.")
         gid, keep_tok, _lab, g_bins = span_ce_index(labels, layout)
-        with torch.no_grad():
-            xt, _, _ = self._tul_front(input_ids, layout, attn_kwargs=front_kw,
-                                       ret_reset_mask=front_reset, twin=twin)
-            z = pooled_span_states(xt, gid, keep_tok, g_bins)
         n_tok = span_token_counts(gid, keep_tok, g_bins)[:, 1:]
         ok = layout.slot_valid & (n_tok > 0)
         zo = (pooled_span_states(x_online, gid, keep_tok, g_bins)
               if (self.tul_fan_opf is not None or self._lsel_mode != "off") else None)
+        if self.cfg.fan_target_online:
+            # `model.fan_target_online`: the target is the ONLINE prelude's pooling under
+            # stop-gradient, not the EMA twin's (no second prelude forward). A different
+            # objective (BYOL without the EMA), not a faster form of this one.
+            z = (zo.detach() if zo is not None else
+                 pooled_span_states(x_online.detach(), gid, keep_tok, g_bins))
+            return {"z": z, "ok": ok, "zo": zo}
+        with torch.no_grad():
+            xt, _, _ = self._tul_front(input_ids, layout, attn_kwargs=front_kw,
+                                       ret_reset_mask=front_reset, twin=twin,
+                                       lookups=lookups)
+            z = pooled_span_states(xt, gid, keep_tok, g_bins)
         return {"z": z, "ok": ok, "zo": zo}
 
     def _tul_fan_opf(self, cells: Tensor, tgt: dict, stats: dict) -> Tensor:
@@ -9831,7 +10379,10 @@ class MORPHTransformer(nn.Module):
         tpick = None
         if st["z"] is not None:
             with torch.no_grad():
-                tpick = lsel_distance(self.tul_fan_lsel_head(cr), st["z"]).argmin(dim=-1)
+                # `model.fan_lsel_pick_bf16`: the pick's head GEMMs in bf16 (not exact).
+                gz = (self.tul_fan_lsel_head.forward_bf16(cr) if self.cfg.fan_lsel_pick_bf16
+                      else self.tul_fan_lsel_head(cr))
+                tpick = lsel_distance(gz, st["z"]).argmin(dim=-1)
             okp = act & st["ok"]
             okf = okp.float()
             ce = F.cross_entropy(scores.reshape(B * S, m), tpick.reshape(B * S),
@@ -11132,6 +11683,30 @@ class MORPHTransformer(nn.Module):
                 stats[f"oracle_z_l{t}"] = v
         return out
 
+    @staticmethod
+    def _spandec_row_cap(B: int, L: int, layout: SlotLayout, dec) -> int:
+        """An upper bound, from SHAPES alone, on the span decoder's labelled rows per batch
+        (``model.spandec_ce_row_cap``): the fixed row count its vocab CE runs at.
+
+        The proof, per row, for one decoded block at shift ``h`` (slot ``s`` graded on span
+        ``s + h``, :func:`morph.model.tul_spandec.span_slots`). Let ``n`` be the row's valid
+        slots (a prefix of the ``S`` slots). (1) A label is a TOKEN position, and ``(slot,
+        offset)`` is unique per position, so labels <= token positions <= ``L - K n``: each
+        valid slot holds ``K = prefix_k`` slot positions. (2) A label needs its span's own
+        slot AND the graded slot to exist, so only slots ``0 .. n-1-h`` are graded, each on
+        at most ``J`` offsets: labels <= ``J max(n - h, 0)``. The row's labels are at most
+        ``max_n min(L - K n, J max(n - h, 0))``; a horizon decoder sums its blocks' bounds.
+        At the lxtul shapes (L 1280, K 4, J 32, S 64, h 1) that is 1132 of 2048 per row
+        (55 %; measured mean 50 %). A batch that beat it would mean the proof is wrong, and
+        `_FusedLinearCE` turns that batch's loss into NaN rather than drop rows.
+        """
+        K, S = int(layout.prefix_k), int(layout.max_slots)
+        J = int(dec.per_span_tokens)
+        per_row = 0
+        for h in range(int(dec.target_offset), int(dec.target_offset) + int(dec.horizon)):
+            per_row += max(min(L - K * n, J * max(n - h, 0)) for n in range(S + 1))
+        return B * min(per_row, S * J * int(dec.horizon))
+
     def _tul_spandec_loss(self, h_slots: Tensor, input_ids: Tensor,
                           layout: SlotLayout, stats: dict | None = None,
                           cells: Tensor | None = None) -> Tensor:
@@ -11172,11 +11747,10 @@ class MORPHTransformer(nn.Module):
 
         Cost, stated because it is not free. The readout is
         ``[B, S, J, V]`` — 2.4 GB fp32 at B=6, S=64, J=32, V=49169 — so it goes through
-        :func:`fused_linear_cross_entropy`, which never materialises it. That kernel
-        always accumulates a ``[V, d]`` fp32 ``grad_w`` (201 MB at V=49169, d=1024) and
-        saves it for the backward, and with a DETACHED head that accumulator is computed
-        and thrown away. It is the price of having one chunked-CE implementation in the
-        tree rather than two.
+        :func:`fused_linear_cross_entropy`, which never materialises it. With the head
+        DETACHED that kernel skips the ``[V, d]`` ``grad_w`` GEMM and accumulator
+        (2026-10-08; before that they were computed and thrown away), and
+        ``model.spandec_ce_row_cap`` runs its GEMMs on the labelled rows only.
         """
         tc = self.cfg.tul
         dec = self.tul_spandec
@@ -11223,6 +11797,8 @@ class MORPHTransformer(nn.Module):
         loss = fused_linear_cross_entropy(
             st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
             chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
+            row_cap=(self._spandec_row_cap(input_ids.shape[0], input_ids.shape[1], layout,
+                                           dec) if self.cfg.spandec_ce_row_cap else 0),
             **self._ce_kw)
         if stats is not None:
             # THE DECODE-CHEAP READOUT. `spandec_ce` is a per-TOKEN conditional CE over the
@@ -12501,8 +13077,9 @@ class MORPHTransformer(nn.Module):
             if logit_l2 != 0.0:
                 raise NotImplementedError("tul.pointer_heads / tul.ditto_rows with "
                                           "tul.coda_logit_l2")
-            lp_model = fused_linear_label_logprob(flat, w_head, lab, ignore_index=-100,
-                                                  chunk_size=chunk, mask_token_id=mask_id)
+            lp_model = fused_linear_label_logprob(
+                flat, w_head, lab, ignore_index=-100, chunk_size=chunk, mask_token_id=mask_id,
+                softmax_kernel=self._ce_kw["softmax_kernel"])
             if self.tul_pointer is not None:
                 lp, _ptr_cov = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
                                                                layout.slot_mask, layout)
@@ -12884,19 +13461,27 @@ class MORPHTransformer(nn.Module):
             # keyword reaches `tg_strict_allow` unless the knob is actually in use
             # (the `tg_coda_token_reach` precedent just below).
             _pre_history_kw = {"prelude_history": "causal"} if _causal_pre else {}
-            _pre_allow = tg_strict_allow(layout, "prelude", **_pre_history_kw)
+            _fused = bool(self.cfg.tg_fused_attention)   # index tensors, no dense masks
+            _pre_allow = None if _fused else tg_strict_allow(layout, "prelude",
+                                                             **_pre_history_kw)
             _front_seg = None if _causal_pre else _seg
             _front_reset = None if _causal_pre else tg_reset_from_ids(_seg)
             # At reach 0 the call is the tree's call, argument for argument.
             _reach_kw = ({"coda_token_reach": tc.tg_coda_token_reach}
                          if tc.tg_coda_token_reach else {})
-            _coda_allow = tg_strict_allow(layout, "coda",
-                                          coda_prefix_reach=tc.tg_coda_prefix_reach,
-                                          **_reach_kw)
+            _coda_allow = None if _fused else tg_strict_allow(
+                layout, "coda", coda_prefix_reach=tc.tg_coda_prefix_reach, **_reach_kw)
             _strict_front_kw = {"tg_allow": _pre_allow, "tg_slot_mask": layout.slot_mask,
                                 "tg_comp_allow": _pre_allow, "tg_seg": _front_seg}
             tg_attn_kwargs = {"tg_allow": _coda_allow, "tg_slot_mask": layout.slot_mask,
                               "tg_comp_allow": _coda_allow, "tg_seg": _seg}
+            if _fused:
+                # model.tg_fused_attention: the same two relations as `tg_strict_index`
+                # tensors; the fused kernel evaluates them for both branches.
+                _strict_front_kw = {"tg_index": tg_strict_index(
+                    "prelude", layout.bag_id, layout.slot_mask), "tg_seg": _front_seg}
+                tg_attn_kwargs = {"tg_index": tg_strict_index(
+                    "coda", layout.bag_id, layout.slot_mask), "tg_seg": _seg}
             tg_reset = tg_reset_from_ids(_seg)
         elif self._tg_restrict:
             # tg_restrict_scope="coda" (TULConfig): the mask reaches the coda only and
@@ -13157,9 +13742,12 @@ class MORPHTransformer(nn.Module):
         # must read (2026-09-13: the horizon grid rebuilt it bare and scored a
         # strict model from an unrestricted prelude).
         _front_kw, _front_reset, tg_attn_kwargs, tg_reset = self._tul_tg_kwargs(layout)
+        # The table reads are taken out so the fan's twin below can reuse them.
+        _front_lk = self._tul_front_lookups(input_ids, layout)
         x, x0, bigram_emb = self._tul_front(input_ids, layout,
                                             attn_kwargs=_front_kw,
-                                            ret_reset_mask=_front_reset)
+                                            ret_reset_mask=_front_reset,
+                                            lookups=_front_lk)
         # ── the fan's EMA-prelude target (tul.fan_opf / tul.fan_route: latent) ─────────
         # Built HERE, on the base batch right after the live front, because the twin runs
         # the SAME front on the SAME row under the SAME strict masks. Labelled forwards in
@@ -13170,7 +13758,8 @@ class MORPHTransformer(nn.Module):
         _fan_tgt = None
         if self._fan_target_needed and labels is not None and plan_mode == "normal":
             _fan_tgt = self._tul_fan_target(input_ids, labels, layout, _front_kw,
-                                            _front_reset, x)
+                                            _front_reset, x, lookups=_front_lk)
+        del _front_lk
 
         # ── tul.gram_objective="iw" (LXTUL-GK): K prior rollouts per row ─────────────
         # The front above ran ONCE on the base batch. From here the batch is expanded
@@ -13636,11 +14225,28 @@ class MORPHTransformer(nn.Module):
                     # `_tul_group_losses` lifts them into the loss `groups` dict as
                     # tensors already, and train.py's logger is the one place that calls
                     # `float()` on these, on the steps it logs).
+                    # model.graph_safe (TRAINING only, a Python-level constant): every
+                    # reader below takes its fixed-shape masked form (`fixed=`), so the
+                    # row counts are the layout's and no mask is read on the host.
+                    # Per piece (MORPHConfig.graph_safe_parts): fan_mix / fan_cos /
+                    # fan_epi / fan_vol.
+                    _gsafe = bool(self.cfg.graph_safe) and self.training
+                    _gs_parts = self.cfg.graph_safe_parts
+                    _gs_mix, _gs_cos = (_gsafe and "fan_mix" in _gs_parts,
+                                        _gsafe and "fan_cos" in _gs_parts)
+                    _gs_epi, _gs_vol = (_gsafe and "fan_epi" in _gs_parts,
+                                        _gsafe and "fan_vol" in _gs_parts)
                     fan_stats["mix_entropy"] = TULFanMix.entropy(
-                        _fan_w, layout.slot_valid).detach()
-                    fan_stats["mix_w_max"] = (
-                        masked_rows(_fan_w, layout.slot_valid).amax(dim=-1).mean().detach()
-                        if any_true(layout.slot_valid) else _fan_w.new_zeros(()))
+                        _fan_w, layout.slot_valid, fixed=_gs_mix).detach()
+                    if _gs_mix:
+                        _fw_rows, _fw_n = valid_first(_fan_w, layout.slot_valid)
+                        _fw_mean = exact_mean_1d(_fw_rows.amax(dim=-1).float(), _fw_n)
+                        fan_stats["mix_w_max"] = torch.where(
+                            _fw_n > 0, _fw_mean, torch.zeros_like(_fw_mean)).detach()
+                    else:
+                        fan_stats["mix_w_max"] = (
+                            masked_rows(_fan_w, layout.slot_valid).amax(dim=-1).mean().detach()
+                            if any_true(layout.slot_valid) else _fan_w.new_zeros(()))
                     _fan_cells = _reg_cells
                     # ── the repulsion (tul.fan_repel_lambda, tul.fan_repel_passes) ──
                     # Read off the SAME live-carry trajectory every per-pass reader uses,
@@ -13672,7 +14278,7 @@ class MORPHTransformer(nn.Module):
                             if _mode == "cos":
                                 _rp = fan_repel_term(db_traj, layout.slot_valid, _m,
                                                      int(tc.fan_repel_passes), stats=fan_stats,
-                                                     instruments=_inst)
+                                                     instruments=_inst, fixed=_gs_cos)
                             else:
                                 # `epi` / `vol` / `epivol`: the cosines stay INSTRUMENTS
                                 # (every pass, no gradient); the charged term is minus the
@@ -13682,19 +14288,29 @@ class MORPHTransformer(nn.Module):
                                     with torch.no_grad():
                                         fan_repel_term(db_traj, layout.slot_valid, _m,
                                                        int(tc.fan_repel_passes),
-                                                       stats=fan_stats)
+                                                       stats=fan_stats, fixed=_gs_cos)
                                 _parts = []
+                                # `model.fan_div_fast`: the same two terms, batched in
+                                # fp32 (`tul_fan.py`); NOT bit-identical.
+                                _fast_div = bool(self.cfg.fan_div_fast)
                                 if _mode in ("epi", "epivol"):
-                                    _parts.append(fan_epi_term(
+                                    _parts.append(fan_epi_term_fast(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         self.tul_fan_epi, _epi_ridge,
                                         float(tc.fan_epi_eta), stats=fan_stats,
-                                        instruments=_inst))
+                                        instruments=_inst) if _fast_div else fan_epi_term(
+                                        db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                        self.tul_fan_epi, _epi_ridge,
+                                        float(tc.fan_epi_eta), stats=fan_stats,
+                                        instruments=_inst, fixed=_gs_epi))
                                 if _mode in ("vol", "epivol"):
-                                    _parts.append(fan_vol_term(
+                                    _parts.append(fan_vol_term_fast(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         float(tc.fan_epi_eta), stats=fan_stats,
-                                        instruments=_inst))
+                                        instruments=_inst) if _fast_div else fan_vol_term(
+                                        db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
+                                        float(tc.fan_epi_eta), stats=fan_stats,
+                                        instruments=_inst, fixed=_gs_vol))
                                 _parts = [p for p in _parts if p is not None]
                                 _rp = torch.stack(_parts).sum() if _parts else None
                         else:
@@ -13710,21 +14326,23 @@ class MORPHTransformer(nn.Module):
                             # the same K cells (LXTUL-R Step 1b, 2026-09-22).
                             with torch.no_grad():
                                 fan_repel_term(db_traj, layout.slot_valid, _m,
-                                               int(tc.fan_repel_passes), stats=fan_stats)
+                                               int(tc.fan_repel_passes), stats=fan_stats,
+                                               fixed=_gs_cos)
                                 if _mode in ("epi", "epivol"):
                                     fan_epi_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
                                         self.tul_fan_epi, _epi_ridge,
-                                        float(tc.fan_epi_eta), stats=fan_stats)
+                                        float(tc.fan_epi_eta), stats=fan_stats, fixed=_gs_epi)
                                 if _mode in ("vol", "epivol"):
                                     fan_vol_term(
                                         db_traj, layout.slot_valid, _m, int(tc.fan_repel_passes),
-                                        float(tc.fan_epi_eta), stats=fan_stats)
+                                        float(tc.fan_epi_eta), stats=fan_stats, fixed=_gs_vol)
                             _traj_plan = [plan_streams(_t, _m, _h)[0] for _t in db_traj]
                             _m_plan = _m - _h
                             if _mode == "cos":
                                 _rp = fan_repel_term(_traj_plan, layout.slot_valid, _m_plan,
-                                                     int(tc.fan_repel_passes), stats=None)
+                                                     int(tc.fan_repel_passes), stats=None,
+                                                     fixed=_gs_cos)
                             else:
                                 _parts = []
                                 if _mode in ("epi", "epivol"):
@@ -13732,12 +14350,12 @@ class MORPHTransformer(nn.Module):
                                         _traj_plan, layout.slot_valid, _m_plan,
                                         int(tc.fan_repel_passes), self.tul_fan_epi,
                                         _epi_ridge, float(tc.fan_epi_eta),
-                                        stats=None))
+                                        stats=None, fixed=_gs_epi))
                                 if _mode in ("vol", "epivol"):
                                     _parts.append(fan_vol_term(
                                         _traj_plan, layout.slot_valid, _m_plan,
                                         int(tc.fan_repel_passes), float(tc.fan_epi_eta),
-                                        stats=None))
+                                        stats=None, fixed=_gs_vol))
                                 _parts = [p for p in _parts if p is not None]
                                 _rp = torch.stack(_parts).sum() if _parts else None
                         if self.training and tc.fan_repel_lambda > 0.0:
@@ -16062,6 +16680,13 @@ class MORPHTransformer(nn.Module):
                         _gram_sample_seed: int | None = None,
                         _code_policy_pick: str | None = None,
                         _lsel_follow: str | None = None) -> dict:
+        # model.ternary_step_cache: every forward enters here, so the bf16 ternary weights
+        # are recomputed once per forward from the weights as they are now (after the last
+        # optimizer step, load or EMA write), and every read inside it hits the cache
+        # (morph/model/ternary_qat.py, TernaryStepCache). Not bound: nothing runs.
+        _tsc = self.__dict__.get("_ternary_step_cache")
+        if _tsc is not None:
+            _tsc.refresh()
         if self._span_mask and slot_layout is not None:
             raise NotImplementedError(
                 "model.span_mask with a slot_layout: the TUL forward is a different "

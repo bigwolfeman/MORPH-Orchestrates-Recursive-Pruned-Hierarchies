@@ -23,6 +23,8 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
+from morph.kernels.triton.fused_hyper_connection import _cayley_tile_YM
+
 _LAUNCH = dict(num_stages=1, num_warps=4)
 
 _dummy_cache: dict = {}
@@ -1594,17 +1596,18 @@ def _hcw_map_kernel(PART, BIAS, SSQ, HRES, HPOSTROW, HPRECM,
     pb = PART + row * 48 * KS
     # [4,4,KS] tiles for the three raw blocks; reduce the K split (fixed tree).
     idx = (i4[:, None, None] * 4 + j4[None, :, None]) * KS + sK[None, None, :]
-    pre = tl.sum(tl.load(pb + idx), 2) + tl.load(BIAS + i4[:, None] * 4 + j4[None, :]).to(tl.float32)
-    post = tl.sum(tl.load(pb + 16 * KS + idx), 2) \
-        + tl.load(BIAS + 16 + i4[:, None] * 4 + j4[None, :]).to(tl.float32)
-    res = tl.sum(tl.load(pb + 32 * KS + idx), 2) \
-        + tl.load(BIAS + 32 + i4[:, None] * 4 + j4[None, :]).to(tl.float32)
+    # Bias OUTSIDE the /rms divide, h_map = (x·Wᵀ)/rms + b: training's mapping
+    # (fused_hyper_connection._hc_premap_fwd_kernel, the 2026-07-02 bias-under-rms fix).
+    bij = i4[:, None] * 4 + j4[None, :]
+    pre = tl.sum(tl.load(pb + idx), 2)
+    post = tl.sum(tl.load(pb + 16 * KS + idx), 2)
+    res = tl.sum(tl.load(pb + 32 * KS + idx), 2)
     ssq = tl.sum(tl.load(SSQ + row * KS + sK), 0)
     inv_rms = 1.0 / tl.sqrt(ssq / NC + EPS)
     inv_tau = 1.0 / TAU
 
     # Hpre: softmax over j (rows), column-mean → hprecm[j]
-    p = pre * inv_rms * inv_tau
+    p = (pre * inv_rms + tl.load(BIAS + bij).to(tl.float32)) * inv_tau
     m = tl.max(p, 1)
     e = tl.exp(p - m[:, None])
     hpre = e / tl.sum(e, 1)[:, None]
@@ -1612,23 +1615,19 @@ def _hcw_map_kernel(PART, BIAS, SSQ, HRES, HPOSTROW, HPRECM,
     tl.store(HPRECM + row * 4 + j4, hprecm)
 
     # Hpost: softmax over i (columns), row-sum → hpostrow[i]
-    q = post * inv_rms * inv_tau
+    q = (post * inv_rms + tl.load(BIAS + 16 + bij).to(tl.float32)) * inv_tau
     mq = tl.max(q, 0)
     eq = tl.exp(q - mq[None, :])
     hpost = eq / tl.sum(eq, 0)[None, :]
     tl.store(HPOSTROW + row * 4 + i4, tl.sum(hpost, 1))
 
-    # Hres: Cayley fixed point on the skew part of res/rms.
-    a = res * inv_rms
-    w = a - tl.trans(a)
+    # Hres: the EXACT closed-form Cayley of B = ½α·(A − Aᵀ), training's map. The old
+    # inverse-free fixed-point iteration here diverged for ‖A−Aᵀ‖ ≥ 2/α (the iteration
+    # training removed on 2026-07-02). ITERS is kept for the signature, unused.
+    a = res * inv_rms + tl.load(BIAS + 32 + bij).to(tl.float32)
     eye = (i4[:, None] == j4[None, :]).to(tl.float32)
-    y = eye + ALPHA * w
-    half: tl.constexpr = ALPHA * 0.5
-    for _ in tl.static_range(ITERS):
-        t = eye + y
-        p3 = tl.sum(w[:, :, None] * t[None, :, :], 1)       # W @ (I + Y)
-        y = eye + half * p3
-    tl.store(HRES + row * 16 + i4[:, None] * 4 + j4[None, :], y)
+    y, _m = _cayley_tile_YM((ALPHA * 0.5) * (a - tl.trans(a)), eye, 4)
+    tl.store(HRES + row * 16 + bij, y)
 
 
 @triton.jit
