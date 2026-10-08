@@ -287,7 +287,8 @@ model:
   core_gain_power_iters: 0       # within-step FD power steps before the reading (E10c: 2)
 
   # Master kernel switch: true = fused Triton attn + fused CE (optimised);
-  # false = eager references + full-logits CE (un-optimised A/B baseline).
+  # false = eager references + full-logits CE (un-optimised A/B baseline). The HC residual
+  # ignores it and runs its kernels on CUDA (2026-10-08; see hc_use_kernel).
   use_kernels: true
 
   # Residual = Hyper-Connection (JPmHC, Cayley) — the sole supported residual. Orthogonal
@@ -298,8 +299,11 @@ model:
   hc_cayley_iters: 3       # Cayley fixed-point steps (paper s=2; 3 = safety margin)
   hc_cayley_alpha: 0.1     # Cayley step size α
   hc_init_gain: 0.1        # W_fused init: smaller → closer to plain residual at init
-  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
-                           # slower) — the reference arm for the fused-vs-eager parity A/B.
+  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda): what every run trains. false ⇒
+                           # the eager references, a debug opt-in: slower, equal to the kernels to
+                           # fp32 roundoff, NOT bit-identical (tests/test_hc_kernel_vs_eager.py).
+                           # Before 2026-10-08 they rounded Hres and the skip to bf16 under
+                           # autocast: .agents/notes/implemented/bug-fix/2026-10-08-eager-hc-reference-bf16.md
   hc_fused_norm: false     # true ⇒ the HC pre-map kernel applies the sublayer's RMSNorm and emits
                            # its input in bf16 under autocast (fwd + bwd, norm weight grad incl.).
                            # NOT bit-identical to the unfused compiled norm. Needs hc_use_kernel.

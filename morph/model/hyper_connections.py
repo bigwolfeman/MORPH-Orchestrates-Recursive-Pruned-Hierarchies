@@ -41,8 +41,10 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
+
+from morph.kernels.triton.fused_hyper_connection import (
+    hc_map_gemv, hc_post_reference, hc_pre_map_reference)
 
 
 def cayley_orthogonal(A: Tensor, iters: int = 2, alpha: float = 0.1) -> Tensor:
@@ -79,22 +81,26 @@ def cayley_orthogonal(A: Tensor, iters: int = 2, alpha: float = 0.1) -> Tensor:
     Returns:
         [..., n, n] orthogonal matrices (exact to fp roundoff).
     """
-    n = A.shape[-1]
-    I = torch.eye(n, dtype=A.dtype, device=A.device)
-    B = (alpha * 0.5) * (A - A.transpose(-1, -2))              # skew so(n)
-    B2 = B @ B                                                 # matmul 1
-    p = 0.5 * (B * B).sum(dim=(-1, -2))                        # ½‖B‖²_F  ≥ 0
-    if n == 4:
-        # Pfaffian of a 4×4 skew matrix: Pf = B01·B23 − B02·B13 + B03·B12 ; det(B) = Pf².
-        Pf = (B[..., 0, 1] * B[..., 2, 3]
-              - B[..., 0, 2] * B[..., 1, 3]
-              + B[..., 0, 3] * B[..., 1, 2])
-        q = Pf * Pf                                            # det(B) ≥ 0
-        num = (I + 2.0 * B + B2) @ ((1.0 + p)[..., None, None] * I + B2)   # (I+B)²·[(1+p)I+B²]
-        return num / (1.0 + p + q)[..., None, None]           # denom ≥ 1 → unconditionally stable
-    # n≠4: true Cayley Y = (I+B)(I−B)⁻¹ via solve — solve((I−B)ᵀ, (I+B)ᵀ)ᵀ. Orthogonal any ‖B‖.
-    Yt = torch.linalg.solve((I - B).transpose(-1, -2), (I + B).transpose(-1, -2))
-    return Yt.transpose(-1, -2)
+    # Autocast off: the map is exact only in A's dtype. Under bf16 autocast the two matmuls
+    # ran in bf16 and Hres lost orthogonality at 2e-3 (hcgap, 2026-10-08; the kernel
+    # computes this in fp32 registers). Without autocast this is the code from before.
+    with torch.autocast(A.device.type, enabled=False):
+        n = A.shape[-1]
+        I = torch.eye(n, dtype=A.dtype, device=A.device)
+        B = (alpha * 0.5) * (A - A.transpose(-1, -2))              # skew so(n)
+        B2 = B @ B                                                 # matmul 1
+        p = 0.5 * (B * B).sum(dim=(-1, -2))                        # ½‖B‖²_F  ≥ 0
+        if n == 4:
+            # Pfaffian of a 4×4 skew matrix: Pf = B01·B23 − B02·B13 + B03·B12 ; det(B) = Pf².
+            Pf = (B[..., 0, 1] * B[..., 2, 3]
+                  - B[..., 0, 2] * B[..., 1, 3]
+                  + B[..., 0, 3] * B[..., 1, 2])
+            q = Pf * Pf                                            # det(B) ≥ 0
+            num = (I + 2.0 * B + B2) @ ((1.0 + p)[..., None, None] * I + B2)  # (I+B)²·[(1+p)I+B²]
+            return num / (1.0 + p + q)[..., None, None]           # denom ≥ 1 → stable
+        # n≠4: true Cayley Y = (I+B)(I−B)⁻¹ via solve — solve((I−B)ᵀ, (I+B)ᵀ)ᵀ. Orthogonal any ‖B‖.
+        Yt = torch.linalg.solve((I - B).transpose(-1, -2), (I + B).transpose(-1, -2))
+        return Yt.transpose(-1, -2)
 
 
 class HyperConnectionResidual(nn.Module):
@@ -151,10 +157,12 @@ class HyperConnectionResidual(nn.Module):
 
         # Branch-free hot path: resolve the carrier-op implementation at construction.
         # The fused Triton kernels (PRE x_bar / POST x_mix+x_post) run on CUDA; hc_pre / hc_post
-        # fall back to their eager references on CPU / force_eager, so binding them here is safe
-        # and adds NO runtime flag check to the math. `use_kernel=False` forces the eager
-        # references even on cayley+cuda — the bit-faithful, slower reference arm for the
-        # fused-vs-eager A/B (and the wandb-logged eager baseline).
+        # fall back to their eager references on CPU (the global force_eager no longer reaches
+        # HC, 2026-10-08), so binding them here is safe and adds NO runtime flag check to the
+        # math. `use_kernel=False` forces the eager references even on cayley+cuda: a debug
+        # opt-in, slower, equal to the kernels to fp32 roundoff (not bit-identical;
+        # tests/test_hc_kernel_vs_eager.py). Before 2026-10-08 it rounded Hres and the skip
+        # to bf16 under autocast.
         if use_kernel:
             from morph.kernels.triton.fused_hyper_connection import hc_pre_map, hc_post
             # Round 2: hc_pre_map fuses the WHOLE pre phase (rms+proj+softmax×2+cayley+
@@ -165,7 +173,6 @@ class HyperConnectionResidual(nn.Module):
             self._hc_post = hc_post
             self._use_fused_premap = True
         else:
-            from morph.kernels.triton.fused_hyper_connection import hc_post_reference
             self._hc_pre_map = None
             self._hc_post = hc_post_reference
             self._use_fused_premap = False
@@ -188,7 +195,7 @@ class HyperConnectionResidual(nn.Module):
         # by the per-token 1/rms (Cayley-HC bias-under-rms bug, Ai-notes 07-02-2026). We divide
         # only the weight term by the stored per-token scalar rms and add the bias after.
         rms = x_flat.float().pow(2).mean(-1, keepdim=True).add(self.eps).sqrt()   # [B,S,1]
-        wx = F.linear(x_flat, self.proj.weight).float()                          # x·Wᵀ (no bias)
+        wx = hc_map_gemv(x_flat, self.proj.weight)                               # x·Wᵀ (no bias)
         h = (wx / rms + self.proj.bias.float()).reshape(B, S, 3, n, n)            # fp32 mappings
         pre_raw, post_raw, res_raw = h[:, :, 0], h[:, :, 1], h[:, :, 2]
 
@@ -253,11 +260,12 @@ class HyperConnectionResidual(nn.Module):
             Hres = Hres.to(dt)
             Hpost_row = Hpost_row.to(dt)
         else:
-            # Sinkhorn / non-cayley: eager mapping (unchanged).
-            Hpre, Hpost, Hres = self._mappings(h)
-            Hpost_row = Hpost.sum(dim=-1).to(dt)
-            Hpre_cm = Hpre.mean(dim=-2).to(dt)
-            x_bar = torch.einsum("bsj,bsjc->bsc", Hpre_cm, h)
+            # model.hc_use_kernel=false: the kernels' own pure-PyTorch reference (the same
+            # math as `_mappings`, carrier ops in the carrier dtype like the kernel).
+            x_bar, Hres, Hpost_row = hc_pre_map_reference(
+                h, self.proj.weight, self.proj.bias,
+                self.tau, self.cayley_alpha, self.cayley_iters, self.eps,
+            )
             Hres = Hres.to(dt)
 
         y = sublayer_fn(x_bar, *args, **kwargs)            # [B,S,C]

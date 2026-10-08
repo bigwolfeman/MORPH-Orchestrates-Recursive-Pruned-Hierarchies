@@ -62,8 +62,11 @@ model:
   hc_cayley_iters: 3       # Cayley fixed-point steps (paper s=2; 3 = safety margin)
   hc_cayley_alpha: 0.1     # Cayley step size α
   hc_init_gain: 0.1        # W_fused init: smaller → closer to plain residual at init
-  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
-                           # slower) — the reference arm for the fused-vs-eager parity A/B.
+  hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda): what every run trains. false ⇒
+                           # the eager references, a debug opt-in: slower, equal to the kernels to
+                           # fp32 roundoff, NOT bit-identical (tests/test_hc_kernel_vs_eager.py).
+                           # Before 2026-10-08 they rounded Hres and the skip to bf16 under
+                           # autocast: .agents/notes/implemented/bug-fix/2026-10-08-eager-hc-reference-bf16.md
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob. Pruning targets the

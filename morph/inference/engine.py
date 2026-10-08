@@ -605,14 +605,17 @@ class StaticDecodeEngine:
         self._cos_flat = rope0.cos_cached.reshape(-1, self.D).contiguous()
         self._sin_flat = rope0.sin_cached.reshape(-1, self.D).contiguous()
 
-        # bf16 copies of the HC mapping projections (loaded bf16→fp32 in the GEMV)
+        # bf16 copies of the HC mapping projections (loaded bf16→fp32 in the GEMV), and the
+        # fp32 biases the premap kernel adds OUTSIDE the /rms divide (pb_ptr).
         with torch.no_grad():
             self._hcw: dict[int, Tensor] = {}
+            self._hcb: dict[int, Tensor] = {}
             for s in self.sites:
                 for mod in (s.block.mrr_attn, s.block.mrr_mlp):
                     if id(mod) not in self._hcw:
                         self._hcw[id(mod)] = mod.proj.weight.detach().contiguous() \
                             .to(torch.bfloat16)
+                        self._hcb[id(mod)] = mod.proj.bias.detach().float().contiguous()
         # wide-HC kernels load a bias unconditionally — dedicated zeros when absent
         # (model untouched; the 276M small_gemv path keeps its bias=None branch).
         self._hcb_zero = torch.zeros(3 * 4 * 4, device=dev, dtype=torch.float32)
@@ -1028,8 +1031,10 @@ class StaticDecodeEngine:
             y = fn(xbar).contiguous()
             return hc_post_wide(hres, hpostrow, h, y, term)
         # mapping projection: row-parallel triton GEMV (cuBLAS gemv2T = 10.8 µs at [48,3072]).
-        raw = small_gemv(h.view(B * S, N * C), self._hcw[id(mod)],
-                         mod.proj.bias).view(B, S, 3 * N * N)
+        # Bias-free: the kernel adds the bias OUTSIDE the /rms divide, h_map = (x·Wᵀ)/rms + b,
+        # as training's _FusedHCPreMap does (the 2026-07-02 bias-under-rms fix; this call
+        # site kept the pre-fix signature and launched without pb_ptr).
+        raw = small_gemv(h.view(B * S, N * C), self._hcw[id(mod)]).view(B, S, 3 * N * N)
         xbar = torch.empty(B, S, C, device=h.device, dtype=h.dtype)
         hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
         hpostrow = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
@@ -1038,7 +1043,7 @@ class StaticDecodeEngine:
         has_nout = norm_out is not None
         # w1/w8 measured-best at C=768 (276M launch unchanged).
         _hc_premap_fwd_kernel[(B * S,)](
-            h, raw, xbar, hres, hpostrow, hprecm, rms,
+            h, raw, self._hcb[id(mod)], xbar, hres, hpostrow, hprecm, rms,
             norm_out if has_nout else xbar, norm_w if has_nout else xbar,
             TAU=float(mod.tau), ALPHA=float(mod.cayley_alpha),
             ITERS=int(mod.cayley_iters), EPS=float(mod.eps),

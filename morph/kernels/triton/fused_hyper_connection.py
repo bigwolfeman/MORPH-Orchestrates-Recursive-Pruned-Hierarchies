@@ -1489,8 +1489,12 @@ def hc_pre(h: Tensor, hpre_cm: Tensor) -> Tensor:
     Returns:
         x_bar: [B, S, C] sublayer input.
     """
-    from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
-    if force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda:
+    from morph.kernels.triton._eager_flag import hc_force_eager
+    # HC ignores the global force_eager (model.use_kernels=false): until 2026-10-08 it sent
+    # HC to the reference, whose einsums ran as bf16 under autocast (47 configs trained a
+    # bf16 skip; .agents/notes/implemented/bug-fix/2026-10-08-eager-hc-reference-bf16.md).
+    # On CUDA only the explicit debug opt-in MORPH_HC_FORCE_EAGER (hc_force_eager) does.
+    if hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda:
         return hc_pre_reference(h, hpre_cm)  # traceable: inductor fuses it
     return _hc_pre_dispatch(h, hpre_cm)
 
@@ -1511,8 +1515,12 @@ def hc_post(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor,
     Returns:
         out: [B, S, n, C] updated carrier.
     """
-    from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
-    if force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda:
+    from morph.kernels.triton._eager_flag import hc_force_eager
+    # HC ignores the global force_eager (model.use_kernels=false): until 2026-10-08 it sent
+    # HC to the reference, whose einsums ran as bf16 under autocast (47 configs trained a
+    # bf16 skip; .agents/notes/implemented/bug-fix/2026-10-08-eager-hc-reference-bf16.md).
+    # On CUDA only the explicit debug opt-in MORPH_HC_FORCE_EAGER (hc_force_eager) does.
+    if hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda:
         return hc_post_reference(hres, hpost_row, h, y, term)  # traceable
     return _hc_post_dispatch(hres, hpost_row, h, y, term)
 
@@ -1539,13 +1547,17 @@ def hc_pre_map(
     Returns:
         (x_bar[B,S,C], Hres[B,S,n,n], Hpost_row[B,S,n]).
     """
-    from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
+    from morph.kernels.triton._eager_flag import hc_force_eager
     N = h.shape[2]
     # The kernels implement the EXACT closed-form Cayley only for n∈{2,4} (n=4 scalar path;
     # n=2 closed 2×2 in the generic tile path). Any other n falls back to the exact eager
     # reference (n=4 closed form / n≠4 solve) — no silent divergent iteration anywhere.
     supported_n = N == 2 or N == 4
-    if (force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda
+    # HC ignores the global force_eager (model.use_kernels=false): until 2026-10-08 it sent
+    # HC to the reference, whose einsums ran as bf16 under autocast (47 configs trained a
+    # bf16 skip; .agents/notes/implemented/bug-fix/2026-10-08-eager-hc-reference-bf16.md).
+    # On CUDA only the explicit debug opt-in MORPH_HC_FORCE_EAGER (hc_force_eager) does.
+    if (hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda
             or int(iters) != 3 or not supported_n):
         return hc_pre_map_reference(h, proj_w, proj_b, tau, alpha, iters, eps)  # traceable
     return _hc_pre_map_dispatch(h, proj_w, proj_b, tau, alpha, iters, eps, N)
@@ -1564,8 +1576,12 @@ def hc_pre_map_fold(
     Either way the CUDA backward accumulates the projection-path carrier grad in place
     (``_FusedHCPreMapFold``). Off the n=4 kernel path it is ``hc_pre_map_fold_composed``.
     """
-    from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
-    if (force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda
+    from morph.kernels.triton._eager_flag import hc_force_eager
+    # HC ignores the global force_eager (model.use_kernels=false): until 2026-10-08 it sent
+    # HC to the reference, whose einsums ran as bf16 under autocast (47 configs trained a
+    # bf16 skip; .agents/notes/implemented/bug-fix/2026-10-08-eager-hc-reference-bf16.md).
+    # On CUDA only the explicit debug opt-in MORPH_HC_FORCE_EAGER (hc_force_eager) does.
+    if (hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda
             or int(iters) != 3 or h.shape[2] != 4):
         return hc_pre_map_fold_composed(h, proj_w, proj_b, tau, alpha, iters, eps,
                                         norm_w, norm_eps, out_dtype)
@@ -1599,20 +1615,53 @@ def _cayley_ref(A: Tensor, iters: int, alpha: float) -> Tensor:
     n=4: Cayley–Hamilton closed form. n≠4: true Cayley via solve. ``iters`` is retained
     for API compatibility but ignored (the old divergent fixed-point iteration is gone).
     """
-    n = A.shape[-1]
-    I = torch.eye(n, dtype=A.dtype, device=A.device)
-    B = (alpha * 0.5) * (A - A.transpose(-1, -2))                    # skew so(n)
-    B2 = B @ B
-    p = 0.5 * (B * B).sum(dim=(-1, -2))
-    if n == 4:
-        Pf = (B[..., 0, 1] * B[..., 2, 3]
-              - B[..., 0, 2] * B[..., 1, 3]
-              + B[..., 0, 3] * B[..., 1, 2])
-        q = Pf * Pf
-        num = (I + 2.0 * B + B2) @ ((1.0 + p)[..., None, None] * I + B2)
-        return num / (1.0 + p + q)[..., None, None]
-    Yt = torch.linalg.solve((I - B).transpose(-1, -2), (I + B).transpose(-1, -2))
-    return Yt.transpose(-1, -2)
+    with torch.autocast(A.device.type, enabled=False):   # see cayley_orthogonal
+        n = A.shape[-1]
+        I = torch.eye(n, dtype=A.dtype, device=A.device)
+        B = (alpha * 0.5) * (A - A.transpose(-1, -2))                    # skew so(n)
+        B2 = B @ B
+        p = 0.5 * (B * B).sum(dim=(-1, -2))
+        if n == 4:
+            Pf = (B[..., 0, 1] * B[..., 2, 3]
+                  - B[..., 0, 2] * B[..., 1, 3]
+                  + B[..., 0, 3] * B[..., 1, 2])
+            q = Pf * Pf
+            num = (I + 2.0 * B + B2) @ ((1.0 + p)[..., None, None] * I + B2)
+            return num / (1.0 + p + q)[..., None, None]
+        Yt = torch.linalg.solve((I - B).transpose(-1, -2), (I + B).transpose(-1, -2))
+        return Yt.transpose(-1, -2)
+
+
+class _HCMapGemv(torch.autograd.Function):
+    """``x·Wᵀ`` with the fused pre-map's precision contract (``_FusedHCPreMap``): forward
+    in ``dt`` (bf16 inputs, fp32 accumulate, a bf16 result, then fp32), backward in fp32.
+    Plain autocast would run the backward GEMMs in bf16 too, 1e-3 off the kernel's
+    carrier and weight grads."""
+
+    @staticmethod
+    def forward(ctx, x: Tensor, w: Tensor, dt: torch.dtype) -> Tensor:
+        ctx.save_for_backward(x, w)
+        x2 = x.reshape(-1, x.shape[-1])
+        return torch.mm(x2.to(dt), w.to(dt).t()).float().reshape(*x.shape[:-1], w.shape[0])
+
+    @staticmethod
+    def backward(ctx, g: Tensor):
+        x, w = ctx.saved_tensors
+        g2 = g.reshape(-1, g.shape[-1]).float()
+        gx = (g2 @ w.float()).reshape(x.shape).to(x.dtype)
+        gw = (g2.t() @ x.reshape(-1, x.shape[-1]).float()).to(w.dtype)
+        return gx, gw, None
+
+
+def hc_map_gemv(x_flat: Tensor, w: Tensor) -> Tensor:
+    """The mapping projection ``x_flat·Wᵀ`` (fp32 result) of the eager references. Under
+    autocast: the kernel's contract (``_HCMapGemv``). Without: the fp32 GEMM from before."""
+    dev = x_flat.device.type
+    if torch.is_autocast_enabled(dev):
+        dt = torch.get_autocast_dtype(dev)
+        with torch.autocast(dev, enabled=False):
+            return _HCMapGemv.apply(x_flat, w, dt)
+    return F.linear(x_flat.float(), w.float())
 
 
 def hc_pre_map_reference(
@@ -1624,7 +1673,7 @@ def hc_pre_map_reference(
     x_flat = h.reshape(B, S, n * C)
     rms = x_flat.float().pow(2).mean(-1, keepdim=True).add(eps).sqrt()
     # bias-under-rms fix: (x·Wᵀ)/rms + b, NOT (x·Wᵀ + b)/rms.
-    wx = F.linear(x_flat.float(), proj_w.float())
+    wx = hc_map_gemv(x_flat, proj_w)
     raw = (wx / rms + proj_b.float()).reshape(B, S, 3, n, n)
     pre_raw, post_raw, res_raw = raw[:, :, 0], raw[:, :, 1], raw[:, :, 2]
     Hpre = torch.softmax(pre_raw / tau, dim=-1)
@@ -1632,21 +1681,30 @@ def hc_pre_map_reference(
     Hres = _cayley_ref(res_raw, iters, alpha)
     Hpre_cm = Hpre.mean(dim=-2)
     Hpost_row = Hpost.sum(dim=-1)
-    x_bar = torch.einsum("bsj,bsjc->bsc", Hpre_cm.to(h.dtype), h)
+    x_bar = hc_pre_reference(h, Hpre_cm)
     return x_bar, Hres, Hpost_row.to(h.dtype)
 
 
+# The carrier ops below run in the CARRIER dtype with autocast off, as the kernels do
+# (fp32 loads, fp32 FMAs, a store in h.dtype). Under bf16 autocast an einsum dispatches
+# to bmm, which autocast runs in bf16: it rounded Hres to bf16 (a diagonal entry
+# 0.99995 becomes 1.0, so the skip is no longer orthogonal) and stored the fp32 carrier's
+# skip term Hres·h in bf16 at every HC op. On the winner at step 0 that moved the slot
+# gain hinge's finite-difference reading 0.905 -> 1.063 and the loss by +2.64 nats
+# (hcgap, 2026-10-07). Without autocast these lines are the ops from before.
 def hc_pre_reference(h: Tensor, hpre_cm: Tensor) -> Tensor:
-    return torch.einsum("bsj,bsjc->bsc", hpre_cm.to(h.dtype), h)
+    with torch.autocast(h.device.type, enabled=False):
+        return torch.einsum("bsj,bsjc->bsc", hpre_cm.to(h.dtype), h)
 
 
 def hc_post_reference(hres: Tensor, hpost_row: Tensor, h: Tensor, y: Tensor,
                       term: Tensor | None = None) -> Tensor:
-    x_mix = torch.einsum("bsij,bsjc->bsic", hres.to(h.dtype), h)
-    x_post = hpost_row.to(h.dtype).unsqueeze(-1) * y.unsqueeze(2)
-    out = x_mix + x_post
-    if term is not None:
-        out = out + term.to(h.dtype).unsqueeze(2)   # broadcast over n streams
+    with torch.autocast(h.device.type, enabled=False):
+        x_mix = torch.einsum("bsij,bsjc->bsic", hres.to(h.dtype), h)
+        x_post = hpost_row.to(h.dtype).unsqueeze(-1) * y.unsqueeze(2)
+        out = x_mix + x_post
+        if term is not None:
+            out = out + term.to(h.dtype).unsqueeze(2)   # broadcast over n streams
     return out
 
 
