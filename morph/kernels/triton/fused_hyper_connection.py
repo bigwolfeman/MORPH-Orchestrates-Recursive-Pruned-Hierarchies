@@ -357,6 +357,7 @@ if TRITON_AVAILABLE:
         TAU: tl.constexpr, ALPHA: tl.constexpr, ITERS: tl.constexpr, EPS: tl.constexpr,
         N: tl.constexpr, C: tl.constexpr, BLOCK_C: tl.constexpr,
         HAS_NOUT: tl.constexpr = False, neps=1e-6, snout=0,
+        NORM_XBAR: tl.constexpr = False,
     ):
         tok = tl.program_id(0)
         c = tl.arange(0, BLOCK_C)
@@ -464,7 +465,17 @@ if TRITON_AVAILABLE:
         h2 = tl.load(h_ptr + h_base + 2 * C + c, mask=cmask, other=0.0).to(tl.float32)
         h3 = tl.load(h_ptr + h_base + 3 * C + c, mask=cmask, other=0.0).to(tl.float32)
         acc = hprecm0 * h0 + hprecm1 * h1 + hprecm2 * h2 + hprecm3 * h3
-        tl.store(xbar_ptr + tok * C + c, acc.to(xbar_ptr.dtype.element_ty), mask=cmask)
+        if NORM_XBAR:
+            # model.hc_fused_norm: the sublayer's RMSNorm folded in. xbar_ptr receives
+            # RMSNorm(x_bar)·nw (attention.RMSNorm's formula, eps = neps) in its own dtype
+            # (bf16 under autocast: the cast the consumer's GEMM would do), and x_bar
+            # itself is never written; the backward recomputes it from h.
+            rn = 1.0 / tl.sqrt(tl.sum(acc * acc, axis=0) / C + neps)
+            nw = tl.load(nw_ptr + c, mask=cmask, other=0.0).to(tl.float32)
+            tl.store(xbar_ptr + tok * C + c, ((acc * rn) * nw).to(xbar_ptr.dtype.element_ty),
+                     mask=cmask)
+        else:
+            tl.store(xbar_ptr + tok * C + c, acc.to(xbar_ptr.dtype.element_ty), mask=cmask)
 
         if HAS_NOUT:
             # decode-engine fold: RMSNorm(x_bar)·nw written straight into a strided
@@ -502,7 +513,53 @@ if TRITON_AVAILABLE:
         TAU: tl.constexpr, ALPHA: tl.constexpr, ITERS: tl.constexpr,
         N: tl.constexpr, C: tl.constexpr, BLOCK_C: tl.constexpr,
     ):
-        tok = tl.program_id(0)
+        # nw is never read with NORM=False; ghpart_ptr stands in for it.
+        _hc_premap_bwd_tok(
+            tl.program_id(0), gxbar_ptr, ghres_ptr, ghpostrow_ptr, h_ptr, raw_ptr, pb_ptr,
+            rms_ptr, graw_ptr, ghpart_ptr, ghpart_ptr, 0.0,
+            TAU, ALPHA, ITERS, N, C, BLOCK_C, False)
+
+    # -----------------------------------------------------------------------
+    # PRE-MAPPING backward, folded (model.hc_fused_norm / model.hc_fused_grad).
+    # One program = TPB consecutive tokens, each run through the same per-token body.
+    #   NORM: gxbar_ptr holds the grad on RMSNorm(x_bar)·nw (the forward's NORM_XBAR
+    #         output). x_bar and its rstd are recomputed from h, the norm VJP turns the
+    #         grad into grad_x_bar in registers, and the program's Σ_tok g·x̂ (the norm
+    #         weight grad over its TPB tokens) goes to gwpart[pid, C]. The caller sums
+    #         the partials over programs: a fixed-order reduction, no atomics.
+    #   NORM=False, TPB=1: the per-token body of _hc_premap_bwd_kernel, op for op.
+    # -----------------------------------------------------------------------
+    @triton.jit
+    def _hc_premap_bwd_fold_kernel(
+        gxbar_ptr, ghres_ptr, ghpostrow_ptr, h_ptr, raw_ptr, pb_ptr, rms_ptr,
+        graw_ptr, ghpart_ptr,
+        nw_ptr,           # [C]        norm weight (NORM)
+        gwpart_ptr,       # [n_prog,C] out: per-program norm weight grad (NORM)
+        neps,
+        TAU: tl.constexpr, ALPHA: tl.constexpr, ITERS: tl.constexpr,
+        N: tl.constexpr, C: tl.constexpr, BLOCK_C: tl.constexpr,
+        TPB: tl.constexpr, NORM: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        c = tl.arange(0, BLOCK_C)
+        gw = tl.zeros((BLOCK_C,), dtype=tl.float32)
+        for t in range(TPB):
+            gw += _hc_premap_bwd_tok(
+                pid * TPB + t, gxbar_ptr, ghres_ptr, ghpostrow_ptr, h_ptr, raw_ptr, pb_ptr,
+                rms_ptr, graw_ptr, ghpart_ptr, nw_ptr, neps,
+                TAU, ALPHA, ITERS, N, C, BLOCK_C, NORM)
+        if NORM:
+            tl.store(gwpart_ptr + pid * C + c, gw, mask=c < C)
+
+    @triton.jit
+    def _hc_premap_bwd_tok(
+        tok, gxbar_ptr, ghres_ptr, ghpostrow_ptr, h_ptr, raw_ptr, pb_ptr, rms_ptr,
+        graw_ptr, ghpart_ptr, nw_ptr, neps,
+        TAU: tl.constexpr, ALPHA: tl.constexpr, ITERS: tl.constexpr,
+        N: tl.constexpr, C: tl.constexpr, BLOCK_C: tl.constexpr,
+        NORM: tl.constexpr,
+    ):
+        """One token of the PRE-MAPPING backward. Returns this token's g·x̂ (NORM) or 0."""
         c = tl.arange(0, BLOCK_C)
         cmask = c < C
         h_base = tok * (N * C)
@@ -581,6 +638,17 @@ if TRITON_AVAILABLE:
         h1 = tl.load(h_ptr + h_base + 1*C + c, mask=cmask, other=0.0).to(tl.float32)
         h2 = tl.load(h_ptr + h_base + 2*C + c, mask=cmask, other=0.0).to(tl.float32)
         h3 = tl.load(h_ptr + h_base + 3*C + c, mask=cmask, other=0.0).to(tl.float32)
+        if NORM:
+            # gx is the grad on RMSNorm(x_bar)·nw. Recompute x_bar (the forward's `acc`)
+            # and its rstd; VJP: g_x = rstd·(g·nw − x̂·mean(g·nw·x̂)), g_nw += g·x̂.
+            xb = cm0 * h0 + cm1 * h1 + cm2 * h2 + cm3 * h3
+            rn = 1.0 / tl.sqrt(tl.sum(xb * xb, axis=0) / C + neps)
+            xh = xb * rn
+            gw = gx * xh
+            gn = gx * tl.load(nw_ptr + c, mask=cmask, other=0.0).to(tl.float32)
+            gx = rn * (gn - xh * (tl.sum(gn * xh, axis=0) / C))
+        else:
+            gw = tl.zeros((BLOCK_C,), dtype=tl.float32)
         gcm0 = tl.sum(gx*h0, axis=0); gcm1 = tl.sum(gx*h1, axis=0)
         gcm2 = tl.sum(gx*h2, axis=0); gcm3 = tl.sum(gx*h3, axis=0)
         # grad_h xbar-path
@@ -708,6 +776,7 @@ if TRITON_AVAILABLE:
         tl.store(ghpart_ptr + h_base + 1*C + c, (ghx1+ghr1).to(ghpart_ptr.dtype.element_ty), mask=cmask)
         tl.store(ghpart_ptr + h_base + 2*C + c, (ghx2+ghr2).to(ghpart_ptr.dtype.element_ty), mask=cmask)
         tl.store(ghpart_ptr + h_base + 3*C + c, (ghx3+ghr3).to(ghpart_ptr.dtype.element_ty), mask=cmask)
+        return gw
 
     # =======================================================================
     # GENERIC (n-arbitrary) PRE-MAPPING — [N,N] register-tile reformulation.
@@ -1216,6 +1285,107 @@ class _FusedHCPreMapGeneric(torch.autograd.Function):
                 None, None, None, None)
 
 
+_FOLD_SM_COUNT: dict[int, int] = {}
+
+
+def _fold_tpb(n_tok: int, device: torch.device) -> int:
+    """Tokens per program of the folded backward: the largest power of two <= 8 that
+    divides ``n_tok`` and still leaves >= 4 programs per SM. More tokens per program
+    means fewer norm-weight partial rows to sum; the floor keeps the grid filling the GPU.
+    """
+    idx = device.index if device.index is not None else torch.cuda.current_device()
+    if idx not in _FOLD_SM_COUNT:
+        _FOLD_SM_COUNT[idx] = torch.cuda.get_device_properties(idx).multi_processor_count
+    floor = 4 * _FOLD_SM_COUNT[idx]
+    tpb = 1
+    while tpb < 8 and n_tok % (2 * tpb) == 0 and n_tok // (2 * tpb) >= floor:
+        tpb *= 2
+    return tpb
+
+
+class _FusedHCPreMapFold(torch.autograd.Function):
+    """``_FusedHCPreMap`` with the sublayer's RMSNorm folded in and/or the projection-path
+    carrier grad accumulated by its GEMM.
+
+    ``norm_w is not None`` (model.hc_fused_norm): the first output is ``RMSNorm(x_bar)·norm_w``
+    (attention.RMSNorm's formula) in ``out_dtype`` instead of ``x_bar``, and the backward
+    returns ``norm_w``'s grad. NOT bit-identical to the unfused path: there the norm is
+    inductor's code inside the compiled block, with its own reduction orders.
+    ``norm_w is None`` (model.hc_fused_grad alone): the outputs are ``_FusedHCPreMap``'s.
+    In both cases the backward adds ``grad_raw @ proj_w`` into the kernel's carrier grad
+    with ``addmm_`` (beta = 1), in place, instead of ``mm`` then a carrier-sized ``add``:
+    the same fp32 sum ``gh_partial + grad_h_proj``, one carrier read and two carrier
+    writes fewer.
+    """
+
+    @staticmethod
+    def forward(ctx, h, proj_w, proj_b, norm_w, tau, alpha, iters, eps, norm_eps, out_dtype):
+        B, S, N, C = h.shape
+        assert N == 4, "fused premap kernel assumes n=4 (mapping unroll is 4×4)"
+        assert int(iters) == 3, "fused premap backward unrolls cayley to exactly 3 iters"
+        h = h.contiguous()
+        x_flat = h.reshape(B * S, N * C)
+        dt = h.dtype
+        # Identical to _FusedHCPreMap.forward up to the kernel's NORM_XBAR output.
+        raw_full = torch.mm(
+            x_flat, proj_w.to(dt).t()
+        ).float().reshape(B, S, 48).contiguous()
+        proj_b_f = proj_b.float().contiguous()
+
+        norm = norm_w is not None
+        xout = torch.empty(B, S, C, device=h.device, dtype=out_dtype if norm else dt)
+        hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
+        hpostrow = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
+        hprecm = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
+        rms = torch.empty(B, S, 1, device=h.device, dtype=torch.float32)
+        nw = norm_w.contiguous() if norm else xout
+        _hc_premap_fwd_kernel[(B * S,)](
+            h, raw_full, proj_b_f, xout, hres, hpostrow, hprecm, rms, xout, nw,
+            TAU=float(tau), ALPHA=float(alpha), ITERS=int(iters), EPS=float(eps),
+            N=N, C=C, BLOCK_C=_next_pow2(C), HAS_NOUT=False, neps=float(norm_eps),
+            NORM_XBAR=norm, **_LAUNCH,
+        )
+        ctx.save_for_backward(h, raw_full, proj_b_f, rms, proj_w, nw if norm else None)
+        ctx.shape = (B, S, N, C)
+        ctx.cfg = (float(tau), float(alpha), int(iters), float(norm_eps), norm)
+        return xout, hres, hpostrow
+
+    @staticmethod
+    def backward(ctx, grad_x, grad_hres, grad_hpostrow):
+        h, raw_full, proj_b_f, rms, proj_w, norm_w = ctx.saved_tensors
+        B, S, N, C = ctx.shape
+        tau, alpha, iters, norm_eps, norm = ctx.cfg
+        dt = h.dtype
+        grad_x = grad_x.contiguous()
+        grad_hres = grad_hres.contiguous().float()
+        grad_hpostrow = grad_hpostrow.contiguous().float()
+
+        n_tok = B * S
+        tpb = _fold_tpb(n_tok, h.device) if norm else 1
+        n_prog = n_tok // tpb
+        graw = torch.empty(B, S, 48, device=h.device, dtype=torch.float32)
+        gh = torch.empty(B, S, N, C, device=h.device, dtype=dt)
+        gwpart = (torch.empty(n_prog, C, device=h.device, dtype=torch.float32) if norm
+                  else graw)                                   # dummy pointer when not read
+        _hc_premap_bwd_fold_kernel[(n_prog,)](
+            grad_x, grad_hres, grad_hpostrow, h, raw_full, proj_b_f, rms,
+            graw, gh, norm_w if norm else h, gwpart, norm_eps,
+            TAU=tau, ALPHA=alpha, ITERS=iters, N=N, C=C, BLOCK_C=_next_pow2(C),
+            TPB=tpb, NORM=norm, **_LAUNCH,
+        )
+        # Projection VJP as in _FusedHCPreMap.backward; grad_h_proj lands in gh through the
+        # GEMM's beta = 1 epilogue (fp32: acc + gh, one rounding, as mm-then-add).
+        graw2 = graw.reshape(n_tok, 48)
+        graw2_dt = graw2.to(dt)
+        x_flat = h.reshape(n_tok, N * C)
+        grad_w = (graw2_dt.t() @ x_flat).float()
+        grad_b = (graw2 * rms.reshape(n_tok, 1)).sum(0)
+        gh.view(n_tok, N * C).addmm_(graw2_dt, proj_w.to(dt))
+        grad_nw = gwpart.sum(0).to(norm_w.dtype) if norm else None
+        return (gh, grad_w.to(proj_w.dtype), grad_b.to(proj_w.dtype), grad_nw,
+                None, None, None, None, None, None)
+
+
 # ===========================================================================
 # autograd.Function — POST (x_mix + x_post + add)
 # ===========================================================================
@@ -1296,6 +1466,15 @@ def _hc_pre_map_dispatch(h: Tensor, proj_w: Tensor, proj_b: Tensor,
     return _FusedHCPreMapGeneric.apply(h, proj_w, proj_b, tau, alpha, iters, eps)
 
 
+@kernel_fence
+def _hc_pre_map_fold_dispatch(h: Tensor, proj_w: Tensor, proj_b: Tensor,
+                              norm_w: Tensor | None, tau: float, alpha: float, iters: int,
+                              eps: float, norm_eps: float,
+                              out_dtype: torch.dtype) -> tuple[Tensor, Tensor, Tensor]:
+    return _FusedHCPreMapFold.apply(h, proj_w, proj_b, norm_w, tau, alpha, iters, eps,
+                                    norm_eps, out_dtype)
+
+
 # ===========================================================================
 # Public API
 # ===========================================================================
@@ -1370,6 +1549,44 @@ def hc_pre_map(
             or int(iters) != 3 or not supported_n):
         return hc_pre_map_reference(h, proj_w, proj_b, tau, alpha, iters, eps)  # traceable
     return _hc_pre_map_dispatch(h, proj_w, proj_b, tau, alpha, iters, eps, N)
+
+
+def hc_pre_map_fold(
+    h: Tensor, proj_w: Tensor, proj_b: Tensor,
+    tau: float, alpha: float, iters: int, eps: float,
+    norm_w: Tensor | None, norm_eps: float, out_dtype: torch.dtype,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """``hc_pre_map`` for ``model.hc_fused_norm`` / ``model.hc_fused_grad``.
+
+    ``norm_w`` given: returns ``(RMSNorm(x_bar)·norm_w in out_dtype, Hres, Hpost_row)``,
+    the sublayer's ``attention.RMSNorm`` (weight ``norm_w``, eps ``norm_eps``) applied in
+    the kernel. ``norm_w`` None: returns ``hc_pre_map``'s outputs (``out_dtype`` unused).
+    Either way the CUDA backward accumulates the projection-path carrier grad in place
+    (``_FusedHCPreMapFold``). Off the n=4 kernel path it is ``hc_pre_map_fold_composed``.
+    """
+    from morph.kernels.triton._eager_flag import force_eager, hc_force_eager
+    if (force_eager() or hc_force_eager() or not TRITON_AVAILABLE or not h.is_cuda
+            or int(iters) != 3 or h.shape[2] != 4):
+        return hc_pre_map_fold_composed(h, proj_w, proj_b, tau, alpha, iters, eps,
+                                        norm_w, norm_eps, out_dtype)
+    return _hc_pre_map_fold_dispatch(h, proj_w, proj_b, norm_w, tau, alpha, iters, eps,
+                                     norm_eps, out_dtype)
+
+
+def hc_pre_map_fold_composed(
+    h: Tensor, proj_w: Tensor, proj_b: Tensor,
+    tau: float, alpha: float, iters: int, eps: float,
+    norm_w: Tensor | None, norm_eps: float, out_dtype: torch.dtype,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """``hc_pre_map_fold`` as its parts: ``hc_pre_map`` (with its own fallback rules), then
+    ``attention.RMSNorm.forward``'s exact ops on ``x_bar`` and the cast to ``out_dtype`` —
+    the unfused path's arithmetic, so on CPU the fold keys change nothing."""
+    x_bar, Hres, Hpost_row = hc_pre_map(h, proj_w, proj_b, tau, alpha, iters, eps)
+    if norm_w is None:
+        return x_bar, Hres, Hpost_row
+    r = x_bar.float().pow(2).mean(-1, keepdim=True).add(norm_eps).rsqrt()
+    xa = ((x_bar.float() * r).to(x_bar.dtype) * norm_w).to(out_dtype)
+    return xa, Hres, Hpost_row
 
 
 # ===========================================================================

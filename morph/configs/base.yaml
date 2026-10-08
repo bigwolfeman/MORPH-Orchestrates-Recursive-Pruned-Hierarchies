@@ -287,6 +287,12 @@ model:
   hc_init_gain: 0.1        # W_fused init: smaller → closer to plain residual at init
   hc_use_kernel: true      # fused Triton HC kernels (cayley+cuda). false ⇒ eager refs (bit-faithful,
                            # slower) — the reference arm for the fused-vs-eager parity A/B.
+  hc_fused_norm: false     # true ⇒ the HC pre-map kernel applies the sublayer's RMSNorm and emits
+                           # its input in bf16 under autocast (fwd + bwd, norm weight grad incl.).
+                           # NOT bit-identical to the unfused compiled norm. Needs hc_use_kernel.
+  hc_fused_grad: false     # true ⇒ the HC pre-map backward adds the projection-path carrier grad
+                           # in place (addmm_) instead of mm + a carrier-sized add. Needs
+                           # hc_use_kernel. Graph-step task 2.2.
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.

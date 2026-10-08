@@ -567,6 +567,13 @@ class MORPHConfig:
     hc_init_gain: float = 0.1    # W_fused init std = gain/sqrt(n*d) → ≈ plain residual at init
     hc_use_kernel: bool = True   # fused Triton HC kernels (cayley+cuda). False ⇒ eager refs
                                  # (bit-faithful, slower) — for the fused-vs-eager A/B reference arm.
+    # model.hc_fused_norm: the HC pre-map kernel applies each sublayer's RMSNorm and emits the
+    # sublayer input in the autocast dtype (needs hc_use_kernel). NOT bit-identical to the
+    # unfused compiled norm (different reduction orders). Default off = the unfused path.
+    hc_fused_norm: bool = False
+    # model.hc_fused_grad: the HC pre-map backward adds the projection-path carrier grad in
+    # place (addmm_, beta=1) instead of mm + add (needs hc_use_kernel). Default off.
+    hc_fused_grad: bool = False
 
     # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
     # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
@@ -2067,6 +2074,7 @@ class MORPHTransformer(nn.Module):
             n_streams=cfg.hc_streams, tau=cfg.hc_tau,
             cayley_iters=cfg.hc_cayley_iters, cayley_alpha=cfg.hc_cayley_alpha,
             init_gain=cfg.hc_init_gain, use_kernel=cfg.hc_use_kernel,
+            fused_norm=cfg.hc_fused_norm, fused_grad=cfg.hc_fused_grad,
         )
 
         # The core alone may re-block its HCA branch; see `core_hca_compress_ratio`.

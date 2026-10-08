@@ -383,6 +383,14 @@ class MORPHBlock(nn.Module):
         hk = dict(hc_kwargs or {})
         self.mrr_attn: nn.Module = HyperConnectionResidual(d_model, **hk)
         self.mrr_mlp:  nn.Module = HyperConnectionResidual(d_model, **hk)
+        if hk.get("fused_norm", False):
+            # model.hc_fused_norm: the residual's kernel applies attention.RMSNorm's exact
+            # formula with these modules' weight and eps; any other norm would be skipped.
+            from .attention import RMSNorm
+            for nm in (norm_attn, norm_mlp):
+                if type(nm) is not RMSNorm:
+                    raise TypeError(f"model.hc_fused_norm folds attention.RMSNorm only, got "
+                                    f"{type(nm).__name__}")
 
         # Retention branch (#230) — attached post-construction so it does NOT perturb
         # the base init RNG (keeps the rest of the model byte-identical to the baseline, so the
@@ -499,13 +507,25 @@ class MORPHBlock(nn.Module):
             attn_kwargs = dict(attn_kwargs)
             _persist_capture = attn_kwargs.pop("tg_persist_capture")
 
+        # model.hc_fused_norm: the residual hands the sublayer `norm(x_bar)` directly. Not
+        # for the attention when something must read the un-normalised `x_bar` (the centre
+        # is subtracted before the norm; the retention branch has its own norm). Python
+        # constants per instance, like `lora` and `center`.
+        fold_attn = (getattr(self.mrr_attn, "folds_norm", False) and center is None
+                     and self.retention is None)
+        fold_mlp = getattr(self.mrr_mlp, "folds_norm", False)
+
         def _attn_fn(x: Tensor) -> Tensor:
             if center is not None:
                 # `x` is `x_bar`, the attention residual's own read of the streams. The
                 # whole attention sublayer (norm, attention, retention, the persist
                 # capture) reads the CENTERED input; the MLP sublayer is untouched.
                 x = center(x)
-            xa = self.norm_attn(x)
+            return _attn_body(x, self.norm_attn(x))
+
+        def _attn_body(x: Tensor | None, xa: Tensor) -> Tensor:
+            # `x` (the un-normalised input) is read only by the retention branch; it is
+            # None on the folded path, which never has one.
             if _persist_capture is not None:
                 # ONE extra core-layer-0 attention application, on the EXACT SAME `xa`
                 # the real call two lines down is about to consume — `x` here is
@@ -541,7 +561,9 @@ class MORPHBlock(nn.Module):
             return self.drop(a)
 
         def _mlp_fn(x: Tensor) -> Tensor:
-            xm = self.norm_mlp(x)
+            return _mlp_body(self.norm_mlp(x))
+
+        def _mlp_body(xm: Tensor) -> Tensor:
             y = self.mlp(xm, **mlp_kwargs)
             if lora is not None and lora.has_mlp:
                 y = y + lora.delta("mlp", xm.to(y.dtype), pass_idx)
@@ -554,12 +576,16 @@ class MORPHBlock(nn.Module):
         # `XHCResidual` refuses it).
         _xa = {} if xhc_route is None else {"fixed_route": xhc_route}
         _xm = dict(_xa) if xhc_valid is None else {**_xa, "valid": xhc_valid}
-        h = self.mrr_attn(h, _attn_fn, **_xa)
+        if fold_attn:
+            h = self.mrr_attn(h, lambda xa: _attn_body(None, xa), norm=self.norm_attn, **_xa)
+        else:
+            h = self.mrr_attn(h, _attn_fn, **_xa)
         if _xm:
             return self.mrr_mlp(h, _mlp_fn, **_xm)
+        mlp_fn, _mk = (_mlp_body, {"norm": self.norm_mlp}) if fold_mlp else (_mlp_fn, {})
         if next_inject_term is not None:
             # HC carrier-engine: fold the next layer's inject into the MLP POST write.
-            h = self.mrr_mlp(h, _mlp_fn, post_inject=next_inject_term)
+            h = self.mrr_mlp(h, mlp_fn, post_inject=next_inject_term, **_mk)
         else:
-            h = self.mrr_mlp(h, _mlp_fn)
+            h = self.mrr_mlp(h, mlp_fn, **_mk)
         return h

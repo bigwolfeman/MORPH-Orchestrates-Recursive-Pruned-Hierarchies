@@ -732,6 +732,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         hc_cayley_alpha=float(getattr(m, "hc_cayley_alpha", 0.1)),
         hc_init_gain=float(getattr(m, "hc_init_gain", 0.1)),
         hc_use_kernel=bool(getattr(m, "hc_use_kernel", True)),
+        hc_fused_norm=bool(getattr(m, "hc_fused_norm", False)),
+        hc_fused_grad=bool(getattr(m, "hc_fused_grad", False)),
         l2_persist=bool(getattr(m, "l2_persist", False)),
         retention=bool(getattr(m, "retention", True)),
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),
