@@ -88,6 +88,13 @@ def graph_step_refusals(cfg, *, total_steps: int, curriculum: bool) -> list[str]
                    "device schedule scalars)")
     if not bool(g(m, "graph_safe", False)):
         out.append("model.graph_safe must be true (fixed pass count, no host-shadow reads)")
+    parts = g(m, "graph_safe_parts", None)
+    if parts is not None:
+        from morph.model.transformer import MORPHConfig
+        missing = sorted(set(MORPHConfig.graph_safe_parts) - set(parts))
+        if missing:
+            out.append(f"model.graph_safe_parts leaves out {missing}: a piece left out reads "
+                       f"a host count the replay would freeze")
     if bool(g(m, "ce_compact_rows", False)):
         out.append("model.ce_compact_rows: the compacted row count is data-dependent")
     if curriculum:

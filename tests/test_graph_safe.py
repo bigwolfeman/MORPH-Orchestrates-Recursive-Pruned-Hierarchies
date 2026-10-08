@@ -3,14 +3,15 @@
 
 A TRAINING forward + backward under the key must make no host read of a tensor value and
 run one op sequence at one set of shapes for every batch of a config, so a CUDA graph
-captured on one batch replays on any other. The key is NOT bit-identical to the off path:
-its masked reductions sum the same nonzero terms plus exact zeros in another order. Every
-such op is bounded here against an fp64 reference, at least as tightly as the off path's
-own error against the same reference.
+captured on one batch replays on any other. On CUDA the fixed-point and fan readers are
+bit-identical to the off path (tests/test_graph_safe_exact.py, the identity
+decomposition of 2026-10-07); the dense slot-column attention is not. Here, on CPU, where
+the exact forms emulate CUDA's reduction order and not the CPU's, every such op is bounded
+against an fp64 reference, at least as tightly as the off path's own error.
 
 What each test pins:
-  * `fixed_rows` / `masked_mean` are the gather and its mean, values and gradients, and an
-    empty mask reads exactly 0.
+  * `valid_first` is the gather with the live rows first, values and gradients, and
+    `exact_mean_1d` is their mean (a CPU tolerance; CUDA bits in the exact file).
   * The prelude/coda slot-column attention's dense form (`dense_slot_cols`) against fp64:
     forward and q/k/v gradients, with and without the strict narrowing mask.
   * The fan's terms (`fan_stream_cos`, `TULFanMix.entropy`, the vol pass, the epi term
@@ -68,21 +69,21 @@ def _bound(new: torch.Tensor, old: torch.Tensor, ref: torch.Tensor, what: str,
 # ── 1. the two helpers ────────────────────────────────────────────────────────────────
 
 
-def test_fixed_rows_is_the_gather_with_zeroed_pads():
+def test_valid_first_is_the_gather_with_zeroed_pads():
     m = _mask((3, 7), 0.5, seed=1)
     x = torch.randn(3, 7, 4, 5)
     xa, xb = x.clone().requires_grad_(True), x.clone().requires_grad_(True)
-    rows, w = hs.fixed_rows(xb, m)
-    assert rows.shape == (21, 4, 5) and w.shape == (21,) and w.dtype == torch.float32
-    assert torch.equal(rows[w == 1], xa[m])
-    assert torch.equal(rows[w == 0], torch.zeros_like(rows[w == 0]))
+    rows, n = hs.valid_first(xb, m)
+    k = int(m.sum())
+    assert rows.shape == (21, 4, 5) and n.dim() == 0 and int(n) == k
+    assert torch.equal(rows[:k], xa[m])
+    assert torch.equal(rows[k:], torch.zeros_like(rows[k:]))
     g = torch.randn(21, 4, 5)
     (rows * g).sum().backward()
-    (xa[m] * g[w == 1]).sum().backward()
+    (xa[m] * g[:k]).sum().backward()
     assert torch.equal(xa.grad, xb.grad)            # pads: exactly 0 gradient
     v = torch.randn(21)
-    assert torch.allclose(hs.masked_mean(v, w), v[w == 1].mean(), rtol=1e-6, atol=0)
-    assert hs.masked_mean(v, torch.zeros(21)).item() == 0.0
+    assert torch.allclose(hs.exact_mean_1d(v, n), v[:k].mean(), rtol=1e-6, atol=0)
 
 
 # ── 2. the slot-column attention ──────────────────────────────────────────────────────

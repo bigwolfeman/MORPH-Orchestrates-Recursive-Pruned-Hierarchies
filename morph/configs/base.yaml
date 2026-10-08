@@ -214,9 +214,15 @@ model:
   #   one op sequence at one set of shapes for every batch of a config (the graph-captured
   #   step): the slot loop runs slot_max_depth passes (not the drawn max), the prelude/coda
   #   slot-column attention scores every column (train and eval), and the host-shadow
-  #   readers become masked reductions over the fixed row count. NOT bit-identical (masked
-  #   sums run in another order; tests/test_graph_safe.py). false = today's path.
+  #   readers keep every row, live rows first, and reproduce the gathered result. Every piece
+  #   but the slot-column attention is bit-identical to false (45-step gate 2026-10-07,
+  #   tests/test_graph_safe_exact.py); that one is not (cuBLAS sums the value product in a
+  #   width-dependent order). false = today's path.
   graph_safe: false
+  # graph_safe_parts: the pieces graph_safe turns on, for gating each one alone against the
+  #   eager path (MORPHConfig.graph_safe_parts names them). null = every piece; a graph_step
+  #   needs every piece (a piece left out reads the host).
+  graph_safe_parts: null
   # tg_fused_attention: a strict slot-loop model (tul.tg_geometry strict, register core at
   #   reach 0) runs both TG attention branches of every prelude / coda / core call in one
   #   Triton kernel pair (morph/kernels/triton/tg_strict_attention.py): the relation read from

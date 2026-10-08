@@ -355,6 +355,7 @@ def test_a_different_phase_or_layout_raises(monkeypatch):
     (_ON + ("training.grad_probe_every=20",), "grad_probe_every"),
     (_ON + ("training.prune_start=100",), "prune_start=100"),
     (_ON + ("+training.step_mix={bptt: 1, db1: 1}",), "step_mix"),
+    (_ON + ("model.graph_safe_parts=[passes,fixed_point]",), "graph_safe_parts leaves out"),
 ])
 def test_config_refusals(monkeypatch, over, needle):
     from morph.training.graph_step import graph_step_refusals

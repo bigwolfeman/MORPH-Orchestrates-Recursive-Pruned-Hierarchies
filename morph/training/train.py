@@ -721,6 +721,9 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
         # MORPHConfig.graph_safe: a training forward with no host sync and fixed shapes.
         graph_safe=bool(getattr(m, "graph_safe", False)),
+        # MORPHConfig.graph_safe_parts: which pieces graph_safe turns on (default: all).
+        graph_safe_parts=tuple(getattr(m, "graph_safe_parts", None)
+                               or MORPHConfig.graph_safe_parts),
         # MORPHConfig.tg_fused_attention: both strict TG attention branches in one kernel.
         tg_fused_attention=bool(getattr(m, "tg_fused_attention", False)),
         # MORPHConfig.ternary_step_cache: bf16 ternary weights once per forward (bound below,
@@ -2573,6 +2576,7 @@ def main(cfg: DictConfig) -> None:
         _tsc = bind_ternary_step_cache(model, mode)
         print(f"  [ternary-step-cache] ON: {_tsc.summary()}, refreshed once per forward",
               flush=True)
+
     if use_compile:
         for group in [model.prelude, model.core, model.coda]:
             # Core MLPs see a VARIABLE batch each loop iteration (active-set

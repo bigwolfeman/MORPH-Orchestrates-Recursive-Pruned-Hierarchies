@@ -59,7 +59,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from morph.model.host_shadow import fixed_rows, masked_mean, masked_rows
+from morph.model.host_shadow import (exact_col_mean, exact_col_std, exact_mean_1d,
+                                     masked_rows, valid_first)
 
 __all__ = ["TULFanMix", "select_streams", "select_winners", "select_gate_loss", "fan_stream_stats", "fan_stream_cos", "fan_repel_term",
            "FanReservoir", "ridge_map", "epi_score", "fan_epi_term", "fan_vol_term", "plan_streams"]
@@ -111,6 +112,13 @@ def fan_stream_stats(cells: Tensor) -> tuple[Tensor, Tensor]:
     return er, cos
 
 
+def _exact_valid_mean(v: Tensor, n_valid: Tensor) -> Tensor:
+    """The gathered ``v[:n_valid].mean()`` bit for bit (``host_shadow.exact_mean_1d``), 0
+    when no row is valid (the gathered readers' early return), for ``valid_first`` rows."""
+    m = exact_mean_1d(v.float(), n_valid)
+    return torch.where(n_valid > 0, m, torch.zeros_like(m)).to(v.dtype)
+
+
 def fan_stream_cos(state: Tensor, valid: Tensor, m_cells: int,
                    fixed: bool = False) -> Tensor:
     """THE REPULSION TERM: mean pairwise cosine among a slot's K streams, one scalar.
@@ -125,8 +133,9 @@ def fan_stream_cos(state: Tensor, valid: Tensor, m_cells: int,
     stream of every valid slot carries gradient. It reads 1.0 when a slot's streams are
     identical, 0.0 when they are orthogonal, and -1/(M-1) at the simplex floor.
 
-    ``fixed`` (``model.graph_safe``): every slot's row, pads zeroed, and the mean over the
-    valid ones (``morph.model.host_shadow.fixed_rows``); no host read, fixed shapes.
+    ``fixed`` (``model.graph_safe``): the valid slots' rows first in the gathered order,
+    the rest zeroed, and the gathered mean itself (``host_shadow.valid_first`` /
+    ``exact_mean_1d``): bit-identical to ``fixed=False``, no host read, fixed shapes.
     """
     b, sm = state.shape[0], state.shape[1]
     s = valid.shape[1]
@@ -135,16 +144,16 @@ def fan_stream_cos(state: Tensor, valid: Tensor, m_cells: int,
             f"fan_stream_cos: compact axis {sm} != S*M = {s}*{m_cells}")
     z = _cell_readout(state.reshape(b, s, m_cells, *state.shape[2:]))   # [B, S, M, C]
     if fixed:
-        sel, w = fixed_rows(z, valid)                                  # [B*S, M, C]
+        sel, n_valid = valid_first(z, valid)                           # [B*S, M, C]
     else:
-        sel, w = masked_rows(z, valid), None                           # [N, M, C]
+        sel, n_valid = masked_rows(z, valid), None                     # [N, M, C]
         if sel.shape[0] == 0:
             return z.sum() * 0.0
     n = F.normalize(sel.float(), dim=-1)
     g = n @ n.transpose(1, 2)
     m = float(m_cells)
     cos = (g.sum((1, 2)) - g.diagonal(dim1=1, dim2=2).sum(-1)) / (m * (m - 1))
-    return cos.mean() if w is None else masked_mean(cos, w)
+    return cos.mean() if n_valid is None else _exact_valid_mean(cos, n_valid)
 
 
 def plan_streams(traj: Tensor, m_cells: int, h: int) -> tuple[Tensor, int]:
@@ -314,13 +323,12 @@ class TULFanMix(nn.Module):
     def entropy(weights: Tensor, valid: Tensor, fixed: bool = False) -> Tensor:
         """Mean entropy in NATS of the mixture weights over VALID slots (max ``ln K``).
 
-        ``fixed`` (``model.graph_safe``): every slot's row, the mean over the valid ones
-        (``morph.model.host_shadow.fixed_rows``); a zeroed pad row clamps to 1e-12 and is
-        weighted 0."""
+        ``fixed`` (``model.graph_safe``): the valid slots' rows first, the gathered mean
+        itself (``host_shadow.valid_first`` / ``exact_mean_1d``); bit-identical."""
         if fixed:
-            w, m = fixed_rows(weights, valid)
+            w, n_valid = valid_first(weights, valid)
             w = w.float().clamp_min(1e-12)
-            return masked_mean(-(w * w.log()).sum(-1), m)
+            return _exact_valid_mean(-(w * w.log()).sum(-1), n_valid)
         w = masked_rows(weights, valid).float().clamp_min(1e-12)
         if w.shape[0] == 0:
             return weights.sum() * 0.0
@@ -460,52 +468,56 @@ class FanReservoir(nn.Module):
         return F.linear(h, self.w2)
 
 
-def ridge_map(h: Tensor, lam: float, w: Tensor | None = None) -> Tensor:
+def ridge_map(h: Tensor, lam: float, n_valid: Tensor | None = None) -> Tensor:
     """``(H^T H + lam I)^-1 H^T`` on standardised features via QR — ``[F, N]``, double.
 
     ``h`` is ``[N, F]``: columns are centered, divided by their batch std and by
     ``sqrt(F)``, EpiJEPA's ``ridge_map`` line for line.
 
-    ``w`` ``[N]`` (``model.graph_safe``, rows from ``host_shadow.fixed_rows``): the mean
-    and the std are taken over the rows with ``w == 1`` only, in double, and every other
-    row is set to EXACTLY 0 after the standardisation. ``[H_valid; 0; sqrt(lam) I]`` has
-    the same Gram ``H^T H + lam I`` as ``[H_valid; sqrt(lam) I]``, so R is the same and
-    the readout's valid columns are the same; its pad columns are zero in exact
-    arithmetic and are set to exactly 0, so a pad row can never reach a score.
+    ``n_valid`` (``model.graph_safe``; ``h``'s rows from ``host_shadow.valid_first``, the
+    first ``n_valid`` live): the gathered map bit for bit at the full row count. The mean
+    and the std are the eager reductions over the live rows (``exact_col_mean`` /
+    ``exact_col_std``); the QR input is ``[H_live; sqrt(lam) I; 0]``, whose Householder
+    factorisation gives the gathered ``R`` and ``Q`` rows bit for bit (the zero rows trail);
+    the solve's right-hand side is ``Q``'s live rows then zero columns. The map's columns
+    past ``n_valid`` are exactly 0, so a pad row can never reach a score.
     """
     n, f = h.shape
-    if w is not None:
-        wd = w.to(torch.float64).unsqueeze(1)                          # [N, 1]
-        hd = h.double()
-        cnt = wd.sum().clamp_min(1.0)
-        mu = (hd * wd).sum(0) / cnt
-        sd = (((hd - mu) * wd).pow(2).sum(0) / cnt).sqrt()
-        hs = (hd - mu) / sd.clamp_min(1e-6) / math.sqrt(f)
-        hs = torch.where(wd > 0, hs, torch.zeros_like(hs))
-        aug = torch.cat([hs, math.sqrt(lam) * torch.eye(f, dtype=hs.dtype, device=hs.device)])
+    if n_valid is not None:
+        hs = ((h - exact_col_mean(h, n_valid)) / exact_col_std(h, n_valid).clamp_min(1e-6)
+              / math.sqrt(f)).double()
+        eye = math.sqrt(lam) * torch.eye(f, dtype=hs.dtype, device=hs.device)
+        # Row r of the QR input: live row r, then the ridge rows, then zeros.
+        r_idx = torch.arange(n + f, device=hs.device)
+        src = torch.where(r_idx < n_valid, r_idx,
+                          torch.where(r_idx < n_valid + f, n + (r_idx - n_valid).clamp(max=f - 1),
+                                      torch.full_like(r_idx, n + f)))
+        aug = torch.cat([hs, eye, hs.new_zeros(1, f)]).index_select(0, src)
         q, r = torch.linalg.qr(aug, mode="reduced")
-        a = torch.linalg.solve_triangular(r, q[:n].T, upper=True)
-        return torch.where(wd.T > 0, a, torch.zeros_like(a))
+        live = (r_idx[:n] < n_valid).unsqueeze(1)
+        return torch.linalg.solve_triangular(
+            r, torch.where(live, q[:n], torch.zeros_like(q[:n])).T, upper=True)
     h = ((h - h.mean(0)) / h.std(0, unbiased=False).clamp_min(1e-6) / math.sqrt(f)).double()
     aug = torch.cat([h, math.sqrt(lam) * torch.eye(f, dtype=h.dtype, device=h.device)])
     q, r = torch.linalg.qr(aug, mode="reduced")
     return torch.linalg.solve_triangular(r, q[:n].T, upper=True)
 
 
-def epi_score(z: Tensor, a: Tensor, eta: float, rw: Tensor | None = None) -> Tensor:
+def epi_score(z: Tensor, a: Tensor, eta: float, n_valid: Tensor | None = None) -> Tensor:
     """``0.5 * log2 det(I + eta * W^T W)`` with ``W = a @ (z - mean(z))``, ``[F, C]``.
 
     Sylvester: ``det(I_C + eta W^T W) = det(I_F + eta W W^T)``, so the ``[F, F]`` side is
     taken and a 1024-wide state costs an F x F slogdet, not a C x C one. Differentiable in ``z``; ``a`` is constant.
 
-    ``rw`` ``[N]`` (``model.graph_safe``): the mean over the rows with ``rw == 1`` only, and
-    the centered pad rows set to 0 (``a``'s pad columns are 0 as well, :func:`ridge_map`).
+    ``n_valid`` (``model.graph_safe``; ``z``'s rows from ``host_shadow.valid_first``): the
+    gathered score bit for bit. The mean is the eager one over the live rows
+    (``exact_col_mean``); ``a``'s columns past ``n_valid`` are exactly 0 (:func:`ridge_map`),
+    so the pad rows add exact zeros to ``W`` and receive zero gradient.
     """
-    if rw is not None:
-        zd = z.double()
-        wd = rw.to(torch.float64).unsqueeze(1)
-        zc = (zd - (zd * wd).sum(0) / wd.sum().clamp_min(1.0)) * wd
-        w = a @ zc
+    if n_valid is not None:
+        # Two casts, as the eager line: each carries its own gradient back to fp32 before
+        # the two are added (one shared cast would add them in fp64 and round once).
+        w = a @ (z.double() - exact_col_mean(z.double(), n_valid))
         eye = torch.eye(w.shape[0], dtype=w.dtype, device=w.device)
         return 0.5 * torch.linalg.slogdet(eye + float(eta) * (w @ w.T))[1] / math.log(2)
     w = a @ (z.double() - z.double().mean(0))
@@ -518,17 +530,16 @@ def _fan_epi_pass(state: Tensor, valid: Tensor, m_cells: int, a: Tensor,
     """Mean over the K streams of the epiplexity of their normalised deviations, in bits
     per reservoir feature, on one trajectory entry.
 
-    ``fixed`` (``model.graph_safe``): every slot's row, pads zeroed, ``a`` from the masked
-    :func:`ridge_map`. Fewer than two valid slots score exactly 0 with no branch: the one
-    valid row centers to 0 (and none centers nothing), so ``W = 0`` and ``log det I = 0``."""
+    ``fixed`` (``model.graph_safe``): the valid slots' rows first (``valid_first``), ``a``
+    from :func:`ridge_map`'s exact form: bit-identical to the gathered score."""
     b, sm = state.shape[0], state.shape[1]
     s = valid.shape[1]
     if sm != s * m_cells:
         raise ValueError(f"fan_epi_term: compact axis {sm} != S*M = {s}*{m_cells}")
     z = _cell_readout(state.reshape(b, s, m_cells, *state.shape[2:]))   # [B, S, M, C]
     if fixed:
-        sel, rw = fixed_rows(z, valid)                                 # [B*S, M, C]
-        sel = sel.float()
+        sel, n_live = valid_first(z, valid)                            # [B*S, M, C]
+        sel, rw = sel.float(), n_live.clamp(min=2)
     else:
         sel, rw = masked_rows(z, valid).float(), None                  # [N, M, C]
         n = sel.shape[0]
@@ -539,7 +550,8 @@ def _fan_epi_pass(state: Tensor, valid: Tensor, m_cells: int, a: Tensor,
     dev = dev / scale                                                  # scale-free
     f = float(a.shape[0])
     scores = [epi_score(dev[:, i], a, eta, rw) / f for i in range(m_cells)]
-    return torch.stack(scores).mean().to(state.dtype)
+    e = torch.stack(scores).mean().to(state.dtype)
+    return e if rw is None else torch.where(n_live >= 2, e, torch.zeros_like(e))
 
 
 def fan_epi_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
@@ -567,8 +579,10 @@ def fan_epi_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int,
     with torch.no_grad():
         seed = _cell_readout(traj[0].reshape(b, s, m_cells, *traj[0].shape[2:]))
         if fixed:
-            seed, sw = fixed_rows(seed.mean(dim=2), valid)             # [B*S, C]
-            a = ridge_map(reservoir(seed), ridge, sw)                  # [F, B*S]
+            # Fewer than two valid slots: the gathered path scores 0 (`a = None`); here
+            # the map is fitted on two rows (finite) and `_fan_epi_pass` returns 0.
+            seed, sw = valid_first(seed.mean(dim=2), valid)            # [B*S, C]
+            a = ridge_map(reservoir(seed), ridge, sw.clamp(min=2))     # [F, B*S]
         else:
             seed = masked_rows(seed.mean(dim=2), valid)                # [N, C], detached
             if seed.shape[0] < 2:
@@ -620,18 +634,20 @@ def _fan_vol_pass(state: Tensor, valid: Tensor, m_cells: int, eta: float,
                   fixed: bool = False) -> Tensor:
     """Mean over valid slots of the within-slot volume of the normalised deviations.
 
-    ``fixed`` (``model.graph_safe``): every slot's row, pads zeroed (a zero slot has
-    ``G = 0`` and ``log det I = 0``), and the mean over the valid ones."""
+    ``fixed`` (``model.graph_safe``): the valid slots' rows FIRST in the gathered order,
+    the rest zeroed (a zero slot has ``G = 0`` and ``log det I = 0``), and the gathered
+    mean itself (``host_shadow.exact_mean_1d``). Every per-row op gives each row the
+    gathered bits, so the term and its gradient are bit-identical to ``fixed=False``."""
     b, sm = state.shape[0], state.shape[1]
     s = valid.shape[1]
     if sm != s * m_cells:
         raise ValueError(f"fan_vol_term: compact axis {sm} != S*M = {s}*{m_cells}")
     z = _cell_readout(state.reshape(b, s, m_cells, *state.shape[2:]))   # [B, S, M, C]
     if fixed:
-        sel, rw = fixed_rows(z, valid)                                 # [B*S, M, C]
+        sel, n_valid = valid_first(z, valid)                           # [B*S, M, C]
         sel = sel.float()
     else:
-        sel, rw = masked_rows(z, valid).float(), None                  # [N, M, C]
+        sel, n_valid = masked_rows(z, valid).float(), None             # [N, M, C]
         if sel.shape[0] == 0:
             return z.sum() * 0.0
     dev = sel - sel.mean(dim=1, keepdim=True)
@@ -646,7 +662,9 @@ def _fan_vol_pass(state: Tensor, valid: Tensor, m_cells: int, eta: float,
         eye = torch.eye(m_cells, dtype=g.dtype, device=g.device)
         ld = torch.linalg.slogdet(eye + float(eta) * g)[1]             # [N]
     v = 0.5 * ld / math.log(2) / float(m_cells - 1)                   # [N]
-    return (v.mean() if rw is None else masked_mean(v, rw)).to(state.dtype)
+    if n_valid is None:
+        return v.mean().to(state.dtype)
+    return _exact_valid_mean(v, n_valid).to(state.dtype)
 
 
 def fan_vol_term(traj: list[Tensor], valid: Tensor, m_cells: int, n_passes: int, eta: float,
