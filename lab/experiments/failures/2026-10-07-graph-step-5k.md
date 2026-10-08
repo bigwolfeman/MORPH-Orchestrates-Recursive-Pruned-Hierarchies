@@ -67,3 +67,11 @@ Two questions, measured separately: (1) which components of the recipe are bit-i
 production (gate each one alone); (2) for the ones that cannot be, does the change move
 K1-K6 beyond the same-code run-to-run spread. Next: the identity decomposition, and an
 eager same-seed rerun of `lxtul_pointer` for the noise floor.
+
+## Amendment 2026-10-08
+
+A same-seed rerun of the eager production recipe, same code with every new key off, read
+K1-K6 +0.0095 and CE@6 3.9187 ([noise floor](2026-10-08-production-rerun-noise-floor.md)). The
+graph recipe's +0.0088 sits inside that spread; the drop this filing reports is not evidence of a
+change in training. The failure verdict stays, for the protocol: the K1-K6 bound was written
+without a measured noise floor.
