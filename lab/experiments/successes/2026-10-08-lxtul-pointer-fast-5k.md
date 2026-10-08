@@ -41,8 +41,8 @@ Artifacts: [`results/2026-10-08-lxtul-pointer-fast-5k/`](../results/2026-10-08-l
 - K1-K6 +0.0104: at or above +0.0075. Held.
 - Final val 3.9161: 0.0076 from 3.9085, inside 0.010. Held.
 - Speed: 24.1-24.5k tok/s logged by the trainer late in the run; 35 minutes wall clock from
-  launch to the final checkpoint (compile, evals and checkpoints included), against about 70
-  for the eager 5k run.
+  launch to the final checkpoint (compile, evals and checkpoints included), against 65 minutes
+  for the eager 5k rerun (01:24:46 -> 02:29:37, `results/2026-10-08-production-rerun-noise-floor/chain.log`).
 - One val reading moved (4500: 3.9533, 4750: 4.1047, final 3.9161), recovered by the end.
 
 ## Verdict
