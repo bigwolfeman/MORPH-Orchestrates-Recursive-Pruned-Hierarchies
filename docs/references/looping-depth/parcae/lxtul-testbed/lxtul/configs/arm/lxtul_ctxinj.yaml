@@ -1,0 +1,6 @@
+# LXTUL with MORPH's injection: only channels [512, 832) are refilled (A 0.447, dt 1), the
+# rest pass through, so a do-nothing pass has gain 0.865 as in MORPH (SPEC 3.2).
+name: lxtul-ctxinj
+kind: lxtul
+lxtul:
+  injection: ctx

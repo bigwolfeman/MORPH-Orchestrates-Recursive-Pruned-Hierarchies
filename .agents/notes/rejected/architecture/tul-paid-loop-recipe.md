@@ -1,4 +1,23 @@
-# The paid loop: how TUL came to earn its depth, and the recipe that trains it
+# Agent Note: The paid loop: how TUL came to earn its depth, and the recipe that trains it
+
+Status: rejected — the paid loop is not TUL (Wolfe, 2026-09-09); LXTUL is the TUL recipe (2026-10-07); base.yaml still ships the paid loop
+
+## Problem
+
+Under TUL as specified, only the slot positions looped, and the loop earned 0.015 nats at
+20k (section 2 below).
+
+## Proposal
+
+Arm A2 and the recipe that trains it (sections 3 to 6 below): tokens and slots run the
+same per-sample core, with a 1000-step LR ramp. Moved from `docs/tul-paid-loop-recipe.md` on 2026-10-07; the text below the added sections is unchanged apart from link paths. The current TUL is LXTUL:
+[2026-10-07-lxtul-pointer-ditto-winner.md](../../implemented/architecture/2026-10-07-lxtul-pointer-ditto-winner.md).
+
+## Alternatives considered
+
+Section 2 below: the slot-only arms (free ride, at most 0.015 nats of loop earning) and
+the write-side ladder (boundary, content and bound seeds). Section 5 below: the warmup
+choices weighed against the detonation.
 
 A literate record, written 2026-09-03 00:00 at the end of the campaign that produced it.
 It is the "lock-in" Wolfe asked for: what worked, why it worked, and where each claim's
@@ -6,7 +25,7 @@ number lives, so that the next person (or the next session) does not have to re-
 any of it. Every number here is read from a filed experiment; the file is named next to
 it. Two slots are still open at the time of writing and are marked OPEN.
 
-Read this with `docs/tul-spec.md` (what TUL is) and
+Read this with `.agents/specs/tul-spec.md` (what TUL is) and
 `lab/divergence/DIVERGENCE-README.md` (what to do when a run blows up) at hand.
 
 ## 1. The claim, in one paragraph

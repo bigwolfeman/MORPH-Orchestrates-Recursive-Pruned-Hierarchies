@@ -440,7 +440,7 @@ class MORPHBlock(nn.Module):
                          is written to ret_capture["state"]. The CALLER must RETURN that state
                          from any checkpointed region (side-channel capture is not checkpoint-safe
                          on its own); _core_step does exactly that.
-            ret_reset_mask: [B, T] bool | None — GLA segment-reset mask (docs/tul-tg-spec.md
+            ret_reset_mask: [B, T] bool | None — GLA segment-reset mask (.agents/specs/tul-tg-spec.md
                          §4), forwarded to the retention branch untouched. Ignored when this
                          block has no retention branch.
             pass_idx:    which loop pass is applying this shared block. Read ONLY by

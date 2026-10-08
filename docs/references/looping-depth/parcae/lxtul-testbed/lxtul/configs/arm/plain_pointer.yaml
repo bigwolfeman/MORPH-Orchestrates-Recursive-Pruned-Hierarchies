@@ -1,0 +1,5 @@
+# Plain Parcae + the learned pointer head (lxtul/plain_pointer.py): the like-for-like control for
+# strict LXTUL + pointer (same PointerHead, 4 heads).
+name: plain-pointer
+kind: plain
+pointer_heads: 4

@@ -1,4 +1,4 @@
-# TUL arm TUL-gate (docs/tul-gate-spec.md §11, docs/ablation-ledger.md).
+# TUL arm TUL-gate (.agents/specs/tul-gate-spec.md §11, docs/ablation-ledger.md).
 # Run: PYTHONPATH=$PWD python -m morph.training.train --config-name tul_gate
 #
 # Everything is tul_a1.yaml — same 20k × 12 × 1024 schedule (tul_short set batch 12 on

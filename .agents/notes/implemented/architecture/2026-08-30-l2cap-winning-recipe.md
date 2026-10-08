@@ -86,7 +86,7 @@ soft spectral penalty instead of the projection (earlier takeover campaign).
 ## Consequences
 
 - G3 (the TUL decode-gate: k=0 keep-thinking / k>0 decode-length, two-head
-  encoding per docs/tul-gate-spec.md §7) builds ON this recipe unmodified; so
+  encoding per .agents/specs/tul-gate-spec.md §7) builds ON this recipe unmodified; so
   does G4 (uniform {1..R} depth sampling).
 - Wall-clock improvements must come from kernels/compile (the eager TG attention
   is the big unmeasured lever), never from touching the iteration structure.

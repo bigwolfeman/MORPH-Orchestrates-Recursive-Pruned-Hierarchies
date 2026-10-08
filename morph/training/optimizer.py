@@ -35,12 +35,12 @@ _NO_DECAY_KEYWORDS = (
                                                    # zero-init readout direction pulls
                                                    # against the only gradient it has —
                                                    # the "provably cannot move" class that
-                                                   # docs/tul-gate-spec.md §10 exists for.
+                                                   # .agents/specs/tul-gate-spec.md §10 exists for.
     "embed",                                       # Embedding tables
     "ste_gain", "ste_temp",                        # LSTE per-layer params
     "gamma_pos", "gamma_neg",                      # TTQ learnable ternary scales (decay would pull
                                                    # a layer's only magnitude carrier toward 0)
-    # ── TUL (docs/tul-spec.md §3.1-§3.4) ──
+    # ── TUL (.agents/specs/tul-spec.md §3.1-§3.4) ──
     # E_slot / E_mask are EMBEDDINGS (E_slot is initialised to the mean of the embedding
     # table, spec §5) and every other embedding here is no-decay; they were landing in the
     # decay group only because their names do not contain "embed".

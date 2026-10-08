@@ -1,7 +1,7 @@
 # TUL Gate — specification (`TUL-gate`, `TUL-halt`)
 
 > **RETIRED 2026-09-03.** The gate left the tree with the slot-only core (the paid loop,
-> [tul-paid-loop-recipe.md](tul-paid-loop-recipe.md), has no per-slot depth for a gate to
+> [tul-paid-loop-recipe.md](../notes/rejected/architecture/tul-paid-loop-recipe.md), has no per-slot depth for a gate to
 > drive). This spec, its §9 invariants and the measured result stay as the record; the
 > last commit that runs it is `d9e04e6`. Decision:
 > `.agents/notes/rejected/feature/2026-08-21-gated-tul.md`.
@@ -16,8 +16,8 @@ and the span it must be is the NEXT one.
 
 Extends [tul-spec.md](tul-spec.md); read that first. This file adds a **span-length
 gate** and an optional **halting gate** to the Thought Unpack Loop. Arms and the
-pre-registered prediction are in [ablation-ledger.md](ablation-ledger.md); the
-invariants in §9 belong in [runtime-invariants.md](runtime-invariants.md) §6c once
+pre-registered prediction are in [ablation-ledger.md](../../docs/ablation-ledger.md); the
+invariants in §9 belong in [runtime-invariants.md](../../lab/runtime-invariants.md) §6c once
 built, in the same "each row names the test that fails" form as §6b.
 
 This document is a **build contract**. Every section states what the code must do

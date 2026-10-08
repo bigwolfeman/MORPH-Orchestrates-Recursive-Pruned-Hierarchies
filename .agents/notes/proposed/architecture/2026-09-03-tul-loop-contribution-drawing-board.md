@@ -69,7 +69,7 @@ The approach, in order, each step gated by a number before the next:
   routing through z, which is the gradient pressure the August arms never had (their
   token path was 6 of 12 layers and decoded fine alone). Pair with attention routing so
   cross-span context reaches tokens ONLY through slots (tokens attend their own span plus
-  slots; the TG restriction of `docs/tul-tg-spec.md` was one form of this — re-read its
+  slots; the TG restriction of `.agents/specs/tul-tg-spec.md` was one form of this — re-read its
   result before repeating it).
 - **Step 3 — teach the thought, without a slot-side objective on tokens.** The candidate
   the record has not tried: distil the deep model's boundary state (Step 1's oracle) into

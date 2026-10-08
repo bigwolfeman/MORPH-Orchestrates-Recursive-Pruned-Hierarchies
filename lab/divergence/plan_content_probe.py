@@ -199,7 +199,7 @@ def extract_slot_examples(input_ids: Tensor, z: Tensor, layout: SlotLayout,
             idx_i = torch.nonzero((bag_b == s) & tok_b, as_tuple=True)[0]
             idx_ip1 = torch.nonzero((bag_b == s + 1) & tok_b, as_tuple=True)[0]
             if idx_i.numel() == 0 or idx_ip1.numel() == 0:
-                # min_span >= 4 (docs/tul-spec.md) makes an empty span for a slot INSIDE
+                # min_span >= 4 (.agents/specs/tul-spec.md) makes an empty span for a slot INSIDE
                 # n_valid - 1 impossible by construction. An empty span here means this
                 # function's bag_id/slot_valid bookkeeping disagrees with the packer's —
                 # a bug, not a data edge case — so it raises rather than silently

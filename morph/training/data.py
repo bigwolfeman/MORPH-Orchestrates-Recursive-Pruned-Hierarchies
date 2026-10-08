@@ -45,7 +45,7 @@ def create_dataloader(
     s-token, so it processes ``seq_len`` positions — equal-FLOPs/VRAM to the baseline,
     ``s×`` more raw tokens ingested per step. ``bag_size == 0`` → standard NTP (below).
 
-    TUL span layout (``tul`` set — docs/tul-spec.md §4 [W]: this arrow path is the
+    TUL span layout (``tul`` set — .agents/specs/tul-spec.md §4 [W]: this arrow path is the
     one the TUL arms run)
     ---------------------------------------------------------------------------
     Yields a 3-TUPLE ``(input_ids, labels, slot_layout)``, each row a fixed-shape
@@ -130,7 +130,7 @@ def create_dataloader(
             raise ValueError("tul and bag_size are mutually exclusive (spec invariant 6)")
         tul_spec = tul.spec_for(seq_len)
         # ONE generator per loader, seeded from the config, so a run's augmentation is
-        # reproducible from its wandb config alone (docs/tul-gate-spec.md §3.2 — the
+        # reproducible from its wandb config alone (.agents/specs/tul-gate-spec.md §3.2 — the
         # truncation point is our RNG, and a number that is not in the config is not a
         # number the run can be reproduced from). None when the gate is off: no draw.
         tul_rng = np.random.default_rng(tul.seed) if tul.gate is not None else None

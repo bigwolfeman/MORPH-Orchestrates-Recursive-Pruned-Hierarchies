@@ -1,0 +1,7 @@
+# The ungraded fan: 4 cells and epivol kept, NO latent selection (no router, no reset, no EMA
+# target); every cell is written to its own prefix position, so the coda reads all 4.
+# MORPH's version of this arm earned K1-K6 +0.0042 at 5k.
+name: ungraded
+kind: lxtul
+lxtul:
+  select: none

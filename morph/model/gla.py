@@ -167,7 +167,7 @@ class GatedLinearAttention(nn.Module):
             vt = v[:, t].to(acc)
             qt = q[:, t].to(acc)
             if reset_mask is not None:
-                # Segment reset (docs/tul-tg-spec.md §4): the state ENTERING a reset
+                # Segment reset (.agents/specs/tul-tg-spec.md §4): the state ENTERING a reset
                 # position is zeroed EXACTLY — a true multiply-by-zero, not a decay
                 # floor, so the gate value alpha_t at the reset position is irrelevant.
                 state = state * (~reset_mask[:, t]).to(acc).view(B, 1, 1, 1)
@@ -194,7 +194,7 @@ class GatedLinearAttention(nn.Module):
             la = log_alpha[:, s:e]                              # [B,L,H,dh] (≤0)
             b = la.cumsum(dim=1)                                # cumulative log-gate within chunk
             if reset_mask is not None:
-                # Segment reset (docs/tul-tg-spec.md §4), EXACT within fp32: recompute the
+                # Segment reset (.agents/specs/tul-tg-spec.md §4), EXACT within fp32: recompute the
                 # cumulative log-gate RELATIVE TO EACH RESET SEGMENT instead of one
                 # chunk-global cumsum. The chunk-global form composes with the -30
                 # overflow clamp below only when the chunk holds ONE segment; with
@@ -274,7 +274,7 @@ class GatedLinearAttention(nn.Module):
                 # a reset position starts a fresh segment: its shifted key would leak
                 # the PREVIOUS segment's feature into the new segment's first write.
                 k = k.masked_fill(reset_mask[:, :, None, None], 0.0)
-        # reset_mask ([B, S] bool | None): GLA segment reset (docs/tul-tg-spec.md §4).
+        # reset_mask ([B, S] bool | None): GLA segment reset (.agents/specs/tul-tg-spec.md §4).
         # Implemented STRUCTURALLY inside _recurrent (state zeroed entering a reset
         # position) and _chunked (per-segment cumulative gate + cross-reset pair
         # masking) — NOT as a log_alpha floor: a -30 floor collides with _chunked's

@@ -1,7 +1,7 @@
 # TUL-FM Phase 1 — the flow-matching span planner on a FROZEN A3 backbone.
 #
 # Arc:        .agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md
-# Gates:      docs/tul-fm-probing.md §5 (P1)
+# Gates:      .agents/notes/rejected/architecture/tul-fm-probing.md §5 (P1)
 # Pre-reg:    lab/experiments/planned/2026-08-28-tulfm-p1.md
 # Entry:      PYTHONPATH=$PWD python -m lab.tulfm.train_p1
 #

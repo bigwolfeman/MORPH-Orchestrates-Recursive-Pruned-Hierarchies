@@ -1,0 +1,6 @@
+# Parcae-LXTUL + copy cache, strict for 2500 steps, then open geometry
+name: lxtul-cache-switch
+kind: lxtul
+lxtul:
+  copy_cache: true
+  open_at: 2500

@@ -1,0 +1,3 @@
+# Stock Parcae at the testbed shape: every token loops (Poisson(6), BPTT 6). The baseline.
+name: plain
+kind: plain

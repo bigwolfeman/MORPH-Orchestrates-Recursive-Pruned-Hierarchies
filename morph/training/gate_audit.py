@@ -1,6 +1,6 @@
 """Gate startup instruments — bias seating and the travel audit.
 
-docs/tul-gate-spec.md §10. Every function here exists because the predecessor
+.agents/specs/tul-gate-spec.md §10. Every function here exists because the predecessor
 (``00DeepNet/coconut``) lost a whole ladder to a gate that never moved: its bias went
 −2.00000 → −2.00071 against a required travel of 1.88, 57× short of what the step budget
 could deliver, and nothing in the run said so. The loss curve looked fine, because a
@@ -90,7 +90,7 @@ def audit_gate_travel(gate, optimizer, stats: dict, total_steps: int, z_norm: fl
         if not p.requires_grad:
             raise RuntimeError(
                 f"gate audit: {name} has requires_grad=False — the gate cannot train. "
-                f"(docs/tul-gate-spec.md §10)"
+                f"(.agents/specs/tul-gate-spec.md §10)"
             )
         hit = [g for g in optimizer.param_groups if any(q is p for q in g["params"])]
         if len(hit) != 1:
@@ -128,7 +128,7 @@ def audit_gate_travel(gate, optimizer, stats: dict, total_steps: int, z_norm: fl
         )
     if fail:
         raise RuntimeError(
-            "gate audit REFUSED the run (docs/tul-gate-spec.md §10): "
+            "gate audit REFUSED the run (.agents/specs/tul-gate-spec.md §10): "
             + "; ".join(fail)
             + ". Raise tul.gate_lr_mult / training.lr, or seat the bias. This is the check "
             "that the predecessor did not have when its gate travelled 0.04 % of what "
@@ -160,7 +160,7 @@ def assert_gate_is_alive(gate, step: int, tol: float = 1e-6) -> None:
         raise RuntimeError(
             f"gate is DEAD at step {step}: ‖w‖ = {n:.3e} is still its zero init, so the "
             f"gate emits a constant for every slot. Check that tul_gate parameters reach "
-            f"the optimizer and that gate_lambda > 0. (docs/tul-gate-spec.md §10)"
+            f"the optimizer and that gate_lambda > 0. (.agents/specs/tul-gate-spec.md §10)"
         )
     print(
         f"  [gate-audit] alive at step {step}: ‖w‖={n:.4f} b={float(gate.b.item()):+.4f}",

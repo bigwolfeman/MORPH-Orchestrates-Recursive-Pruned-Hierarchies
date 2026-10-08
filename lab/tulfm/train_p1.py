@@ -1,7 +1,7 @@
 """TUL-FM Phase 1 — train the flow-matching planner on a FROZEN backbone.
 
 Arc:     ``.agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md``
-Gates:   ``docs/tul-fm-probing.md`` §5 (P1)
+Gates:   ``.agents/notes/rejected/architecture/tul-fm-probing.md`` §5 (P1)
 Pre-reg: ``lab/experiments/planned/2026-08-28-tulfm-p1.md``
 Config:  ``morph/configs/tulfm_p1.yaml``
 
@@ -166,7 +166,7 @@ def make_loader(bcfg: DictConfig, seq_len: int, batch_size: int, skip_samples: i
     ``tul`` given (TG-restrict backbones): ``create_dataloader``'s own TUL path yields
     ``(input_ids, labels, slot_layout)`` triples, packed with the SAME
     ``pack_tul_batch``/``BoundaryRule`` the checkpoint was trained with (invariant 1,
-    docs/tul-spec.md) — not a second packer reimplemented here.
+    .agents/specs/tul-spec.md) — not a second packer reimplemented here.
     """
     return create_dataloader(
         tokenizer_name=str(bcfg.data.tokenizer),

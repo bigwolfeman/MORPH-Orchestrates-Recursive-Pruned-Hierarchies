@@ -1,0 +1,27 @@
+# Throughput benchmark: plain Parcae vs Parcae-LXTUL at MORPH LXTUL's shape, on MORPH's rows.
+# tok/s uses MORPH's formula: steps/s * batch * data.seq_len (1024 nominal tokens per row).
+defaults:
+  - base
+  - _self_
+
+hydra:
+  run:
+    dir: outputs/lxtul-bench/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+
+run:
+  name: lxtul-bench
+
+optimizer:               # the bench has no schedule: lr is the batch-6 scaled value
+  lr: 0.0017320508
+  muon_lr: 0.0017320508
+
+bench:
+  arms: [plain, lxtul]
+  batch_size: 6
+  n_batches: 16          # distinct real batches, cycled (layouts differ per batch)
+  warmup_steps: 10
+  measured_steps: 40
+  compile: true
+  grad_clip: 1.0

@@ -1,4 +1,4 @@
-"""TUL span layout contract (docs/tul-spec.md §3.1, §4, §6, §9 invariants 1/3/5).
+"""TUL span layout contract (.agents/specs/tul-spec.md §3.1, §4, §6, §9 invariants 1/3/5).
 
 Invariant 1 is the reason this file exists: the boundary rule is ONE function used by
 the loader and by the generator, and a train/generation mismatch would silently decode

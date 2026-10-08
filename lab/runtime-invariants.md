@@ -134,7 +134,7 @@ These are observation-only when unset: `MORPH_EXACT_TRACE`, `MORPH_MEM_PROBE`,
 `MORPH_EXACT_TRACE=<path>` appends per-step loss hex for bit-identical A/B gates.
 Use only on gate runs (adds a host sync per step).
 
-## 6b. TUL invariants (LIVE — the paid loop, `docs/tul-paid-loop-recipe.md`; layout rules from `tul-spec.md` §9)
+## 6b. TUL invariants (LIVE — the paid loop, `.agents/notes/rejected/architecture/tul-paid-loop-recipe.md`; layout rules from `.agents/specs/tul-spec.md` §9)
 
 These are runtime invariants, not aspirations: each row names the test that fails when it
 is broken (`tests/test_tul_layout.py`, `tests/test_tul_forward.py`,
@@ -146,7 +146,7 @@ commit `d9e04e6`.
 | Invariant | Why |
 | --- | --- |
 | The boundary rule (`.;!?` + newline + dashes, `min_span`, `span_cap`, EOS) is ONE function used by the loader and the generator, parity-tested. | The slot layout is structural; a train/generation mismatch silently decodes without the plan (the coconut `assert_layout_parity` lesson). `test_incremental_parity`, `test_generator_row_builder_matches_the_packer`. |
-| **Run collapse is CAUSAL: the boundary lands after the FIRST token of a run of boundary tokens, and `min_span` absorbs the rest.** | `tul-spec.md` §3.1 rule 2 places it after the LAST token of the run, which cannot be decided without reading the NEXT token — so it is not implementable at generation, where the rule must be causal (§6, and invariant 1 above). A `.`+`\n` run still yields exactly ONE boundary, which is what rule 2 was for. `test_run_of_boundary_tokens_yields_exactly_one_boundary`. |
+| **Run collapse is CAUSAL: the boundary lands after the FIRST token of a run of boundary tokens, and `min_span` absorbs the rest.** | `.agents/specs/tul-spec.md` §3.1 rule 2 places it after the LAST token of the run, which cannot be decided without reading the NEXT token — so it is not implementable at generation, where the rule must be causal (§6, and invariant 1 above). A `.`+`\n` run still yields exactly ONE boundary, which is what rule 2 was for. `test_run_of_boundary_tokens_yields_exactly_one_boundary`. |
 | The packer fills a row to exactly `L_total`; when the next unit does not fit, the leftover ≤ `prefix_k` positions become TAIL PADS (input `slot_id`, label −100, in `slot_mask`, absent from `slot_index`). | Fixed shapes without ever dropping a boundary inside the row. Measured cost on OWT at `max_slots 64`: 1.18 % of positions. `test_l_total_is_fixed_and_token_count_varies`. |
 | The forward with a layout runs the SAME per-sample core (`_core_region`) exactly once, over the FULL packed row; nothing is gathered, projected or scattered, and `layer_passes` charges every packed position for prelude + `n_core × mean_depth` + coda. | The paid loop is the one arm whose loop earned depth; a gather/scatter regression or a coreless regression is a silent change of model. `test_tul_forward_runs_the_whole_packed_row_through_the_core`, `test_layer_passes_charge_every_packed_position_for_the_loop`, `test_eval_forward_is_deterministic_at_the_mean_depth`. |
 | Slot core states have no loss; a slot's only label is the first token of the next span; pad slots are `-100`. | Loss-free latent (MegaByte, H-Net, LD4LG, Pred-Sent); the LTD think-position failure. A pad slot's `slot_index` is 0, so a missing validity mask would silently train on the PREVIOUS row's last token. `test_pad_slots_are_excluded_from_every_loss_group`. |
@@ -162,7 +162,7 @@ commit `d9e04e6`.
 
 ## 6c. TUL gate invariants — RETIRED 2026-09-03
 
-The span-length gate (`docs/tul-gate-spec.md`, arms TUL-gate / TUL-halt) left the tree with
+The span-length gate (`.agents/specs/tul-gate-spec.md`, arms TUL-gate / TUL-halt) left the tree with
 the slot-only core; `tests/test_tul_gate.py` and its 13 mutation-checked rows went with it.
 The spec and the measured result (`lab/experiments/`, `docs/ablation-ledger.md`) stay as the
 record; the last commit that runs the gate is `d9e04e6`. Decision:
@@ -178,8 +178,8 @@ record; the last commit that runs the gate is `d9e04e6`. Decision:
   K/C=1.0).
 - Silent fallbacks when a kernel, dataset path, or checkpoint topology fails.
 - Rebuilding the slot-only core (gather → loop on slots → scatter) as "the cheaper TUL":
-  its loop never earned depth (K1−K6 ≤ 0.011 nats at any length; `docs/tul-paid-loop-recipe.md`
-  §2), and the gate's `gate_train_zeros` lesson (`tul-gate-spec.md` §6) went with it.
+  its loop never earned depth (K1−K6 ≤ 0.011 nats at any length; `.agents/notes/rejected/architecture/tul-paid-loop-recipe.md`
+  §2), and the gate's `gate_train_zeros` lesson (`.agents/specs/tul-gate-spec.md` §6) went with it.
 - Reverting `@kernel_fence` to hard `@torch.compiler.disable` (kills graph
   composition), or flipping `MORPH_DYNAMO_FENCE=0` into the default without an
   fp32 parity gate on the target torch version.

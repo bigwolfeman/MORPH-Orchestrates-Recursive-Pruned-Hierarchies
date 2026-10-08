@@ -1,4 +1,4 @@
-# TUL arm A3 — shallow control (docs/tul-spec.md §7.1, ablation-ledger "TUL-A3").
+# TUL arm A3 — shallow control (.agents/specs/tul-spec.md §7.1, ablation-ledger "TUL-A3").
 # The COMPUTE FLOOR: no slots and no core at all, so the prelude and coda alone must
 # carry the sequence (the n_core == 0 seed path, which routes prelude → input_norm →
 # coda). A1 must clear this floor on val/plan_nats or the slot loop is doing nothing.

@@ -1,12 +1,38 @@
-# SCSE spec — Source-Centered State Evolution in the MORPH core loop
+# Agent Note: SCSE spec — Source-Centered State Evolution in the MORPH core loop
 
-Status: SPECIFICATION. Written 2026-08-25, BEFORE the implementation, so the code can be
+Status: proposed
+
+## Problem
+
+Stated in the decision record,
+[2026-08-24-scse-source-centered-core-loop.md](../../rejected/architecture/2026-08-24-scse-source-centered-core-loop.md).
+This file is the specification the implementation was checked against.
+
+## Proposal
+
+Sections 2 to 4 below: the method as the paper defines it, its mapping onto MORPH, and
+each deviation from the paper with its reason. Moved from `docs/scse-spec.md` on 2026-10-07; the text below the added sections is unchanged apart from link paths.
+
+## Alternatives considered
+
+Recorded in the decision record's Alternatives considered section (link above).
+
+## Acceptance criteria
+
+Section 5 below, "Invariants the implementation must satisfy": S1 onward, each with its
+test in `tests/test_scse.py`.
+
+## Risks
+
+Section 6 below, "Known risks, carried forward".
+
+Original status: SPECIFICATION. Written 2026-08-25, BEFORE the implementation, so the code can be
 checked against it rather than the other way round.
 
 Source: **"Looped Transformers with Source-Centered State Evolution"**, Bum Jun Kim, Kohei
 Hayashi, Shunsuke Kamiya, Masanori Koyama, Yusuke Iwasawa, Yutaka Matsuo, arXiv:2607.27656,
 30 July 2026. Equation, table and listing numbers below are the paper's.
-Decision record: [.agents/notes/proposed/architecture/2026-08-24-scse-source-centered-core-loop.md](../.agents/notes/proposed/architecture/2026-08-24-scse-source-centered-core-loop.md).
+Decision record: [.agents/notes/rejected/architecture/2026-08-24-scse-source-centered-core-loop.md](../../rejected/architecture/2026-08-24-scse-source-centered-core-loop.md).
 
 ## 1. What the paper claims, and where
 
@@ -15,7 +41,7 @@ Quoted so the implementation is checked against the paper and not against my sum
 * **The gain comes from two things.** Abstract: the ablations "identify the learned anchor and
   the anchor-coordinate deviation recurrence as the primary contributors to the gain."
   A port that implements neither is not a test of the method. This is exactly the error that
-  produced [H23](experiments/failures/2026-08-25-scse-stage1-initial-deviation.md).
+  produced [H23](../../../../lab/experiments/failures/2026-08-25-scse-stage1-initial-deviation.md).
 * **The gains are not confined to depth extrapolation.** Table 1, WikiText-103, 95.6M, at
   `T = 8` — inside the training loop-depth range — baseline 117.1 -> SCSE **96.9** PPL.
   At 50M: 151.1 -> **123.1**.
@@ -161,7 +187,7 @@ SCSE checkpoint at the converged operating point (iterations 3-5):
 `cos = 0.88` is the identity. One-step norm gain: the doubled form **1.414x per iteration**
 (about 16x over eight), the corrected form **0.923x**. Against this repo's standing model of
 its own failure mode — `rho(J_core)` crossing 1 is the disease
-([iterative-map-dynamics](../.agents/notes/implemented/architecture/2026-06-19-iterative-map-dynamics.md))
+([iterative-map-dynamics](../../implemented/architecture/2026-06-19-iterative-map-dynamics.md))
 — the doubled form builds the disease into the recurrence.
 
 Equivalently `Delta_{t+1} = (1 - s)*Delta_t + s*stack(Delta_t)`, so `s` is a damping factor

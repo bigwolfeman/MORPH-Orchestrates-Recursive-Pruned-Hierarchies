@@ -29,7 +29,7 @@ supervises). Position ``j`` sees ``z`` and every earlier token of the span, so t
 ``j`` is the conditional ``-log p(t_j | z, t_{<j})`` and the gradient reaches ``z`` from
 EVERY token of the span, not once per span.
 
-There IS a token path. ``docs/tul-spec.md`` and the root ``CLAUDE.md`` are emphatic:
+There IS a token path. ``.agents/specs/tul-spec.md`` and the root ``CLAUDE.md`` are emphatic:
 never decode a span from one vector plus an offset with no token path (Huginn 2026-08-16,
 MegaByte T7, Bowman T2, Hourglass T6). The teacher-forced token prefix is that path, and
 it is why this is a decoder and not a ``W_bcast``-style offset read.

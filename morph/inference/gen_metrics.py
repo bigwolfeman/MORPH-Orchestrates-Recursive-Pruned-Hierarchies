@@ -1,6 +1,6 @@
 """Generation-quality metrics — the numbers a good val CE can hide.
 
-docs/tul-gate-spec.md §10 requires these from run 1. §5's teacher-forcing leak is
+.agents/specs/tul-gate-spec.md §10 requires these from run 1. §5's teacher-forcing leak is
 invisible in val CE by construction: at training the coda is told the true span length,
 at generation it is told the model's guess. Only generation exposes the gap.
 

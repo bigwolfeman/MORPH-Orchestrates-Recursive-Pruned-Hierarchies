@@ -45,11 +45,11 @@ single campaign or partial stack; **low** = directional / incomplete.
 > **Status 2026-09-03: this table is a RECORD.** Every slot-only arm below (A0/A1/A1r/A3/A4,
 > A5, the gate, halt, the TG rows, the gist/mux rows) was cut from the tree with the paid-loop
 > merge; the last commit that runs them is `d9e04e6`. The shipped forward and its numbers
-> are in [tul-paid-loop-recipe.md](tul-paid-loop-recipe.md) and
+> are in [tul-paid-loop-recipe.md](../.agents/notes/rejected/architecture/tul-paid-loop-recipe.md) and
 > `lab/experiments/{successes,failures}/2026-09-02-*`; the surviving configs are `tul_a2`
 > (paid loop, seq 1024 panel), `notul` (matched control) and `base` (production).
 
-Arms from [tul-spec.md](tul-spec.md) §7. First comparison (A0c / A1c / A3):
+Arms from [tul-spec.md](../.agents/specs/tul-spec.md) §7. First comparison (A0c / A1c / A3):
 [lab/tul/arms-result.md](../lab/tul/arms-result.md) — A1 beats dense A0 (~0.056
 nats `val/ce_tokens`, ~1.6× wall clock). Further testing in progress; remaining
 rows stay `planned` until gated.
@@ -58,9 +58,9 @@ rows stay `planned` until gated.
 | --- | --- | --- | --- | --- |
 | TUL-A0 | MORPH baseline | `tul.activate_at: never` (plain schedule) | reference | **RUN** 2026-08-18 (seed 0, b14): val CE 3.2805 |
 | TUL-A1 | TUL | `tul:` block defaults (slots looped, tokens skip core, coda sees slots, per-slot Poisson) | the method | **RUN** 2026-08-23 (seed 0, b12): val CE 3.4175. Also 2026-08-18 (seed 0, b14): 3.2243. Repetition vs A0 at matched b14: NO detectable effect (−0.026 ± 0.097 at top-k, n=12, MDE 0.272) | 
-| TUL-A1r | TUL repeat | as A1, second seed | retrain noise floor — read BEFORE any cell | **DIVERGED 2/2** (step 3240 uncapped, step 4160 CAPPED at b12). NO NOISE FLOOR EXISTS; every TUL cell below is one seed. [bake-off](experiments/results/2026-08-23-tul-gate-bakeoff.md) |
+| TUL-A1r | TUL repeat | as A1, second seed | retrain noise floor — read BEFORE any cell | **DIVERGED 2/2** (step 3240 uncapped, step 4160 CAPPED at b12). NO NOISE FLOOR EXISTS; every TUL cell below is one seed. [bake-off](../lab/experiments/results/2026-08-23-tul-gate-bakeoff.md) |
 | TUL-A2 | slots-as-memory | `tul.tokens_through_core: true` | C2 alone (plan readable, uniform depth) | planned |
-| TUL-TG1 | TG restriction | `tul.tg_restrict: true` (docs/tul-tg-spec.md; Thought Gestalt 2512.25026) | close the token shortcut → plan load-bearing | **RUN** 2026-08-27 (2 seeds, b6, 3500 steps): plan worth 0.087 ce_main, loop worth 0.006; s2 TOOK OVER @1258. The control's 0.012-0.016 is NOT a fair baseline for plan worth — an unrestricted arm recovers cross-span information through causal attention, so its plan worth is low by construction (confound correction 2026-08-28). [experiment](../lab/experiments/failures/2026-08-27-tg-restriction.md) |
+| TUL-TG1 | TG restriction | `tul.tg_restrict: true` (.agents/specs/tul-tg-spec.md; Thought Gestalt 2512.25026) | close the token shortcut → plan load-bearing | **RUN** 2026-08-27 (2 seeds, b6, 3500 steps): plan worth 0.087 ce_main, loop worth 0.006; s2 TOOK OVER @1258. The control's 0.012-0.016 is NOT a fair baseline for plan worth — an unrestricted arm recovers cross-span information through causal attention, so its plan worth is low by construction (confound correction 2026-08-28). [experiment](../lab/experiments/failures/2026-08-27-tg-restriction.md) |
 | TUL-TG2 | TG single-objective | TG1 + `plast_weight/emit_weight: 0` | TG's own recipe; removes takeover fuel (O5) | **RUN** 2026-08-27 (2 seeds). ⚠ **THE 0/2 TAKEOVER RESULT IS UNTESTED PAST STEP 3500** — a1noaux-s1 showed core share 0.0010 at step 3499 (inside this arm's range) and took over at 3556. Every tg2-based arm STOPS at 3500. Cite the block GAIN (0.865-0.939, contractive) instead, which separates at matched steps. 0/2 takeovers, END CORE SHARES 0.0020/0.0035 (campaign lowest), loop worth 0.024-0.036 ce_main (campaign largest, sub-0.05), ce within 0.045 of TG1. The plan-worth-vs-control comparison is confounded (see TUL-TG1); the plan-content probe decides it. |
 | TUL-TG3 | soft restriction | TG1 + `tul.tg_soft_prev_span: true` | is the hard restriction too tight? | **DIVERGED 2/2** 2026-08-28 (abort @2040, @2120; end shares 0.9986/0.9927, block gain 1.95/1.75 at r2 0.97/0.98). NO step-3000 checkpoint, so the arm CANNOT answer its own question — it is tul_tg1-based and dies of the aux-loss takeover. Re-asked as TUL-TG3b. [experiment](../lab/experiments/planned/2026-08-28-tg-round2-seed-and-softness.md) |
 | TUL-TG4a | delete the bag-mean seed | TG2 + `tul.slot_seed: e_slot` | pooling law says the bag-mean dilutes | **RUN 2/2** 2026-08-28: ce_main@3000 4.8094/4.7735 (mean 4.791 vs TG2's 4.794 — **the seed moves CE by 0.003 nats**). Takeover held 0/2, core shares 0.0011/0.0010 = campaign lowest. Loop worth is NOT comparable across slot_seed modes (prediction B2 falsified 3.6-7.3x). |
@@ -75,8 +75,8 @@ rows stay `planned` until gated.
 | TUL-stp | punc-STP on slot trajectory | `tul.stp_lambda > 0` | slot warm-up (MORPH punc-STP finding) | planned |
 | TUL-set | slot-set MCE warm-up | `tul.set_lambda > 0` | slot warm-up (TST MCE); Block Transformer §4.2 says aux on the latent hurt | planned |
 | TUL-prefix1 | prefix length 1 | `tul.prefix_k: 1` (default is 2, projection prefixes, Block Transformer App. F.2 / Fig 3f) | plan and first-token label forced onto one coda position | planned |
-| TUL-gate | span-length gate | `--config-name tul_gate` (`tul.gate: true`, `gate_lambda: 1.0`, `gate_budget_cond: true`, `gate_truncate_p: 0.15`) | does a model-chosen span length pay? ([tul-gate-spec.md](tul-gate-spec.md)) | **RUN 2026-08-23: YES, −0.105 nats vs A1 at identical layer-passes/token, `plan_nats` 42x. NO ERROR BAR (A1r died).** [results](experiments/results/2026-08-23-tul-gate-bakeoff.md). ALSO repeats far less: −0.251 rep4 at top-k (t=−3.27, 10/12 prompts) and −0.177 at greedy (12/12), with the better CE on the same arm, so it is not the diversity trap. [repetition](experiments/results/2026-08-23-tul-repetition-sampled-decoding.md) |
-| TUL-halt | halting gate | the SAME run: `gate_drives_depth: true` scores every eval a second time with the gate choosing each slot's depth (`val/halt_*`) | does variable depth pay on top? | **RUN 2026-08-23: NO — prediction held. Worse at 39/40 evals, and `depth_mean` COLLAPSED to 1.00 at every eval, so the near-tie is degeneration not merit.** [results](experiments/results/2026-08-23-tul-gate-bakeoff.md) |
+| TUL-gate | span-length gate | `--config-name tul_gate` (`tul.gate: true`, `gate_lambda: 1.0`, `gate_budget_cond: true`, `gate_truncate_p: 0.15`) | does a model-chosen span length pay? ([tul-gate-spec.md](../.agents/specs/tul-gate-spec.md)) | **RUN 2026-08-23: YES, −0.105 nats vs A1 at identical layer-passes/token, `plan_nats` 42x. NO ERROR BAR (A1r died).** [results](../lab/experiments/results/2026-08-23-tul-gate-bakeoff.md). ALSO repeats far less: −0.251 rep4 at top-k (t=−3.27, 10/12 prompts) and −0.177 at greedy (12/12), with the better CE on the same arm, so it is not the diversity trap. [repetition](../lab/experiments/results/2026-08-23-tul-repetition-sampled-decoding.md) |
+| TUL-halt | halting gate | the SAME run: `gate_drives_depth: true` scores every eval a second time with the gate choosing each slot's depth (`val/halt_*`) | does variable depth pay on top? | **RUN 2026-08-23: NO — prediction held. Worse at 39/40 evals, and `depth_mean` COLLAPSED to 1.00 at every eval, so the near-tie is degeneration not merit.** [results](../lab/experiments/results/2026-08-23-tul-gate-bakeoff.md) |
 | TUL-A1+ | TUL reinvest | `n_coda: 8`, `tul.slot_mean_depth: 12` (≤ A0 layer-passes/token) | the fair-compute cell | planned |
 | TUL-xattn | cross-attn branch | `tul.xattn: true` (attach like retention) | BLT T7 vs Block Transformer Fig 3f | planned |
 | TUL-carry | explicit `W·h_{i-1}` | `tul.carry: true` | Coconut feedback vs attention-only memory | planned |
@@ -95,14 +95,14 @@ All of them are logged by `morph/training/train.py` as of the implementation
 > pair. Separately, every capped run that has ever survived is seed 0 (4/4) and seed 1 has
 > been tested once and failed, so the `ademamix_alpha_cap: 1.0` stability claim is
 > seed-0 evidence only. Both facts and the divergence signature are in
-> [the bake-off results](experiments/results/2026-08-23-tul-gate-bakeoff.md).
+> [the bake-off results](../lab/experiments/results/2026-08-23-tul-gate-bakeoff.md).
 >
 > **Two corrections, 2026-08-23.** (1) The `spec/sigma_max` precursor claim is withdrawn:
 > the gate arm survives 20k with a core linear at 5.618, ABOVE the diverged arm's 5.508
 > at its abort, and `rho_eff` is 1.9–3.2 on every run that finishes. Contractivity is not
 > the discriminator; the live precursor that does work is `gradnorm/core`, which ratchets
 > 0.009 → 0.043 → 0.108 → 0.90 about 140 steps before the norm explodes.
-> [mechanism](experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md)
+> [mechanism](../lab/experiments/failures/2026-08-23-tul-forward-backward-asymmetry.md)
 > (2) **Every ABSOLUTE CE in this table is inflated** by the causality defect in
 > [`retention-carry-breaks-causality`](../.agents/notes/implemented/bug-fix/2026-08-23-retention-carry-breaks-causality.md):
 > `retention_carry: true` lets every position read the whole sequence from core iteration
@@ -135,14 +135,14 @@ inference shapes static. **Falsifier:** `TUL-halt` beats `TUL-gate` on val CE by
 the `A1`/`A1r` retrain noise floor AND does not lose on the generation metrics (rep4@512,
 distinct-3, mean span length, fraction of spans ending on a boundary). A results note is
 written whether these arms win or lose — the predecessor missed both of its pre-registered
-numbers and never wrote one ([tul-gate-spec.md](tul-gate-spec.md) §2, §11).
+numbers and never wrote one ([tul-gate-spec.md](../.agents/specs/tul-gate-spec.md) §2, §11).
 
 **Amendment 2026-08-22, still before any arm was scored.** Building the arms found the
 halting prediction is true *by construction*, and the reason is worth writing down rather
 than claiming as a result. The per-slot depth is a Poisson draw independent of the input,
 so a head trained to emit 0 until its last iteration converges to the HAZARD, and the
 length is scaled away — measured `k = 5.00` against gold `18.98`, matching the hazard
-table to the integer ([tul-gate-spec.md](tul-gate-spec.md) §6). With that half of the
+table to the integer ([tul-gate-spec.md](../.agents/specs/tul-gate-spec.md) §6). With that half of the
 target removed (`gate_train_zeros: false`), `g` sits near the mean length, `k ≥ 1` fires
 on the first iteration, and `TUL-halt` halts at depth 1 everywhere. So `TUL-halt` is no
 longer a test of "is variable depth better"; it is the measured cost of running the loop

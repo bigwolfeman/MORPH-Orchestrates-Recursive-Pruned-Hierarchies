@@ -1,6 +1,6 @@
 """TUL model pieces — slot parameters and the gather/scatter that the core loops on.
 
-Spec: ``docs/tul-spec.md`` §3.2 (slot input embedding), §3.3 (core on slots only),
+Spec: ``.agents/specs/tul-spec.md`` §3.2 (slot input embedding), §3.3 (core on slots only),
 §3.4 (coda, token-state dropout, prefix projections), §5 (losses), §7.2 (metrics).
 The forward that uses these lives in :mod:`morph.model.transformer`; this module
 holds the parameters and the pure tensor plumbing so ``transformer.py`` stays
@@ -45,7 +45,7 @@ __all__ =["TULCenterExit", "TULConfig", "TULGate", "TULGateConfig", "TULGradPass
 
 @dataclass
 class TULGateConfig:
-    """Construction-time settings of the span-length gate (docs/tul-gate-spec.md).
+    """Construction-time settings of the span-length gate (.agents/specs/tul-gate-spec.md).
 
     Present ⇒ :class:`TULGate` is built and the layout must carry ``span_len`` /
     ``len_supervised``. Absent (``TULConfig.gate is None``) ⇒ nothing is built, no
@@ -124,11 +124,11 @@ class TULGateConfig:
             if float(getattr(self, name)) != 0.0:
                 raise NotImplementedError(
                     f"tul.{key}={getattr(self, name)} — specified in "
-                    f"docs/tul-gate-spec.md §12 and NOT implemented. Set it to 0.0.")
+                    f".agents/specs/tul-gate-spec.md §12 and NOT implemented. Set it to 0.0.")
         if self.stop_head:
             raise NotImplementedError(
                 "tul.gate_stop_head — the split stop/length encoding of "
-                "docs/tul-gate-spec.md §7 is specified and NOT implemented. Leave it false.")
+                ".agents/specs/tul-gate-spec.md §7 is specified and NOT implemented. Leave it false.")
 
 
 @dataclass
@@ -1070,7 +1070,7 @@ class TULConfig:
     # where "sum" / "gate" stay refused (see slot_cells below).
     # morph/model/tul_carry.py holds the state and the normalisation rule.
     loop_carry: str = "none"             # "none" | "sum" | "gate" | "persist"
-    gate: "TULGateConfig | None" = None  # docs/tul-gate-spec.md; None = arm A1 (nothing built)
+    gate: "TULGateConfig | None" = None  # .agents/specs/tul-gate-spec.md; None = arm A1 (nothing built)
     # Per-slot-INDEX input embedding instead of one shared E_slot. 0 = off (one shared
     # vector, the shipped behaviour); >0 = that many rows, and the slot at index s gets row
     # s. Motivated by measurement, not taste: the 50 valid slot states of a row have an
@@ -2345,7 +2345,7 @@ class TULConfig:
     row_contrast_lambda: float = 0.0
     row_contrast_tau: float = 0.1
 
-    # ── TG restriction (docs/tul-tg-spec.md) ──────────────────────────────────
+    # ── TG restriction (.agents/specs/tul-tg-spec.md) ──────────────────────────────────
     # False builds nothing new and adds no mask (bit-identical to master, spec T4).
     # True closes the token shortcut: within-span attention only in the window
     # branch, direct slot attention in the compressed branch (spec §§1-3). The
@@ -3955,7 +3955,7 @@ class TULConfig:
         if self.tg_soft_prev_span and not self.tg_restrict:
             raise ValueError(
                 "tul.tg_soft_prev_span=true requires tul.tg_restrict=true "
-                "(docs/tul-tg-spec.md §6: TG3 SOFTENS the restriction — there is "
+                "(.agents/specs/tul-tg-spec.md §6: TG3 SOFTENS the restriction — there is "
                 "nothing to soften when the restriction itself is off).")
         _legal_slot_seed = ("bag_mean", "e_slot", "boundary", "content", "bound")
         if self.slot_seed not in _legal_slot_seed:
@@ -7005,7 +7005,7 @@ class TULGate(nn.Module):
     """The span-length gate: one scalar read off each slot's core state, and the
     budget embedding that tells the coda how many tokens the plan covers.
 
-    docs/tul-gate-spec.md §4 (forward), §5 (why the coda must be told), §6 (loss),
+    .agents/specs/tul-gate-spec.md §4 (forward), §5 (why the coda must be told), §6 (loss),
     §9 (invariants), §10 (instruments).
 
     **Zero RNG draws at construction.** ``nn.Linear`` and ``nn.Embedding`` both draw from
@@ -7119,7 +7119,7 @@ class TULGate(nn.Module):
         if layout.span_len is None:
             raise RuntimeError(
                 "the TUL gate is built but the layout carries no span_len; the loader was "
-                "built without a TulGateSpec (docs/tul-gate-spec.md §3.3).")
+                "built without a TulGateSpec (.agents/specs/tul-gate-spec.md §3.3).")
         B, S, T = g_traj.shape
         k_max = self.gate.k_max
         t_idx = torch.arange(T, device=g_traj.device).view(1, 1, T)

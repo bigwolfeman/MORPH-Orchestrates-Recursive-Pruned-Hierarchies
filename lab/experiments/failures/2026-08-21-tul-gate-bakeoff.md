@@ -2,7 +2,7 @@
 
 Status: failure (no verdict — every arm died before its question could be answered)
 
-Predictions for these arms were pre-registered in `docs/tul-gate-spec.md` §11, committed as
+Predictions for these arms were pre-registered in `.agents/specs/tul-gate-spec.md` §11, committed as
 `3bad5eb` before any code was written. There was no `lab/experiments/planned/` file; that is
 itself a process gap, and this record exists because §11 says "a results note is written for
 these arms whether they win or lose."

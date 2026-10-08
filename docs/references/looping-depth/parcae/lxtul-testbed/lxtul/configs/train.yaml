@@ -1,0 +1,41 @@
+# One 5k training run of one arm, then the depth sweep on 480 held-out rows.
+#   python -m lxtul.train arm=plain        (arms: lxtul/configs/arm/*.yaml)
+defaults:
+  - base
+  - arm: lxtul
+  - _self_
+
+hydra:
+  run:
+    dir: ${training.out_root}/${run.name}/hydra
+  job:
+    chdir: false
+
+run:
+  name: ${arm.name}-5k
+
+training:
+  out_root: /home/wolfe/parcae-runs     # ZFS (/home/wolfe/parcae itself is on the HDD)
+  steps: 5000
+  batch_size: 6
+  grad_clip: 1.0
+  log_every: 25
+  val_every: 500
+  val_rows: 120                         # first 120 of the eval rows, depth = eval depth
+  prefetch: 4
+  compile: true
+  save_final: true
+  # Parcae's schedule (experiments/runtime.py::schedule): constant lr, linear cooldown over the
+  # last cooldown_fraction of steps, Muon momentum warmup, Muon wd decayed to 0.
+  lr_reference_batch: 256
+  lr_batch_exponent: 0.5
+  cooldown_fraction: 0.5
+  momentum_start: 0.85
+  momentum_warmup_steps: 300
+  warmup_steps: 300                     # linear LR warmup, added on top of Parcae's schedule
+  recompile_limit: 64
+
+eval:
+  rows: 480
+  batch_size: 6
+  depths: [1, 2, 3, 4, 6, 8]

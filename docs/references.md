@@ -38,7 +38,8 @@ Local markdown copies are grouped by topic in `[references/MANIFEST.md](referenc
 **MORPH uses:** The negative-diagonal injection parameterization that guarantees spectral radius
 ρ(Ā) < 1 (via zero-order-hold / Euler discretization), enabling stable arbitrary-depth looping.
 Also the per-sequence Poisson depth sampling during training, which stochastically varies the
-number of loop iterations per batch to further reduce loss spikes.
+number of loop iterations per batch to further reduce loss spikes.  
+**Local:** [references/looping-depth/parcae/parcae.md](references/looping-depth/parcae/parcae.md); the 2026-10 LXTUL-on-Parcae testbed code and its filings: [references/looping-depth/parcae/lxtul-testbed/](references/looping-depth/parcae/lxtul-testbed/README.md).
 
 ### Poisson Depth Sampling
 
@@ -838,14 +839,115 @@ harness deployment after RL training, currently deferred.
 
 
 
-## 13. TUL — Thought Unpack Loop (latent emission & hierarchy) (spec, `experiments/tul`)
+## 13. TUL — Thought Unpack Loop (latent emission & hierarchy)
 
-TUL loops the Parcae core over one **thought slot per span** and decodes tokens with
-the slot's looped state visible as an attended prefix position. Spec:
-[tul-spec.md](tul-spec.md). Local copies of every source below live in
-`references/tul-latent-emission/`; the per-paper reading notes (31 papers, one templated
-note each) are in `ignore/Ai-notes/08-16-2026/prior-art/`. Entries say what TUL takes and,
-where a paper argues AGAINST something TUL does, say that too.
+TUL thinks once per span. The current TUL is **LXTUL**: one slot of 4 cells per
+punctuation-bounded span; only the slots loop the shared Parcae core; after each pass a
+router picks one cell and all 4 restart from it; the winner alone is written into the
+slot's prefix positions, which later spans' tokens read in the coda. An output-only
+pointer head and a DITTO training phase complete the recipe (`morph/configs/lxtul_pointer.yaml`
+then `lxtul_pointer_ditto.yaml`; decision record
+[2026-10-07 winner note](../.agents/notes/implemented/architecture/2026-10-07-lxtul-pointer-ditto-winner.md)).
+`base.yaml` still ships the older paid loop, which is history. The v0.1 spec is
+[.agents/specs/tul-spec.md](../.agents/specs/tul-spec.md). A minimal Parcae-based LXTUL
+testbed is archived in
+[references/looping-depth/parcae/lxtul-testbed/](references/looping-depth/parcae/lxtul-testbed/README.md).
+Local copies of every source below live in `references/tul-latent-emission/`; the
+per-paper reading notes (31 papers, one templated note each) are in
+`ignore/Ai-notes/08-16-2026/prior-art/`. Entries say what TUL takes and, where a paper
+argues AGAINST something TUL does, say that too. The first six entries are the pieces of
+the 2026-10-07 recipe.
+
+### DITTO — Learning to Break the Loop
+
+**Title:** Learning to Break the Loop: Analyzing and Mitigating Repetitions for Neural Text Generation  
+**Authors:** Jin Xu, Xiaojiang Liu, Jianhao Yan, Deng Cai, Huayang Li, Jian Li  
+**Year:** 2022 (NeurIPS 2022)  
+**arXiv:** [2206.02369](https://arxiv.org/abs/2206.02369)  
+**Local:** [references/tul-latent-emission/ditto/ditto.md](references/tul-latent-emission/ditto/ditto.md) (+ PDF)  
+**What it is:** a language model's repetition is self-reinforcing: once a sentence repeats,
+each copy makes the next more likely. DITTO trains on pseudo-repeated data (a sentence
+repeated to fill the context) with Eq. 1, `-log(1 - |p_n - lambda * sg(p_{n-1})|)` on each
+token of copy n, lambda 0.5 on Wikitext-103, mixed equally with MLE in a 10k-step fine-tune.
+Table 1, greedy: rep-4 44.20 % -> 22.00 % with PPL 25.68 -> 24.33.  
+**MORPH uses:** the 1000-step DITTO phase of the TUL recipe
+(`morph/model/tul_ditto.py`, `tul_layout.pack_ditto_row`, `lxtul_pointer_ditto.yaml`):
+3 of 6 rows per batch are pseudo-repetition rows, lambda 0.5, on the pointer-mixed
+probability. Measured: sampled seq_rep_4 0.291 -> 0.140 against its control phase, at
++0.071 nats of trainer val
+([filing](../lab/experiments/mixed/2026-10-07-lxtul-pointer-ditto.md)).
+
+### Pointer Sentinel Mixture Models
+
+**Title:** Pointer Sentinel Mixture Models  
+**Authors:** Stephen Merity, Caiming Xiong, James Bradbury, Richard Socher (MetaMind / Salesforce)  
+**Year:** 2016 (arXiv; the venue is commonly given as ICLR 2017, not confirmed from the paper or arXiv metadata)  
+**arXiv:** [1609.07843](https://arxiv.org/abs/1609.07843)  
+**Local:** [references/tul-latent-emission/pointer-sentinel/pointer-sentinel.md](references/tul-latent-emission/pointer-sentinel/pointer-sentinel.md) (+ PDF)  
+**What it is:** a language model mixes its vocabulary softmax with a pointer over recent
+tokens, `p = g p_vocab + (1 - g) p_ptr` (Eq. 6). A learned sentinel vector is appended to
+the pointer's scores (Eq. 7), so the gate g is the attention mass the sentinel takes and the
+pointer and the vocabulary compete in one normalization.  
+**MORPH uses:** the pointer head's learned **null key** is this sentinel: a head's abstain
+mass goes back to the model's distribution, so the mixture sums to exactly 1
+(`morph/model/tul_pointer.py`, `mix_target`). On the Parcae testbed this normalisation
+cut the like-for-like gap from +0.098 to +0.045.
+
+### Get To The Point — pointer-generator networks and coverage
+
+**Title:** Get To The Point: Summarization with Pointer-Generator Networks  
+**Authors:** Abigail See, Peter J. Liu, Christopher D. Manning  
+**Year:** 2017 (ACL 2017)  
+**arXiv:** [1704.04368](https://arxiv.org/abs/1704.04368)  
+**Local:** [references/tul-latent-emission/pointer-generator/pointer-generator.md](references/tul-latent-emission/pointer-generator/pointer-generator.md) (+ PDF)  
+**What it is:** a generator / copy mixture, `P(w) = p_gen P_vocab(w) + (1 - p_gen) sum_{i: w_i = w} a_i`
+(Eq. 9), plus coverage: `c^t = sum_{t' < t} a^{t'}` (Eq. 10) and the loss term
+`lambda sum_i min(a_i^t, c_i^t)` (Eq. 13), lambda 1, added in a short final phase.  
+**MORPH uses:** the pointer-generator mixture is the shape of the LXTUL pointer head
+(`tul.pointer_heads`). Coverage (`tul.pointer_coverage_lambda`) was built and **measured
+negative**: sampled repetition rose 29 % (0.291 -> 0.374). Coverage counts attention per
+source position; an LM's loop copies from fresh positions, which coverage cannot see
+([filing](../lab/experiments/failures/2026-10-07-lxtul-pointer-coverage.md)). It stays in
+the tree, default off.
+
+### Pointer Networks
+
+**Title:** Pointer Networks  
+**Authors:** Oriol Vinyals, Meire Fortunato, Navdeep Jaitly  
+**Year:** 2015 (NIPS 2015)  
+**arXiv:** [1506.03134](https://arxiv.org/abs/1506.03134)  
+**Local:** [references/tul-latent-emission/pointer-networks/pointer-networks.md](references/tul-latent-emission/pointer-networks/pointer-networks.md) (+ PDF)  
+**What it is:** attention used as the OUTPUT distribution: `softmax(u^i)` over input
+positions (Eq. 3 and §2.3) selects an input element instead of a vocabulary word.  
+**MORPH uses:** the origin of the copy head's mechanism: each pointer head reads its
+attention over earlier tokens as a distribution over the token that followed each of them.
+
+### Multiple Choice Learning
+
+**Title:** Multiple Choice Learning: Learning to Produce Multiple Structured Outputs  
+**Authors:** Abner Guzman-Rivera, Dhruv Batra, Pushmeet Kohli  
+**Year:** 2012 (NIPS 2012)  
+**URL:** [papers.nips.cc](https://papers.nips.cc/paper_files/paper/2012/hash/cfbce4c1d7c425baf21d6b6f2babe6be-Abstract.html)  
+**Local:** [references/tul-latent-emission/mcl/mcl.md](references/tul-latent-emission/mcl/mcl.md) (+ PDF)  
+**What it is:** train M predictors with the oracle set loss `min_m l(y, y_hat_m)` (Eq. 4):
+only the best hypothesis of each example is trained.  
+**MORPH uses:** the winner-take-all idea behind LXTUL's exit loss: of the 4 final cells,
+the one nearest the next span's EMA-prelude latent is the target's owner. The relaxed form
+below is the one in the code.
+
+### Relaxed winner-take-all (multiple hypotheses)
+
+**Title:** Learning in an Uncertain World: Representing Ambiguity Through Multiple Hypotheses  
+**Authors:** Christian Rupprecht, Iro Laina, Robert DiPietro, Maximilian Baust, Federico Tombari, Nassir Navab, Gregory D. Hager  
+**Year:** 2017 (ICCV 2017)  
+**arXiv:** [1612.00197](https://arxiv.org/abs/1612.00197)  
+**Local:** [references/tul-latent-emission/relaxed-wta/relaxed-wta.md](references/tul-latent-emission/relaxed-wta/relaxed-wta.md) (+ PDF)  
+**What it is:** the hard WTA loss (Eq. 11) relaxed so the winner gets weight 1 - eps and
+every other hypothesis eps / (M - 1) (Eq. 12), eps 0.05, so no hypothesis drifts off and dies.  
+**MORPH uses:** LXTUL's exit loss is this relaxed WTA, eps 0.05 (`lsel_exit_loss`,
+`morph/model/tul_fan_route.py`; `tul.fan_lsel_eps`). In the recipe the latent head reads
+the cells detached, so the loss trains the head's ranking and sends no latent gradient into
+the loop.
 
 ### Byte Latent Transformer (BLT)
 
@@ -1232,7 +1334,7 @@ normalised reader alignment is 1.36 to 1.45 where 1.0 is random, flat across the
 onset, and the slot's own label delivers about HALF the gradient reaching `h_i` rather than
 3 % of it (loss weight is not gradient share). See
 [../.agents/notes/rejected/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md](../.agents/notes/rejected/architecture/2026-08-24-xm-applies-to-the-plan-not-the-head.md)
-and [experiments/failures/2026-08-24-tul-reader-gradient-conflict.md](experiments/failures/2026-08-24-tul-reader-gradient-conflict.md).
+and [experiments/failures/2026-08-24-tul-reader-gradient-conflict.md](../lab/experiments/failures/2026-08-24-tul-reader-gradient-conflict.md).
 
 What is NOT refuted is the across-dataset form: the same slot state serving different
 continuations in different EXAMPLES. Teacher forcing hides it from any single-batch probe,
@@ -1324,6 +1426,12 @@ to that case and to nothing else here.
 | 67  | Unitary scalarization (TUL, counter)   | Kurin et al. (NeurIPS 2022)               | [2201.04122](https://arxiv.org/abs/2201.04122)                                                                                                 |
 | 68  | MUX multiplexed latent tokens (TUL/GL) | Suleymanzade et al. (2026)                | [2607.18264](https://arxiv.org/abs/2607.18264)                                                                                                 |
 | 69  | Gated Recurrent Transformers (loop)    | Hegazy, Alanwar, Elhoushi (2026)          | [2608.15062](https://arxiv.org/abs/2608.15062)                                                                                                 |
+| 70  | DITTO repetition loss (TUL)            | Xu et al. (NeurIPS 2022)                  | [2206.02369](https://arxiv.org/abs/2206.02369)                                                                                                 |
+| 71  | Pointer Sentinel (TUL, null key)       | Merity et al. (2016)                      | [1609.07843](https://arxiv.org/abs/1609.07843)                                                                                                 |
+| 72  | Pointer-generator + coverage (TUL)     | See, Liu, Manning (ACL 2017)              | [1704.04368](https://arxiv.org/abs/1704.04368)                                                                                                 |
+| 73  | Pointer Networks (TUL)                 | Vinyals, Fortunato, Jaitly (NIPS 2015)    | [1506.03134](https://arxiv.org/abs/1506.03134)                                                                                                 |
+| 74  | Multiple Choice Learning (TUL)         | Guzman-Rivera, Batra, Kohli (NIPS 2012)   | [papers.nips.cc](https://papers.nips.cc/paper_files/paper/2012/hash/cfbce4c1d7c425baf21d6b6f2babe6be-Abstract.html)                            |
+| 75  | Relaxed WTA (TUL exit loss)            | Rupprecht et al. (ICCV 2017)              | [1612.00197](https://arxiv.org/abs/1612.00197)                                                                                                 |
 
 
 

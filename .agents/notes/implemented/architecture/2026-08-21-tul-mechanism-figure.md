@@ -38,7 +38,7 @@ slots, not `h`.
   `pdftoppm … ../tul_mechanism` from `docs/figures/architecture/` (MANIFEST path
   corrected from `../../`).
 - Stale `tul_overview.png` may linger until deleted; do not link it.
-- Spec text in `docs/tul-spec.md` is unchanged; the figure now matches the
+- Spec text in `.agents/specs/tul-spec.md` is unchanged; the figure now matches the
   dummies summary and the implemented forward (`_tul_core` → `prefix_project` →
   coda with `coda_sees_slots=true`).
 

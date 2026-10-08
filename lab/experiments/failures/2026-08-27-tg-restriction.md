@@ -1,7 +1,7 @@
 # Planned: TG restriction — close the token shortcut, make the slot load-bearing
 
 Status: failure (P2; P1,P3,P4 held)
-Spec: ../../../docs/tul-tg-spec.md   Paper: arXiv 2512.25026 (Thought Gestalt)
+Spec: ../../../.agents/specs/tul-tg-spec.md   Paper: arXiv 2512.25026 (Thought Gestalt)
 Written and committed BEFORE the implementation existed or any arm ran.
 
 ## Question

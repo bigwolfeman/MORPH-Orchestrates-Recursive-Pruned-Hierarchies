@@ -1,4 +1,4 @@
-# TUL arm A1 — the method (docs/tul-spec.md §7.1, ablation-ledger "TUL-A1").
+# TUL arm A1 — the method (.agents/specs/tul-spec.md §7.1, ablation-ledger "TUL-A1").
 # Run: PYTHONPATH=$PWD python -m morph.training.train --config-name tul_a1
 # Everything is tul_short.yaml (1024 × 16 × 20k, dense, TST off); the ONLY difference
 # from arm A0 (`--config-name tul_short`, which inherits tul.activate_at: never) is the

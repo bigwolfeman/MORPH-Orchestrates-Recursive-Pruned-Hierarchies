@@ -136,7 +136,7 @@ Start new loop work from it. Decision record:
 Status: the **paid loop** is the shipped forward and is ON in `base.yaml`
 (`tul.tokens_through_core: true`; `tul.activate_at: ${training.tst_ratio}` — TUL switches
 on when the TST phase ends): tokens and slots are ONE sequence and the ordinary per-sample
-Poisson-depth core runs over ALL of it (`docs/tul-paid-loop-recipe.md`). The **slot loop**
+Poisson-depth core runs over ALL of it (`.agents/notes/rejected/architecture/tul-paid-loop-recipe.md`). The **slot loop**
 (`tul.tokens_through_core: false`: only the slot positions loop, in `_tul_core`, and
 `W_prefix` writes each looped state into its `prefix_k` positions) was cut on 2026-09-03
 (`d9e04e6` was the last commit that ran it) and came BACK on 2026-09-04 when branch
@@ -220,7 +220,7 @@ Short mental model:
 | `morph/inference/tul_generate_cached.py`, `tul_generate_graphed.py` | KV-cached generators for the STRICT slot-loop model (`code_enum_k` rollouts, per-span Bayes read): same tokens as `generate_tul`, each position computed once (span-local prelude/coda caches, per-(pass, layer) loop caches, permanent coda cell caches). `_graphed` holds fixed-capacity buffers and replays one CUDA graph per token and per slot. Anything else they do not reproduce RAISES (`_check_supported`). Tests `tests/test_tul_generate_cached.py`; note `.agents/notes/implemented/feature/2026-09-26-tul-kv-cached-generation.md`. |
 | `tests/test_tul_forward.py`, `test_slot_seed.py`, `test_tul_layout.py`, `test_checkpoint_compat.py`, `test_tul_setup_keys.py`; `test_slot_gain_reg.py`, `test_slot_cot_clip.py`, `test_onset_capture.py` (the constraint) | The contracts, one test per invariant row. |
 
-Two v1 deviations from the spec text, both recorded in `tul-spec.md` and §6b: run
+Two v1 deviations from the spec text, both recorded in `.agents/specs/tul-spec.md` and §6b: run
 collapse is CAUSAL (boundary after the FIRST token of a run — the spec's "after the
 LAST" needs a lookahead the generator cannot have), and the packer pads a row's last
 ≤ `prefix_k` positions rather than dropping a boundary.

@@ -1,0 +1,9 @@
+# The bare strict slot loop: one cell, no fan, no latent selection, no epivol, no span
+# decoder. Keeps the strict masks, cell norm, fixed point 0.1, gain hinge and cot clip.
+name: bare
+kind: lxtul
+lxtul:
+  cells: 1
+  lsel_lambda: 0.0
+  repel_lambda: 0.0
+  spandec_weight: 0.0

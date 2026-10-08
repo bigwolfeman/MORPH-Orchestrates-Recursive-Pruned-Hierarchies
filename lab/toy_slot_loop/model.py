@@ -1,7 +1,7 @@
 """Toy slot-TUL model: prelude -> shared core loop on slot cells -> coda.
 
 The design mirrors MORPH's slot loop (see the TUL section of the repo CLAUDE.md and
-docs/tul-spec.md sec 3), stripped to the parts that decide how updates flow:
+.agents/specs/tul-spec.md sec 3), stripped to the parts that decide how updates flow:
 
   row layout, one span:   [tok x L] [SLOT] [PRE x P]
   prelude   : n_pre causal blocks over ALL cells        -> entry state e per slot

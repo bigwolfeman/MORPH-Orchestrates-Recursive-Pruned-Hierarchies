@@ -5,8 +5,8 @@ Status: failure
 Written and committed BEFORE any arm produced a checkpoint. Predictions are not editable
 once the first run starts; if the method must change, Method gets a dated amendment.
 
-Implementation: [docs/scse-spec.md](../../scse-spec.md), commit `7849da9`.
-Decision record: [.agents/notes/proposed/architecture/2026-08-24-scse-source-centered-core-loop.md](../../../.agents/notes/proposed/architecture/2026-08-24-scse-source-centered-core-loop.md).
+Implementation: [.agents/notes/proposed/architecture/scse-spec.md](../../../.agents/notes/proposed/architecture/scse-spec.md), commit `7849da9`.
+Decision record: [.agents/notes/proposed/architecture/2026-08-24-scse-source-centered-core-loop.md](../../../.agents/notes/rejected/architecture/2026-08-24-scse-source-centered-core-loop.md).
 
 ## Question
 

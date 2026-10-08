@@ -1,0 +1,6 @@
+# Parcae-LXTUL with OPEN geometry: tokens also read every earlier token in prelude and coda;
+# cells keep the strict rule. Splits the gap: what remains is not cross-span information.
+name: lxtul-open
+kind: lxtul
+lxtul:
+  geometry: open

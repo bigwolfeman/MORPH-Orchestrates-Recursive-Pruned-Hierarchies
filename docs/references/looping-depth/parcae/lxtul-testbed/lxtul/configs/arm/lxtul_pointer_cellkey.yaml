@@ -1,0 +1,7 @@
+# Parcae-LXTUL (strict) + pointer head whose keys in EARLIER spans also read that span's loop
+# cells (lxtul/copy_heads.PointerHead cell_key). Output-only, causal; zero-initialised.
+name: lxtul-pointer-cellkey
+kind: lxtul
+lxtul:
+  pointer_heads: 4
+  pointer_cell_key: true

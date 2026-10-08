@@ -286,7 +286,7 @@ class MultiSourceCurriculumLoader:
                 spec = tul.spec_for(L)
                 buf = self._fill(batch_size * (spec.l_total + 1))
                 # ONE generator for the life of this loader, seeded from the config
-                # (docs/tul-gate-spec.md §3.2). None when the gate is off ⇒ no draw and a
+                # (.agents/specs/tul-gate-spec.md §3.2). None when the gate is off ⇒ no draw and a
                 # byte-identical row, which is what keeps the reference arm reproducible.
                 if tul.ditto_rows:
                     raise NotImplementedError(

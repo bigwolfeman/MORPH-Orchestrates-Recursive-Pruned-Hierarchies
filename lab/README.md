@@ -6,7 +6,7 @@ Test various algorithms, optimizations, and changes on a branch and document FIN
 
 | Subtree | What |
 |---|---|
-| [tul/](tul/) | TUL campaign logs, RCAs, and spike evals (canonical spec stays in `docs/tul-spec.md`) |
+| [tul/](tul/) | TUL campaign logs, RCAs, and spike evals (canonical spec stays in `.agents/specs/tul-spec.md`) |
 | [boundary-trajectory-readout/](boundary-trajectory-readout/) | Boundary / trajectory readout toys |
 | [perf/](perf/) | Throughput and memory probes; the 2026-09-08 Olympiad panel audit (`perf/2026-09-08-oly-throughput-audit/`: the levers, the batch frontier, the gain-hinge eps finding) |
 | [divergence/](divergence/) | Loop/GLA divergence campaigns: the takeover index (`divergence/takeover-campaign.md` — every hypothesis, verdict, and instrument; read it before adding an arm), depth sweeps, branch-norm and gate probes |

@@ -1,12 +1,41 @@
-# The Gist-Slot Recipe — the code that made slot content load-bearing
+# Agent Note: The Gist-Slot Recipe — the code that made slot content load-bearing
+
+Status: proposed
+
+## Problem
+
+Slot content was not read: every prefix arm's plan was worth at most 0.0006 nats of
+`worth_shuffle` (first table below). This record holds the code that first made slot
+content load-bearing.
+
+## Proposal
+
+The three-piece gist-slot recipe recorded below: the mask, the loop-free
+gradient-carrying write, and the MUX span target. Moved from `docs/gist-mux-recipe.md` on 2026-10-07; the text below the added sections is unchanged apart from link paths.
+
+## Alternatives considered
+
+The arms in "What each piece buys — the ablation map the campaign paid for" below are the
+alternatives that ran. The loop variants are in the decision note
+[2026-08-29-gist-loop.md](../../rejected/architecture/2026-08-29-gist-loop.md).
+
+## Acceptance criteria
+
+The binding 4.40 line of the frozen prereg `lab/experiments/failures/2026-08-29-tul-gl1-line2.md`,
+and the promotion list in "The way out of the test chambers" below.
+
+## Risks
+
+The CORRECTION section below: the mask's reliance signal is seed-dependent, and the
+inversion claim is dead. The machinery left the tree on 2026-09-03 (the RETIRED box).
 
 > **RETIRED 2026-09-03.** The gist / mux machinery (`mux_span_targets`, the gist loop,
 > the compaction window, `compact_index`) left the tree with the slot-only core. The paid
-> loop ([tul-paid-loop-recipe.md](tul-paid-loop-recipe.md)) is the shipped forward. This
+> loop ([tul-paid-loop-recipe.md](../../rejected/architecture/tul-paid-loop-recipe.md)) is the shipped forward. This
 > file is the record of the code as it ran at `d9e04e6`. Decision:
 > `.agents/notes/rejected/architecture/2026-08-29-gist-loop.md`.
 
-Status: LIVE, CORRECTED. Written 2026-08-29, the night GL1b appeared to invert
+Original status: LIVE, CORRECTED. Written 2026-08-29, the night GL1b appeared to invert
 the mask's price; corrected the same day by the round-2 confound arm (see the
 CORRECTION section — the frozen prereg `lab/experiments/failures/2026-08-29-tul-gl1-line2.md`
 killed the inversion claim). The code below is unchanged and still the recipe.
@@ -61,7 +90,7 @@ total = token_CE + β · mux_local        (β = tul.mux_beta = 1.0; SIGReg off i
 ## Piece 1 — the mask: slots are the only route between spans
 
 `morph/model/tul_layout.py::tg_allow_mask` (the TG restriction, spec
-`docs/tul-tg-spec.md` §1). A token attends its own span and any earlier slot —
+`.agents/specs/tul-tg-spec.md` §1). A token attends its own span and any earlier slot —
 nothing else. Content from an earlier span has NO path to a later token except
 through a slot state.
 

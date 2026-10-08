@@ -178,7 +178,7 @@ class _FusedLinearCE(torch.autograd.Function):
             if V_pad != V:
                 logits_c[:, V:] = neg_inf            # pad cols → prob exactly 0
             if mask_token_id >= 0:
-                # TUL (docs/tul-spec.md §3.1, invariant 4): the slot id is a structural
+                # TUL (.agents/specs/tul-spec.md §3.1, invariant 4): the slot id is a structural
                 # token the rule inserts — the LM head must never predict it. Same
                 # mechanism as the pad columns above: -inf ⇒ softmax probability EXACTLY
                 # 0 ⇒ that vocab row's grad_w stays 0 and it is excluded from the

@@ -5,7 +5,7 @@
 # What the two seeds are (morph/model/tul.py, `TULSlots.slot_input`):
 #   boundary (the ruler, shipped in base.yaml since arm TG4b) = E_slot + W_sent . embed(t_last),
 #            t_last the LAST token of the span. Builds a bias-free nn.Linear(d, d).
-#   bag_mean (this arm, the spec's original seed, docs/tul-spec.md 3.2) = E_slot + mean_j
+#   bag_mean (this arm, the spec's original seed, .agents/specs/tul-spec.md 3.2) = E_slot + mean_j
 #            embed(t_j) over the span's tokens. Builds NOTHING new.
 #
 # Why this arm. Wolfe's 2026-09-10 reading of the geometry audit is that the slot's TARGET

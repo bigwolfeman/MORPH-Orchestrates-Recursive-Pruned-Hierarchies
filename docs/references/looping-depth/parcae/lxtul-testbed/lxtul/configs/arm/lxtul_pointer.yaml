@@ -1,0 +1,6 @@
+# Parcae-LXTUL (strict) + a learned pointer/copy head, output-only (lxtul/copy_heads.PointerHead):
+# 4 heads over earlier tokens' coda outputs, read as distributions over their targets, gated with the model.
+name: lxtul-pointer
+kind: lxtul
+lxtul:
+  pointer_heads: 4

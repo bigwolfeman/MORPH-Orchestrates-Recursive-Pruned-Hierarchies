@@ -1,4 +1,4 @@
-# The 5090 panel of the paid loop (docs/tul-paid-loop-recipe.md): base.yaml's recipe on
+# The 5090 panel of the paid loop (.agents/notes/rejected/architecture/tul-paid-loop-recipe.md): base.yaml's recipe on
 # the short schedule every 2026-09 arm ran — 20k steps, seq 1024, dense (no prune /
 # carve / route), TST off so TUL is on from step 0, batch 6. This is the config the
 # matched 20k pair (lab/experiments/failures/2026-09-02-warmup-20k-pair.md) and every

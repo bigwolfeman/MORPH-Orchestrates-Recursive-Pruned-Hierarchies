@@ -1,4 +1,4 @@
-"""Eager TUL generation (docs/tul-spec.md §6, v1).
+"""Eager TUL generation (.agents/specs/tul-spec.md §6, v1).
 
 The spec defers the inference-engine port ("separate work; eager generation for the
 test" [W]), so this is a plain recompute-per-step sampler: it holds no KV cache and
@@ -50,7 +50,7 @@ class TulRowBuilder:
     bag_id: list[int] = field(default_factory=list)
     slot_first: list[int] = field(default_factory=list)
     span_len: int = 0
-    budget: int = 0        # docs/tul-gate-spec.md §8: the model's own k for the OPEN span.
+    budget: int = 0        # .agents/specs/tul-gate-spec.md §8: the model's own k for the OPEN span.
                            # 0 = no gate, the punctuation rule alone decides (v1 behaviour).
 
     @property
@@ -73,7 +73,7 @@ class TulRowBuilder:
         cuts, self.span_len = self.rule.cut(np.array([token_id], dtype=np.int64), self.span_len)
         if cuts.size == 0 and 0 < self.budget <= self.span_len:
             # The gate asked for `budget` tokens and the budget-th was not a boundary
-            # (docs/tul-gate-spec.md §8). Cut here anyway: the next span then starts
+            # (.agents/specs/tul-gate-spec.md §8). Cut here anyway: the next span then starts
             # mid-unit, which is exactly what the loader's end-truncated rows taught, and
             # the rule restarts from this cut the same way it restarts from a real one —
             # so a wrong k costs quality, never synchronisation.
@@ -184,7 +184,7 @@ def generate_tul(
     try:
         for _ in range(max_new_tokens):
             ids, layout = builder.tensors(device)
-            # `halt` = arm TUL-halt (docs/tul-gate-spec.md §7/§8): each slot loops until
+            # `halt` = arm TUL-halt (.agents/specs/tul-gate-spec.md §7/§8): each slot loops until
             # the gate asks for a token instead of running the fixed mean depth.
             if _code:
                 S = spec.max_slots

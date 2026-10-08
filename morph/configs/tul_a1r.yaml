@@ -1,4 +1,4 @@
-# TUL arm A1r — A1 repeated at a different seed (docs/tul-spec.md §7.1).
+# TUL arm A1r — A1 repeated at a different seed (.agents/specs/tul-spec.md §7.1).
 # THE RETRAIN NOISE FLOOR. Read this spread BEFORE reading any A1−A0 difference:
 # a byte-identical retrain has moved pass@4 by 4.8 points in earlier work, so an
 # unmeasured noise floor turns run-to-run variance into a method claim.

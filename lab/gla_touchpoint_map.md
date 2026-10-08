@@ -217,7 +217,7 @@ h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
 new_ret = ret_cap.get("state") if ret_cap is not None else None # transformer.py:1168
 ```
 
-Note `_apply_core_step` never forwards a reset mask — `docs/tul-tg-spec.md:91-92` says the
+Note `_apply_core_step` never forwards a reset mask — `.agents/specs/tul-tg-spec.md:91-92` says the
 core loop's GLA gets no reset by design.
 
 ### 2.3 The three modes
@@ -240,7 +240,7 @@ Shared: `_project` (`gla.py:99-121`) and `_readout` (`gla.py:123-140`).
 
 ### 2.4 The tg reset path
 
-`docs/tul-tg-spec.md` §4. Built once per forward:
+`.agents/specs/tul-tg-spec.md` §4. Built once per forward:
 
 * `transformer.py:2782-2792` (`_forward_tul`) and `transformer.py:1509-1518`
   (`prelude_states`): `tg_reset = tg_reset_mask(layout)` when `self._tg_restrict`.
@@ -660,7 +660,7 @@ the forward:
 | `morph/model/fused_ce.py:196,219,260-264` | Per-row loss reductions over the label axis, after the logits. Not a feature path. |
 | `morph/model/ternary_qat.py:171,214,419` | Per-output-row weight scale `mean(dim=1)` over the INPUT-feature axis of a weight matrix. No sequence axis involved. |
 | `morph/model/fm_planner.py:674-678` | Head reshape/transpose. |
-| TUL slot bag-mean (`_tul_front`, `transformer.py:1966-1979`) | Means over a span's tokens; the slot sits AFTER its span, so the pooled content is strictly in the past. Documented in `docs/tul-spec.md` §3.2. |
+| TUL slot bag-mean (`_tul_front`, `transformer.py:1966-1979`) | Means over a span's tokens; the slot sits AFTER its span, so the pooled content is strictly in the past. Documented in `.agents/specs/tul-spec.md` §3.2. |
 
 The HC stream reduction `x.mean(dim=2)` (`transformer.py:1449`) is over the STREAM axis, not
 the sequence axis.

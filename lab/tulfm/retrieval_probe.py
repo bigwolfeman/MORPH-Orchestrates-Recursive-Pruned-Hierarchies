@@ -1,6 +1,6 @@
 """TUL-FM P1 gate — the retrieval probe.
 
-Doctrine: ``docs/tul-fm-probing.md`` §3. This probe REPLACED the blind decoder, which
+Doctrine: ``.agents/notes/rejected/architecture/tul-fm-probing.md`` §3. This probe REPLACED the blind decoder, which
 refused twice (memorisation at 1.6k examples, underfitting at 41k;
 ``lab/experiments/failures/2026-08-28-plan-content.md``). It has no trained component, so
 there is no fit/eval split to get wrong and nothing to overfit.

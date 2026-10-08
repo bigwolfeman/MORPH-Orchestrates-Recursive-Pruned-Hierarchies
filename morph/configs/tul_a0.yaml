@@ -1,4 +1,4 @@
-# TUL arm A0 — the baseline (docs/tul-spec.md §7.1, ablation-ledger "TUL-A0").
+# TUL arm A0 — the baseline (.agents/specs/tul-spec.md §7.1, ablation-ledger "TUL-A0").
 # Plain MORPH on the short schedule: no slots, tokens through the core, the Poisson
 # depth per SEQUENCE exactly as today. `tul.activate_at` stays `never` (base.yaml), so
 # NO TUL parameters are constructed and the forward is bit-identical to the pre-TUL

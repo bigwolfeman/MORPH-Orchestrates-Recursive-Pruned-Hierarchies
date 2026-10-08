@@ -11,7 +11,7 @@ checkpoint of any arm) and reopened an early-training detonation that belongs to
 winner recipe itself (retention off, cap 0, ternary on, flat 1e-4, warmup 0): ~70% of
 draws, onset in steps 200 to 775, ternary QAT as the trigger surface, the healthy core
 map expansive and drifting outward. The full record, with every number's file, is
-[docs/tul-paid-loop-recipe.md](../../../../docs/tul-paid-loop-recipe.md).
+[.agents/notes/rejected/architecture/tul-paid-loop-recipe.md](../../../../.agents/notes/rejected/architecture/tul-paid-loop-recipe.md).
 
 ## Decision
 

@@ -1,4 +1,4 @@
-"""TUL span-length gate — the §9 invariants of docs/tul-gate-spec.md.
+"""TUL span-length gate — the §9 invariants of .agents/specs/tul-gate-spec.md.
 
 One test per row of the spec's invariant table, plus the §3 data claims the label
 depends on. Every test here protects something a silent break would hide inside a

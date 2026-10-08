@@ -2,7 +2,7 @@
 
 Status: results (partial — the gate question is answered, its error bar is not)
 
-Predictions pre-registered in `docs/tul-gate-spec.md` §11, commit `3bad5eb`. The first
+Predictions pre-registered in `.agents/specs/tul-gate-spec.md` §11, commit `3bad5eb`. The first
 attempt is [2026-08-21-tul-gate-bakeoff.md](../failures/2026-08-21-tul-gate-bakeoff.md),
 which produced no verdict because every arm died. This one produced two of three arms.
 

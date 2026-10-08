@@ -401,7 +401,7 @@ def evaluate(
                 if _k.startswith("gate/") and _v is not None:
                     acc.setdefault(f"val/{_k}", []).append(float(_v.detach().mean()))
             if halt:
-                # Arm TUL-halt (docs/tul-gate-spec.md §7/§11), on the SAME batch and the
+                # Arm TUL-halt (.agents/specs/tul-gate-spec.md §7/§11), on the SAME batch and the
                 # SAME weights as the row above: §4 teacher-forces the depth in training,
                 # so the two arms differ only in the depth policy at scoring time and the
                 # comparison is exactly paired — no second run, no seed noise.
@@ -419,7 +419,7 @@ def evaluate(
                 # Plan WORTH is the ce_tokens COST of removing the plan (zero) or of
                 # destroying only its correspondence to the slot (shuffle). Report the
                 # COST, never a specificity fraction: the fraction's denominator
-                # collapses through zero (docs/tul-fm-probing.md §4 rule 1, the tg3b
+                # collapses through zero (.agents/notes/rejected/architecture/tul-fm-probing.md §4 rule 1, the tg3b
                 # -55.4 % reading).
                 _oz = _m.tul_forward_ablated(x, y, layout, plan_mode="zero")
                 _os = _m.tul_forward_ablated(x, y, layout, plan_mode="shuffle")
@@ -543,7 +543,7 @@ def run_generation_test(
     so a campaign in flight is never edited underneath its own arms.
 
     The metrics are empty on the plain path and, on the TUL path, are the
-    docs/tul-gate-spec.md §10 generation numbers averaged over the prompts: rep4 /
+    .agents/specs/tul-gate-spec.md §10 generation numbers averaged over the prompts: rep4 /
     distinct-3 (a repetition loop scores an EXCELLENT perplexity — 1.46 against real
     text's 32.44 — so fluency is meaningless without diversity beside it), the realised
     span geometry, and how often a span actually ended on a boundary rather than
@@ -673,7 +673,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         depth_fixed=bool(getattr(m, "depth_fixed", False)),
         ckpt_grad_iters=int(getattr(m, "ckpt_grad_iters", -1)),
         core_init_scale=float(getattr(m, "core_init_scale", 0.0)),
-        # SCSE, the full method (docs/scse-spec.md). Every field goes through the
+        # SCSE, the full method (.agents/notes/proposed/architecture/scse-spec.md). Every field goes through the
         # config so a run is reproducible from its wandb config alone.
         scse_enabled=bool(getattr(m, "scse_enabled", False)),
         scse_step_scale=float(getattr(m, "scse_step_scale", 0.5)),
@@ -2064,7 +2064,7 @@ def warmup_compile_all_shapes(
 
     ``tul_rt``: required when the model is built with ``tul.tg_restrict`` — a TG model
     has NO plain-forward path (transformer.forward raises without a slot_layout, by
-    design: docs/tul-tg-spec.md), so the warmup synthesizes a TUL batch with the SAME
+    design: .agents/specs/tul-tg-spec.md), so the warmup synthesizes a TUL batch with the SAME
     packer the loader uses and warms the REAL path instead. The forced-size loop is
     skipped there on purpose: it exists for the hand-written Triton kernels' per-size
     JIT specializations, and tg_restrict is use_kernels=false-only (no Triton on the
@@ -2288,7 +2288,7 @@ def main(cfg: DictConfig) -> None:
     # alive yet, every compile fork is safe. The fused CCA kernels JIT-specialize size==1
     # separately; without this ordering, the first n_active==1 Poisson draw would compile
     # against live threads. wandb.init() is deferred to just after the warmup.
-    # ── TUL (docs/tul-spec.md §8) ──────────────────────────────────────────
+    # ── TUL (.agents/specs/tul-spec.md §8) ──────────────────────────────────────────
     # Resolved BEFORE the model build: `tul.activate_at: never` → tul_rt is None →
     # no TUL parameters are constructed and every path below is the baseline's,
     # bit-identical (runtime-invariants §6b). The parameters exist from step 0 when
@@ -3223,7 +3223,7 @@ def main(cfg: DictConfig) -> None:
             _mm0.tul.init_at_activation(_mm0.embed.lm_weight())
             print("[TUL] layout ACTIVE from step 0; E_slot ← mean(embedding table)",
                   flush=True)
-    # docs/tul-gate-spec.md §10. Pending until the first real batch: seating reads the
+    # .agents/specs/tul-gate-spec.md §10. Pending until the first real batch: seating reads the
     # corpus base rate off actual span lengths rather than a hardcoded constant, and the
     # audit then refuses the run if the seated gate still cannot reach its targets.
     _gate_pending = getattr(getattr(model, "_orig_mod", model), "tul_gate", None) is not None
@@ -4382,7 +4382,7 @@ def main(cfg: DictConfig) -> None:
                            if str(k).startswith(_pp_pref) and str(k)[14:].isdigit()]:
                     if out[_k] is not None:
                         log[f"tul/{_k}"] = float(out[_k].detach())
-                # docs/tul-gate-spec.md §10 — every step, because a gate that stops moving
+                # .agents/specs/tul-gate-spec.md §10 — every step, because a gate that stops moving
                 # is only visible as a FLAT curve, and a curve sampled at eval_every is
                 # too coarse to tell "flat" from "converged".
                 for _k, _v in out.items():
@@ -4561,7 +4561,7 @@ def main(cfg: DictConfig) -> None:
                             + f"  cf={_val_extra.get('val/first_tok_counterfactual', float('nan')):+.4f}"
                             f"  lp/tok={_val_extra.get('val/layer_passes_per_token', float('nan')):.2f}")
                 if "val/gate/loss_gate" in _val_extra:
-                    # docs/tul-gate-spec.md §10: the numbers that separate a WORKING gate
+                    # .agents/specs/tul-gate-spec.md §10: the numbers that separate a WORKING gate
                     # from one sitting at a low loss emitting a constant. In the console,
                     # not only in wandb — a dead gate must be visible while the run runs.
                     _tul_msg += (
@@ -4620,7 +4620,7 @@ def main(cfg: DictConfig) -> None:
                 )
             _train_mode()
 
-        # docs/tul-gate-spec.md §10: `w` starts at exactly zero and takes a gradient
+        # .agents/specs/tul-gate-spec.md §10: `w` starts at exactly zero and takes a gradient
         # every step, so a norm still at the floor here means the parameter is frozen.
         # Fail at step ~2k rather than score a 3-hour arm whose mechanism never engaged.
         if step == _gate_alive_step:

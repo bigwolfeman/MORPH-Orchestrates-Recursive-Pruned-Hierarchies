@@ -1,0 +1,36 @@
+# Shared by bench.yaml and train.yaml: run, MORPH data source, model shape, optimizer.
+run:
+  name: ???
+  seed: 1
+  wandb_project: parcae-lxtul
+  wandb_mode: online
+
+morph:
+  config: lxtul          # rows, tokenizer, boundary rule and packer come from this MORPH config
+
+shape:                   # MORPH lxtul: d 1024, 8 heads, 4/6/4 layers (MORPH uses 4 kv heads)
+  base: parcae-small-140m
+  n_embd: 1024
+  num_attention_heads: 8
+  num_key_value_heads: 8    # Parcae forces kv = heads in its core blocks (no GQA there)
+  intermediate_size: 4096   # ReLU2, 2 matrices: 8.4M/layer vs MORPH's SwiGLU 2816 x3 = 8.65M
+  n_layers_in_prelude: 4
+  n_layers_in_recurrent_block: 6
+  n_layers_in_coda: 4
+  block_size: 1280          # packed TUL row = 1024 + 4 * 64
+
+plain:                   # Parcae's own sampler: Poisson(6) total, BPTT 6 (draws > 6 run no-grad)
+  mean_recurrence: 6
+  mean_backprop_depth: 6
+
+lxtul: {}                # LXTULConfig overrides; empty = MORPH lxtul.yaml values
+
+optimizer:               # Parcae's MuonAdamW, owt.yaml values (train scales lr by sqrt(batch/256))
+  lr: 0.008
+  weight_decay: 0.0
+  betas: [0.8, 0.95]
+  eps: 1.0e-10
+  muon_lr: 0.008
+  muon_momentum: 0.95
+  muon_wd: 0.2
+  muon_ns_steps: 5

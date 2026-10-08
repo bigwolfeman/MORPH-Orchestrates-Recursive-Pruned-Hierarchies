@@ -315,7 +315,7 @@ def step_at(root, point: dict, *, zero_inj: bool = False, no_diag: bool = False,
         if zero_inj or no_diag or no_dt or no_decay:
             raise ValueError(
                 "the injection ablations (zero_inj/no_diag/no_dt/no_decay) are meaningless "
-                "under SCSE: its core takes no source at all (docs/scse-spec.md D3). "
+                "under SCSE: its core takes no source at all (.agents/notes/proposed/architecture/scse-spec.md D3). "
                 "Asking for one here would silently return the un-ablated number.")
         s = root.scse
         with dropout_off(root), torch.no_grad(), \

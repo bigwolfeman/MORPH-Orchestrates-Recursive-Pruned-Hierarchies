@@ -1,7 +1,25 @@
-# TUL-FM probing doctrine — how to measure a plan latent without fooling yourself
+# Agent Note: TUL-FM probing doctrine — how to measure a plan latent without fooling yourself
+
+Status: rejected — the FM planner arc it served is dead: the P1 revival gate failed (2026-08-28-tul-fm-arc.md)
+
+## Problem
+
+The 2026-08 campaign misread a plan latent's worth more than once; each rule below cites
+the failure it came from. The planner problem itself is stated in
+[2026-08-28-tul-fm-arc.md](2026-08-28-tul-fm-arc.md).
+
+## Proposal
+
+The measurement doctrine in sections 1 to 7 below. Moved from `docs/tul-fm-probing.md` on 2026-10-07; the text below the added sections is unchanged apart from link paths.
+
+## Alternatives considered
+
+The arc note's Alternatives considered section (link above). Section 6 below names the
+comparisons this doctrine refused: ranking arms by their training losses, MAUVE, and a
+"planner perplexity".
 
 Companion to the arc proposal:
-[.agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md](../.agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md).
+[.agents/notes/rejected/architecture/2026-08-28-tul-fm-arc.md](2026-08-28-tul-fm-arc.md).
 This file is the HOW; the note is the WHY. Every rule here was paid for by a specific
 failure in the 2026-08 campaign; the failure is cited so the rule survives skepticism.
 

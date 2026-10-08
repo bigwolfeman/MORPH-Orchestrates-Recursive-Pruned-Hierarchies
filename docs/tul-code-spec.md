@@ -100,7 +100,7 @@ The shipped looped model runs 3 + 6·6 + 3 = 42 per token.
 ### 3.1 Sequence layout — unchanged
 
 `SlotLayout`, `pack_tul_row`, the boundary rule, `prefix_k`, `max_slots`, `span_cap`, pad
-slots at −100: all as today (`docs/tul-spec.md` §3.1, committed copy). `tokens_through_core`
+slots at −100: all as today (`.agents/specs/tul-spec.md` §3.1, committed copy). `tokens_through_core`
 is `false` and the thinker never touches token positions. Slot s's cells are its `M` prefix
 positions (`tul.prefix_k`, today 2), read by the coda exactly as the strict geometry reads
 them today (`tg_geometry: strict`, `tg_coda_prefix_reach: all`).
@@ -527,7 +527,7 @@ first smoke measures it; nothing here is a claim.
 | no KL, no amortised-encoder-plus-KL | LTM §3.4 (VAE baseline collapsed with annealing) |
 | tape as decaying history (v0.2) | Diffusion Forcing Theorem 3.1, App. B.7, stabilisation §3.3 |
 | strict geometry, cells read by the coda | `2026-09-12-strict-slot-geometry.md` |
-| CFM, `loss_scale auto`, source scale rule | `morph/model/fm_planner.py`, `docs/tul-fm-probing.md` §7 (committed copy) |
+| CFM, `loss_scale auto`, source scale rule | `morph/model/fm_planner.py`, `.agents/notes/rejected/architecture/tul-fm-probing.md` §7 (committed copy) |
 | no BPTT through any loop, guess outside the CE graph | FM1's non-negotiable, `morph/model/tul_fm.py` header |
 | never decode a span from one vector with no token path | CLAUDE.md (Huginn 2026-08-16, MegaByte T7, Bowman T2, Hourglass T6) |
 

@@ -97,4 +97,4 @@ Secondary risks: capacity split between two modes at a small model size; and
 `p` becomes another hyperparameter in a campaign that already has too many.
 
 Related: [[2026-08-25-mux-head-arm-v1a]] (the empty-plan measurement),
-`docs/tul-spec.md` §3.4 (token-state dropout, the complementary tax).
+`.agents/specs/tul-spec.md` §3.4 (token-state dropout, the complementary tax).

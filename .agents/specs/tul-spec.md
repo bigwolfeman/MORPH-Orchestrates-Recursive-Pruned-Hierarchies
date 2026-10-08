@@ -1,7 +1,9 @@
 # TUL — Thought Unpack Loop: specification v0.1
 
+> **2026-10-07: the current TUL is LXTUL** (`morph/configs/lxtul_pointer.yaml` + the DITTO phase); see [the winner note](../notes/implemented/architecture/2026-10-07-lxtul-pointer-ditto-winner.md). This spec is the v0.1 history.
+
 > **2026-09-03 — read this first.** The shipped TUL forward is the PAID loop
-> ([tul-paid-loop-recipe.md](tul-paid-loop-recipe.md)): the core runs over every position
+> ([tul-paid-loop-recipe.md](../notes/rejected/architecture/tul-paid-loop-recipe.md)): the core runs over every position
 > of the packed row. §3.3's slot-only core (gather → loop on slots → scatter, per-slot
 > masked depth), the arms A0/A1/A3/A4/A5 of §7, and the §3.5 arm keys are RETIRED from the
 > tree (last commit that runs them: `d9e04e6`). §3.1 (boundary rule, packer), §3.2 (slot
@@ -11,7 +13,7 @@
 > reference. Decision: `.agents/notes/implemented/architecture/2026-09-03-ship-the-paid-loop-cut-the-arms.md`.
 
 Status: **implemented, run, and measured** — A1 beats dense A0 on the short
-schedule (see [lab/tul/arms-result.md](../lab/tul/arms-result.md)); further
+schedule (see [lab/tul/arms-result.md](../../lab/tul/arms-result.md)); further
 testing in progress. Off by default in `base.yaml` (`tul.activate_at: never`).
 The v1 mechanism is in the tree and gated by `pytest tests/`: the causal
 boundary rule and packer (`morph/model/tul_layout.py`), the slot parameters and

@@ -18,7 +18,7 @@
 #
 # ONE change from tul_tg2: `tul.tg_soft_prev_span: true` — each token may attend its
 # own span, the PREVIOUS span, and the slots (morph/model/tul_layout.py
-# `tg_allow_mask`, docs/tul-tg-spec.md §6). No new parameters.
+# `tg_allow_mask`, .agents/specs/tul-tg-spec.md §6). No new parameters.
 #
 # THE DISCRIMINATOR IS ce_main VS THE CONTROL BAND (4.4586-4.5459 at step 3000).
 # Read it against tul_tg2's OWN seeds (4.8763 / 4.7121), which differ from this arm by

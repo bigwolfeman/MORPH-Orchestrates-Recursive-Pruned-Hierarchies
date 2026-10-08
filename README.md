@@ -22,40 +22,86 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 </p>
 <p align="center"><em>Architecture overview: Parcae-style prelude / core loop / coda on a <a href="docs/references/residual-streams/jpmhc/jpmhc.md">Cayley Hyper-Connection</a> carrier, with a gated <a href="docs/references/memory/gla/gla.md">GLA</a> retention branch on layer 1.</em></p>
 
-## TUL: Thought Unpack Loop (merged, OFF by default)
+## TUL: Thought Unpack Loop (LXTUL)
 
 
 <p align="center">
-  <img src="docs/figures/tul_mechanism.png" alt="TUL paid loop: tokens and slots are one row; prelude, the per-sample Poisson-depth core and the coda run on every position; the next span's first token is read at the boundary token; cut on punctuation" width="720" />
+  <img src="docs/figures/tul_mechanism.png" alt="LXTUL: tokens and 4-cell slots in one row; prelude once; the slot loop runs 4 cells per slot, a router picks a winner after each pass and all cells restart from it; the winner alone is written; the coda decodes the span; an output-only pointer head mixes copied tokens into the LM head; a DITTO training phase" width="720" />
 </p>
-<p align="center"><em>TUL paid loop: one row of tokens and slots through prelude, core × T and coda; the slots stay in the row and every later position reads them.</em></p>
+<p align="center"><em>LXTUL, the 2026-10-07 TUL recipe: strict geometry, the latent-selected 4-cell slot loop, the winner-only write, the output-only pointer head and the DITTO phase.</em></p>
 
 
-TUL loops the Parcae core over one **thought slot per span** (punctuation-bounded) instead
-of over every token, and decodes tokens with the slot's looped state visible as an attended
-prefix position. Tokens run prelude → coda only. Specification, provenance and planned
-ablations: [docs/tul-spec.md](docs/tul-spec.md); paper map: [docs/references.md](docs/references.md) §13;
-measured arms: [lab/tul/arms-result.md](lab/tul/arms-result.md).
+TUL thinks once per span instead of once per token. The text is cut into spans at
+punctuation. Each span gets one thought slot, and only the slots run the looped core. The
+tokens of the next span are decoded with the slot's looped state in view.
 
-`base.yaml` ships `tul.activate_at: never`, which constructs no TUL parameters, so the
-default recipe is bit-identical to plain MORPH and the main line's behaviour is unchanged.
+The current TUL is **LXTUL**, the latent-selected slot loop. The recipe has two stages:
+[`morph/configs/lxtul_pointer.yaml`](morph/configs/lxtul_pointer.yaml) for 5000 steps, then
+the 1000-step DITTO phase [`morph/configs/lxtul_pointer_ditto.yaml`](morph/configs/lxtul_pointer_ditto.yaml).
+Both compose the LXTUL base [`morph/configs/lxtul.yaml`](morph/configs/lxtul.yaml).
+Decision record: [the 2026-10-07 winner note](.agents/notes/implemented/architecture/2026-10-07-lxtul-pointer-ditto-winner.md).
+Every attempt to make the loop contribute, with its numbers:
+[docs/tul-loop-contribution-history.md](docs/tul-loop-contribution-history.md).
+Paper map: [docs/references.md](docs/references.md) §13. The v0.1 spec is history:
+[.agents/specs/tul-spec.md](.agents/specs/tul-spec.md).
 
-**Results of TUL:** Over the same 20k steps the TUL arm beat the dense
-baseline by 0.056 nats of `val/ce_tokens` (slightly better than noise) while running 177 minutes against 278. A 1.6x
-wall-clock win at slightly better loss.
+`base.yaml` does not run LXTUL. It still ships the older paid loop
+(`tul.tokens_through_core: true`: tokens and slots all run the core). The paid loop is
+history; its record is
+[.agents/notes/rejected/architecture/tul-paid-loop-recipe.md](.agents/notes/rejected/architecture/tul-paid-loop-recipe.md).
 
-**FLOPs (same runs: `no-tul-a0-acap1` / `tul-a1-acap1`):** ~4× fewer FLOPs per token
-(1793 → ~452 MFLOP forward pass; ~5.84 → ~1.47 GFLOP executed total) and ~3.9× fewer total
-FLOPs over the run, at nearly equal token count. Wall clock only moved 1.6×
-because the step is still launch / fixed-overhead bound. Details:
-[lab/tul/arms-result.md](lab/tul/arms-result.md). Needs further optimization.
+**Results of TUL** (MORPH, one 5090, d 1024, seq 1024, 480 fixed validation rows; ONE
+seed per arm):
 
-**TUL For Dummies:** 
-- After the core loop save the hidden state, lets call z1.
-- Use a frozen z1 to decode a span. A span goes to the next punctuation mark, or 32 tokens max. This is a loop through the coda.
-- z1 kept in the sequence
+| model | CE at depth 6 | gap to plain | K1-K6 | sampled seq_rep_4 |
+| --- | --- | --- | --- | --- |
+| plain looped model (no pointer) | 4.0806 | 0 | | 0.215 |
+| LXTUL | 4.3529 | +0.272 | +0.0215 | 0.041 (degenerate text) |
+| LXTUL + pointer, 5k steps | 3.9280 | -0.150 [-0.169, -0.132] | +0.0155 | 0.307 |
+| + DITTO phase, 1000 steps | +0.071 trainer val vs its control phase | not measured on fresh rows | +0.0294 (on re-trained rows) | 0.140 (control phase 0.291) |
 
-So the core loop is forced to contain the full semantic thought and amortize the loop cost over many tokens. As opposed to looping many times per token.
+K1-K6 is the CE at loop depth 1 minus the CE at depth 6: what loop depth earns.
+"Sampled seq_rep_4" is 4-gram repetition at temperature 0.7, top-k 40 (real text: 0.020).
+Sources: [pointer pair](lab/experiments/mixed/2026-10-06-lxtul-pointer.md),
+[coverage phase](lab/experiments/failures/2026-10-07-lxtul-pointer-coverage.md),
+[DITTO phase](lab/experiments/mixed/2026-10-07-lxtul-pointer-ditto.md),
+[LXTUL base](.agents/notes/implemented/architecture/2026-10-04-lxtul-primary-candidate.md).
+
+What these numbers do not show yet:
+
+- One seed per arm. The two LXTUL base seeds differ by 0.009 at depth 6.
+- The plain ruler has no pointer head. A MORPH plain + pointer run is owed. On the Parcae
+  testbed, plain + pointer led strict LXTUL + pointer by 0.045 nats.
+- The loop's earning is small: K1-K6 is 0.0155 nats with the pointer, 0.0215 / 0.0172
+  without it (two seeds). With the head forced off, CE is 4.41, 0.05 worse than an LXTUL
+  that never had the head.
+- DITTO halves sampled repetition and lands below plain, but costs +0.071 nats of clean
+  validation CE against its control phase. Its samples show junk subword runs that are not
+  yet counted.
+- Training speed is 11.8k tok/s. The Parcae testbed runs LXTUL + pointer at 22.2k tok/s on
+  the same rows. The work per step is equal; the MORPH step is host-serial and launch-bound
+  ([speed filing](lab/experiments/mixed/2026-10-07-morph-vs-parcae-speed.md)). A faster
+  training step is in progress on a branch.
+- Decode speed is not measured. The KV-cached generators refuse the fan and the pointer
+  head, so only the eager recompute generator runs this model.
+
+**TUL For Dummies:**
+- Cut the text into spans at punctuation (4 to 32 tokens). After each span, the row gets
+  one slot with 4 cells.
+- The prelude reads each span once. Tokens never enter the loop.
+- The loop runs the shared core blocks over every slot's 4 cells, T passes (T is drawn
+  per slot, mean 6, max 8).
+- After each pass a small router picks one cell, and all 4 cells restart from it.
+- After the last pass the winner alone is written into the slot.
+- The coda decodes the tokens. A token sees its own span and the winners of all earlier
+  slots. Inside the model, that is the only path from one span to the next.
+- An output-only pointer head lets a token copy a word that appeared earlier. It reads
+  final states and writes nothing back.
+- A short DITTO phase teaches the model that each repeat of a phrase must be less likely
+  than the one before.
+
+So the core loop has to hold the span's thought, and its cost is spread over the span's
+tokens instead of being paid on every token.
 
 This is based on a series of experiments run on
 [Coconut](docs/references/tul-latent-emission/coconut/coconut.md),
@@ -81,10 +127,9 @@ Difficulty that needs deeper thought lives at the span level and not the token l
 
 TUL gives a method of exploiting this, while genuinely reducing compute costs.
 
-Testing is happening for a gated version. Initial results are good. It is based on Quiet-STaR.
-The gate can produce a variable k, and k=0 is to loop. The magnitude of k determines how many tokens to decode for the next span.
-Because we are delimitting the spans at easily detected values (punctuation), it is self supervised training for halting.
-
+History: a gated version, based on Quiet-STaR, chose a variable span length k. It was built
+in 2026-08 and retired on 2026-09-03 with the slot-only core
+([gate spec](.agents/specs/tul-gate-spec.md)).
 
 ## Current Architecture
 
@@ -160,13 +205,19 @@ Training logs the resolved Hydra config to Weights & Biases when W&B is enabled.
 
 ```text
 .agents/notes/              # Public decision records (see AGENTS.md)
+.agents/specs/              # TUL v0.1, TUL-gate and TUL-TG specs (history)
 lab/                        # Spikes + campaign finals (TUL arms, runtime-invariants)
 tests/
 scripts/                    # verify_template, pretok, probes
 morph/
   model/
     transformer.py          # MORPHTransformer, looped core, TUL forward paths
-    tul.py / tul_layout.py  # Thought Unpack Loop (slots, boundary packer)
+    tul.py / tul_layout.py  # Thought Unpack Loop (slots, register, boundary packer)
+    tul_fan.py              # LXTUL fan: K cells per slot through the shared core
+    tul_fan_route.py        # router, EMA-prelude target, latent head, reset to winner
+    tul_spandec.py          # train-only span decoder (decodes the next span)
+    tul_pointer.py          # output-only pointer / copy head (LXTUL winner)
+    tul_ditto.py            # DITTO repetition loss (the 1000-step phase)
     attention.py            # CCA + CSA/HCA + XSA + ResAttn + CoPE
     embeddings.py           # Euclidean + Lorentz + hash-bigram
     hyper_connections.py    # HyperConnectionResidual (Cayley n=4)
@@ -191,12 +242,12 @@ morph/
   posttrain/                # deploy artifacts, masks, validation
   jax/                      # JAX/Flax mirror (lags PyTorch)
   interop/                  # PT ↔ JAX checkpoint conversion
-  configs/                  # Hydra YAML (base.yaml is recipe SoT)
+  configs/                  # Hydra YAML (base.yaml is recipe SoT; lxtul_pointer*.yaml = TUL)
 docs/
   MANIFEST.md               # docs navigator
   mortar-bcsr.md            # CMS prune + MORTAR BCSR readout
   ablation-ledger.md        # accepted / rejected / deferred
-  tul-spec.md               # Thought Unpack Loop contract
+  tul-loop-contribution-history.md  # every TUL loop-contribution attempt, with sources
   olympiad-interop.md       # PT ↔ JAX / Olympiad notes
   figures/                  # PNG previews + topic-grouped TikZ sources
   references.md             # paper map + MORPH usage notes

@@ -1,0 +1,5 @@
+# Parcae-LXTUL without the span decoder (spandec_weight 0); everything else as lxtul.
+name: nospandec
+kind: lxtul
+lxtul:
+  spandec_weight: 0.0

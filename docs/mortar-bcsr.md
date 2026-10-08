@@ -192,7 +192,7 @@ CMS is in this doc (§ CMS): it chooses *which* blocks die; MORTAR packs what’
 
 1. **Carve without prune** (or `prune_start` past the run) → `block_mask` all true →
    `density ≈ 1.0`. You still have “BCSR,” but it’s a dense matrix in sparse clothing.
-   Trust `[prune] density=` logs before claiming 0.25.
+   Trust `[prune] density=` logs before claiming 0.25. Pruning is necessary to get speed benefit.
 2. **`training.sparse_backend`** must be MORTAR (or unset). Anything else raises.
 3. Miss **`accumulate_scores` between `backward` and `zero_grad`** and CMS saliency is a
    silent no-op — prune never learns; carve often freezes a still-dense model.

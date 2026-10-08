@@ -10,13 +10,13 @@ contract" vs "campaign evidence".
 
 ## Decision
 
-Keep only [`docs/tul-spec.md`](../../../../docs/tul-spec.md) in `docs/`. Place the rest by
+Keep only [`.agents/specs/tul-spec.md`](../../../../.agents/specs/tul-spec.md) in `docs/`. Place the rest by
 kind:
 
 | Kind | Destination |
 |---|---|
 | Arms comparison, divergence RCA, trace-inverter spike | [`lab/tul/`](../../../../lab/tul/) |
-| Arm CW contract (shipped eval + `coda_token_cut`) | [archived/architecture/2026-08-18-tul-compaction-window.md](../architecture/2026-08-18-tul-compaction-window.md) |
+| Arm CW contract (shipped eval + `coda_token_cut`) | [archived/architecture/2026-08-18-tul-compaction-window.md](../../archived/architecture/2026-08-18-tul-compaction-window.md) |
 | Arm D teacher-distill (unbuilt) | [proposed/architecture/2026-08-18-tul-teacher-distill.md](../../proposed/architecture/2026-08-18-tul-teacher-distill.md) |
 
 Update inbound links in README, CLAUDE, configs, model comments, and
@@ -35,4 +35,4 @@ Update inbound links in README, CLAUDE, configs, model comments, and
 
 - `docs/` root is the stable surface; TUL evidence is one `lab/tul/` hop away.
 - Code comments that cited `docs/tul-compaction-window-spec.md` now cite the Agent Note
-  path; `docs/tul-spec.md` citations are unchanged.
+  path; `.agents/specs/tul-spec.md` citations are unchanged.

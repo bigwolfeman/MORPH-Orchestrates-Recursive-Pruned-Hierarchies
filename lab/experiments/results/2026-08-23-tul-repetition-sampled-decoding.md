@@ -112,7 +112,7 @@ where a diverged arm at CE 6.43 scored the best rep4 of any arm. Here both axes 
 same way, which is what makes the gate result readable.
 
 A mechanism is available and was not tested here: the gate trains a span-length head and
-conditions the coda on a length budget (`docs/tul-gate-spec.md` §5, §8), which is directly
+conditions the coda on a length budget (`.agents/specs/tul-gate-spec.md` §5, §8), which is directly
 a "stop running on" signal. Whether the budget conditioning is what does it, rather than
 the extra parameters or the auxiliary loss, needs an arm with the head trained and the
 conditioning disabled.

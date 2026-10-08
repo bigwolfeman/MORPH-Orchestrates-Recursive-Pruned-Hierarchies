@@ -1,7 +1,7 @@
 # Planned: TG3b — ask the soft-restriction question from a base that can survive it
 
 Status: planned
-Config: `morph/configs/tul_tg3b.yaml`   Spec: ../../../docs/tul-tg-spec.md §6
+Config: `morph/configs/tul_tg3b.yaml`   Spec: ../../../.agents/specs/tul-tg-spec.md §6
 Prior: ../failures/2026-08-27-tg-restriction.md, ./2026-08-28-tg-round2-seed-and-softness.md
 
 ## Why this arm exists

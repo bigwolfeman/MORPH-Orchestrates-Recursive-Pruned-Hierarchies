@@ -230,7 +230,7 @@ class MORPHConfig:
     # forward branch, so torch.compile still sees a straight-line graph.
     core_init_scale: float = 0.0
 
-    # ── SCSE — Source-Centered State Evolution (docs/scse-spec.md) ───────────────
+    # ── SCSE — Source-Centered State Evolution (.agents/notes/proposed/architecture/scse-spec.md) ───────────────
     # The FULL method of arXiv:2607.27656, not the Stage 1 initial-deviation probe above.
     # The abstract credits the gain to "the learned anchor and the anchor-coordinate
     # deviation recurrence", which are precisely the two things `core_init_scale` does NOT
@@ -580,7 +580,7 @@ class MORPHConfig:
     # Training
     dropout: float = 0.1
 
-    # ── TUL — Thought Unpack Loop (docs/tul-spec.md) ──────────────────────
+    # ── TUL — Thought Unpack Loop (.agents/specs/tul-spec.md) ──────────────────────
     # None → NO TUL parameters are constructed and the model is byte-identical to the
     # baseline (the `retention` convention: the flag gates CONSTRUCTION, not a forward
     # branch). Set it and the model gains E_slot / E_mask / W_prefix (spec §3.1-§3.4),
@@ -862,7 +862,7 @@ class _SCSEInit(nn.Module):
 
 
 class _SCSE(nn.Module):
-    """Source-Centered State Evolution — the FULL method. Spec: ``docs/scse-spec.md``.
+    """Source-Centered State Evolution — the FULL method. Spec: ``.agents/notes/proposed/architecture/scse-spec.md``.
 
     Paper: "Looped Transformers with Source-Centered State Evolution", arXiv:2607.27656,
     Kim, Hayashi, Kamiya, Koyama, Iwasawa, Matsuo, 30 July 2026. Reference implementation
@@ -1891,7 +1891,7 @@ class MORPHTransformer(nn.Module):
 
         d_ff = cfg.d_ff if cfg.d_ff > 0 else ((d * 8 // 3 + 63) // 64 * 64)
 
-        # ── TG restriction (docs/tul-tg-spec.md) ────────────────────────────
+        # ── TG restriction (.agents/specs/tul-tg-spec.md) ────────────────────────────
         # Construction-time only: gates which attention modules get built (§3) and
         # what `_forward_tul` threads into every prelude/coda call. Validated HERE,
         # before anything else is built, so a bad config never gets partway through
@@ -1908,7 +1908,7 @@ class MORPHTransformer(nn.Module):
         if self._tg_restrict and cfg.use_kernels:
             raise ValueError(
                 "model.tul.tg_restrict=true requires model.use_kernels=false "
-                "(docs/tul-tg-spec.md §2/§6): the TG arms run eager only — the fused "
+                "(.agents/specs/tul-tg-spec.md §2/§6): the TG arms run eager only — the fused "
                 "window/CSA/HCA kernels do not know about the restriction, and a "
                 "silent unmasked kernel path is forbidden.")
 
@@ -2331,7 +2331,7 @@ class MORPHTransformer(nn.Module):
         self._core_aux: dict | None = None      # arc E10 loss terms, stashed by _core_region
         self._core_gain_dir: Tensor | None = None   # the power-iterated probe direction
 
-        # ── TUL slot parameters (docs/tul-spec.md §3.1-§3.4) ───────────────
+        # ── TUL slot parameters (.agents/specs/tul-spec.md §3.1-§3.4) ───────────────
         # Constructed LAST, after retention, for the same reason: all three inits are
         # DETERMINISTIC (zeros / identity — zero RNG draws), so a TUL model's base weights
         # are byte-identical to a baseline built with the same seed, and the arms differ by
@@ -2395,7 +2395,7 @@ class MORPHTransformer(nn.Module):
         # The gate is built AFTER TULSlots for the same reason and with the same
         # discipline: every one of its inits is a deterministic zero/one, so building it
         # advances the RNG stream by nothing and arm TUL-gate's base weights are
-        # byte-identical to arm A1's (docs/tul-gate-spec.md §9 invariant 1).
+        # byte-identical to arm A1's (.agents/specs/tul-gate-spec.md §9 invariant 1).
         _gc = cfg.tul.gate if cfg.tul is not None else None
         self.tul_gate: TULGate | None = TULGate(d, _gc) if _gc is not None else None
         # The reread (TULConfig.reread): the looping slot cross-attends the frozen prelude
@@ -3490,7 +3490,7 @@ class MORPHTransformer(nn.Module):
             else _NoiseInit(cfg.core_state_init_std) if cfg.core_state_init == "noise"
             else _CloneInit())
 
-        # ── SCSE, the full method (docs/scse-spec.md) ──────────────────────────────
+        # ── SCSE, the full method (.agents/notes/proposed/architecture/scse-spec.md) ──────────────────────────────
         # Also built LAST, and after `core_init`, for the same RNG-neutrality reason: with
         # `scse_enabled: false` NO parameter is created and NO RNG is drawn, so a control
         # model's weights stay byte-identical to master (invariant S1).
@@ -4104,7 +4104,7 @@ class MORPHTransformer(nn.Module):
             h_in = h_in.mean(dim=2)
             if e_in is not None:
                 e_in = e_in.mean(dim=2)
-        # `source_free` is SCSE's G_theta (docs/scse-spec.md section 3.2): the shared block
+        # `source_free` is SCSE's G_theta (.agents/notes/proposed/architecture/scse-spec.md section 3.2): the shared block
         # stack with NO source entering the recurrence. Both injections are skipped, not fed
         # zeros — feeding e = 0 would leave DiagonalInjection's `h_ctx <- A*h_ctx` decaying
         # the deviation's context channels by ~0.447 per iteration with nothing to refill
@@ -4376,7 +4376,7 @@ class MORPHTransformer(nn.Module):
                     twin: FanTargetFront | None = None) -> tuple[Tensor, Tensor]:
         """x0 skip-clone → HC stream expansion → prelude blocks. Returns (x, x0).
 
-        ``attn_kwargs`` / ``ret_reset_mask`` (docs/tul-tg-spec.md §§1-4): the SAME
+        ``attn_kwargs`` / ``ret_reset_mask`` (.agents/specs/tul-tg-spec.md §§1-4): the SAME
         tg_allow / slot-mask / GLA-reset-mask dict, built ONCE per forward, threaded
         into every prelude block. None on every non-TG path → the calls below are
         exactly ``layer(x)`` as before (bit-identical, spec T4).
@@ -4517,7 +4517,7 @@ class MORPHTransformer(nn.Module):
         per-forward tg_allow / slot-mask / GLA-reset-mask dict, threaded into every
         coda block. Only meaningful for the FULL-``L`` coda call (``coda_sees_slots
         and coda_token_cut == 0``); the gathered-subset coda callers never pass these
-        (docs/tul-tg-spec.md does not define the restriction on a gathered index
+        (.agents/specs/tul-tg-spec.md does not define the restriction on a gathered index
         space — see ``_forward_tul``'s raise for that combination).
 
         ``attn_kwargs_at`` (``model.span_reach_layer`` only): see :meth:`_front_tail` —
@@ -4987,7 +4987,7 @@ class MORPHTransformer(nn.Module):
         Pure code motion out of ``_forward_single`` (the ``_front_region`` /
         ``_back_region`` precedent): the ops and their order are IDENTICAL to the old
         inline block, so every non-TUL path is bit-identical. It is a method so the paid
-        TUL loop (``tokens_through_core``, docs/tul-paid-loop-recipe.md) can run the SAME
+        TUL loop (``tokens_through_core``, .agents/notes/rejected/architecture/tul-paid-loop-recipe.md) can run the SAME
         per-sample core over a sequence that happens to contain slot positions, instead
         of forking a second implementation of the loop. ``jac_active`` (``[B, L]`` bool,
         optional) is read ONLY by the Jacobian probe capture: positions that carry no
@@ -5033,7 +5033,7 @@ class MORPHTransformer(nn.Module):
         # injection would still perturb the ctx channel every iteration. Used by seed models.
         if self.cfg.n_core > 0:
             e = self.input_norm(x)
-            # SCSE (docs/scse-spec.md): a Python-level constant, so every branch on it below
+            # SCSE (.agents/notes/proposed/architecture/scse-spec.md): a Python-level constant, so every branch on it below
             # is resolved at trace time and the non-SCSE graph is unchanged.
             _scse = self.scse
             with _prof("carrier::h_clone"):
@@ -5607,7 +5607,7 @@ class MORPHTransformer(nn.Module):
         hi = self.cfg.core_gain_clip_iter_hi
         return t >= lo and (hi < 0 or t <= hi)
 
-    # ── TUL regions (docs/tul-spec.md §3) ─────────────────────────────────
+    # ── TUL regions (.agents/specs/tul-spec.md §3) ─────────────────────────────────
     # Reached only when a `slot_layout` is passed. Every helper below is a no-op for
     # the plain path because the plain path never calls it.
 
@@ -5624,7 +5624,7 @@ class MORPHTransformer(nn.Module):
         the slot's output is the in-context pooled span summary (BLT §3.2.2).
 
         ``attn_kwargs`` / ``ret_reset_mask``: passed straight through to
-        :meth:`_front_tail` (docs/tul-tg-spec.md §§1-4).
+        :meth:`_front_tail` (.agents/specs/tul-tg-spec.md §§1-4).
 
         ``twin`` (``tul.fan_opf`` / ``tul.fan_route: latent``; the caller holds
         ``no_grad``): the fan's EMA TARGET front — the twin's prelude blocks, x0 and
@@ -5880,7 +5880,7 @@ class MORPHTransformer(nn.Module):
         Eq. 9), ``h_slots`` ``[B, max_slots, …]`` the looped state of each slot, the
         realised per-slot ``depths``, and — when the gate is built — ``g_traj``
         ``[B, max_slots, T]``, the gate output after EVERY iteration
-        (docs/tul-gate-spec.md §4). ``g_traj`` is a RETURN VALUE, never a side channel:
+        (.agents/specs/tul-gate-spec.md §4). ``g_traj`` is a RETURN VALUE, never a side channel:
         the ``ret_capture`` lesson is that a side channel is not checkpoint-safe. So is
         ``mep_keep`` (``tul.mux_every_pass`` and ``tul.mux_stage_all``, which share one
         trajectory and one set of masks; ``None`` everywhere else): the per-pass
@@ -6033,7 +6033,7 @@ class MORPHTransformer(nn.Module):
         if n_core == 0:
             if halt:
                 raise RuntimeError(
-                    "halt=True needs a core loop to halt (docs/tul-gate-spec.md §7); "
+                    "halt=True needs a core loop to halt (.agents/specs/tul-gate-spec.md §7); "
                     "n_core == 0 has no iterations to stop.")
             if self.tul_gate is not None:
                 raise NotImplementedError(
@@ -6130,7 +6130,7 @@ class MORPHTransformer(nn.Module):
                 h = self.core_init(e)
                 h_star = None
             else:
-                # THE LOOP CARRIER IS THE DEVIATION (docs/scse-spec.md section 3.1). h* is
+                # THE LOOP CARRIER IS THE DEVIATION (.agents/notes/proposed/architecture/scse-spec.md section 3.1). h* is
                 # built ONCE (S2); the absolute slot state is rebuilt at the return (S6).
                 # `gather_valid` zeroes pad slots, and both projections are bias-free, so a
                 # pad has h* = 0 AND Delta_0 = 0 exactly — invariant S8.
@@ -6340,7 +6340,7 @@ class MORPHTransformer(nn.Module):
                 raise RuntimeError("halt=True needs a model built with tul.gate (§7)")
             if self.training:
                 raise RuntimeError(
-                    "halt=True is EVAL ONLY (docs/tul-gate-spec.md §4: training "
+                    "halt=True is EVAL ONLY (.agents/specs/tul-gate-spec.md §4: training "
                     "teacher-forces the depth). Scoring a training step with the gate "
                     "driving the depth would make the LM loss chase the gate's error.")
             total_iters = self.cfg.tul.slot_max_depth or self.cfg.max_depth
@@ -7215,7 +7215,7 @@ class MORPHTransformer(nn.Module):
             if _gctx is not None:
                 h_new = self._gram_step(h_new, t, active, layout, _gctx)
 
-            # ── gate readout (docs/tul-gate-spec.md §4) ────────────────────────
+            # ── gate readout (.agents/specs/tul-gate-spec.md §4) ────────────────────────
             # OUTSIDE the checkpoint / no_grad block on purpose: it then shapes the core
             # state on exactly the iterations inside the truncated-BPTT window and is a
             # pure readout on the frozen ones — the same window the token loss uses —
@@ -12832,7 +12832,7 @@ class MORPHTransformer(nn.Module):
         """``(front_kw, front_reset, coda_kw, coda_reset)`` — the TG restriction of ONE forward.
 
         The ONE home of the relation the prelude and the coda run under
-        (docs/tul-tg-spec.md §§1-4). :meth:`_forward_tul` reads it, and so must every
+        (.agents/specs/tul-tg-spec.md §§1-4). :meth:`_forward_tul` reads it, and so must every
         instrument that rebuilds the front outside the forward
         (``lab/divergence/spandec_horizon_grid.py``, ``core_token_aux_probe.py``,
         :meth:`tul_slot_state_probe`): a bare ``_tul_front(input_ids, layout)`` on a
@@ -12942,7 +12942,7 @@ class MORPHTransformer(nn.Module):
                      gram_sample_seed: int | None = None,
                      code_policy_pick: str | None = None,
                      lsel_follow: str | None = None) -> dict:
-        """The TUL forward (docs/tul-spec.md §3). One shared position axis.
+        """The TUL forward (.agents/specs/tul-spec.md §3). One shared position axis.
 
         ``lsel_follow`` (``tul.fan_loop_select``, EVAL ONLY, labels required): ``"teacher"``
         makes the loop follow the latent teacher's pick on the slots with a target, as
@@ -13135,7 +13135,7 @@ class MORPHTransformer(nn.Module):
             if halt:
                 raise NotImplementedError(
                     "tul_step_mode='db1' is a TRAINING step; halt=True is EVAL-only "
-                    "(docs/tul-gate-spec.md §7) and the two have no defined interaction.")
+                    "(.agents/specs/tul-gate-spec.md §7) and the two have no defined interaction.")
         if halt and self._core_stage_cond_mode == "sigma":
             raise NotImplementedError(
                 "halt=True (arm TUL-halt) has no defined interaction with "
@@ -13152,7 +13152,7 @@ class MORPHTransformer(nn.Module):
                 f"dropped from the coda, leaving nothing to predict. Lower the cut."
             )
 
-        # ── TG restriction (docs/tul-tg-spec.md §§1-4) — built ONCE per forward, in
+        # ── TG restriction (.agents/specs/tul-tg-spec.md §§1-4) — built ONCE per forward, in
         # `_tul_tg_kwargs`, the ONE home every instrument that rebuilds the front
         # must read (2026-09-13: the horizon grid rebuilt it bare and scored a
         # strict model from an unrestricted prelude).
@@ -14329,7 +14329,7 @@ class MORPHTransformer(nn.Module):
                     "tul.tg_restrict has no defined interaction with coda_sees_slots=False "
                     "or coda_token_cut>0: the coda then runs on a GATHERED subset of "
                     "positions, and neither tg_allow nor the GLA reset mask is re-derived "
-                    "for that index space (docs/tul-tg-spec.md does not specify it). Not "
+                    "for that index space (.agents/specs/tul-tg-spec.md does not specify it). Not "
                     "run by the TG arms (tul_a1's coda_sees_slots=true, coda_token_cut=0); "
                     "raises rather than silently building an unrestricted or mis-masked "
                     "coda pass.")
@@ -14359,7 +14359,7 @@ class MORPHTransformer(nn.Module):
                     "plan_nats (§7.2) has no defined interaction with tg_restrict: it "
                     "removes every slot position from the coda's gathered sequence — "
                     "exactly the channel tg_restrict forces context through — and "
-                    "docs/tul-tg-spec.md does not specify the resulting mask. The TG "
+                    ".agents/specs/tul-tg-spec.md does not specify the resulting mask. The TG "
                     "arms' pre-registration "
                     "(lab/experiments/planned/2026-08-27-tg-restriction.md) reports plan "
                     "worth as 'enormous by construction, decides nothing' and does not "
@@ -15183,7 +15183,7 @@ class MORPHTransformer(nn.Module):
         return out
 
     def _tul_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
-        """Eval-only plan ablations for ``val/plan_worth_*`` (docs/tul-fm-probing.md §1).
+        """Eval-only plan ablations for ``val/plan_worth_*`` (.agents/notes/rejected/architecture/tul-fm-probing.md §1).
 
         Applies to EVERY slot path — the FM planner's plans, the core loop's looped
         states, and GL1's one-step tap states — because it operates on ``h_slots`` just
@@ -15335,7 +15335,7 @@ class MORPHTransformer(nn.Module):
         ``shuffle``— whole slots permuted WITHIN a row. Removes only the correspondence
                      between a slot and its span, which is what makes it the
                      span-SPECIFICITY number. Report the shuffle COST, never a
-                     specificity fraction (docs/tul-fm-probing.md §4 rule 1).
+                     specificity fraction (.agents/notes/rejected/architecture/tul-fm-probing.md §4 rule 1).
         ``all_slots`` — THE ROUTE SPLIT (2026-09-11). ``zero`` plus the two routes it
                      leaves open: the coda's per-layer injections at the slot cells and the
                      cells' own attention over their span. Under ``tg_restrict`` this makes
@@ -15823,7 +15823,7 @@ class MORPHTransformer(nn.Module):
             raise NotImplementedError(
                 "tul.tg_restrict has no defined interaction with arm CW "
                 "(tul_forward_cw_arms always runs the gathered-subset coda — see the "
-                "same raise in _forward_tul). docs/tul-tg-spec.md does not specify it.")
+                "same raise in _forward_tul). .agents/specs/tul-tg-spec.md does not specify it.")
         B, L = layout.slot_mask.shape
         if not 0 <= cut < L:
             raise ValueError(
@@ -16112,7 +16112,7 @@ class MORPHTransformer(nn.Module):
                 "tul_step_mode requires slot_layout (faithful DiffusionBlocks conditions "
                 "the TUL slot loop only; there is no core loop to condition here).")
         if self._tg_restrict:
-            # docs/tul-tg-spec.md builds the restriction as a per-forward DATA argument
+            # .agents/specs/tul-tg-spec.md builds the restriction as a per-forward DATA argument
             # derived from the layout — there is no defined "unrestricted" fallback for
             # a tg_restrict model, and every real call site (train.py, tul_generate.py)
             # always supplies a layout once TUL is active. A missing layout here would
@@ -16120,7 +16120,7 @@ class MORPHTransformer(nn.Module):
             # applied — the exact silent-fallback theater the spec forbids.
             raise RuntimeError(
                 "model built with tul.tg_restrict=true but forward() got no slot_layout "
-                "(docs/tul-tg-spec.md): there is no unrestricted fallback path for a TG "
+                "(.agents/specs/tul-tg-spec.md): there is no unrestricted fallback path for a TG "
                 "model. Pass slot_layout explicitly.")
         # ── Token-Superposition Training input bagging (TST, arXiv 2605.06546) ──
         # bag_size==0 → baseline path, BIT-IDENTICAL to pre-TST (and what eval/gen

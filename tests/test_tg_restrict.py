@@ -1,4 +1,4 @@
-"""TG restriction (docs/tul-tg-spec.md) — spec §7 tests T1, T2, T3, plus the kernels
+"""TG restriction (.agents/specs/tul-tg-spec.md) — spec §7 tests T1, T2, T3, plus the kernels
 raise (spec §2/§6) and a state-dict-keys-unchanged check for ``tg_restrict=false``.
 
 CPU only, eager (``use_kernels=False``), tiny config, no tokenizer — the same

@@ -1,7 +1,7 @@
 # Planned: TG round 2 — the slot SEED (TG4a/TG4b) and the softness of the restriction (TG3)
 
 Status: planned
-Spec: ../../../docs/tul-tg-spec.md   Worklist: ../../divergence/TG-WORKLIST.md (A1, A2)
+Spec: ../../../.agents/specs/tul-tg-spec.md   Worklist: ../../divergence/TG-WORKLIST.md (A1, A2)
 Prior: ../failures/2026-08-27-tg-restriction.md   Paper: arXiv 2512.25026 (Thought Gestalt)
 
 ## Two process failures, stated before anything else

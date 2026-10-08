@@ -1,4 +1,4 @@
-"""TUL forward contract (docs/tul-spec.md §3.2-§3.4, §5, §7.2; runtime-invariants §6b).
+"""TUL forward contract (.agents/specs/tul-spec.md §3.2-§3.4, §5, §7.2; runtime-invariants §6b).
 
 Protects the invariants that a silent break would hide inside the loss curve:
 ``slot_layout=None`` is bit-identical to the baseline, the per-slot depth really is a

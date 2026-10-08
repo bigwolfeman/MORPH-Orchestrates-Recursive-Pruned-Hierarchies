@@ -11,7 +11,7 @@ been TRAINED yet" after the short-schedule arms finished and A1 beat dense A0.
 
 Align current-state docs with `lab/tul/arms-result.md`:
 
-- `docs/tul-spec.md` status → implemented, run, measured; further testing ongoing
+- `.agents/specs/tul-spec.md` status → implemented, run, measured; further testing ongoing
 - `CLAUDE.md` code map line → measured A0/A1/A3, further testing ongoing
 - `docs/ablation-ledger.md` TUL section → A0/A1/A3 measured, A1r incomplete,
   remaining planned; drop "none has been RUN"

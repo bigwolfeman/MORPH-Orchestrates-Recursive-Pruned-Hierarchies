@@ -1,6 +1,6 @@
 """Resolve the Hydra ``tul:`` block into the objects the training loop needs.
 
-Spec: ``docs/tul-spec.md`` §8 (config keys), §5 (schedule), §4 (data).
+Spec: ``.agents/specs/tul-spec.md`` §8 (config keys), §5 (schedule), §4 (data).
 
 Kept out of ``train.py`` so the tokenizer work (resolving the boundary id set and the
 slot token) is one testable unit, and so ``train.py``'s TUL seam is three lines. The
@@ -221,7 +221,7 @@ class TulRuntime:
     def val_data_cfg(self) -> TulDataConfig:
         """The val loader's layout: the same segmentation with the gate augmentation OFF.
 
-        docs/tul-gate-spec.md §3.2 truncates spans with OUR rng. A val CE measured over
+        .agents/specs/tul-gate-spec.md §3.2 truncates spans with OUR rng. A val CE measured over
         rng-truncated spans is not comparable to the reference arm's, and it would move
         with the seed. Val therefore always scores the data's own segmentation — which is
         also the segmentation the generation metrics are checked against.
@@ -298,7 +298,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                 f"of them, not both.")
         slot_cells = fan_k
 
-    # ── the span-length gate (docs/tul-gate-spec.md §1, §3, §12) ──────────────
+    # ── the span-length gate (.agents/specs/tul-gate-spec.md §1, §3, §12) ──────────────
     # `tul.gate: false` ⇒ gate_cfg and gate_spec are both None ⇒ no parameter is built,
     # the packer draws no random number, and the arm IS arm A1 (§9 invariant 1).
     gate_cfg = gate_spec = None
@@ -1602,11 +1602,11 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
               f"(decode≤{gate_cfg.k_decode_max}) lambda={gate_cfg.lam} "
               f"budget_cond={gate_cfg.budget_cond} truncate_p={gate_spec.truncate_p} "
               f"huber_beta={gate_cfg.huber_beta} drives_depth={gate_cfg.drives_depth} "
-              f"seed={data_cfg.seed} (docs/tul-gate-spec.md)", flush=True)
+              f"seed={data_cfg.seed} (.agents/specs/tul-gate-spec.md)", flush=True)
     if model_cfg.tg_restrict:
         print(f"  TUL TG-RESTRICT ON: soft_prev_span={model_cfg.tg_soft_prev_span} "
               f"— window branch restricted to same-span-or-slot, compressed branch "
-              f"restricted to slot positions (docs/tul-tg-spec.md); model.use_kernels "
+              f"restricted to slot positions (.agents/specs/tul-tg-spec.md); model.use_kernels "
               f"must be false", flush=True)
     if model_cfg.tg_geometry == "strict":
         print(f"  TUL STRICT GEOMETRY ON (coda_prefix_reach={model_cfg.tg_coda_prefix_reach}): "

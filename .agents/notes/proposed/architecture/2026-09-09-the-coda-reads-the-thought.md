@@ -4,7 +4,7 @@ Status: proposed
 
 ## Problem
 
-The TUL spec (`docs/tul-spec.md` §3.4, line 418: `x_coda = input_norm(x)  # tokens SKIP
+The TUL spec (`.agents/specs/tul-spec.md` §3.4, line 418: `x_coda = input_norm(x)  # tokens SKIP
 the core`) hands the coda every token's own prelude state. The prelude is a global
 transformer over every position, so a token of span i+1 reaches the coda already carrying
 all of span i, and the slot's looped state `z_i` is two extra cells among ~1,100 that the

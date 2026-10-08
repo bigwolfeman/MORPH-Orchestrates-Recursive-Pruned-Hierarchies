@@ -24,7 +24,7 @@ Add `emit_source ∈ {"slot","token"}` to `generate_tul` and `generate_tul_batch
 procedure is unchanged. Default stays `"slot"` (spec §6 v1 — no silent behavior
 change). `scripts/tul_samples.py` and the trainer's gen path select `"token"`
 when the arm's `emit_weight == 0`. Spec deviation recorded in
-`docs/tul-spec.md` §6. Tests: `tests/test_generation_sampling.py` (position-
+`.agents/specs/tul-spec.md` §6. Tests: `tests/test_generation_sampling.py` (position-
 coded stub asserts the read index per mode, default, batch parity — 17 pass).
 
 ## Alternatives considered

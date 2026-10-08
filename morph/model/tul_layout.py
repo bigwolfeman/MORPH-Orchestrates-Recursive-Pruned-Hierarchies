@@ -1,6 +1,6 @@
 """TUL span layout — the ONE boundary rule, the row packer, and the slot layout.
 
-Spec: ``docs/tul-spec.md`` §3.1 (sequence layout + boundary rule), §4 (data),
+Spec: ``.agents/specs/tul-spec.md`` §3.1 (sequence layout + boundary rule), §4 (data),
 §6 (generation parity), §9 invariants 1/3/5.
 
 This module is the single source of truth for "where does a span end and where
@@ -240,11 +240,11 @@ class BoundaryRule:
         return np.asarray(out, dtype=np.int64), (n - 1) - base
 
 
-# ── The gate augmentation (docs/tul-gate-spec.md §3) ─────────────────────────
+# ── The gate augmentation (.agents/specs/tul-gate-spec.md §3) ─────────────────────────
 
 @dataclass(frozen=True)
 class TulGateSpec:
-    """Loader-side settings of the span-length gate (docs/tul-gate-spec.md §3).
+    """Loader-side settings of the span-length gate (.agents/specs/tul-gate-spec.md §3).
 
     ``truncate_p`` is the ONLY augmentation. Spec §3 listed two (start jitter and end
     truncation); they are the two halves of ONE edit, so this implements one knob —
@@ -273,7 +273,7 @@ def insert_truncations(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Split spans at random interior points → ``(boundaries, is_rng)``.
 
-    docs/tul-gate-spec.md §3.2: a span cut SHORT of its unit's boundary ends without
+    .agents/specs/tul-gate-spec.md §3.2: a span cut SHORT of its unit's boundary ends without
     punctuation, and the next span then starts mid-unit. That second span is exactly
     §3.1's "start jitter" — one insertion produces both — so this is the single
     augmentation, and §3.1's separate ``jitter_p`` is not built. (A row-phase offset
@@ -361,7 +361,7 @@ def pack_tul_row(
               the row consumes — the last row token's label is the next token.
         rule: the shared boundary rule.
         spec: the fixed-shape budget.
-        gate: docs/tul-gate-spec.md §3. ``None`` (or ``truncate_p`` 0) draws NO random
+        gate: .agents/specs/tul-gate-spec.md §3. ``None`` (or ``truncate_p`` 0) draws NO random
               number and produces byte-identical output to the pre-gate packer, which
               is what keeps the reference arm reproducible.
         rng:  ``np.random.Generator``; required when ``gate.truncate_p > 0``.
@@ -375,7 +375,7 @@ def pack_tul_row(
 
     ``span_len`` is the token count of each slot's span, clamped to ``gate.k_max``;
     ``len_supervised`` is False at pad slots and at slots whose span was ended by the
-    truncation RNG rather than by the data (docs/tul-gate-spec.md §6 masks those out
+    truncation RNG rather than by the data (.agents/specs/tul-gate-spec.md §6 masks those out
     of the length term — grading a head on our own noise is label noise, not signal).
     """
     L, K, S = spec.l_total, spec.prefix_k, spec.max_slots
@@ -400,7 +400,7 @@ def pack_tul_row(
         # The length label is span_len / k_max, so a span longer than k_max cannot be
         # expressed. Saturating silently would train the head on a wrong target for the
         # longest spans — exactly the class of silent label corruption the packer's
-        # slot_id check already refuses (docs/tul-gate-spec.md §3.3).
+        # slot_id check already refuses (.agents/specs/tul-gate-spec.md §3.3).
         raise ValueError(
             f"tul.span_cap={rule.span_cap} > tul.gate_k_max={k_max}: the length label "
             f"would saturate. Raise gate_k_max or lower span_cap.")
@@ -474,7 +474,7 @@ def pack_tul_row(
         slot_index[:n_slots] = slot_first
         slot_valid[:n_slots] = True
 
-    # ── gate labels (docs/tul-gate-spec.md §3.3) ──────────────────────────
+    # ── gate labels (.agents/specs/tul-gate-spec.md §3.3) ──────────────────────────
     # THE LABEL IS THE **NEXT** SPAN'S LENGTH, not the slot's own.
     # Slot i is built from span i's tokens and sits AFTER them, so causal attention lets
     # it condition only what comes after: span i+1. The budget the coda needs is therefore
@@ -555,7 +555,7 @@ class SlotLayout:
                     causal attention over the compact slot sequence is unchanged.
         prefix_k:   coda positions per slot (§3.1).
         span_len:   ``[B, max_slots]`` int64 — tokens this slot's span covers, 1…k_max;
-                    0 at pad slots (docs/tul-gate-spec.md §3.3). None ⇒ no gate.
+                    0 at pad slots (.agents/specs/tul-gate-spec.md §3.3). None ⇒ no gate.
         len_supervised: ``[B, max_slots]`` bool — True when ``span_len`` is the DATA's
                     answer; False at pad slots and at RNG-truncated ones (gate §6).
         ditto_prev: ``[B, L]`` int64 — ``tul.ditto_rows`` (DITTO, Xu et al. 2022, arXiv
@@ -791,7 +791,7 @@ def span_start_mask(span_id: Tensor) -> Tensor:
     return out
 
 
-# ── TG restriction masks (docs/tul-tg-spec.md §1, §4) ────────────────────────
+# ── TG restriction masks (.agents/specs/tul-tg-spec.md §1, §4) ────────────────────────
 #
 # The ONE builder both the window branch (via `_window_fallback`'s `extra_mask`) and
 # the tests share for the causal "same-span-or-slot" allow relation. The compressed
@@ -1068,7 +1068,7 @@ class TulDataConfig:
     prefix_k: int = 2
     slot_id: int = 4
     max_slots: int = 0                # 0 → seq_len // 8 (spec §8)
-    # docs/tul-gate-spec.md §3. `gate=None` ⇒ no span_len/len_supervised arrays and NO
+    # .agents/specs/tul-gate-spec.md §3. `gate=None` ⇒ no span_len/len_supervised arrays and NO
     # random draw, i.e. the reference arm's loader is untouched. The VAL loader always
     # gets truncate_p 0 (train.py builds it with `for_val=True`): a val CE that depends
     # on our augmentation RNG is not comparable to the reference arm's.

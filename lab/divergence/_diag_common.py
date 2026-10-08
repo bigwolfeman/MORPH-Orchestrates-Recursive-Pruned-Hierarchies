@@ -50,7 +50,7 @@ class Arm:
         self.device = device
         # tg_scoped_kernels=false as well: these instruments monkey-patch and re-invoke
         # eager functions (_window_fallback, core_init), which the scoped Triton kernel
-        # path does not know about (docs/tul-tg-spec.md; lab/divergence/
+        # path does not know about (.agents/specs/tul-tg-spec.md; lab/divergence/
         # slot_state_linear_probe.py's own --override note). Correctness over speed here
         # — every run in this file is eval-only.
         # ++ (not +) because a plain (no-tul) config's model.* struct never declares this

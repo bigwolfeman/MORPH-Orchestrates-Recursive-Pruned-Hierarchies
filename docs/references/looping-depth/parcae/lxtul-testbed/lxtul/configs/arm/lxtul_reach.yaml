@@ -1,0 +1,6 @@
+# Parcae-LXTUL (strict) + identity reach (lxtul/copy_heads.IdentityReach): before the coda, tokens
+# attend over earlier tokens' RAW embedding windows (8 heads); the loop and the cells are untouched.
+name: lxtul-reach
+kind: lxtul
+lxtul:
+  identity_reach_heads: 8

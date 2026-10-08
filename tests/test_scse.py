@@ -1,4 +1,4 @@
-"""Contract for the FULL SCSE method. Spec: ``docs/scse-spec.md`` (arXiv:2607.27656).
+"""Contract for the FULL SCSE method. Spec: ``.agents/notes/proposed/architecture/scse-spec.md`` (arXiv:2607.27656).
 
 One test per invariant in spec section 5, named after it. These are deliberately written to
 fail when the code is broken rather than to confirm shapes: the previous SCSE round shipped

@@ -6,7 +6,7 @@
 # checkpoints/morph/gl1-ctrl-s1/).
 #
 # THE CURRICULUM: GL1's own gate showed the mask costs 0.34 nats vs the unrestricted
-# twin (docs/tul-tg-spec.md decision note: "0.17-0.42 nats vs unrestricted at matched
+# twin (.agents/specs/tul-tg-spec.md decision note: "0.17-0.42 nats vs unrestricted at matched
 # steps" is the pre-existing TG-family range; GL1's own run landed at the top of it).
 # The bet here is that most of that gap is the model having to LEARN language and the
 # gist-write discipline from a cold start at the same time — if the backbone already
