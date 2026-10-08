@@ -41,8 +41,8 @@ Owners are subagents; every change is a default-off key until it passes its chec
 
 | lever | region now | target | agent | measured 2026-10-08 (bench pairs, 420 steps) |
 |---|---|---|---|---|
-| span decoder: dead rows (static cap 6786, Lemma 9), no dW for the detached head, fused CE | 65.7 | ~15 | cehead | in progress |
-| LM head CE: fused, slot rows dropped (coda K/V at slot rows stays, Lemma 3) | 50.4 | ~22 | cehead | in progress |
+| span decoder: dead rows (static cap 6792, Lemma 9), no dW for the detached head, fused CE | 65.7 | ~15 | cehead | fed3aafc: 53.5 -> 28.3 ms (dW skip exact) |
+| LM head CE: fused kernel reaches the pointer/DITTO loss (slot rows not dropped yet, Lemma 3) | 50.4 | ~22 | cehead | fed3aafc: 49.2 -> 25.3 ms; both keys 373 -> 324 ms |
 | EMA twin: shared table reads (exact), compiled twin | 19.2 | ~6 | twinfan | 4284c374: exact part -4.3 ms; compile -1.6 ms; twin still 13.75 ms (HC/CCA kernels compile cannot reach) |
 | fan diversity / lsel: fp32 batched, bf16 pick | 11.2 | ~3 | twinfan | 4284c374: fan/lsel 11.2 -> 4.3 ms; three keys together 388.8 -> ~377 ms |
 | online prelude as router teacher (changes objective) | 13.75 | 0 | twinfan | -13 ms more (362 ms); needs a paired continuation |
@@ -51,9 +51,12 @@ Owners are subagents; every change is a default-off key until it passes its chec
 | hinge reuses the loop's f(h) | | | coreloop | built, off, NOT near-equivalent on active steps (total-gradient cosine 0.85-0.95): rejected |
 | HC eager reference fixed, HC always kernel | (correctness) | | hcgap | bc75eec1 |
 
-Committed exact and rounding-only keys (FAST2): about 352 ms, 17.5k tok/s. With the CE heads at
-target, about 270-290 ms. The rest of the gap is block glue (B) and compaction (C): agents
-`blockfuse` and `compaction`, launched 2026-10-08 05:30.
+Measured 2026-10-08 08:36 (bench pairs, frozen tree, 420 steps): FAST2 343.0 / 343.2 ms
+(17.9k tok/s); every committed key together, `morph/configs/lxtul_pointer_fast.yaml`: 266.7 /
+266.8 ms = **23.0k tok/s**, about 2x eager production (~525 ms) and level with Parcae's testbed
+(23.5k). Compaction (f1ac1b9c, `slot_compact: gather` + `slot_depth_stratified`) is part of it.
+Left: block glue (`blockfuse`, in progress), LM-head slot rows (Lemma 3), the logits recompute
+GEMM, the hinge's inactive-step backward.
 
 ### B. Carrier and sublayer glue (the HC/CCA Triton kernels are about 75 ms; copies/casts and
 fp32 adds/muls about 100 ms across the step)
