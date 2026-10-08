@@ -92,3 +92,28 @@ and make it clear how this e and h evolve to the final z." The figure now draws:
 
 The v1 eager generator still recomputes the whole row per step; the arrows draw the
 design's cost model (think once, decode cheap), not the v1 generator's schedule.
+
+## Update 2026-10-07 — LXTUL alone, results split out
+
+Wolfe's read of the 2026-10-07 drawing (LXTUL + pointer + DITTO, with geometry table,
+equations, train-only heads, a MEASURED box and a GENERATION box): "way too much going on
+... just show LXTUL ... break [the measured results] out into its own image". Now:
+
+- `tul_mechanism.tex` draws LXTUL alone in about 80 words: the row (spans cut at
+  punctuation, a 4-cell slot after each), the prelude once, tokens skipping the loop, the
+  4 cells through the shared core with a router pick and a reset to the winner after each
+  pass, the winner-only write, and the coda reading its own span and every earlier slot's
+  winner. The strict geometry is one line ("Between spans, the loop is the only path").
+  The code citations stay as `.tex` comments.
+- `tul_mechanism_detailed.tex` (+ PDF, no PNG) is the full drawing, unchanged apart from
+  its header, so nothing is lost: pointer head, DITTO phase, router teacher, span decoder,
+  geometry table, per-pass terms, generation.
+- `tul_results.tex` → `tul_results.png` sits below the mechanism in the README: CE gap to
+  plain at depth 6, K1−K6 and sampled seq_rep_4 as a table with bars, one seed per arm,
+  every number copied from the README table and its filings. The pointer and DITTO appear
+  only as result rows.
+
+Alternatives weighed: keep one figure and only shrink the MEASURED box (rejected, the ask
+was a separate image); a plain text table for the results (rejected, the README already
+has one, and bars show the sign of the CE gap and the repetition ordering at a glance);
+delete the detailed drawing (rejected, it holds the per-part code citations).

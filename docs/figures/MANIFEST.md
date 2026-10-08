@@ -9,7 +9,7 @@ files (`.aux`, `.log`) are grouped by topic.
 | Topic | Diagrams | Preview |
 |---|---|---|
 | Branding | — | `hydra.png` |
-| Architecture | [MORPH overview](architecture/morph_overview.tex), [MORPH block](architecture/morph_block.tex), [TUL mechanism](architecture/tul_mechanism.tex) | `morph_overview.png`, `morph_block.png`, `tul_mechanism.png` |
+| Architecture | [MORPH overview](architecture/morph_overview.tex), [MORPH block](architecture/morph_block.tex), [TUL mechanism](architecture/tul_mechanism.tex) (simple, README), [TUL mechanism, detailed](architecture/tul_mechanism_detailed.tex) (train-only heads, pointer, DITTO, code notes; PDF only), [TUL results](architecture/tul_results.tex) | `morph_overview.png`, `morph_block.png`, `tul_mechanism.png`, `tul_results.png` |
 | Attention | [Attention stack](attention/morph_attention.tex) | `morph_attention.png` |
 | Embeddings | [Hybrid embeddings](embeddings/morph_embeddings.tex) | `morph_embeddings.png` |
 | Memory | [Memory behavior](memory/morph_memory.tex), [Context coverage](memory/morph_context_coverage.tex) | `morph_memory.png`, `morph_context_coverage.png` |
@@ -28,6 +28,8 @@ pdftoppm -png -r 200 -singlefile <name>.pdf ../<name>
 ```
 
 Use `-singlefile` so previews are named `<name>.png`, not `<name>-1.png`.
+The TUL figures (`tul_mechanism`, `tul_results`) render at `-r 220`, as their `.tex`
+headers state; `tul_mechanism_detailed` keeps no PNG preview.
 Do not keep both an old `<name>.png` and a newer `<name>-1.png`.
 
 Deprecated: `architecture/tul_overview_deprecated.tex` (old stack dump) → use

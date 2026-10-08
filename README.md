@@ -26,9 +26,14 @@ The PyTorch path is the implementation target. The JAX/Flax mirror under `morph/
 
 
 <p align="center">
-  <img src="docs/figures/tul_mechanism.png" alt="LXTUL: tokens and 4-cell slots in one row; prelude once; the slot loop runs 4 cells per slot, a router picks a winner after each pass and all cells restart from it; the winner alone is written; the coda decodes the span; an output-only pointer head mixes copied tokens into the LM head; a DITTO training phase" width="720" />
+  <img src="docs/figures/tul_mechanism.png" alt="LXTUL: a row of token spans cut at punctuation, with a 4-cell slot after each span; the prelude reads the row once; tokens skip the loop; each slot's 4 cells loop through the shared core, a router picks one cell after each pass and all 4 restart from it; only the winner is written to the slot; the coda decodes the next span's tokens from its own span and every earlier slot's winner" width="720" />
 </p>
-<p align="center"><em>LXTUL, the 2026-10-07 TUL recipe: strict geometry, the latent-selected 4-cell slot loop, the winner-only write, the output-only pointer head and the DITTO phase.</em></p>
+<p align="center"><em>LXTUL, the latent-selected slot loop: only the slots loop, a router keeps one of 4 cells after each pass, and only the winner reaches the coda. Between spans, the loop is the only path. The full drawing, with the train-only heads, the pointer head and the DITTO phase, is <a href="docs/figures/architecture/tul_mechanism_detailed.tex">tul_mechanism_detailed.tex</a>.</em></p>
+
+<p align="center">
+  <img src="docs/figures/tul_results.png" alt="LXTUL measured results, one seed per arm: CE at depth 6 gap to the plain looped model (LXTUL +0.272, LXTUL + pointer -0.150), K1-K6 loop contribution (+0.0215, +0.0155, +0.0294 on re-trained rows after DITTO), and sampled seq_rep_4 repetition (plain 0.215, LXTUL 0.041, pointer 0.307, DITTO 0.140, real text 0.020)" width="720" />
+</p>
+<p align="center"><em>Measured results of the recipe (one seed per arm, 2026-10-07): the pointer head moves LXTUL from 0.272 behind the plain looped model to 0.150 ahead, and the DITTO phase halves its sampled repetition. Numbers and caveats are in the table below.</em></p>
 
 
 TUL thinks once per span instead of once per token. The text is cut into spans at
