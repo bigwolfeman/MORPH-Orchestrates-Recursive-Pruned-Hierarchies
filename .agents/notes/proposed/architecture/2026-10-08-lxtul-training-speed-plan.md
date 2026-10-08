@@ -99,9 +99,11 @@ fp32 adds/muls about 100 ms across the step)
   chaos alone moves a 5k run's K1-K6 by 0.006.
 - C (function changes): a PAIRED continuation: resume the production rerun's step_2500 twice, with
   and without the change, same data order and seed, 1000 steps; compare K1-K6 and CE@6 on the 480
-  rows. Measured paired noise (no change, 2026-10-08, `lab/experiments/mixed/`): K1-K6 0.0005,
-  CE@6 0.0007, against 0.006 / 0.009 between independent 5k runs. 5 % of K1-K6 there is 0.00045,
-  so a cut passes when its paired gap is inside 0.001 on two pairs; one full 5k run of the final
+  rows. Measured paired noise (no change, three draws, 2026-10-08, `lab/experiments/mixed/`):
+  K1-K6 spread 0.0012, CE@6 0.0007, against 0.006 / 0.009 between independent 5k runs. 5 % of
+  K1-K6 there is 0.00045, below the paired spread, so a cut needs three or more pairs and is
+  judged on the mean; CE@6 is the sharper readout. The FAST2 package plus the online teacher
+  passed this check (CE@6 unchanged in 3 runs; K1-K6 2 of 3 inside, one draw high). One full 5k run of the final
   combined recipe is read against the noise-floor runs.
 
 ### Lean
