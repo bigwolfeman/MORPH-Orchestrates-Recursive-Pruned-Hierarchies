@@ -233,10 +233,17 @@ def deterministic():
     torch.use_deterministic_algorithms(prev)
 
 
+# The slot loop and the gain hinge without checkpoints, and the hinge reusing the loop's
+# f(h) (graph-step speed keys, 2026-10-08): the capture must hold and replay the eager step.
+_CORELOOP = ("model.ckpt_grad_iters=0", "model.slot_gain_no_ckpt=true",
+             "model.slot_gain_reuse_f0=true")
+
+
 @cuda
-def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic):
+@pytest.mark.parametrize("extra", [(), _CORELOOP], ids=["winner", "coreloop_keys"])
+def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra):
     from morph.training.graph_step import GraphStep
-    cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON)
+    cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *extra)
     clip = float(cfg.training.grad_clip)
     batches = _batches(rt, len(_PLAN))
     lr = [1e-3 * (1 + 0.1 * s) for s in range(len(_PLAN))]

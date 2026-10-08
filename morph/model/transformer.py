@@ -771,6 +771,19 @@ class MORPHConfig:
     # False = the hinge before this existed.
     # Note: .agents/notes/proposed/architecture/2026-09-26-plan-c-xhc-slot-loop.md (C1b).
     slot_gain_renorm: bool = False
+    # slot_gain_no_ckpt — the hinge's two core applications keep their activations for the
+    # backward instead of running under `torch.utils.checkpoint` (no recompute: two core
+    # passes of backward work saved, one pass of activations held per application). EXACT:
+    # a checkpoint recomputes with the RNG state it saved, so the loss and every gradient
+    # are bit-identical (tests/test_slot_gain_reg.py). False = checkpointed, as before.
+    slot_gain_no_ckpt: bool = False
+    # slot_gain_reuse_f0 — the hinge's f(h) IS the loop's own step output at the sampled
+    # pass, and f(h + d) runs under that step's dropout masks (the RNG state before the
+    # step is replayed for it). Saves one of the hinge's two core applications. NOT exact:
+    # the value is the same map at the same point, but the loop's output is not detached
+    # at its input, so the hinge's gradient through f(h) also reaches earlier passes and
+    # the prelude (the separate application detaches them). False = two applications.
+    slot_gain_reuse_f0: bool = False
 
     @property
     def retention_carry_mode(self) -> str:
@@ -3707,6 +3720,14 @@ class MORPHTransformer(nn.Module):
             raise ValueError(
                 f"model.slot_gain_tail_lambda must be >= 0 (0 = off) and slot_gain_tail_target "
                 f"> 0, got {cfg.slot_gain_tail_lambda} / {cfg.slot_gain_tail_target}")
+        if (cfg.slot_gain_no_ckpt or cfg.slot_gain_reuse_f0) and cfg.slot_gain_lambda <= 0.0:
+            raise ValueError("model.slot_gain_no_ckpt / slot_gain_reuse_f0 need "
+                             "model.slot_gain_lambda > 0: they change how the hinge runs.")
+        if (cfg.slot_gain_reuse_f0 and cfg.tul is not None
+                and int(cfg.tul.xhc_streams) > 0):
+            # The expanded residuals' TopK route is recorded by the hinge's own f(h) and
+            # replayed by f(h + d); the loop's step records nothing to replay.
+            raise NotImplementedError("model.slot_gain_reuse_f0 under tul.xhc_streams")
         if cfg.slot_gain_tail_lambda > 0.0 and cfg.slot_gain_lambda <= 0.0:
             # The tail rides the row hinge's finite difference: with slot_gain_lambda 0 the
             # probe never runs, so a tail lambda alone would be a knob that does nothing.
@@ -6638,6 +6659,7 @@ class MORPHTransformer(nn.Module):
         # stream and the stream put back, so the draw is free of side effects on the run.
         _t_gain = -1
         _gain_all = bool(self.cfg.slot_gain_all_iters)
+        _gain_reuse = _gain_on and bool(self.cfg.slot_gain_reuse_f0)
         if _gain_on and n_grad_iters > 0 and not _gain_all:
             _rs = torch.get_rng_state()
             _t_gain = n_nograd + int(torch.randint(n_grad_iters, (1,)).item())
@@ -7200,6 +7222,12 @@ class MORPHTransformer(nn.Module):
             # has to be captured so the accumulator still grows (morph/model/tul_carry.py).
             _cy = _carry_state if (_carry_reinjects and t > 0) else None
             _want_carry = _carry is not None
+            # The gain hinge runs at this pass (its site below). `model.slot_gain_reuse_f0`:
+            # the RNG states the step is about to draw from, replayed for the hinge's f(h + d).
+            _gain_here = t == _t_gain or (_gain_on and _gain_all and t >= n_nograd)
+            _f0_rng = ((torch.get_rng_state(),
+                        torch.cuda.get_rng_state() if h.is_cuda else None)
+                       if _gain_here and _gain_reuse else None)
             if _ctr_w is not None:
                 # tul.loop_attn_center: record THIS pass's valid mean of x_bar (the forward
                 # of the step only; see the life-cycle block above the loop).
@@ -7285,7 +7313,7 @@ class MORPHTransformer(nn.Module):
                         # — it is the check that the match is live, not a free reading.
                         _carry_stats[f"inject_ratio_t{t}"] = _carry_cap.pop("ratio")
 
-            if t == _t_gain or (_gain_on and _gain_all and t >= n_nograd):
+            if _gain_here:
                 # The hinge must read the map on the slots whose pass at t CARRIES
                 # gradient: its penalty is added to the loss and shapes the core weights,
                 # and applying it at prefix positions would constrain the map exactly
@@ -7302,7 +7330,11 @@ class MORPHTransformer(nn.Module):
                         _gm, _gain_lambda, carry=_cy,
                         # keyword passed only when on: the knob-off call is the old call
                         **({} if _gain_renorm_to is None
-                           else {"renorm_to": _gain_renorm_to})))
+                           else {"renorm_to": _gain_renorm_to}),
+                        # `model.slot_gain_reuse_f0`: the step's RAW output (before the
+                        # progressive cut, the renorm and the cell norm) is f(h).
+                        **({} if _f0_rng is None
+                           else {"f0": _step_out[0], "f0_rng": _f0_rng})))
             if _renorm:
                 # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
                 # raw step output, BEFORE the gain governor and the recurrence gate, so it is
@@ -7778,8 +7810,13 @@ class MORPHTransformer(nn.Module):
         }
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
-                           mask, lam: float, carry=None, renorm_to=None) -> dict:
+                           mask, lam: float, carry=None, renorm_to=None,
+                           f0: Tensor | None = None, f0_rng: tuple | None = None) -> dict:
         """Hinge penalty on the slot map's typical gain at the live operating point.
+
+        ``f0`` / ``f0_rng`` (``model.slot_gain_reuse_f0`` only): the loop's own step output
+        at this pass and the (CPU, CUDA) RNG states from before that step. None: the hinge
+        computes f(h) itself, as below.
 
         The gain read here INCLUDES `DiagonalInjection`, whose identity-plus-decay Jacobian
         alone gives 0.865 at `A`'s init; the slot map sits just above that floor. A term
@@ -7812,6 +7849,12 @@ class MORPHTransformer(nn.Module):
             torch.set_rng_state(cpu_rng)
             if cuda_rng is not None:
                 torch.cuda.set_rng_state(cuda_rng)
+        # `model.slot_gain_reuse_f0`: the reused f(h) is attached at its input, so f(h + d)
+        # must be too, at the SAME live point and sources. Then the two applications'
+        # gradients into the upstream graph cancel to first order, as their weight gradients
+        # do; detached, f(h)'s input gradient alone is O(1 / slot_gain_eps) (tiny fixture:
+        # 70.9 upstream against the hinge's own 0.28 on the core; live: 0.14).
+        _live = (h_in, e_arg, inj_arg, ret_state, carry)
         hp = h_in.detach()
         # The map's gain in h at a FIXED source: the injection source and the retention
         # state are detached too, so the penalty shapes the core's weights and nothing
@@ -7851,15 +7894,31 @@ class MORPHTransformer(nn.Module):
         # are the same function (bit-identical pins: tests/test_tul_lx_credit.py and
         # /home/wolfe/morph-scratch/credit/pin_compare.py). The cost is two core passes
         # recomputed in the backward, the price the loop's own passes already pay.
-        def _app(h_, xr):
-            return checkpoint(core_step, h_, e_arg, inj_arg, ret_state=ret_state,
-                              iter_idx=t, stage_cond=stage_cond, carry=carry,
+        # `model.slot_gain_no_ckpt`: the same calls without the checkpoint, so the backward
+        # reads the kept activations; with the RNG put back before each call the forward
+        # draws what the checkpoint's recompute would replay (bit-identical).
+        _ckpt = not bool(self.cfg.slot_gain_no_ckpt)
+        def _app(h_, xr, e_, inj_, ret_, carry_):
+            if not _ckpt:
+                return core_step(h_, e_, inj_, ret_state=ret_, iter_idx=t,
+                                 stage_cond=stage_cond, carry=carry_, **xr)
+            return checkpoint(core_step, h_, e_, inj_, ret_state=ret_,
+                              iter_idx=t, stage_cond=stage_cond, carry=carry_,
                               use_reentrant=False, **xr)
         try:
-            _restore()
-            f0, _ = _app(hp, _xr0)
-            _restore()
-            f1, _ = _app(hp + d, _xr1)
+            if f0 is None:
+                _restore()
+                f0, _ = _app(hp, _xr0, e_arg, inj_arg, ret_state, carry)
+                _restore()
+                f1, _ = _app(hp + d, _xr1, e_arg, inj_arg, ret_state, carry)
+            else:
+                # `model.slot_gain_reuse_f0`: `f0` is the loop's own step output at this
+                # pass; f(h + d) replays that step's RNG state, so both see one set of masks,
+                # and runs at the live point (`_live` above).
+                torch.set_rng_state(f0_rng[0])
+                if f0_rng[1] is not None:
+                    torch.cuda.set_rng_state(f0_rng[1])
+                f1, _ = _app(_live[0] + d, _xr1, *_live[1:])
         finally:
             _restore()
         den = d.float().flatten(1).norm(dim=1) + 1e-6

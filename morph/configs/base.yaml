@@ -141,6 +141,15 @@ model:
   #   the hinge reads f (arc E14's hinge + renorm pairing). First arms: plan C1b,
   #   tul_slot_spandec_strict_e4probe_fp01_xhc_c1b{,_ta}.yaml.
   slot_gain_renorm: false
+  # slot_gain_no_ckpt: the hinge's two core applications keep their activations instead of
+  #   running under torch.utils.checkpoint (no backward recompute; +1.54 GB peak on the
+  #   lxtul_pointer FAST step). EXACT: loss and grads bit-identical. false = checkpointed.
+  slot_gain_no_ckpt: false
+  # slot_gain_reuse_f0: the hinge's f(h) is the loop's own step output at the sampled pass and
+  #   f(h + d) replays that step's RNG state (one core application saved). NOT exact: the
+  #   hinge's gradient through f(h) also reaches earlier passes and the prelude. false = two
+  #   applications at the detached point.
+  slot_gain_reuse_f0: false
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).

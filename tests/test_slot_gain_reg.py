@@ -181,3 +181,79 @@ def test_all_iters_penalty_is_at_least_the_single_sample_penalty_in_expectation(
     every = _run(_model(seed=3, slot_gain_lambda=1.0, slot_gain_target=0.0,
                         slot_gain_all_iters=True))[0]
     assert float(every["gain_reg_weighted"]) >= float(single["gain_reg_weighted"]) * 0.999
+
+
+# ── checkpoint policy of the slot loop and the hinge (graph-step speed work, 2026-10-08) ──
+
+_ON = dict(slot_gain_lambda=1.0, slot_gain_target=0.0)
+
+
+def test_hinge_without_checkpoint_is_bit_identical():
+    """`model.slot_gain_no_ckpt`: the hinge's applications keep their activations. The
+    checkpoint recomputes with the RNG state it saved, so the loss, every gradient and the
+    run's random stream are bit-identical to the checkpointed hinge (dropout 0.1 here, so
+    a mask drawn from the wrong state would show)."""
+    out_c, g_c, rng_c = _run(_model(seed=3, **_ON))
+    out_n, g_n, rng_n = _run(_model(seed=3, slot_gain_no_ckpt=True, **_ON))
+    assert float(out_c["gain_reg_weighted"]) > 0.0
+    assert torch.equal(out_c["loss"], out_n["loss"])
+    assert torch.equal(out_c["gain_est"], out_n["gain_est"])
+    assert _same(g_c, g_n), "the un-checkpointed hinge changed a gradient"
+    assert torch.equal(rng_c, rng_n)
+
+
+def test_slot_loop_without_checkpoint_is_bit_identical():
+    """`ckpt_grad_iters` 0 (no pass of the slot loop checkpointed) against -1 (every grad
+    pass checkpointed), with the hinge on: the same loss and gradients, bit for bit."""
+    out_a, g_a, _ = _run(_model(seed=3, ckpt_grad_iters=-1, **_ON))
+    out_b, g_b, _ = _run(_model(seed=3, ckpt_grad_iters=0, slot_gain_no_ckpt=True, **_ON))
+    assert torch.equal(out_a["loss"], out_b["loss"])
+    assert _same(g_a, g_b), "the un-checkpointed slot loop changed a gradient"
+
+
+def test_reuse_f0_reads_the_same_gain_at_dropout_zero():
+    """`model.slot_gain_reuse_f0` at dropout 0: f(h) is the loop's step output, the same
+    map at the same point, and the direction is drawn from the same state, so the gain and
+    the penalty are the two-application hinge's bit for bit, and the run's losses and RNG
+    stream are untouched. The gradients differ by design (next tests)."""
+    out_a, g_a, rng_a = _run(_model(seed=3, dropout=0.0, **_ON))
+    out_b, g_b, rng_b = _run(_model(seed=3, dropout=0.0, slot_gain_reuse_f0=True, **_ON))
+    assert torch.equal(out_a["gain_est"], out_b["gain_est"])
+    assert torch.equal(out_a["gain_reg_weighted"], out_b["gain_reg_weighted"])
+    assert torch.equal(out_a["mux_local"], out_b["mux_local"])
+    assert torch.equal(rng_a, rng_b)
+
+
+def test_reuse_f0_replays_the_steps_dropout_masks():
+    """At dropout 0.1, f(h + d) must run under the loop step's masks: two applications
+    under different masks differ by O(1) of the state, which over a step of size eps reads
+    as a gain of order 1/eps. With the masks matched the gain is the map's, close to the
+    two-application hinge's (each pair of applications shares its own masks)."""
+    out_a, _, rng_a = _run(_model(seed=3, **_ON))
+    out_b, _, rng_b = _run(_model(seed=3, slot_gain_reuse_f0=True, **_ON))
+    ga, gb = float(out_a["gain_est"]), float(out_b["gain_est"])
+    assert abs(ga - gb) / ga < 0.25, (ga, gb)
+    assert torch.equal(out_a["mux_local"], out_b["mux_local"])
+    assert torch.equal(rng_a, rng_b), "the reused hinge moved the run's random stream"
+
+
+def test_reuse_f0_gradient_reaches_upstream_of_the_loop_at_the_hinges_scale():
+    """The stated cost of `slot_gain_reuse_f0`: f(h) is not detached at its input, so the
+    hinge's gradient also reaches the prelude (the two-application hinge never does:
+    `test_gain_penalty_reaches_the_core_and_nothing_upstream`). f(h + d) runs at the same
+    live point, so the two input gradients cancel to first order and what reaches upstream
+    is the gain's own dependence on the operating point: no larger than the hinge's own
+    gradient on the core (a detached f(h + d) sent O(1 / eps): 70.9 against 0.28).
+    Dropout 0, so the two hinges read one map."""
+    _, g_r, _ = _run(_model(seed=3, dropout=0.0))
+    _, g_a, _ = _run(_model(seed=3, dropout=0.0, **_ON))
+    _, g_b, _ = _run(_model(seed=3, dropout=0.0, slot_gain_reuse_f0=True, **_ON))
+    upstream = [n for n in g_r if n.startswith("prelude.") and g_r[n] is not None]
+    core = [n for n in g_r if n.startswith("core.") and g_r[n] is not None]
+    assert upstream and core
+    assert _same(g_r, g_a, upstream) and not _same(g_r, g_b, upstream)
+    def _nrm(ga, gb, names):
+        return float(sum((ga[n] - gb[n]).double().pow(2).sum() for n in names)) ** 0.5
+    hinge_core = _nrm(g_a, g_r, core)            # the two-application hinge on the core
+    leak = _nrm(g_b, g_r, upstream)              # the reused hinge upstream of the loop
+    assert 0.0 < leak < hinge_core, (leak, hinge_core)

@@ -774,6 +774,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_floor_lambda=float(getattr(m, "slot_gain_floor_lambda", 0.0)),
         slot_gain_floor_target=float(getattr(m, "slot_gain_floor_target", 0.95)),
         slot_gain_renorm=bool(getattr(m, "slot_gain_renorm", False)),
+        slot_gain_no_ckpt=bool(getattr(m, "slot_gain_no_ckpt", False)),
+        slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
         mtp_heads=int(getattr(m, "mtp_heads", 1)),
         injection_channels=str(getattr(m, "injection_channels", "ctx")),
         core_fixed_point_lambda=float(getattr(m, "core_fixed_point_lambda", 0.0)),
