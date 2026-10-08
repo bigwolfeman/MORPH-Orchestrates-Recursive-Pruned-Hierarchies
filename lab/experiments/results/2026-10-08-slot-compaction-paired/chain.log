@@ -1,0 +1,9 @@
+[10-08 07:20:59] train g start
+[10-08 07:32:23] train g exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) Final val_loss=4.0926
+[10-08 07:32:23] train h start
+[10-08 07:44:39] train h exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) Final val_loss=4.0915
+[10-08 07:44:39] train i start
+[10-08 07:54:34] train i exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) Final val_loss=4.0920
+[10-08 07:57:03] sweep g exit=0 ckpt=step_3500.pt g depth=1 ce=4.0578 span_first=3.6614 spandec_ce=4.6857 g depth=6 ce=4.0480 span_first=3.6314 spandec_ce=4.6704 g ce_tokens K1-K6: +0.0098 [+0.0091, +0.0104] over 480 rows g spandec_ce K1-K6: +0.0153 [+0.0140, +0.0166] over 160 batches 
+[10-08 07:59:49] sweep h exit=0 ckpt=step_3500.pt h depth=1 ce=4.0561 span_first=3.6562 spandec_ce=4.6823 h depth=6 ce=4.0468 span_first=3.6311 spandec_ce=4.6700 h ce_tokens K1-K6: +0.0093 [+0.0086, +0.0099] over 480 rows h spandec_ce K1-K6: +0.0123 [+0.0114, +0.0133] over 160 batches 
+[10-08 08:02:18] sweep i exit=0 ckpt=step_3500.pt i depth=1 ce=4.0592 span_first=3.6705 spandec_ce=4.6846 i depth=6 ce=4.0472 span_first=3.6309 spandec_ce=4.6709 i ce_tokens K1-K6: +0.0120 [+0.0113, +0.0127] over 480 rows i spandec_ce K1-K6: +0.0137 [+0.0128, +0.0147] over 160 batches 
