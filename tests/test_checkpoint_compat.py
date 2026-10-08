@@ -15,7 +15,8 @@ import torch
 from morph.model.transformer import MORPHConfig, MORPHTransformer
 from morph.model.tul import TULConfig
 from morph.model.tul_fm import FMArmConfig
-from morph.training.train import RETIRED_TUL_KEYS, drop_retired_tul_keys, load_weights_only
+from morph.training.train import (RETIRED_TUL_KEYS, _canon_ckpt_key, drop_retired_tul_keys,
+                                  load_checkpoint, load_weights_only)
 
 V = 64
 
@@ -96,3 +97,43 @@ def test_load_weights_only_loads_an_old_arm_checkpoint_with_no_unexpected_key(tm
     assert torch.equal(dst.tul.E_slot, src.tul.E_slot)
     for (ka, a), (kb, b) in zip(src.state_dict().items(), dst.state_dict().items()):
         assert ka == kb and torch.equal(a, b), ka
+
+
+def _resume_into(tmp_path, src: MORPHTransformer, dst: MORPHTransformer):
+    path = tmp_path / "resume.pt"
+    torch.save({"model": {k: v.clone() for k, v in src.state_dict().items()},
+                "optimizer": {}, "step": 7, "next_step": 8}, path)
+    scaler = torch.amp.GradScaler("cuda", enabled=False)
+    return load_checkpoint(str(path), dst, scaler, torch.device("cpu"))
+
+
+def _assert_same_weights(src: MORPHTransformer, dst: MORPHTransformer):
+    a = {_canon_ckpt_key(k): v for k, v in src.state_dict().items()}
+    b = {_canon_ckpt_key(k): v for k, v in dst.state_dict().items()}
+    assert a.keys() == b.keys()
+    for k in a:
+        assert torch.equal(a[k], b[k]), k
+
+
+def test_resume_aligns_compile_wrappers_on_either_side(tmp_path):
+    """An eager checkpoint resumes into a model whose blocks are wrapped by torch.compile
+    (`training.compile_blocks`: keys gain `._orig_mod.`), and a wrapped model's checkpoint
+    resumes into an eager one. The optimizer-state names come back in the LIVE model's key
+    convention, so align_optimizer_state matches them by name. Before 2026-10-08 the first
+    case raised with 420 keys without a home on the lxtul_pointer model."""
+    torch.manual_seed(1)
+    eager_src = MORPHTransformer(_cfg())
+    torch.manual_seed(2)
+    wrapped_dst = MORPHTransformer(_cfg())
+    wrapped_dst.prelude[0] = torch.compile(wrapped_dst.prelude[0])
+    assert any("._orig_mod." in k for k in wrapped_dst.state_dict())
+    step, _, _, pnames = _resume_into(tmp_path, eager_src, wrapped_dst)
+    assert step == 8
+    _assert_same_weights(eager_src, wrapped_dst)
+    assert pnames == set(wrapped_dst.state_dict().keys())
+
+    torch.manual_seed(3)
+    eager_dst = MORPHTransformer(_cfg())
+    _resume_into(tmp_path, wrapped_dst, eager_dst)
+    _assert_same_weights(wrapped_dst, eager_dst)
+

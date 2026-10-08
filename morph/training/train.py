@@ -997,8 +997,7 @@ def classify_plain_to_tul_keys(
     tul_pre = tul_owned_prefixes(model)
     tg_pre = tg_dropped_attention_prefixes(model)
 
-    def _canon(k: str) -> str:
-        return k.replace("._orig_mod.", ".").replace("_orig_mod.", "")
+    _canon = _canon_ckpt_key
 
     ok_m, bad_m, ok_u, bad_u = [], [], [], []
     for k in missing:
@@ -1029,6 +1028,28 @@ def _report_plain_to_tul(tag: str, path: str, ok_m: list[str], bad_m: list[str],
             print(f"    {label}: {len(keys)}", flush=True)
             for k in keys:
                 print(f"      {k}", flush=True)
+
+
+def _canon_ckpt_key(k: str) -> str:
+    """A state-dict key with every torch.compile `_orig_mod.` level removed."""
+    k = k.replace("._orig_mod.", ".")
+    return k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k
+
+
+def align_checkpoint_keys(raw: dict, model: nn.Module) -> dict:
+    """Map each checkpoint tensor onto the live model's ACTUAL key, ignoring compile wrappers.
+
+    torch.compile inserts `._orig_mod.` into the keys of every module it wraps, and the
+    checkpoint and the model may each carry it independently: compiled MLPs (always),
+    `training.compile_blocks` (whole blocks, opt-in), or neither. Canonical form on BOTH
+    sides covers every pairing; a key with no canonical match passes through unchanged so
+    `load_state_dict` reports it as unexpected (and the carve/router load hooks still see
+    every mortar_* key). Before 2026-10-08 `load_checkpoint` only stripped the checkpoint
+    side, so an eager checkpoint could not resume into a `compile_blocks` model (420 keys
+    without a home).
+    """
+    canon_to_model = {_canon_ckpt_key(k): k for k in model.state_dict().keys()}
+    return {canon_to_model.get(_canon_ckpt_key(k), k): v for k, v in raw.items()}
 
 
 def load_checkpoint(
@@ -1080,16 +1101,8 @@ def load_checkpoint(
     #    near-empty "resume" — latent theater). Fix: align the checkpoint's key CONVENTION to
     #    the model's, but pass ALL keys through INTACT so the carve/router load-hooks fire
     #    (pre-filtering to the dense model's keys would drop mortar_data before it exists).
-    ckpt_model = ckpt["model"]
-    model_keys = list(model.state_dict().keys())
-    model_has_orig = any("_orig_mod" in k for k in model_keys)
-    ckpt_has_orig = any("_orig_mod" in k for k in ckpt_model)
-    if ckpt_has_orig and not model_has_orig:
-        state = {k.replace("_orig_mod.", ""): v for k, v in ckpt_model.items()}
-    else:
-        # Same convention (both compiled, or neither) → as-is. (model-compiled/ckpt-not is
-        # not produced by this codebase — compile is applied unconditionally before save.)
-        state = dict(ckpt_model)
+    state = align_checkpoint_keys(ckpt["model"], model)
+    ckpt_pnames = set(state.keys())
     # Let load_state_dict report truthfully AFTER the hooks reconstruct mortar_data/routers.
     drop_retired_tul_keys(state, model, path)
     drop_code_thinker_keys(state, model, path)
@@ -1152,7 +1165,7 @@ def load_checkpoint(
     # The checkpoint's MODEL parameter names travel with the optimizer state so the caller
     # can re-index it when the live model has parameters the checkpoint does not (an
     # intervention arm that adds a module). See optimizer.align_optimizer_state.
-    return step, ckpt["optimizer"], needs_rebuild, set(ckpt["model"].keys())
+    return step, ckpt["optimizer"], needs_rebuild, ckpt_pnames
 
 
 def assert_code_target_front_frozen(model) -> list[str]:
@@ -1238,22 +1251,10 @@ def load_weights_only(path: str, model: nn.Module, device: torch.device,
     """
     ckpt = torch.load(path, map_location=device, weights_only=False)
     raw = ckpt["model"]
-    # _orig_mod-robust key alignment, SYMMETRIC on both sides. torch.compile inserts
-    # `._orig_mod.` into wrapped-submodule keys; a checkpoint and this model may EACH carry it
-    # independently — compiled↔compiled (match natively), or an UNcompiled init_from seed loaded
-    # into a COMPILED model (the seed lacks `._orig_mod.` that the model's compiled MLP keys have).
-    # The old raw-vs-strip pick only stripped the checkpoint side, so the uncompiled-seed→compiled-
-    # model case silently dropped every compiled-submodule tensor to random init. Fix: canonicalize
-    # BOTH sides (strip `._orig_mod.`) and map each checkpoint tensor onto the model's ACTUAL key.
     model_keys = set(model.state_dict().keys())
-    def _canon(k):
-        return k.replace("._orig_mod.", ".")
-    canon_to_model = {_canon(k): k for k in model_keys}
-    state = {}
-    for k, v in raw.items():
-        state[canon_to_model.get(_canon(k), k)] = v   # onto the model's real key, else leave → unexpected
+    state = align_checkpoint_keys(raw, model)
     n_raw = sum(1 for k in raw if k in model_keys)
-    n_strip = sum(1 for k in raw if _canon(k) in canon_to_model)   # true canonical match count
+    n_strip = sum(1 for k in state if k in model_keys)   # true canonical match count
     drop_retired_tul_keys(state, model, path)
     drop_code_thinker_keys(state, model, path)
     missing, unexpected = model.load_state_dict(state, strict=False)
@@ -1319,8 +1320,7 @@ def check_init_from_keys(missing: list[str], unexpected: list[str], model: nn.Mo
     Prints the missing list in full and returns it."""
     prefixes = tuple(str(p) for p in new_modules)
 
-    def _canon(k: str) -> str:
-        return k.replace("._orig_mod.", ".").replace("_orig_mod.", "")
+    _canon = _canon_ckpt_key
 
     if unexpected:
         raise RuntimeError(
