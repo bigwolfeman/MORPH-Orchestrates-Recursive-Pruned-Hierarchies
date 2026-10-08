@@ -58,3 +58,12 @@ independent 5k runs). By the rule written before the run (<= 0.0006), one paired
 per cut can test the owner's 5 % rule; at this checkpoint 5 % of K1-K6 is about 0.00045, so the
 paired noise is at that level, and two pairs per cut give a margin. One pair is one sample of the
 paired noise; the span-decoder K1-K6 gap (0.0025) shows the readouts differ in noise.
+
+## Amendment 2026-10-08 06:25
+
+A third same-code continuation (f, same checkpoint and seed) read CE@6 4.0462 and K1-K6 +0.0098
+[+0.0092, +0.0105]. Over three draws the eager paired spread is 0.0012 in K1-K6 (+0.0086 to
++0.0098) and 0.0007 in CE@6. So 0.0005 was a low draw: the paired design removes about 80 % of
+the independent-run spread, and resolving 5 % of K1-K6 (about 0.00045) needs several pairs per
+cut, not one.
+

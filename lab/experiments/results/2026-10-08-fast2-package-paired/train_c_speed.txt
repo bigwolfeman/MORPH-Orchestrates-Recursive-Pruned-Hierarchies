@@ -1,0 +1,3 @@
+[   3000/3500] loss=9.5698  ppl=14326.0  lr=1.00e-04  sps=3.13  tok/s=19234  proxy=10.25  tflops=27.8  peak=20.30GB  reserved=21.19GB
+[   3200/3500] loss=10.2713  ppl=28890.1  lr=1.00e-04  sps=3.13  tok/s=19213  proxy=10.16  tflops=27.6  peak=20.30GB  reserved=21.19GB
+[   3400/3500] loss=10.4108  ppl=33217.8  lr=1.00e-04  sps=3.12  tok/s=19142  proxy=10.27  tflops=27.7  peak=20.30GB  reserved=21.19GB
