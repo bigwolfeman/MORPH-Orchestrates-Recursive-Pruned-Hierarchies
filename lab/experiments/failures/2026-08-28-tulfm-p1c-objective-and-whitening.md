@@ -3,7 +3,7 @@
 Status: failure — C1 missed; the gate metric is capped at ~2.5x chance across five configurations
 Arc: [`.agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md`](../../../.agents/notes/rejected/architecture/2026-08-28-tul-fm-arc.md)
 Predecessor: [`2026-08-28-tulfm-p1.md`](2026-08-28-tulfm-p1.md)
-Doctrine: [`../../../.agents/notes/rejected/architecture/tul-fm-probing.md`](../../../.agents/notes/rejected/architecture/tul-fm-probing.md) §6–7
+Doctrine: [`../../../.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md`](../../../.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md) §6–7
 
 ## Question
 

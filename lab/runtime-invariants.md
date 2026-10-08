@@ -134,7 +134,7 @@ These are observation-only when unset: `MORPH_EXACT_TRACE`, `MORPH_MEM_PROBE`,
 `MORPH_EXACT_TRACE=<path>` appends per-step loss hex for bit-identical A/B gates.
 Use only on gate runs (adds a host sync per step).
 
-## 6b. TUL invariants (LIVE — the paid loop, `.agents/notes/rejected/architecture/tul-paid-loop-recipe.md`; layout rules from `.agents/specs/tul-spec.md` §9)
+## 6b. TUL invariants (LIVE — the paid loop, `.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md`; layout rules from `.agents/specs/tul-spec.md` §9)
 
 These are runtime invariants, not aspirations: each row names the test that fails when it
 is broken (`tests/test_tul_layout.py`, `tests/test_tul_forward.py`,
@@ -178,7 +178,7 @@ record; the last commit that runs the gate is `d9e04e6`. Decision:
   K/C=1.0).
 - Silent fallbacks when a kernel, dataset path, or checkpoint topology fails.
 - Rebuilding the slot-only core (gather → loop on slots → scatter) as "the cheaper TUL":
-  its loop never earned depth (K1−K6 ≤ 0.011 nats at any length; `.agents/notes/rejected/architecture/tul-paid-loop-recipe.md`
+  its loop never earned depth (K1−K6 ≤ 0.011 nats at any length; `.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md`
   §2), and the gate's `gate_train_zeros` lesson (`.agents/specs/tul-gate-spec.md` §6) went with it.
 - Reverting `@kernel_fence` to hard `@torch.compiler.disable` (kills graph
   composition), or flipping `MORPH_DYNAMO_FENCE=0` into the default without an

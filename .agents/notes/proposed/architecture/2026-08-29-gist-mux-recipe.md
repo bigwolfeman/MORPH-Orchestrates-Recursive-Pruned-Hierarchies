@@ -31,7 +31,7 @@ inversion claim is dead. The machinery left the tree on 2026-09-03 (the RETIRED 
 
 > **RETIRED 2026-09-03.** The gist / mux machinery (`mux_span_targets`, the gist loop,
 > the compaction window, `compact_index`) left the tree with the slot-only core. The paid
-> loop ([tul-paid-loop-recipe.md](../../rejected/architecture/tul-paid-loop-recipe.md)) is the shipped forward. This
+> loop ([tul-paid-loop-recipe.md](../../rejected/architecture/2026-09-02-tul-paid-loop-recipe.md)) is the shipped forward. This
 > file is the record of the code as it ran at `d9e04e6`. Decision:
 > `.agents/notes/rejected/architecture/2026-08-29-gist-loop.md`.
 

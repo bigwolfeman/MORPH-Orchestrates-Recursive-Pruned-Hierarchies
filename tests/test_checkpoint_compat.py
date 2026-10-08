@@ -1,4 +1,4 @@
-"""Checkpoint compatibility for the paid loop (.agents/notes/rejected/architecture/tul-paid-loop-recipe.md §3).
+"""Checkpoint compatibility for the paid loop (.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md §3).
 
 The slot-loop arms save ``tul.W_prefix`` (their prefix projection). The paid-loop model
 (``tul.tokens_through_core``) builds none of it, and ``load_checkpoint`` RAISES on an unexpected key by design (a homeless

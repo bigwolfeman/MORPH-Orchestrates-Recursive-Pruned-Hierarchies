@@ -102,7 +102,7 @@ reasoning about core attention. Three of the four rows were a surprise.**
 **2026-09-03: the shipped TUL forward is the paid loop** (`tul.tokens_through_core: true`);
 the slot path is the `tokens_through_core: false` core stage (`_tul_core`, back on master
 2026-09-04 with the gain constraint, reached only through `tul_short.yaml`). The paid loop
-(`.agents/notes/rejected/architecture/tul-paid-loop-recipe.md`): the core runs over the FULL packed row (`L_total` =
+(`.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md`): the core runs over the FULL packed row (`L_total` =
 1152 at seq 1024, `max_slots` 64), so the core's attention is the TOKEN-PATH column of the
 table below at every layer. The slot-path column is kept as the record of what the
 retired arms ran and why three of their rows were a surprise.

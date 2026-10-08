@@ -48,7 +48,7 @@ Paper map: [docs/references.md](docs/references.md) §13. The v0.1 spec is histo
 `base.yaml` does not run LXTUL. It still ships the older paid loop
 (`tul.tokens_through_core: true`: tokens and slots all run the core). The paid loop is
 history; its record is
-[.agents/notes/rejected/architecture/tul-paid-loop-recipe.md](.agents/notes/rejected/architecture/tul-paid-loop-recipe.md).
+[.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md](.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md).
 
 **Results of TUL** (MORPH, one 5090, d 1024, seq 1024, 480 fixed validation rows; ONE
 seed per arm):

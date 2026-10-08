@@ -419,7 +419,7 @@ def evaluate(
                 # Plan WORTH is the ce_tokens COST of removing the plan (zero) or of
                 # destroying only its correspondence to the slot (shuffle). Report the
                 # COST, never a specificity fraction: the fraction's denominator
-                # collapses through zero (.agents/notes/rejected/architecture/tul-fm-probing.md §4 rule 1, the tg3b
+                # collapses through zero (.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md §4 rule 1, the tg3b
                 # -55.4 % reading).
                 _oz = _m.tul_forward_ablated(x, y, layout, plan_mode="zero")
                 _os = _m.tul_forward_ablated(x, y, layout, plan_mode="shuffle")
@@ -673,7 +673,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         depth_fixed=bool(getattr(m, "depth_fixed", False)),
         ckpt_grad_iters=int(getattr(m, "ckpt_grad_iters", -1)),
         core_init_scale=float(getattr(m, "core_init_scale", 0.0)),
-        # SCSE, the full method (.agents/notes/proposed/architecture/scse-spec.md). Every field goes through the
+        # SCSE, the full method (.agents/notes/proposed/architecture/2026-08-25-scse-spec.md). Every field goes through the
         # config so a run is reproducible from its wandb config alone.
         scse_enabled=bool(getattr(m, "scse_enabled", False)),
         scse_step_scale=float(getattr(m, "scse_step_scale", 0.5)),

@@ -226,4 +226,4 @@ Also corrected, both immaterial to any verdict: the Predictions section lists co
 `b_t` max as 1.966 where the scorer and the results table say 1.977, and the `delta0_rel`
 range top is quoted as 0.0432 where seed 0 reaches 0.0439.
 
-The full method is specified in [.agents/notes/proposed/architecture/scse-spec.md](../../../.agents/notes/proposed/architecture/scse-spec.md) and is being run.
+The full method is specified in [.agents/notes/proposed/architecture/2026-08-25-scse-spec.md](../../../.agents/notes/proposed/architecture/2026-08-25-scse-spec.md) and is being run.

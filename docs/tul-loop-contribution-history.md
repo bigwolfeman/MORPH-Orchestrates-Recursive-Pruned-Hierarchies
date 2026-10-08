@@ -651,7 +651,7 @@ is. Wolfe rejected the paid loop the same evening ("totally wrong",
 ln 10). The slot loop came back on 2026-09-04 (the ship note's amendment). The 2026-09-22
 synthesis states it as a standing call: "TUL means the slot loop. The paid loop is not
 TUL." The lock-in record now lives at
-[.agents/notes/rejected/architecture/tul-paid-loop-recipe.md](../.agents/notes/rejected/architecture/tul-paid-loop-recipe.md). The 40k continuation that
+[.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md](../.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md). The 40k continuation that
 would test whether the paid gap crosses ([planned/2026-09-03-warmup-pair-continue-40k.md](../lab/experiments/planned/2026-09-03-warmup-pair-continue-40k.md))
 never ran.
 

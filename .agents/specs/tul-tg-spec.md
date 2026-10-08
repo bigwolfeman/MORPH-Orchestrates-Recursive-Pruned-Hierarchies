@@ -2,7 +2,7 @@
 
 > **RETIRED 2026-09-03.** The TG restriction stack (`tg_*` masks, `_tg_slot_attention`,
 > the truncation gate, iteration conditioning, attention lift) left the tree with the
-> slot-only core; the paid loop ([tul-paid-loop-recipe.md](../notes/rejected/architecture/tul-paid-loop-recipe.md)) runs
+> slot-only core; the paid loop ([tul-paid-loop-recipe.md](../notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md)) runs
 > plain causal attention over the packed row. Record only; last commit that runs it:
 > `d9e04e6`. Results: `lab/experiments/failures/2026-08-2*-tg-*.md`.
 

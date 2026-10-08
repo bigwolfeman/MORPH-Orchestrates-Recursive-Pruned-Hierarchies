@@ -1,7 +1,7 @@
 """Score the full-SCSE experiment against its pre-registered predictions.
 
 Pre-registration: lab/experiments/planned/2026-08-25-scse-full-method.md
-Implementation:   .agents/notes/proposed/architecture/scse-spec.md
+Implementation:   .agents/notes/proposed/architecture/2026-08-25-scse-spec.md
 
 Committed BEFORE the first arm produced a checkpoint, so no threshold here can have been
 fitted to the data. Every number a verdict uses is read from the training logs and the

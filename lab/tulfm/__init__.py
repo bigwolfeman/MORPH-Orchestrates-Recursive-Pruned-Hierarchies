@@ -2,5 +2,5 @@
 
 Arc rationale + phase gates:
 ``.agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md``.
-Probing doctrine (the gates this code must satisfy): ``.agents/notes/rejected/architecture/tul-fm-probing.md``.
+Probing doctrine (the gates this code must satisfy): ``.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md``.
 """

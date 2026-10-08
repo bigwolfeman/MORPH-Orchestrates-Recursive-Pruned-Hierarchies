@@ -527,7 +527,7 @@ first smoke measures it; nothing here is a claim.
 | no KL, no amortised-encoder-plus-KL | LTM §3.4 (VAE baseline collapsed with annealing) |
 | tape as decaying history (v0.2) | Diffusion Forcing Theorem 3.1, App. B.7, stabilisation §3.3 |
 | strict geometry, cells read by the coda | `2026-09-12-strict-slot-geometry.md` |
-| CFM, `loss_scale auto`, source scale rule | `morph/model/fm_planner.py`, `.agents/notes/rejected/architecture/tul-fm-probing.md` §7 (committed copy) |
+| CFM, `loss_scale auto`, source scale rule | `morph/model/fm_planner.py`, `.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md` §7 (committed copy) |
 | no BPTT through any loop, guess outside the CE graph | FM1's non-negotiable, `morph/model/tul_fm.py` header |
 | never decode a span from one vector with no token path | CLAUDE.md (Huginn 2026-08-16, MegaByte T7, Bowman T2, Hourglass T6) |
 

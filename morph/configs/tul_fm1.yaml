@@ -44,7 +44,7 @@ model:
   n_core: 0
 
 training:
-  # PINNED, per .agents/notes/rejected/architecture/tul-fm-probing.md §4 rule 5 ("written in blood"): a null
+  # PINNED, per .agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md §4 rule 5 ("written in blood"): a null
   # ademamix_t_beta3 silently falls back to training.steps, so the optimizer's beta3
   # horizon moves whenever the run length does. It cost three experiments on 2026-08-28.
   # 4500 is the value the slot-pay panel arms effectively ran (they were 4500 steps with

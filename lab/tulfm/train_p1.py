@@ -1,7 +1,7 @@
 """TUL-FM Phase 1 — train the flow-matching planner on a FROZEN backbone.
 
 Arc:     ``.agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md``
-Gates:   ``.agents/notes/rejected/architecture/tul-fm-probing.md`` §5 (P1)
+Gates:   ``.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md`` §5 (P1)
 Pre-reg: ``lab/experiments/planned/2026-08-28-tulfm-p1.md``
 Config:  ``morph/configs/tulfm_p1.yaml``
 

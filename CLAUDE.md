@@ -136,7 +136,7 @@ Start new loop work from it. Decision record:
 Status: the **paid loop** is the shipped forward and is ON in `base.yaml`
 (`tul.tokens_through_core: true`; `tul.activate_at: ${training.tst_ratio}` — TUL switches
 on when the TST phase ends): tokens and slots are ONE sequence and the ordinary per-sample
-Poisson-depth core runs over ALL of it (`.agents/notes/rejected/architecture/tul-paid-loop-recipe.md`). The **slot loop**
+Poisson-depth core runs over ALL of it (`.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md`). The **slot loop**
 (`tul.tokens_through_core: false`: only the slot positions loop, in `_tul_core`, and
 `W_prefix` writes each looped state into its `prefix_k` positions) was cut on 2026-09-03
 (`d9e04e6` was the last commit that ran it) and came BACK on 2026-09-04 when branch

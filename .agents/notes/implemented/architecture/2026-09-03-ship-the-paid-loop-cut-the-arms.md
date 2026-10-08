@@ -10,7 +10,7 @@ depth → scatter back; arms A0/A1/A1r/A3/A4/A5, the span-length gate and halt, 
 restriction stack, the gist loop and mux targets, the compaction window, the DB
 interleave, per-slot embeddings, the fixed-stride rule) had been measured to exhaustion:
 its loop never earned depth (K1−K6 ≤ 0.011 nats at any horizon,
-[.agents/notes/rejected/architecture/tul-paid-loop-recipe.md](../../../../.agents/notes/rejected/architecture/tul-paid-loop-recipe.md) §2), its
+[.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md](../../../../.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md) §2), its
 takeover was never cured (15 hypotheses, 11 refuted,
 [lab/divergence/takeover-campaign.md](../../../../lab/divergence/takeover-campaign.md)),
 and every one of its arms lost to the plain model or to A2. The paid loop — the ordinary
@@ -60,7 +60,7 @@ recipe, ship it to master, and clean up the arms that did not make the cut.
    model without an FM planner (`tests/test_checkpoint_compat.py`). Nothing else is
    forgiven.
 5. **Records stay, code goes.** `.agents/specs/tul-spec.md` §3.3, `.agents/specs/tul-gate-spec.md`,
-   `.agents/specs/tul-tg-spec.md`, `.agents/notes/proposed/architecture/gist-mux-recipe.md` and the TUL table of
+   `.agents/specs/tul-tg-spec.md`, `.agents/notes/proposed/architecture/2026-08-29-gist-mux-recipe.md` and the TUL table of
    `docs/ablation-ledger.md` carry a RETIRED banner naming `d9e04e6`, the last commit that
    runs the arms. The lab probes that import deleted code (`mask_surgery.py`,
    `mux_unigram_baseline.py`) are listed as retired in

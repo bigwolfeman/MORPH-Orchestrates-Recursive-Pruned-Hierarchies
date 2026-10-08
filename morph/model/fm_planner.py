@@ -8,7 +8,7 @@ scripts in ``lab/tulfm/`` import it from here.
 PHASE 1 (the standalone planner on a frozen backbone).
 
 Arc: ``.agents/notes/proposed/architecture/2026-08-28-tul-fm-arc.md``.
-Gates: ``.agents/notes/rejected/architecture/tul-fm-probing.md`` §5 (P1).
+Gates: ``.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md`` §5 (P1).
 Pre-registration: ``lab/experiments/planned/2026-08-28-tulfm-p1.md``.
 
 WHAT P1 IS. A small NEW trainable planner sits on top of a FROZEN MORPH-A3 backbone.

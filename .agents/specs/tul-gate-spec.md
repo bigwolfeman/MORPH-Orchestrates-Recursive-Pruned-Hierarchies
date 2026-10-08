@@ -1,7 +1,7 @@
 # TUL Gate — specification (`TUL-gate`, `TUL-halt`)
 
 > **RETIRED 2026-09-03.** The gate left the tree with the slot-only core (the paid loop,
-> [tul-paid-loop-recipe.md](../notes/rejected/architecture/tul-paid-loop-recipe.md), has no per-slot depth for a gate to
+> [tul-paid-loop-recipe.md](../notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md), has no per-slot depth for a gate to
 > drive). This spec, its §9 invariants and the measured result stay as the record; the
 > last commit that runs it is `d9e04e6`. Decision:
 > `.agents/notes/rejected/feature/2026-08-21-gated-tul.md`.

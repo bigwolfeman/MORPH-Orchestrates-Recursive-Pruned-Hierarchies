@@ -230,7 +230,7 @@ class MORPHConfig:
     # forward branch, so torch.compile still sees a straight-line graph.
     core_init_scale: float = 0.0
 
-    # ── SCSE — Source-Centered State Evolution (.agents/notes/proposed/architecture/scse-spec.md) ───────────────
+    # ── SCSE — Source-Centered State Evolution (.agents/notes/proposed/architecture/2026-08-25-scse-spec.md) ───────────────
     # The FULL method of arXiv:2607.27656, not the Stage 1 initial-deviation probe above.
     # The abstract credits the gain to "the learned anchor and the anchor-coordinate
     # deviation recurrence", which are precisely the two things `core_init_scale` does NOT
@@ -862,7 +862,7 @@ class _SCSEInit(nn.Module):
 
 
 class _SCSE(nn.Module):
-    """Source-Centered State Evolution — the FULL method. Spec: ``.agents/notes/proposed/architecture/scse-spec.md``.
+    """Source-Centered State Evolution — the FULL method. Spec: ``.agents/notes/proposed/architecture/2026-08-25-scse-spec.md``.
 
     Paper: "Looped Transformers with Source-Centered State Evolution", arXiv:2607.27656,
     Kim, Hayashi, Kamiya, Koyama, Iwasawa, Matsuo, 30 July 2026. Reference implementation
@@ -3490,7 +3490,7 @@ class MORPHTransformer(nn.Module):
             else _NoiseInit(cfg.core_state_init_std) if cfg.core_state_init == "noise"
             else _CloneInit())
 
-        # ── SCSE, the full method (.agents/notes/proposed/architecture/scse-spec.md) ──────────────────────────────
+        # ── SCSE, the full method (.agents/notes/proposed/architecture/2026-08-25-scse-spec.md) ──────────────────────────────
         # Also built LAST, and after `core_init`, for the same RNG-neutrality reason: with
         # `scse_enabled: false` NO parameter is created and NO RNG is drawn, so a control
         # model's weights stay byte-identical to master (invariant S1).
@@ -4104,7 +4104,7 @@ class MORPHTransformer(nn.Module):
             h_in = h_in.mean(dim=2)
             if e_in is not None:
                 e_in = e_in.mean(dim=2)
-        # `source_free` is SCSE's G_theta (.agents/notes/proposed/architecture/scse-spec.md section 3.2): the shared block
+        # `source_free` is SCSE's G_theta (.agents/notes/proposed/architecture/2026-08-25-scse-spec.md section 3.2): the shared block
         # stack with NO source entering the recurrence. Both injections are skipped, not fed
         # zeros — feeding e = 0 would leave DiagonalInjection's `h_ctx <- A*h_ctx` decaying
         # the deviation's context channels by ~0.447 per iteration with nothing to refill
@@ -4987,7 +4987,7 @@ class MORPHTransformer(nn.Module):
         Pure code motion out of ``_forward_single`` (the ``_front_region`` /
         ``_back_region`` precedent): the ops and their order are IDENTICAL to the old
         inline block, so every non-TUL path is bit-identical. It is a method so the paid
-        TUL loop (``tokens_through_core``, .agents/notes/rejected/architecture/tul-paid-loop-recipe.md) can run the SAME
+        TUL loop (``tokens_through_core``, .agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md) can run the SAME
         per-sample core over a sequence that happens to contain slot positions, instead
         of forking a second implementation of the loop. ``jac_active`` (``[B, L]`` bool,
         optional) is read ONLY by the Jacobian probe capture: positions that carry no
@@ -5033,7 +5033,7 @@ class MORPHTransformer(nn.Module):
         # injection would still perturb the ctx channel every iteration. Used by seed models.
         if self.cfg.n_core > 0:
             e = self.input_norm(x)
-            # SCSE (.agents/notes/proposed/architecture/scse-spec.md): a Python-level constant, so every branch on it below
+            # SCSE (.agents/notes/proposed/architecture/2026-08-25-scse-spec.md): a Python-level constant, so every branch on it below
             # is resolved at trace time and the non-SCSE graph is unchanged.
             _scse = self.scse
             with _prof("carrier::h_clone"):
@@ -6130,7 +6130,7 @@ class MORPHTransformer(nn.Module):
                 h = self.core_init(e)
                 h_star = None
             else:
-                # THE LOOP CARRIER IS THE DEVIATION (.agents/notes/proposed/architecture/scse-spec.md section 3.1). h* is
+                # THE LOOP CARRIER IS THE DEVIATION (.agents/notes/proposed/architecture/2026-08-25-scse-spec.md section 3.1). h* is
                 # built ONCE (S2); the absolute slot state is rebuilt at the return (S6).
                 # `gather_valid` zeroes pad slots, and both projections are bias-free, so a
                 # pad has h* = 0 AND Delta_0 = 0 exactly — invariant S8.
@@ -15183,7 +15183,7 @@ class MORPHTransformer(nn.Module):
         return out
 
     def _tul_plan_ablate(self, h_slots: Tensor, layout: SlotLayout, mode: str) -> Tensor:
-        """Eval-only plan ablations for ``val/plan_worth_*`` (.agents/notes/rejected/architecture/tul-fm-probing.md §1).
+        """Eval-only plan ablations for ``val/plan_worth_*`` (.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md §1).
 
         Applies to EVERY slot path — the FM planner's plans, the core loop's looped
         states, and GL1's one-step tap states — because it operates on ``h_slots`` just
@@ -15335,7 +15335,7 @@ class MORPHTransformer(nn.Module):
         ``shuffle``— whole slots permuted WITHIN a row. Removes only the correspondence
                      between a slot and its span, which is what makes it the
                      span-SPECIFICITY number. Report the shuffle COST, never a
-                     specificity fraction (.agents/notes/rejected/architecture/tul-fm-probing.md §4 rule 1).
+                     specificity fraction (.agents/notes/rejected/architecture/2026-08-28-tul-fm-probing.md §4 rule 1).
         ``all_slots`` — THE ROUTE SPLIT (2026-09-11). ``zero`` plus the two routes it
                      leaves open: the coda's per-layer injections at the slot cells and the
                      cells' own attention over their span. Under ``tg_restrict`` this makes

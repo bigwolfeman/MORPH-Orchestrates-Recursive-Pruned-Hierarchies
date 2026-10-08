@@ -26,7 +26,7 @@ model:
   max_depth: 8
   bptt_depth: 8                  # ≥ max_depth → FULL BPTT (zero no_grad iterations). The
                                  # truncated window (4) was the l2cap leak's cover: full BPTT
-                                 # trains the loop the coda actually reads (docs/tul-paid-loop-recipe.md §6)
+                                 # trains the loop the coda actually reads (.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md §6)
   # SCSE Stage 1 (arXiv:2607.27656): the core loop's INITIAL DEVIATION.
   # MORPH historically entered the loop at h_0 = e, so against the input-conditioned anchor
   # h* = e the initial deviation is EXACTLY zero. The paper's Theorem 2 then makes the whole
@@ -40,7 +40,7 @@ model:
   # while this is 0.0 -- at Delta_0 = 0 the mask sets m = 0 forever and the loop stops updating.
   core_init_scale: 0.0
 
-  # ── SCSE — Source-Centered State Evolution (docs/scse-spec.md) ────────────────
+  # ── SCSE — Source-Centered State Evolution (.agents/notes/proposed/architecture/2026-08-25-scse-spec.md) ────────────────
   # arXiv:2607.27656. The FULL method, not the core_init_scale probe above (which was
   # measured 0.815 nats WORSE and is dead). Enabling both RAISES at build time.
   #   h*        = e + scse_anchor_scale * a_omega(e)        built ONCE, held fixed
@@ -654,8 +654,8 @@ routing:
   aux_detach_input: true         # feed router x.detach() → load-balance aux grad stays out of
                                  # the looped carrier (prevents OOM from extended BPTT depth)
 
-# ── TUL — Thought Unpack Loop (docs/tul-spec.md; the shipped arm is the PAID loop of
-# docs/tul-paid-loop-recipe.md). Slots are ordinary positions of ONE sequence: one slot
+# ── TUL — Thought Unpack Loop (.agents/specs/tul-spec.md; the shipped arm is the PAID loop of
+# .agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md). Slots are ordinary positions of ONE sequence: one slot
 # after every span (boundary rule below), seeded from the span's boundary token, and the
 # core loops over EVERY position — tokens and slots alike — at the per-sample Poisson
 # depth. The coda reads the looped carrier; the slot's own logit is masked at the head.
@@ -689,7 +689,7 @@ tul:
   # recipe trains the token position only; the emit position stays a metric (ce_emit).
   emit_weight: 0.0
   plast_weight: 1.0
-  # THE PAID LOOP (docs/tul-paid-loop-recipe.md): tokens and slots are one sequence and the
+  # THE PAID LOOP (.agents/notes/rejected/architecture/2026-09-02-tul-paid-loop-recipe.md): tokens and slots are one sequence and the
   # ordinary per-sample core runs over all of it. false = the slot loop (_tul_core: only the
   # slot positions loop, W_prefix writes one looped state into the prefix positions), the
   # think-once design that lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md
