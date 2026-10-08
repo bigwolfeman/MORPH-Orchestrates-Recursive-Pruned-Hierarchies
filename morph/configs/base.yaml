@@ -150,6 +150,21 @@ model:
   #   hinge's gradient through f(h) also reaches earlier passes and the prelude. false = two
   #   applications at the detached point.
   slot_gain_reuse_f0: false
+  # slot_depth_stratified: the slot loop's training depths are, per row, a systematic sample of
+  #   clamp(Poisson(mean), 1, max) permuted over the slots. Each slot's marginal law is the same,
+  #   the JOINT law is not (a row cannot draw many deep slots at once), and at most C_t slots
+  #   of a row are active at pass t (64 63 61 55 46 36 26 17 at 64 slots, mean 6, max 8; proof
+  #   in morph/model/slot_compact.py). CHANGES THE TRAINING FUNCTION. Eval keeps the mean depth.
+  #   false = the independent per-slot draw.
+  slot_depth_stratified: false
+  # slot_compact: off | full | gather. A finished cell serves each core layer's attention from a
+  #   cache of that layer's input written at its last active pass, instead of recomputing its
+  #   keys from the current state of the slots before it (CHANGES THE TRAINING FUNCTION). "full"
+  #   still computes every cell (the reference form); "gather" computes the C_t * M active
+  #   rows of each pass only (same function to kernel rounding, tests/test_slot_compact.py).
+  #   Training forward only. Needs slot_depth_stratified, tg_fused_attention, graph_safe,
+  #   ckpt_grad_iters 0, slot_gain_no_ckpt (refuses the rest at build). off = today.
+  slot_compact: "off"
   # Selective core-loop checkpointing (throughput knob). Checkpoint the first N of the bptt_depth
   # grad-iterations; later ones run eager (activations retained → no backward recompute → faster),
   # at the cost of retained activation memory. -1 = checkpoint ALL (default, bit-identical/safest).

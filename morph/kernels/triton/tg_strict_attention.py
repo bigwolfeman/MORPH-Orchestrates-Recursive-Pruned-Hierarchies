@@ -29,6 +29,13 @@ tile), with the relation evaluated in the kernel from index tensors instead of a
 Nothing else is supported; the model refuses every other geometry at build
 (``MORPHTransformer`` under ``model.tg_fused_attention``).
 
+QUERY ROWS BY POSITION (``model.slot_compact: gather``, MODE_CELLS only): ``index["qpos"]``
+``[B, SQ]`` int32 names the ORIGINAL position of each query row, so q is ``[B, H, SQ, D]``
+while k and v keep every position ``[B, H, S, D]``. ``i`` above is then ``qpos[b, row]``: the
+cell relation and the window both read original positions, and the outputs are per query row.
+The slot loop hands the live cells of a pass as queries and every cell as keys
+(``morph/model/slot_compact.py``). Without ``qpos`` the kernels are the code before it.
+
 The sink enters as the comp branch's initial online-softmax state (max = sink logit,
 normaliser 1, accumulator 0): it is a key every row sees, with a zero value. Its gradient is
 ``-sum_i p_sink(i) * (dO_i . O_i)``, reduced in torch (fixed order, deterministic).
@@ -118,22 +125,37 @@ if TRITON_AVAILABLE:
         return win, comp
 
     @triton.jit
-    def _fwd_kernel(Q, K, V, SINK, BAG, SLOT, TMIN, TMAX, OC, OW, LC, LW, OC32, OW32,
-                    H, S, NT, scale_log2, W,
+    def _qpos_rows(QPOS, b, offs_m, mrow, SQ, CELLS: tl.constexpr):
+        """``slot_compact``: the query rows' original positions and the key bound they need
+        (every key block up to the tile's deepest query's cell block)."""
+        pos = tl.load(QPOS + b * SQ + offs_m, mask=mrow, other=0)
+        return pos, (tl.max(tl.where(mrow, pos, 0), 0) // CELLS + 1) * CELLS
+
+    @triton.jit
+    def _fwd_kernel(Q, K, V, SINK, BAG, SLOT, TMIN, TMAX, QPOS, OC, OW, LC, LW, OC32, OW32,
+                    H, S, SQ, NT, scale_log2, W,
                     MODE: tl.constexpr, CELLS: tl.constexpr, D: tl.constexpr,
                     BM: tl.constexpr, BN: tl.constexpr, SAVE32: tl.constexpr,
-                    PREC: tl.constexpr):
+                    PREC: tl.constexpr, HAS_QPOS: tl.constexpr):
         qt = tl.program_id(0)
         bh = tl.program_id(1)
         b = bh // H
         h = bh % H
         base = bh.to(tl.int64) * S * D
+        # query-side tensors are [B, H, SQ, *]; SQ == S without QPOS
+        qbase = bh.to(tl.int64) * SQ * D
         offs_m = qt * BM + tl.arange(0, BM)
         offs_d = tl.arange(0, D)
-        mrow = offs_m < S
-        q = tl.load(Q + base + offs_m[:, None] * D + offs_d[None, :], mask=mrow[:, None],
+        mrow = offs_m < SQ
+        q = tl.load(Q + qbase + offs_m[:, None] * D + offs_d[None, :], mask=mrow[:, None],
                     other=0.0)
-        if MODE == 2:
+        pos_m = offs_m
+        if HAS_QPOS:
+            pos_m, hi = _qpos_rows(QPOS, b, offs_m, mrow, SQ, CELLS)
+            hi = tl.minimum(S, hi)
+            bag_i = pos_m
+            slot_i = pos_m
+        elif MODE == 2:
             bag_i = offs_m
             slot_i = offs_m
             hi = tl.minimum(S, ((qt * BM + BM - 1) // CELLS + 1) * CELLS)
@@ -169,7 +191,7 @@ if TRITON_AVAILABLE:
                 else:
                     bag_j = tl.load(BAG + b * S + offs_n, mask=ncol, other=-2)
                     slot_j = tl.load(SLOT + b * S + offs_n, mask=ncol, other=0)
-                win, comp = _tile_masks(offs_m, offs_n, mrow, ncol, bag_i, slot_i,
+                win, comp = _tile_masks(pos_m, offs_n, mrow, ncol, bag_i, slot_i,
                                         bag_j, slot_j, W, MODE, CELLS)
                 s = tl.dot(q, tl.trans(k), input_precision=PREC) * scale_log2
                 # comp: the sink started the state, so the running max is finite
@@ -189,7 +211,7 @@ if TRITON_AVAILABLE:
                 l_w = l_w * alpha + tl.sum(p, 1)
                 acc_w = acc_w * alpha[:, None] + tl.dot(p.to(v.dtype), v, input_precision=PREC)
                 m_w = mw_new
-        o_ptr = base + offs_m[:, None] * D + offs_d[None, :]
+        o_ptr = qbase + offs_m[:, None] * D + offs_d[None, :]
         o_c = acc_c / l_c[:, None]
         has_w = l_w > 0.0
         l_safe = tl.where(has_w, l_w, 1.0)
@@ -201,7 +223,7 @@ if TRITON_AVAILABLE:
         if SAVE32:
             tl.store(OC32 + o_ptr, o_c, mask=mrow[:, None])
             tl.store(OW32 + o_ptr, o_w, mask=mrow[:, None])
-        r_ptr = bh.to(tl.int64) * S + offs_m
+        r_ptr = bh.to(tl.int64) * SQ + offs_m
         tl.store(LC + r_ptr, m_c + _log2(l_c, PREC), mask=mrow)
         # an empty window row stores +inf: exp2(s - inf) == 0 in the backward
         tl.store(LW + r_ptr, tl.where(has_w, m_w + _log2(l_safe, PREC), float("inf")),
@@ -232,15 +254,17 @@ if TRITON_AVAILABLE:
         tl.store(PSD + r_ptr, -_exp2(sink - lc, PREC) * dc, mask=mrow)
 
     @triton.jit
-    def _bwd_dkdv_kernel(Q, K, V, DOC, DOW, LC, LW, DC, DW, BAG, SLOT, TMIN, TMAX, DK, DV,
-                         H, S, NT, scale, scale_log2, W,
+    def _bwd_dkdv_kernel(Q, K, V, DOC, DOW, LC, LW, DC, DW, BAG, SLOT, TMIN, TMAX, QPOS,
+                         DK, DV, H, S, SQ, NT, scale, scale_log2, W,
                          MODE: tl.constexpr, CELLS: tl.constexpr, D: tl.constexpr,
-                         BM: tl.constexpr, BN: tl.constexpr, PREC: tl.constexpr):
+                         BM: tl.constexpr, BN: tl.constexpr, PREC: tl.constexpr,
+                         HAS_QPOS: tl.constexpr):
         kt = tl.program_id(0)
         bh = tl.program_id(1)
         b = bh // H
         base = bh.to(tl.int64) * S * D
-        rbase = bh.to(tl.int64) * S
+        qbase = bh.to(tl.int64) * SQ * D
+        rbase = bh.to(tl.int64) * SQ
         offs_n = kt * BN + tl.arange(0, BN)
         offs_d = tl.arange(0, D)
         ncol = offs_n < S
@@ -259,18 +283,26 @@ if TRITON_AVAILABLE:
             kmin = tl.load(TMIN + b * NT + kt)
             kmax = tl.load(TMAX + b * NT + kt)
         lo = (lo // BM) * BM
+        if HAS_QPOS:
+            # the query rows are not in position order: every query tile is visited and a
+            # tile whose deepest query sits before this key tile's first cell block skipped
+            lo = 0
         dk = tl.zeros([BN, D], dtype=tl.float32)
         dv = tl.zeros([BN, D], dtype=tl.float32)
-        for start in range(lo, S, BM):
+        for start in range(lo, SQ, BM):
+            offs_m = start + tl.arange(0, BM)
+            mrow = offs_m < SQ
+            pos_m = offs_m
             run = True
+            if HAS_QPOS:
+                pos_m, hi_m = _qpos_rows(QPOS, b, offs_m, mrow, SQ, CELLS)
+                run = hi_m > kt * BN
             if MODE == 0:
                 qmin = tl.load(TMIN + b * NT + start // BM)
                 qmax = tl.load(TMAX + b * NT + start // BM)
                 run = (kmin <= qmax) & (kmax >= qmin)
             if run:
-                offs_m = start + tl.arange(0, BM)
-                mrow = offs_m < S
-                q_ptr = base + offs_m[:, None] * D + offs_d[None, :]
+                q_ptr = qbase + offs_m[:, None] * D + offs_d[None, :]
                 q = tl.load(Q + q_ptr, mask=mrow[:, None], other=0.0)
                 doc = tl.load(DOC + q_ptr, mask=mrow[:, None], other=0.0)
                 dow = tl.load(DOW + q_ptr, mask=mrow[:, None], other=0.0)
@@ -279,12 +311,12 @@ if TRITON_AVAILABLE:
                 dc = tl.load(DC + rbase + offs_m, mask=mrow, other=0.0)
                 dw = tl.load(DW + rbase + offs_m, mask=mrow, other=0.0)
                 if MODE == 2:
-                    bag_i = offs_m
-                    slot_i = offs_m
+                    bag_i = pos_m
+                    slot_i = pos_m
                 else:
                     bag_i = tl.load(BAG + b * S + offs_m, mask=mrow, other=-1)
                     slot_i = tl.load(SLOT + b * S + offs_m, mask=mrow, other=0)
-                win, comp = _tile_masks(offs_m, offs_n, mrow, ncol, bag_i, slot_i,
+                win, comp = _tile_masks(pos_m, offs_n, mrow, ncol, bag_i, slot_i,
                                         bag_j, slot_j, W, MODE, CELLS)
                 s = tl.dot(q, tl.trans(k), input_precision=PREC) * scale_log2
                 pc = tl.where(comp, _exp2(s - lc[:, None], PREC), 0.0)
@@ -301,19 +333,21 @@ if TRITON_AVAILABLE:
         tl.store(DV + kv_ptr, dv.to(DV.dtype.element_ty), mask=ncol[:, None])
 
     @triton.jit
-    def _bwd_dq_kernel(Q, K, V, DOC, DOW, LC, LW, DC, DW, BAG, SLOT, TMIN, TMAX, DQ,
-                       H, S, NT, scale, scale_log2, W,
+    def _bwd_dq_kernel(Q, K, V, DOC, DOW, LC, LW, DC, DW, BAG, SLOT, TMIN, TMAX, QPOS, DQ,
+                       H, S, SQ, NT, scale, scale_log2, W,
                        MODE: tl.constexpr, CELLS: tl.constexpr, D: tl.constexpr,
-                       BM: tl.constexpr, BN: tl.constexpr, PREC: tl.constexpr):
+                       BM: tl.constexpr, BN: tl.constexpr, PREC: tl.constexpr,
+                       HAS_QPOS: tl.constexpr):
         qt = tl.program_id(0)
         bh = tl.program_id(1)
         b = bh // H
         base = bh.to(tl.int64) * S * D
-        rbase = bh.to(tl.int64) * S
+        qbase = bh.to(tl.int64) * SQ * D
+        rbase = bh.to(tl.int64) * SQ
         offs_m = qt * BM + tl.arange(0, BM)
         offs_d = tl.arange(0, D)
-        mrow = offs_m < S
-        q_ptr = base + offs_m[:, None] * D + offs_d[None, :]
+        mrow = offs_m < SQ
+        q_ptr = qbase + offs_m[:, None] * D + offs_d[None, :]
         q = tl.load(Q + q_ptr, mask=mrow[:, None], other=0.0)
         doc = tl.load(DOC + q_ptr, mask=mrow[:, None], other=0.0)
         dow = tl.load(DOW + q_ptr, mask=mrow[:, None], other=0.0)
@@ -321,7 +355,13 @@ if TRITON_AVAILABLE:
         lw = tl.load(LW + rbase + offs_m, mask=mrow, other=float("inf"))
         dc = tl.load(DC + rbase + offs_m, mask=mrow, other=0.0)
         dw = tl.load(DW + rbase + offs_m, mask=mrow, other=0.0)
-        if MODE == 2:
+        pos_m = offs_m
+        if HAS_QPOS:
+            pos_m, hi = _qpos_rows(QPOS, b, offs_m, mrow, SQ, CELLS)
+            hi = tl.minimum(S, hi)
+            bag_i = pos_m
+            slot_i = pos_m
+        elif MODE == 2:
             bag_i = offs_m
             slot_i = offs_m
             hi = tl.minimum(S, ((qt * BM + BM - 1) // CELLS + 1) * CELLS)
@@ -351,7 +391,7 @@ if TRITON_AVAILABLE:
                 else:
                     bag_j = tl.load(BAG + b * S + offs_n, mask=ncol, other=-2)
                     slot_j = tl.load(SLOT + b * S + offs_n, mask=ncol, other=0)
-                win, comp = _tile_masks(offs_m, offs_n, mrow, ncol, bag_i, slot_i,
+                win, comp = _tile_masks(pos_m, offs_n, mrow, ncol, bag_i, slot_i,
                                         bag_j, slot_j, W, MODE, CELLS)
                 s = tl.dot(q, tl.trans(k), input_precision=PREC) * scale_log2
                 pc = tl.where(comp, _exp2(s - lc[:, None], PREC), 0.0)
@@ -374,11 +414,24 @@ def _prec(dtype: torch.dtype) -> str:
     return "ieee" if dtype == torch.float32 else "tf32"
 
 
-def _check(q: Tensor, k: Tensor, v: Tensor, mode: int, bag, slot, cells: int) -> None:
+def _check(q: Tensor, k: Tensor, v: Tensor, mode: int, bag, slot, cells: int,
+           qpos: Tensor | None = None) -> None:
     if not TRITON_AVAILABLE or not q.is_cuda:
         raise RuntimeError("tg_strict_attention needs Triton and CUDA tensors "
                            "(model.tg_fused_attention has no CPU path)")
-    if q.shape != k.shape or q.shape != v.shape or q.dim() != 4:
+    if qpos is not None:
+        # query rows by position: q [B, H, SQ, D] against k / v [B, H, S, D]
+        if mode != MODE_CELLS:
+            raise ValueError("qpos (query rows by position) is MODE_CELLS only")
+        if (k.shape != v.shape or k.dim() != 4 or q.dim() != 4
+                or q.shape[:2] != k.shape[:2] or q.shape[3] != k.shape[3]
+                or q.shape[2] > k.shape[2]):
+            raise ValueError(f"qpos: q must be [B, H, SQ <= S, D] against k / v [B, H, S, D], "
+                             f"got {tuple(q.shape)} {tuple(k.shape)} {tuple(v.shape)}")
+        if qpos.shape != (q.shape[0], q.shape[2]) or qpos.dtype != torch.int32:
+            raise ValueError(f"qpos must be int32 [B, SQ] = {(q.shape[0], q.shape[2])}, got "
+                             f"{qpos.dtype} {tuple(qpos.shape)}")
+    elif q.shape != k.shape or q.shape != v.shape or q.dim() != 4:
         raise ValueError(f"q/k/v must share one [B, H, S, D] shape, got "
                          f"{tuple(q.shape)} {tuple(k.shape)} {tuple(v.shape)}")
     if (q.dtype not in (torch.bfloat16, torch.float16, torch.float32) or k.dtype != q.dtype
@@ -416,81 +469,87 @@ def _tile_bounds(bag: Tensor | None, S: int, device, bt: int) -> tuple[Tensor, T
 
 @torch.library.custom_op("morph::tg_strict_attn_fwd", mutates_args=())
 def _fwd_op(q: Tensor, k: Tensor, v: Tensor, sink: Tensor, bag: Tensor | None,
-            slot: Tensor | None, mode: int, cells: int, window: int,
+            slot: Tensor | None, qpos: Tensor | None, mode: int, cells: int, window: int,
             scale: float, save32: bool) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
-    _check(q, k, v, mode, bag, slot, cells)
+    _check(q, k, v, mode, bag, slot, cells, qpos)
     q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
-    B, H, S, D = q.shape
+    B, H, SQ, D = q.shape
+    S = k.shape[2]
     oc, ow = torch.empty_like(q), torch.empty_like(q)
-    lc = torch.empty(B, H, S, device=q.device, dtype=torch.float32)
+    lc = torch.empty(B, H, SQ, device=q.device, dtype=torch.float32)
     lw = torch.empty_like(lc)
-    n32 = (B, H, S, D) if save32 else (0,)        # no backward -> no fp32 copies
+    n32 = (B, H, SQ, D) if save32 else (0,)       # no backward -> no fp32 copies
     oc32 = torch.empty(n32, device=q.device, dtype=torch.float32)
     ow32 = torch.empty_like(oc32)
     bt = _tile(q.dtype)
     tmin, tmax = _tile_bounds(bag, S, q.device, bt)
     if bag is None:
         bag = slot = tmin
-    nt = triton.cdiv(S, bt)
-    _fwd_kernel[(nt, B * H)](q, k, v, sink, bag, slot, tmin, tmax, oc, ow, lc, lw, oc32, ow32,
-                             H, S, nt, scale * _LOG2E, window,
-                             MODE=mode, CELLS=max(cells, 1), D=D, BM=bt, BN=bt,
-                             SAVE32=save32, PREC=_prec(q.dtype), **_launch(q.dtype))
+    _qp = tmin if qpos is None else qpos.contiguous()
+    _fwd_kernel[(triton.cdiv(SQ, bt), B * H)](
+        q, k, v, sink, bag, slot, tmin, tmax, _qp, oc, ow, lc, lw, oc32, ow32,
+        H, S, SQ, triton.cdiv(S, bt), scale * _LOG2E, window,
+        MODE=mode, CELLS=max(cells, 1), D=D, BM=bt, BN=bt,
+        SAVE32=save32, PREC=_prec(q.dtype), HAS_QPOS=qpos is not None, **_launch(q.dtype))
     return oc, ow, lc, lw, oc32, ow32
 
 
 @_fwd_op.register_fake
-def _fwd_fake(q, k, v, sink, bag, slot, mode, cells, window, scale, save32):
-    B, H, S, D = q.shape
-    n32 = (B, H, S, D) if save32 else (0,)
+def _fwd_fake(q, k, v, sink, bag, slot, qpos, mode, cells, window, scale, save32):
+    B, H, SQ, D = q.shape
+    n32 = (B, H, SQ, D) if save32 else (0,)
     return (torch.empty_like(q), torch.empty_like(q),
-            q.new_empty(B, H, S, dtype=torch.float32), q.new_empty(B, H, S, dtype=torch.float32),
+            q.new_empty(B, H, SQ, dtype=torch.float32),
+            q.new_empty(B, H, SQ, dtype=torch.float32),
             q.new_empty(n32, dtype=torch.float32), q.new_empty(n32, dtype=torch.float32))
 
 
 @torch.library.custom_op("morph::tg_strict_attn_bwd", mutates_args=())
 def _bwd_op(q: Tensor, k: Tensor, v: Tensor, sink: Tensor, bag: Tensor | None,
-            slot: Tensor | None, oc: Tensor, ow: Tensor, lc: Tensor, lw: Tensor,
-            doc: Tensor, dow: Tensor, mode: int, cells: int, window: int,
+            slot: Tensor | None, qpos: Tensor | None, oc: Tensor, ow: Tensor, lc: Tensor,
+            lw: Tensor, doc: Tensor, dow: Tensor, mode: int, cells: int, window: int,
             scale: float) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
     doc, dow = doc.contiguous().to(q.dtype), dow.contiguous().to(q.dtype)
-    B, H, S, D = q.shape
+    B, H, SQ, D = q.shape
+    S = k.shape[2]
     bt = _tile(q.dtype)
-    nt = triton.cdiv(S, bt)
-    dc = torch.empty(B, H, S, device=q.device, dtype=torch.float32)
+    nt, nqt = triton.cdiv(S, bt), triton.cdiv(SQ, bt)
+    dc = torch.empty(B, H, SQ, device=q.device, dtype=torch.float32)
     dw, psd = torch.empty_like(dc), torch.empty_like(dc)
-    _bwd_pre_kernel[(nt, B * H)](oc, ow, doc, dow, lc, sink, dc, dw, psd, H, S,
-                                 D=D, BM=bt, PREC=_prec(q.dtype), num_warps=4)
+    _bwd_pre_kernel[(nqt, B * H)](oc, ow, doc, dow, lc, sink, dc, dw, psd, H, SQ,
+                                  D=D, BM=bt, PREC=_prec(q.dtype), num_warps=4)
     tmin, tmax = _tile_bounds(bag, S, q.device, bt)
     if bag is None:
         bag = slot = tmin
+    _qp = tmin if qpos is None else qpos.contiguous()
     dq, dk, dv = torch.empty_like(q), torch.empty_like(k), torch.empty_like(v)
-    common = (H, S, nt, scale, scale * _LOG2E, window)
+    common = (H, S, SQ, nt, scale, scale * _LOG2E, window)
     meta = dict(MODE=mode, CELLS=max(cells, 1), D=D, BM=bt, BN=bt, PREC=_prec(q.dtype),
-                **_launch(q.dtype))
+                HAS_QPOS=qpos is not None, **_launch(q.dtype))
     _bwd_dkdv_kernel[(nt, B * H)](q, k, v, doc, dow, lc, lw, dc, dw, bag, slot, tmin, tmax,
-                                  dk, dv, *common, **meta)
-    _bwd_dq_kernel[(nt, B * H)](q, k, v, doc, dow, lc, lw, dc, dw, bag, slot, tmin, tmax,
-                                dq, *common, **meta)
+                                  _qp, dk, dv, *common, **meta)
+    _bwd_dq_kernel[(nqt, B * H)](q, k, v, doc, dow, lc, lw, dc, dw, bag, slot, tmin, tmax,
+                                 _qp, dq, *common, **meta)
     dsink = psd.sum(dim=(0, 2)).to(sink.dtype)
     return dq, dk, dv, dsink
 
 
 @_bwd_op.register_fake
-def _bwd_fake(q, k, v, sink, bag, slot, oc, ow, lc, lw, doc, dow, mode, cells, window, scale):
+def _bwd_fake(q, k, v, sink, bag, slot, qpos, oc, ow, lc, lw, doc, dow, mode, cells, window,
+              scale):
     return torch.empty_like(q), torch.empty_like(k), torch.empty_like(v), torch.empty_like(sink)
 
 
 def _setup(ctx, inputs, output):
-    q, k, v, sink, bag, slot, mode, cells, window, scale, save32 = inputs
+    q, k, v, sink, bag, slot, qpos, mode, cells, window, scale, save32 = inputs
     _, _, lc, lw, oc, ow = output          # the backward reads the fp32 outputs
-    ctx.save_for_backward(q, k, v, sink, bag, slot, oc, ow, lc, lw)
+    ctx.save_for_backward(q, k, v, sink, bag, slot, qpos, oc, ow, lc, lw)
     ctx.meta = (mode, cells, window, scale)
 
 
 def _backward(ctx, doc, dow, _dlc, _dlw, _doc32, _dow32):
-    q, k, v, sink, bag, slot, oc, ow, lc, lw = ctx.saved_tensors
+    q, k, v, sink, bag, slot, qpos, oc, ow, lc, lw = ctx.saved_tensors
     if oc.numel() == 0:
         raise RuntimeError("tg_strict_attention: a backward through a forward that ran "
                            "without grad (no fp32 outputs were saved)")
@@ -498,9 +557,9 @@ def _backward(ctx, doc, dow, _dlc, _dlw, _doc32, _dow32):
         doc = torch.zeros_like(q)
     if dow is None:
         dow = torch.zeros_like(q)
-    dq, dk, dv, dsink = _bwd_op(q, k, v, sink, bag, slot, oc, ow, lc, lw, doc, dow,
+    dq, dk, dv, dsink = _bwd_op(q, k, v, sink, bag, slot, qpos, oc, ow, lc, lw, doc, dow,
                                 *ctx.meta)
-    return dq, dk, dv, dsink, None, None, None, None, None, None, None
+    return dq, dk, dv, dsink, None, None, None, None, None, None, None, None
 
 
 _fwd_op.register_autograd(_backward, setup_context=_setup)
@@ -508,15 +567,17 @@ _fwd_op.register_autograd(_backward, setup_context=_setup)
 
 def tg_strict_attention(q: Tensor, k: Tensor, v: Tensor, sink: Tensor, index: dict,
                         window: int, scale: float) -> tuple[Tensor, Tensor]:
-    """``(out_comp, out_win)``, each ``[B, H, S, D]`` in q's dtype (see the module docstring).
+    """``(out_comp, out_win)``, each ``[B, H, SQ, D]`` in q's dtype (see the module docstring).
 
     ``index`` is :func:`tg_strict_index`'s dict: ``{"mode": "prelude" | "coda", "bag": [B, S]
-    int32, "slot": [B, S] int32}`` or ``{"mode": "cells", "cells": M}``.
+    int32, "slot": [B, S] int32}`` or ``{"mode": "cells", "cells": M}``, the cells form with an
+    optional ``"qpos"`` ``[B, SQ]`` int32 (query rows by position; SQ == S without it).
     """
     mode = _MODES[index["mode"]]
     save32 = torch.is_grad_enabled() and any(t.requires_grad for t in (q, k, v, sink))
-    oc, ow, _, _, _, _ = _fwd_op(q, k, v, sink, index.get("bag"), index.get("slot"), mode,
-                                 int(index.get("cells", 0)), int(window), float(scale), save32)
+    oc, ow, _, _, _, _ = _fwd_op(q, k, v, sink, index.get("bag"), index.get("slot"),
+                                 index.get("qpos"), mode, int(index.get("cells", 0)),
+                                 int(window), float(scale), save32)
     return oc, ow
 
 

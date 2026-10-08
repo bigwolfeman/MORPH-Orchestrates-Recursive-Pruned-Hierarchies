@@ -55,6 +55,8 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
                           swor_uniform)
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
+from .slot_compact import (compact_attn_input, compact_order, put_rows, slot_depth_capacity,
+                           stratified_slot_depths, take_rows, validate_slot_compact)
 from .tul_ditto import ditto_loss
 from .host_shadow import (any_true, aten_rowsum_width, derive as derive_shadow,
                           exact_mean_1d, masked_rows, rowsum_by_width,
@@ -784,6 +786,22 @@ class MORPHConfig:
     # at its input, so the hinge's gradient through f(h) also reaches earlier passes and
     # the prelude (the separate application detaches them). False = two applications.
     slot_gain_reuse_f0: bool = False
+    # slot_depth_stratified — the slot loop's training depth draw is, per row, a SYSTEMATIC
+    # sample of clamp(Poisson(mean), 1, max) randomly permuted over the slots: each slot's
+    # marginal law is unchanged, the joint law is not (a row cannot draw many deep slots at
+    # once), and at most C_t slots of a row are active at pass t (morph/model/slot_compact.py
+    # proves the bound). CHANGES THE TRAINING FUNCTION (the joint law). Eval keeps the mean
+    # depth. False = the independent per-slot draw.
+    slot_depth_stratified: bool = False
+    # slot_compact — "off" | "full" | "gather". A finished cell serves each core layer's
+    # attention from a cache of that layer's input written at its last active pass ("full":
+    # every cell is still computed; the reference form). "gather": the same function on the
+    # C_t * M active rows of each pass only (queries by original position in the strict
+    # attention kernel). Both CHANGE THE TRAINING FUNCTION against "off" (a frozen cell's keys
+    # no longer follow the slots before it); "full" and "gather" agree to kernel rounding
+    # (tests/test_slot_compact.py). Training forward only; needs slot_depth_stratified and the
+    # graph-step recipe (validate_slot_compact). "off" = today.
+    slot_compact: str = "off"
 
     @property
     def retention_carry_mode(self) -> str:
@@ -3723,6 +3741,9 @@ class MORPHTransformer(nn.Module):
         if (cfg.slot_gain_no_ckpt or cfg.slot_gain_reuse_f0) and cfg.slot_gain_lambda <= 0.0:
             raise ValueError("model.slot_gain_no_ckpt / slot_gain_reuse_f0 need "
                              "model.slot_gain_lambda > 0: they change how the hinge runs.")
+        # model.slot_depth_stratified / model.slot_compact: refused outside the recipe they
+        # were built for (morph/model/slot_compact.py).
+        validate_slot_compact(cfg)
         if (cfg.slot_gain_reuse_f0 and cfg.tul is not None
                 and int(cfg.tul.xhc_streams) > 0):
             # The expanded residuals' TopK route is recorded by the hinge's own f(h) and
@@ -4215,7 +4236,7 @@ class MORPHTransformer(nn.Module):
                          ret_state=None, iter_idx=0, inj_terms=None, source_free=False,
                          stage_cond=None, attn_kw=None, source_decay_only=False,
                          xhc_valid=None, xhc_route=None,
-                         ds_state_in=None, ds_capture=False):
+                         ds_state_in=None, ds_capture=False, compact_out=False):
         """ONE core-loop step: SSM diagonal injection → the n_core shared blocks
         (each with per-layer x0/bigram injection + optional GLA retention carry).
         Returns ``(h, new_ret_state)`` (new_ret None unless a core layer carries retention),
@@ -4265,6 +4286,11 @@ class MORPHTransformer(nn.Module):
         as a THIRD return value ``[n_core, B, S, C]``, for the NEXT pass's
         ``ds_state_in``. ``False`` (every pre-existing call site) returns the old
         2-tuple, unchanged.
+
+        ``compact_out`` (``model.slot_compact``, ``_slot_compact_step`` only): every layer's
+        ``attn_kw`` carries a ``"slot_compact"`` payload, so every block returns
+        ``(h, xa)``, ``xa`` its attention input over every cell (the next pass's cache); the
+        tuple of them is returned as a THIRD value ``(h, new_ret, xas)``.
         """
         np_ = self.cfg.n_prelude
         mlp_kw = {"iter_idx": iter_idx}
@@ -4301,6 +4327,7 @@ class MORPHTransformer(nn.Module):
             h_injected = self.injection(h_in, e_in)
         ret_cap = {} if self._core_has_retention else None
         ds_out = [] if ds_capture else None
+        xa_out = [] if compact_out else None
         for i, layer in enumerate(self.core):
             gi = np_ + i
             if not (source_free or source_decay_only):
@@ -4337,6 +4364,9 @@ class MORPHTransformer(nn.Module):
                                attn_kwargs=_akw, pass_idx=iter_idx,
                                **({} if xhc_valid is None else {"xhc_valid": xhc_valid}),
                                **({} if xhc_route is None else {"xhc_route": xhc_route}))
+            if compact_out:
+                h_injected, _xa = h_injected
+                xa_out.append(_xa)
             if ds_capture:
                 ds_out.append(h_injected.mean(dim=2) if self._is_hc else h_injected)
         new_ret = ret_cap.get("state") if ret_cap is not None else None
@@ -4350,6 +4380,8 @@ class MORPHTransformer(nn.Module):
                 -1, -1, self._n_streams, -1).contiguous()
         if ds_capture:
             return h_injected, new_ret, torch.stack(ds_out, dim=0)
+        if compact_out:
+            return h_injected, new_ret, tuple(xa_out)
         return h_injected, new_ret
 
     # ── Static-region CUDA graphs (MORPH_STATIC_GRAPHS) ──────────────────────
@@ -5850,13 +5882,17 @@ class MORPHTransformer(nn.Module):
                                  **({"twin": twin} if twin is not None else {}))
         return x, x0, bigram_emb
 
-    def _sample_slot_depths(self, layout: SlotLayout, device) -> Tensor:
+    def _sample_slot_depths(self, layout: SlotLayout, device, cells: int = 1) -> Tensor:
         """``[B, max_slots]`` per-slot Poisson depth (spec §3.3 [W]).
 
         Parcae samples one depth per SEQUENCE; TUL samples one per SLOT — claim C1 is
         "depth per idea", so the depth must vary per idea. Eval is the deterministic
         mean depth. Pad slots get depth 1 so they never inflate ``total_iters``; their
         update is masked out regardless.
+
+        ``cells`` (``model.slot_depth_stratified`` only): the layout's slot axis holds
+        ``cells`` cells per slot (the Thought Register's cell view); the stratified draw is
+        made per SLOT and repeated over its cells. The independent draw ignores it.
         """
         tc = self.cfg.tul
         mean_d = tc.slot_mean_depth or self.cfg.mean_depth
@@ -5868,6 +5904,13 @@ class MORPHTransformer(nn.Module):
             # in training AND at eval, so the forced-depth sweep reads a model that never
             # saw another depth. bptt_depth < fixed truncates uniformly (Parcae's form).
             d = torch.full(shape, fixed, device=device, dtype=torch.long)
+        elif self.training and self.cfg.slot_depth_stratified:
+            # model.slot_depth_stratified: per row a systematic sample of the same clamped
+            # law, permuted over the row's slots (pads included; `_pad_slot_depths` below
+            # then sets them to 1). Same marginal per slot, at most `slot_depth_capacity`'s
+            # C_t active slots per row at pass t (morph/model/slot_compact.py).
+            d = stratified_slot_depths(shape[0], shape[1] // cells, float(mean_d), int(max_d),
+                                       device).repeat_interleave(cells, dim=1)
         elif self.training:
             d = torch.poisson(torch.full(shape, float(mean_d), device=device)).long()
             d = d.clamp(min=1, max=max_d)
@@ -6561,11 +6604,13 @@ class MORPHTransformer(nn.Module):
                 # tul.gram_objective="iw": ONE depth table per base row, shared by its K
                 # rollouts (drawn on the base rows, so it consumes a single draw's stream).
                 _lb = layout.head_rows(B // iw_rollouts)
-                depths = (self._sample_slot_depths(_lb, x.device) if slot_depths is None
+                depths = (self._sample_slot_depths(_lb, x.device, cells=_m_cells)
+                          if slot_depths is None
                           else self._slot_depth_override(_lb, slot_depths, x.device)
                           ).repeat(iw_rollouts, 1)
             else:
-                depths = (self._sample_slot_depths(layout, x.device) if slot_depths is None
+                depths = (self._sample_slot_depths(layout, x.device, cells=_m_cells)
+                          if slot_depths is None
                           else self._slot_depth_override(layout, slot_depths, x.device))
             if _m_cells > 1:
                 # ONE depth per SPAN, not per cell: the M cells of a slot are one register
@@ -6868,7 +6913,13 @@ class MORPHTransformer(nn.Module):
                              + tuple(_core_akw[1:]))
 
         def _core_step(h_in, e_in, inj_terms, ret_state=None, iter_idx=0, stage_cond=None,
-                       carry=None, want_carry=False, xhc_route=None):
+                       carry=None, want_carry=False, xhc_route=None, compact=None):
+            if compact is not None:
+                # model.slot_compact: this pass's plan and the layers' attention-input
+                # caches; returns (h, None, new caches). `_slot_compact_guard` (before the
+                # loop) refused every feature the branches below would add to the map.
+                return self._slot_compact_step(h_in, e_in, inj_terms, compact, _core_akw,
+                                               iter_idx)
             if _rr is not None:
                 h_in = self._apply_injection(
                     h_in, _rr.read(h_in, _rr_k, _rr_v, _rr_allow, layout.slot_valid))
@@ -7050,6 +7101,28 @@ class MORPHTransformer(nn.Module):
                 # record is that pass's mean of x_bar over the valid cells. [B, S*M]
                 _vf = layout.slot_valid.float()
                 _ctr_w = _vf / _vf.sum().clamp(min=1.0)
+        # ── model.slot_compact: one plan per pass (morph/model/slot_compact.py) ────────
+        # TRAINING only, a Python-level constant: "off" (and every eval forward) binds None
+        # and the loop below is the one from before the key. Every plan is built here on
+        # the device (no host read): the cells whose pass it is (`depths > t`, pads at t = 0
+        # only) and, in "gather" mode, the row order that puts them first and their
+        # original positions for the attention kernel (`qpos`, C_t * M rows). `_xa_cache`
+        # holds each core layer's attention input over every cell, rebound after each pass:
+        # a finished cell keeps serving the input of its last active pass.
+        _cpt_plans = None
+        _xa_cache = None
+        if self.training and self.cfg.slot_compact != "off":
+            self._slot_compact_guard(
+                halt=halt, iw_rollouts=iw_rollouts, n_nograd=n_nograd, n_ckpt=n_ckpt,
+                m_cells=_m_cells, gs_pass=_gs_pass, total_iters=total_iters,
+                per_pass=dict(reread=_rr, carry=_carry, scse=_scse, grad_pass=_gp,
+                              chain=_chain, denoise=_dn, code_enum=_enum, policy=_pol_codes,
+                              gram=_gctx, trigger=_trig, stage_iter=_iter_mode or None,
+                              retention=track_ret or None, centers=_ctrs or None,
+                              reach=_reach or None, source_once=_src_once or None,
+                              progressive=_prog or None, gain_reuse=_gain_reuse or None,
+                              gain_all=_gain_all or None, recur_gate=self.tul_recur_gate))
+            _cpt_plans = self._slot_compact_plans(depths, _n_slots, _m_cells, total_iters)
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
@@ -7233,6 +7306,11 @@ class MORPHTransformer(nn.Module):
                 # of the step only; see the life-cycle block above the loop).
                 for _c in _ctrs:
                     _c.arm(_ctr_w)
+            # model.slot_compact: this pass's plan with the caches it reads (the guard
+            # keeps every pass a grad pass without a checkpoint, the third call below).
+            _xa_in = _xa_cache
+            _cpt_kw = ({} if _cpt_plans is None
+                       else {"compact": (*_cpt_plans[t], _xa_in)})
             if t < n_nograd:
                 with torch.no_grad():
                     _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
@@ -7246,12 +7324,14 @@ class MORPHTransformer(nn.Module):
             else:
                 _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
                                        iter_idx=t, stage_cond=_sc,
-                                       carry=_cy, want_carry=_want_carry)
+                                       carry=_cy, want_carry=_want_carry, **_cpt_kw)
             if _ctr_w is not None:
                 for _c in _ctrs:
                     _c.disarm()
             if _want_carry:
                 h_new, rs_new, _read = _step_out
+            elif _cpt_plans is not None:
+                h_new, rs_new, _xa_cache = _step_out
             else:
                 h_new, rs_new = _step_out
             if _prog:
@@ -7334,7 +7414,12 @@ class MORPHTransformer(nn.Module):
                         # `model.slot_gain_reuse_f0`: the step's RAW output (before the
                         # progressive cut, the renorm and the cell norm) is f(h).
                         **({} if _f0_rng is None
-                           else {"f0": _step_out[0], "f0_rng": _f0_rng})))
+                           else {"f0": _step_out[0], "f0_rng": _f0_rng}),
+                        # model.slot_compact: the map of THIS pass, frozen cells served
+                        # from the caches it read, detached like every other source.
+                        **({} if _cpt_plans is None
+                           else {"compact": (*_cpt_plans[t], None if _xa_in is None
+                                             else tuple(c.detach() for c in _xa_in))})))
             if _renorm:
                 # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
                 # raw step output, BEFORE the gain governor and the recurrence gate, so it is
@@ -7779,6 +7864,83 @@ class MORPHTransformer(nn.Module):
             _gain_reg = self._slot_gain_reduce(_gain_terms)
         return xn, h, depths, g_traj, _db_traj, _gain_reg, _mep_keep
 
+    # ── model.slot_compact (morph/model/slot_compact.py) ─────────────────────────────
+
+    def _slot_compact_guard(self, *, halt: bool, iw_rollouts: int, n_nograd: int,
+                            n_ckpt: int, m_cells: int, gs_pass: bool, total_iters: int,
+                            per_pass: dict) -> None:
+        """The runtime half of ``validate_slot_compact``: the features the build check names
+        by config key, read here off the objects ``_tul_core`` resolved. Each one adds a
+        term to a pass, or reads its rows, that the compacted step does not carry."""
+        max_d = int(self.cfg.tul.slot_max_depth or self.cfg.max_depth)
+        bad = sorted(k for k, v in per_pass.items() if v is not None) + [k for k, ok in (
+            ("halt", not halt), ("iw_rollouts>1", iw_rollouts == 1),
+            ("a no-grad pass", n_nograd == 0), ("a checkpointed pass", n_ckpt == 0),
+            ("slot_cells==1", m_cells > 1), ("graph_safe passes off", gs_pass),
+            (f"total_iters {total_iters} != slot_max_depth {max_d}", total_iters == max_d))
+            if not ok]
+        if bad:
+            raise NotImplementedError(f"model.slot_compact on a slot loop with {bad}: the "
+                                      "compacted pass carries none of them.")
+
+    def _slot_compact_plans(self, depths: Tensor, n_slots: int, m_cells: int,
+                            total_iters: int) -> list[tuple]:
+        """One ``(perm, inv, qpos, active)`` per pass (``perm`` / ``inv`` / ``qpos`` None in
+        ``"full"`` mode). ``depths`` is the cell-level table ``[B, S * M]``, constant within
+        a slot. In ``"gather"`` mode pass ``t`` computes ``C_t * M`` rows, ``C_t`` the
+        stratified draw's capacity (``slot_depth_capacity``); a device assert (no host read)
+        stops the run if more cells than that are active, which would mean the draw and the
+        proved bound disagree."""
+        if self.cfg.slot_compact == "full":
+            return [(None, None, None, depths > t) for t in range(total_iters)]
+        tc = self.cfg.tul
+        caps = slot_depth_capacity(float(tc.slot_mean_depth or self.cfg.mean_depth),
+                                   int(tc.slot_max_depth or self.cfg.max_depth), n_slots)
+        plans = []
+        for t in range(total_iters):
+            act = depths > t
+            n = caps[t] * m_cells
+            torch._assert_async(act.sum(dim=1).max() <= n,
+                                "model.slot_compact: more active cells than the capacity C_t")
+            perm, inv = compact_order(act)
+            plans.append((perm, inv, perm[:, :n].to(torch.int32).contiguous(), act))
+        return plans
+
+    def _slot_compact_step(self, h_in: Tensor, e_in: Tensor, inj: Tensor, compact: tuple,
+                           akw: tuple, iter_idx: int) -> tuple[Tensor, None, tuple]:
+        """One slot-loop pass under ``model.slot_compact``: ``(h_out, None, caches)``.
+
+        ``compact`` is ``(perm, inv, qpos, active, caches)``: a ``_slot_compact_plans``
+        entry plus the per-layer attention-input caches (None at the first pass). In
+        ``"gather"`` mode the carrier, the injection source and the per-layer injection
+        terms are cut to the plan's rows, the core blocks run on them (the attention's keys
+        and values over every cell, from the caches with this pass's rows written in:
+        ``compact_attn_input``), and the result is written back at the active cells; every
+        other cell keeps ``h_in``. In ``"full"`` mode every cell is computed and the active
+        ones are kept, so both modes hand the loop the same tensor. ``akw`` is the loop's
+        per-layer attention kwargs; every core layer shares the cells index (the guard
+        refused ``loop_reach``)."""
+        perm, inv, qpos, act, caches = compact
+        tg = akw[0]["tg_index"]
+        if perm is not None:
+            n = qpos.shape[1]
+            h_c = take_rows(h_in, perm, inv, n)
+            e_c = take_rows(e_in, perm, inv, n)
+            inj_c = take_rows(inj, perm, inv, n, dim=2, bdim=1)
+            tg = {**tg, "qpos": qpos, "perm": perm, "inv": inv}
+        else:
+            h_c, e_c, inj_c = h_in, e_in, inj
+        kws = tuple({"tg_index": tg,
+                     "slot_compact": (None if caches is None else caches[i], act, perm, inv)}
+                    for i in range(self.cfg.n_core))
+        h_out, _, xa = self._apply_core_step(h_c, e_c, None, None, None, iter_idx=iter_idx,
+                                             inj_terms=inj_c, attn_kw=kws, compact_out=True)
+        if perm is not None:
+            h_out = put_rows(h_out, perm, inv, h_in, act)
+        else:
+            h_out = torch.where(act.view(*act.shape, *([1] * (h_in.dim() - 2))), h_out, h_in)
+        return h_out, None, xa
+
     @staticmethod
     def _slot_gain_reduce(terms: list[dict]) -> dict:
         """One step's gain-hinge dict from the per-iteration dicts of `_slot_gain_penalty`.
@@ -7811,12 +7973,19 @@ class MORPHTransformer(nn.Module):
 
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
                            mask, lam: float, carry=None, renorm_to=None,
-                           f0: Tensor | None = None, f0_rng: tuple | None = None) -> dict:
+                           f0: Tensor | None = None, f0_rng: tuple | None = None,
+                           compact: tuple | None = None) -> dict:
         """Hinge penalty on the slot map's typical gain at the live operating point.
 
         ``f0`` / ``f0_rng`` (``model.slot_gain_reuse_f0`` only): the loop's own step output
         at this pass and the (CPU, CUDA) RNG states from before that step. None: the hinge
         computes f(h) itself, as below.
+
+        ``compact`` (``model.slot_compact`` only): the pass's plan with its DETACHED
+        attention-input caches, handed to both applications, so the hinge probes the map
+        the pass ran (frozen cells served from the caches) on the pass's rows only. ``d`` is
+        zero off ``mask`` (the active valid cells), so the two applications differ only
+        through the cells the plan computes. None: the call before this existed.
 
         The gain read here INCLUDES `DiagonalInjection`, whose identity-plus-decay Jacobian
         alone gives 0.865 at `A`'s init; the slot map sits just above that floor. A term
@@ -7898,10 +8067,14 @@ class MORPHTransformer(nn.Module):
         # reads the kept activations; with the RNG put back before each call the forward
         # draws what the checkpoint's recompute would replay (bit-identical).
         _ckpt = not bool(self.cfg.slot_gain_no_ckpt)
+        if compact is not None:
+            # model.slot_compact (refused with the checkpointed hinge): the step returns
+            # (h, None, caches); only h is read.
+            _xr0, _xr1 = {**_xr0, "compact": compact}, {**_xr1, "compact": compact}
         def _app(h_, xr, e_, inj_, ret_, carry_):
             if not _ckpt:
                 return core_step(h_, e_, inj_, ret_state=ret_, iter_idx=t,
-                                 stage_cond=stage_cond, carry=carry_, **xr)
+                                 stage_cond=stage_cond, carry=carry_, **xr)[:2]
             return checkpoint(core_step, h_, e_, inj_, ret_state=ret_,
                               iter_idx=t, stage_cond=stage_cond, carry=carry_,
                               use_reentrant=False, **xr)

@@ -24,6 +24,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from .slot_compact import compact_attn_input
+
 
 # ── Channel layout ────────────────────────────────────────────────────────────
 
@@ -506,6 +508,16 @@ class MORPHBlock(nn.Module):
         if "tg_persist_capture" in attn_kwargs:
             attn_kwargs = dict(attn_kwargs)
             _persist_capture = attn_kwargs.pop("tg_persist_capture")
+        # model.slot_compact (`MORPHTransformer._slot_compact_step`, core blocks only): the
+        # private payload `(cache, active, perm, inv)`. The attention then reads its input
+        # over EVERY cell (`compact_attn_input`: this call's rows at the active cells, the
+        # cache elsewhere) and the block returns `(h, that input)`, the next pass's cache.
+        # Popped like the persist capture above; None on every other call.
+        _compact = None
+        if "slot_compact" in attn_kwargs:
+            attn_kwargs = dict(attn_kwargs)
+            _compact = attn_kwargs.pop("slot_compact")
+        _compact_xa: list = []
 
         # model.hc_fused_norm: the residual hands the sublayer `norm(x_bar)` directly. Not
         # for the attention when something must read the un-normalised `x_bar` (the centre
@@ -526,6 +538,11 @@ class MORPHBlock(nn.Module):
         def _attn_body(x: Tensor | None, xa: Tensor) -> Tensor:
             # `x` (the un-normalised input) is read only by the retention branch; it is
             # None on the folded path, which never has one.
+            if _compact is not None:
+                # model.slot_compact (no retention, centre, LoRA or persist capture on these
+                # blocks: validate_slot_compact)
+                xa = compact_attn_input(xa, _compact)
+                _compact_xa.append(xa)
             if _persist_capture is not None:
                 # ONE extra core-layer-0 attention application, on the EXACT SAME `xa`
                 # the real call two lines down is about to consume — `x` here is
@@ -588,4 +605,6 @@ class MORPHBlock(nn.Module):
             h = self.mrr_mlp(h, mlp_fn, post_inject=next_inject_term, **_mk)
         else:
             h = self.mrr_mlp(h, mlp_fn, **_mk)
+        if _compact is not None:
+            return h, _compact_xa[0]
         return h

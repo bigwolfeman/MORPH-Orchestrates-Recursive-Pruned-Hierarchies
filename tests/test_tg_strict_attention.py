@@ -349,7 +349,7 @@ def test_graph_replay_with_the_key_is_its_eager_step(monkeypatch, request):
     _prev = torch.are_deterministic_algorithms_enabled()
     torch.use_deterministic_algorithms(True, warn_only=False)
     try:
-        G.test_replay_is_the_eager_step_bit_for_bit(monkeypatch, None)
+        G.test_replay_is_the_eager_step_bit_for_bit(monkeypatch, None, ())
     finally:
         torch.use_deterministic_algorithms(_prev)
 

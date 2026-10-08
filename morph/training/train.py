@@ -776,6 +776,9 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_renorm=bool(getattr(m, "slot_gain_renorm", False)),
         slot_gain_no_ckpt=bool(getattr(m, "slot_gain_no_ckpt", False)),
         slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
+        # MORPHConfig.slot_depth_stratified / slot_compact (morph/model/slot_compact.py)
+        slot_depth_stratified=bool(getattr(m, "slot_depth_stratified", False)),
+        slot_compact=str(getattr(m, "slot_compact", "off")),
         mtp_heads=int(getattr(m, "mtp_heads", 1)),
         injection_channels=str(getattr(m, "injection_channels", "ctx")),
         core_fixed_point_lambda=float(getattr(m, "core_fixed_point_lambda", 0.0)),
@@ -2663,7 +2666,14 @@ def main(cfg: DictConfig) -> None:
         # fork) rather than recompiling mid-loop. Raise the Dynamo cache limit so all variants
         # coexist without eviction.
         import torch._dynamo as _dynamo
-        _dynamo.config.cache_size_limit = max(getattr(_dynamo.config, "cache_size_limit", 8), 64)
+        # model.slot_compact=gather: the core blocks see C_t * M rows, one shape per slot-loop
+        # pass (8), and the HC residual's resume frame after its graph break guards on each
+        # block's own CMS parametrization type, so its entries are blocks x shapes x {attn,
+        # mlp}: about 120 for the core alone. At 64 the excess ran EAGER (bench 2026-10-08:
+        # `recompile_limit (64)` hit in the warm-up). The limit is raised for that key only.
+        _dyn_lim = 256 if str(getattr(model.cfg, "slot_compact", "off")) == "gather" else 64
+        _dynamo.config.cache_size_limit = max(getattr(_dynamo.config, "cache_size_limit", 8),
+                                              _dyn_lim)
         _dynamo.config.accumulated_cache_size_limit = max(
             getattr(_dynamo.config, "accumulated_cache_size_limit", 256), 512)
 

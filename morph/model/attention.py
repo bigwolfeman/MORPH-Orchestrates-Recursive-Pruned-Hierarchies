@@ -65,6 +65,7 @@ from morph.kernels.triton._eager_flag import force_eager
 # model.tg_fused_attention: both strict-geometry TG branches in one Triton kernel pair (fwd/bwd),
 # the relation computed in-kernel from the layout's index tensors (see that module).
 from morph.kernels.triton.tg_strict_attention import tg_strict_attention
+from morph.model.slot_compact import take_rows
 
 
 # ─── Fused input-projection batching (perf: launch-count + GEMM SOL) ──────────
@@ -601,6 +602,33 @@ def _tg_index_guard(tg_index: dict | None, tg_allow: Tensor | None,
     if n_skip_rope:
         raise NotImplementedError("tg_index with n_skip_rope > 0: the fused kernel has no "
                                   "suffix rows / columns.")
+
+
+def _tg_index_attend(cca: "_CCABase", x: Tensor, q: Tensor, k: Tensor, v: Tensor,
+                     q_lat: Tensor, gate_pre: Tensor | None, tg_index: dict, scale: float,
+                     win_capture: dict | None) -> Tensor:
+    """The ``tg_index`` (fused strict kernel) tail shared by both CCA attentions.
+
+    ``tg_index["qpos"]`` (``model.slot_compact: gather``): the layer's input ``x`` and its
+    keys / values cover every cell, the queries are the rows ``perm[:, :n]`` only, ``n =
+    qpos.shape[1]`` (``morph/model/slot_compact.py``). q, x, q_lat and the gate's
+    pre-activation are cut to those rows, the kernel reads each query's original position,
+    and the output has ``n`` rows. Without it: the call before the key.
+    """
+    qpos = tg_index.get("qpos")
+    if qpos is not None:
+        if win_capture is not None:
+            raise NotImplementedError("tg_win_capture (tul.loop_carry) with query rows by "
+                                      "position (model.slot_compact)")
+        perm, inv, n = tg_index["perm"], tg_index["inv"], qpos.shape[1]
+        q = take_rows(q, perm, inv, n, dim=2)
+        x = take_rows(x, perm, inv, n)
+        q_lat = take_rows(q_lat, perm, inv, n)
+        gate_pre = None if gate_pre is None else take_rows(gate_pre, perm, inv, n)
+    out_comp, out_win = tg_strict_attention(q, k, v, cca.sink_logits, tg_index,
+                                            cca.window_size, scale)
+    return cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat, gate_pre=gate_pre,
+                                win_capture=win_capture)
 
 
 def _tg_slot_attention(q: Tensor, k: Tensor, v: Tensor, slot_mask: Tensor | None,
@@ -1201,11 +1229,8 @@ class _CCACSAAttention(nn.Module):
             if tg_index is not None:
                 # model.tg_fused_attention: the compressed and the window branch from one
                 # score tile, the strict relation read from the layout's index tensors.
-                out_comp, out_win = tg_strict_attention(q, k, v, self.cca.sink_logits, tg_index,
-                                                        self.cca.window_size, scale)
-                return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
-                                                 gate_pre=gate_pre,
-                                                 win_capture=tg_win_capture)
+                return _tg_index_attend(self.cca, x, q, k, v, q_lat, gate_pre, tg_index,
+                                        scale, tg_win_capture)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
                                               scale=scale,
@@ -1392,11 +1417,8 @@ class _CCAHCAAttention(nn.Module):
             if tg_index is not None:
                 # model.tg_fused_attention: the compressed and the window branch from one
                 # score tile, the strict relation read from the layout's index tensors.
-                out_comp, out_win = tg_strict_attention(q, k, v, self.cca.sink_logits, tg_index,
-                                                        self.cca.window_size, scale)
-                return self.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat,
-                                                 gate_pre=gate_pre,
-                                                 win_capture=tg_win_capture)
+                return _tg_index_attend(self.cca, x, q, k, v, q_lat, gate_pre, tg_index,
+                                        scale, tg_win_capture)
             if tg_span is not None:
                 out_comp = _tg_span_attention(q, k, v, sink_logits=self.cca.sink_logits,
                                               scale=scale,

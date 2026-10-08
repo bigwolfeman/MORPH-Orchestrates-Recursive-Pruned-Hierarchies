@@ -239,8 +239,17 @@ _CORELOOP = ("model.ckpt_grad_iters=0", "model.slot_gain_no_ckpt=true",
              "model.slot_gain_reuse_f0=true")
 
 
+# Only the active cells of each slot-loop pass (model.slot_compact, 2026-10-08): the stratified
+# draw, the per-pass row order, the cached attention inputs and the kernel's query positions
+# must all capture and replay.
+_COMPACT = ("model.ckpt_grad_iters=0", "model.slot_gain_no_ckpt=true",
+            "model.tg_fused_attention=true", "model.slot_depth_stratified=true",
+            "model.slot_compact=gather")
+
+
 @cuda
-@pytest.mark.parametrize("extra", [(), _CORELOOP], ids=["winner", "coreloop_keys"])
+@pytest.mark.parametrize("extra", [(), _CORELOOP, _COMPACT],
+                         ids=["winner", "coreloop_keys", "slot_compact"])
 def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra):
     from morph.training.graph_step import GraphStep
     cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *extra)
