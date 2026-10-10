@@ -86,7 +86,9 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         router pick + reset_to_winner; routed winner write; coda on the cells (all 4 stay as
         keys); one-rollout read; pointer head with a cache over all earlier tokens. Cell count
         M as a decoder argument from the start (item B).
-  - [~] C1d Training-side, Wolfe's go 2026-10-10: a no-span-decoder arm on MORPH. The span
+  - [~] C1d Training-side, Wolfe's go 2026-10-10: a no-span-decoder arm on MORPH. Prereg
+        `lab/experiments/planned/2026-10-10-lxtul-fast-no-spandec-5k.md`, config
+        `lxtul_pointer_fast_nospandec`. The span
         decoder is 5.68 TFLOP (26 %), runs on 2 rows per token, and half of those rows carry no
         label. Parcae evidence (one 5k seed each): Parcae LXTUL 24.4k tok/s with it, 28.2k
         without, CE@6 +0.006. Plan: prereg, then `lxtul_pointer_fast` with the span decoder off
@@ -133,7 +135,14 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       in DiffusionBlocks (norm 0.27, hard argmax fixed it); cost is about 4 block applications
       per cell per pass (one 1024 x 49169 GEMM), against the 9.1 TFLOP target. Its 5k signal
       would be inside our noise (their gain shows after 13B tokens; our 5k is 31M). A fair test
-      is a multi-hop task on the Parcae testbed, not a 5k web-text arm. Wolfe decides.
+      is a multi-hop task on the Parcae testbed, not a 5k web-text arm.
+  - Wolfe 2026-10-10: test it as an ALTERNATIVE to LXTUL, both ways: DiscoTUL (the strict slot
+    loop, one cell, re-embedding between passes) and LX-DiscoTUL (LXTUL with it on every cell).
+    Build now; run after the optimization work (A, C).
+  - [~] D2a Build both arms on the fast path (`graph_step`), branch `feat/discotul`. Bridge
+    modes soft (the paper), top-k and hard argmax (our DiffusionBlocks lesson); sigmoid gate
+    starting open, last pass ungated; at gate 0 the forward must equal its base config.
+  - [ ] D2b Prereg + runs, after A and C.
 
 ## Alternatives considered
 

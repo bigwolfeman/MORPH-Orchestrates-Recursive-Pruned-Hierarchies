@@ -1,0 +1,15 @@
+# lxtul_pointer_fast with the span decoder OFF (phase-2 tracker C1d, 2026-10-10). Why and the
+# eager twin: lxtul_pointer_nospandec.yaml. `spandec_ce_row_cap` acts only on the decoder, so
+# it is cleared here rather than left inert.
+defaults:
+  - lxtul_pointer_fast
+  - _self_
+
+model:
+  spandec_ce_row_cap: false
+
+tul:
+  spandec: false
+
+wandb:
+  name: lxtul-pointer-fast-nospandec

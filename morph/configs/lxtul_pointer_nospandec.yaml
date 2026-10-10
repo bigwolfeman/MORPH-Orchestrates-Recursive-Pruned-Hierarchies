@@ -1,0 +1,16 @@
+# The winner (lxtul_pointer) with the span decoder OFF (phase-2 tracker C1d, 2026-10-10).
+# The span decoder is a training-only target: 5.68 of 21.67 TFLOP per step (26 %), on 2 rows
+# per token, half of them past their span's end. Parcae LXTUL without it: 24.4k -> 28.2k
+# tok/s at CE@6 +0.006 (one 5k seed each). The latent teacher (the factor fan's EMA code) and
+# the coda's token CE still train the loop. Eager twin of lxtul_pointer_fast_nospandec: the
+# fixed-weight readout (core_depth_sweep.py) builds its model from this config.
+# Tracker: .agents/notes/proposed/process/2026-10-10-phase-2-tracker.md
+defaults:
+  - lxtul_pointer
+  - _self_
+
+tul:
+  spandec: false
+
+wandb:
+  name: lxtul-pointer-nospandec
