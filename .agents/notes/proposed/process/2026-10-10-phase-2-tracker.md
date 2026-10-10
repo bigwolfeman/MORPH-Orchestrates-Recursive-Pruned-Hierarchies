@@ -90,12 +90,19 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         + 256 new, batch 1): LXTUL + pointer graphed 294.8 tok/s, cached 82.9, eager 12.2
         (generation forward) / 6.2 (old forward); plain MORPH eager 16.6, `kv_cache` 11.2.
         Graphed LXTUL token step 1.94 ms (835 kernels, about 6x the 0.31 ms weight-read
-        floor), slot step 11.7 ms. Open: graphed plain MORPH (`StaticDecodeEngine`), so the
-        ratio against the 2.3x target is NOT measured; Parcae arm; true batching (the LXTUL
-        decoders hold one row).
+        floor), slot step 11.7 ms. 2026-10-10: graphed plain MORPH measured (perf/lxtul-decode
+        38675819, `StaticDecodeEngine` fixed for the current geometry): B=1 / B=8 tok/s plain
+        graphed exact_weights 302.6 / 1137.5 (bf16 copies 319.7 / 1318.5, flips 2/10 streams on a
+        0.0062-nat tie), LXTUL graphed same run 295.3 / 260.6. RATIO LXTUL/plain = 0.98x at B=1,
+        0.23x at B=8, against the 2.3x target: the decode saving is NOT realized. Cause: the
+        plain engine is fused Triton (617 kernels for 44 layer passes, about 50 us per layer pass,
+        GPU-bound); the LXTUL graphed decoder is generic PyTorch (835 kernels for 8 token-path
+        layer passes, about 240 us each) and holds one row. Open: an LXTUL decode on the fused
+        engine kernels with real batching; Parcae arm.
   - [x] C1c Cached + graphed LXTUL decode: `perf/lxtul-decode` 46c2fa0d (not merged). On
-        step_5000 row 0, 256 greedy tokens equal eager (row diff 4.1e-3, not explained; TF32
-        conv1d suspected, `--no_tf32` run queued); fp64 agrees to 3e-14 on CPU fixtures. M other
+        step_5000 row 0, 256 greedy tokens equal eager (row diff 4.1e-3, not explained. 2026-10-10:
+        NOT TF32 (`--no_tf32` 4.15e-3) and NOT run noise (deterministic mode: eager repeat bit-equal,
+        gap still 4.15e-3): a fixed numeric path difference in the cached path, tokens equal); fp64 agrees to 3e-14 on CPU fixtures. M other
         than the trained 4 is refused until B1. Original item: bit-equal tokens to `generate_tul`. Refused today at
         `tul_generate_cached.py:85-159` (fan_k, slot_cells, pointer_heads, code_enum_k > 1,
         tul_fan / tul_register). Minimal set: 4 cells through the prelude; register seed with a
@@ -103,8 +110,10 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         router pick + reset_to_winner; routed winner write; coda on the cells (all 4 stay as
         keys); one-rollout read; pointer head with a cache over all earlier tokens. Cell count
         M as a decoder argument from the start (item B).
-  - [~] C1d Training-side, Wolfe's go 2026-10-10: a no-span-decoder arm on MORPH. Prereg
-        `lab/experiments/planned/2026-10-10-lxtul-fast-no-spandec-5k.md`, config
+  - [x] C1d FAILED 2026-10-10 (`lab/experiments/failures/2026-10-10-lxtul-fast-no-spandec-5k.md`):
+        34.7k tok/s and 26.4 min (speed held), but CE@6 3.9927 vs 3.92, K1-K6 +0.0020 vs +0.0098,
+        val 3.9806. The span decoder stays; its cost is a speed target, not a cut.
+        Training-side, Wolfe's go 2026-10-10: a no-span-decoder arm on MORPH. Prereg, config
         `lxtul_pointer_fast_nospandec`. The span
         decoder is 5.68 TFLOP (26 %), runs on 2 rows per token, and half of those rows carry no
         label. Parcae evidence (one 5k seed each): Parcae LXTUL 24.4k tok/s with it, 28.2k

@@ -1,6 +1,6 @@
 # lxtul_pointer_fast without the span decoder at 5k
 
-Status: planned
+Status: failure
 
 ## Question
 
@@ -44,6 +44,33 @@ command as the references. One seed (seed 1, the references' seed).
 
 ## Results
 
+Run 2026-10-10, tree `git archive 6a33958e`, seed 1, launch (GPU lock taken) 10:43:50, final
+checkpoint 11:10:16. Artifacts: `lab/experiments/results/2026-10-10-lxtul-fast-no-spandec-5k/`
+(chain log with the readout line, trainer rate lines, final val line).
+
+| Reading | Prediction | Result | Span-decoder references |
+|---|---|---|---|
+| Trainer rate, late | >= 33k tok/s (guess 36k) | 34.7k (flat 34.66k-34.71k from step 800) | 29.8k |
+| Wall clock | < 29 min (guess 26) | 26.4 min | 35 / 31.3 min |
+| CE@6 (480 rows) | <= 3.936 (guess 3.930) | 3.9927 | 3.9248 / 3.9229 |
+| K1-K6 (ce_tokens) | >= +0.0060 (guess +0.008) | +0.0020 [+0.0014, +0.0026] | +0.0104 / +0.0091 |
+| Final val | <= 3.925 (guess 3.919) | 3.9806 | 3.9161 / 3.9129 |
+
+CE@1 3.9947. The two speed predictions held; the three quality predictions missed by far more
+than the 0.006 run-to-run spread of K1-K6 (the drop is 0.0071-0.0084) and the CE gap is 0.068-0.070.
+
 ## Verdict
 
+Failure. The span decoder carries both CE (0.07 nats at 5k) and most of the loop's contribution
+(K1-K6 +0.0098 mean -> +0.0020). Under the decision rule it stays in `lxtul_pointer_fast`, and
+its cost (5.68 of 21.67 TFLOP per step, about 16 % of wall clock: 34.7k vs 29.8k tok/s) becomes a
+speed target instead of a cut.
+
 ## Updated hypothesis
+
+On MORPH the latent teacher and the coda's token CE do not replace the span decoder as a training
+signal for the loop: the whole-span target is still the term that makes passes 2-6 useful, as it
+was on 2026-09-11 when it first moved the slot channel. One seed only; the gap is about ten times
+the spread, so a second seed is not needed to keep the decoder. Next: make the decoder cheaper,
+not absent (tracker C1d follow-up: its CE row cap, fewer layers, or a decoder on a subset of
+slots per step), each as its own preregistered arm.
