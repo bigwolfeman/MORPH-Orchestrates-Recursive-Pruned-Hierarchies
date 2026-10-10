@@ -1,0 +1,19 @@
+# DiscoTUL on the graph-captured step: tul_onecell_pointer_fast.yaml plus `tul.disco` (the
+# keys and why: discotul.yaml). One factor against tul_onecell_pointer_fast; eager twin
+# discotul.yaml. The term is fixed-shape (top-k at a fixed k, a fixed pass count under
+# graph_safe, masks instead of gathers) and reads nothing on the host at train.
+defaults:
+  - tul_onecell_pointer_fast
+  - _self_
+
+tul:
+  disco: true
+  disco_bridge: topk
+  disco_topk: 128
+  disco_tau: 1.0
+  disco_gate: learned
+  disco_gate_bias: 0.0
+  disco_detach_table: true
+
+wandb:
+  name: discotul-fast

@@ -1,0 +1,27 @@
+# LX-DiscoTUL (phase-2 tracker D2a, 2026-10-10): the winner (lxtul_pointer) plus DiscoLoop
+# re-embedding between slot-loop passes (morph/model/tul_disco.py; the keys and why:
+# discotul.yaml). One factor against lxtul_pointer.
+#
+# On the latent-selected loop, after pass t-1 every cell of a slot whose depth continues is
+# reset to that pass's winner (`reset_to_winner`, the same "depth > t" mask the term uses),
+# so the four cells entering pass t are bit-equal before their per-cell seeds reach them
+# inside the pass (DiagonalInjection's source and the register term). Phi is therefore
+# computed ONCE per slot, on the winner, and broadcast to its four cells: the cost is one
+# head read per slot per pass, not four (pinned in tests/test_tul_disco.py).
+# Eager twin of lxtul_disco_fast.yaml (the fixed-weight readout builds from this file).
+# Note: .agents/notes/proposed/architecture/2026-10-10-discotul.md
+defaults:
+  - lxtul_pointer
+  - _self_
+
+tul:
+  disco: true
+  disco_bridge: topk
+  disco_topk: 128
+  disco_tau: 1.0
+  disco_gate: learned
+  disco_gate_bias: 0.0
+  disco_detach_table: true
+
+wandb:
+  name: lxtul-disco

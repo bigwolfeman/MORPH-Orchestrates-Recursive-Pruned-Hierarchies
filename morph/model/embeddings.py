@@ -174,15 +174,20 @@ class HybridEmbedding(nn.Module):
         )
         return torch.cat([euc_w, lor_w], dim=-1)                            # [V, d_model]
 
-    def attend(self, x: Tensor) -> Tensor:
+    def attend(self, x: Tensor, detach_table: bool = False) -> Tensor:
         """Weight-tied LM head logits, shape [..., vocab_size].
 
         Projects the hidden state through the tied weight matrix. Splitting x
         into euclidean/lorentz slices and summing two matmuls is algebraically
         identical to one matmul against the concatenated weight, so we use the
         single :meth:`lm_weight` source of truth.
+
+        ``detach_table`` (default False, the head as before): the same logits with the
+        table DETACHED, for an auxiliary reader that must not train the tied embedding
+        (``tul.disco_detach_table``; memory ``morph-lm-head-is-weight-tied``).
         """
-        return x @ self.lm_weight().T
+        w = self.lm_weight()
+        return x @ (w.detach() if detach_table else w).T
 
 
 # ── BigramEmbedding ───────────────────────────────────────────────────────────
@@ -344,13 +349,14 @@ class MORPHEmbedding(nn.Module):
         """Weight-tied LM-head matrix [vocab_size, d_model] (see HybridEmbedding)."""
         return self.hybrid.lm_weight()
 
-    def attend(self, x: Tensor) -> Tensor:
+    def attend(self, x: Tensor, detach_table: bool = False) -> Tensor:
         """Weight-tied LM head: hidden state → vocab logits.
 
         Args:
             x: [B, S, d_model] final hidden state (after norm).
+            detach_table: the table enters DETACHED (see :meth:`HybridEmbedding.attend`).
 
         Returns:
             [B, S, vocab_size] logits.
         """
-        return self.hybrid.attend(x)
+        return self.hybrid.attend(x, detach_table=detach_table)

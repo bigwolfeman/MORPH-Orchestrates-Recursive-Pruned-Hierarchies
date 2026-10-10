@@ -1,0 +1,44 @@
+# The one-cell control (tul_onecell_pointer.yaml) on the graph-captured training step, with
+# every speed key of lxtul_pointer_fast that applies at ONE cell. DiscoTUL's fast arm
+# (discotul_fast.yaml) is this file plus `tul.disco`.
+#
+# Keys of lxtul_pointer_fast that do NOT apply here, each refused at build:
+#   model.tg_fused_attention  the fused kernel implements the strict relations with the
+#                             REGISTER core (tul.slot_cells > 1) only
+#   model.slot_compact        needs tul.slot_cells > 1 (the cell index) and
+#                             tg_fused_attention (validate_slot_compact)
+#   model.fan_twin_compile, fan_div_fast, fan_lsel_pick_bf16, fan_target_online
+#                             the fan / latent-selected loop / EMA twin keys
+# So the one-cell core runs the eager strict attention path (tg_scoped_kernels keeps
+# HC-Cayley, the CCA prologue and the core window fused). Both one-cell arms carry the same
+# handicap, so their pair is fair; against lxtul_pointer_fast the ms/step includes it.
+# Kept: every key below. slot_depth_stratified is a training-function change (the joint
+# law of the depths, same marginal; lab/experiments/successes/2026-10-08-*), kept because
+# the winner's fast arm runs it.
+defaults:
+  - tul_onecell_pointer
+  - _self_
+
+model:
+  ce_softmax_kernel: true
+  graph_safe: true
+  hc_fused_grad: true
+  ternary_step_cache: true
+  ckpt_grad_iters: 0
+  slot_gain_no_ckpt: true
+  slot_depth_stratified: true
+  spandec_ce_row_cap: true
+  hc_region_fused: true
+  cca_prologue_tiled: true
+  inject_fold: true
+
+training:
+  grad_probe_every: 0
+  loop_cot_probe: false
+  compile_blocks: true
+  compile_core_dynamic: false
+  capturable_optimizer: true
+  graph_step: true
+
+wandb:
+  name: tul-onecell-pointer-fast

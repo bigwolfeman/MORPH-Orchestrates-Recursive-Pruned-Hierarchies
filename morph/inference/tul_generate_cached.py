@@ -194,6 +194,8 @@ def _check_supported(model) -> None:
         # variants that read more than a token's own final state are not.
         need(not model.tul_pointer.cell_key, "tul.pointer_cell_key (the cell key term)")
         need(not model.tul_pointer.coverage, "tul.pointer_coverage_lambda (the coverage term)")
+    need(not getattr(tc, "disco", False),
+         "tul.disco (the re-embedding between slot-loop passes; the eager generate_tul runs it)")
     need(not tc.slot_source_once, "tul.slot_source_once")
     need(not tc.tg_span_comp, "tul.tg_span_comp")
     need(not tc.center_bag_mean, "tul.center_bag_mean")

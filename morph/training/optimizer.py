@@ -57,6 +57,10 @@ _NO_DECAY_KEYWORDS = (
     # arm B's codes (tul.code_policy_k, morph/model/tul_code_policy.py): the SAME
     # `TULCodeEnum` basis under the policy module, for the same reason.
     "tul_code_policy.codes.basis",
+    # tul.disco (morph/model/tul_disco.py): the RMSNorm gain on Phi and the gate's zero-init
+    # direction and bias, all control parameters (the `tul_gate` reason: decay on a zero-init
+    # readout direction pulls against the only gradient it has).
+    "tul_disco",
 )
 
 

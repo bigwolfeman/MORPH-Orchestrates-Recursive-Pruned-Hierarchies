@@ -1,0 +1,20 @@
+# LX-DiscoTUL on the winner's fast path: lxtul_pointer_fast.yaml plus `tul.disco` (the keys
+# and why: discotul.yaml and lxtul_disco.yaml). One factor against lxtul_pointer_fast.
+# Under `model.slot_compact: gather` the term goes only to the cells whose depth continues,
+# which is exactly the pass's compacted row set, so the compacted pass computes every cell
+# that got a term and no other (morph/model/tul_disco.py).
+defaults:
+  - lxtul_pointer_fast
+  - _self_
+
+tul:
+  disco: true
+  disco_bridge: topk
+  disco_topk: 128
+  disco_tau: 1.0
+  disco_gate: learned
+  disco_gate_bias: 0.0
+  disco_detach_table: true
+
+wandb:
+  name: lxtul-disco-fast
