@@ -1278,7 +1278,10 @@ class TULConfig:
     # Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
     spandec_reads_cells: bool = False
     # ── WHICH STATE THE SPAN DECODER GRADES (arm "spdwin", 2026-10-10) ────────────
-    # spandec_read: "mean" (default; today's forward, bit-identical) | "winner".
+    # spandec_read: "mean" (default; today's forward, bit-identical) | "winner" | "each".
+    # "each" (2026-10-10): the decoder grades EACH of the M exit cells alone (cell axis folded
+    # into the batch axis, one pass over B*M rows) and the loss is the mean of the M per-cell
+    # losses, so every cell gets the gradient of its own decodability. Same refusals as "winner".
     #
     # WHY. On the latent-selected loop the coda reads ONLY the router's final winner cell
     # (`_fan_route_cells` writes every loser as exact zero), but the span decoder reads
@@ -4699,27 +4702,28 @@ class TULConfig:
         """``tul.spandec_read`` — ``"mean"`` (default, no-op) or ``"winner"``: the span
         decoder grades the latent-selected loop's hard winner cell, the one cell the coda
         reads, instead of the mean of the M exit cells."""
-        if self.spandec_read not in ("mean", "winner"):
+        if self.spandec_read not in ("mean", "winner", "each"):
             raise ValueError(
-                f"tul.spandec_read must be 'mean' or 'winner', got {self.spandec_read!r}")
+                f"tul.spandec_read must be 'mean', 'winner' or 'each', got "
+                f"{self.spandec_read!r}")
         if self.spandec_read == "mean":
             return
         if not self.spandec:
             raise ValueError(
-                "tul.spandec_read='winner' needs tul.spandec: true (no decoder is built, "
-                "so the knob would be silently ignored).")
+                f"tul.spandec_read={self.spandec_read!r} needs tul.spandec: true (no decoder "
+                f"is built, so the knob would be silently ignored).")
         if not (self.fan_loop_select != "off" and self.fan_lsel_read == "winner"):
             raise ValueError(
-                f"tul.spandec_read='winner' needs tul.fan_loop_select != 'off' with "
+                f"tul.spandec_read={self.spandec_read!r} needs tul.fan_loop_select != 'off' with "
                 f"tul.fan_lsel_read == 'winner' (got fan_loop_select="
                 f"{self.fan_loop_select!r}, fan_lsel_read={self.fan_lsel_read!r}): the "
                 f"winner is the latent-selected loop's hard pick, which the coda reads "
                 f"alone; without it there is no single cell to grade.")
         if self.spandec_reads_cells:
             raise ValueError(
-                "tul.spandec_read='winner' with tul.spandec_reads_cells: true: the second "
-                "hands the decoder ALL M cells as a memory, the first ONE winner cell. "
-                "They are different readers; pick one.")
+                f"tul.spandec_read={self.spandec_read!r} with tul.spandec_reads_cells: true: "
+                f"the second hands the decoder ALL M cells as a memory, the first reads the "
+                f"winner / each cell alone. They are different readers; pick one.")
 
     def _check_spandec_parallel(self) -> None:
         """``tul.spandec_parallel`` — LXTUL-E's committed product reader
