@@ -123,8 +123,10 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         rounded to bf16 after every op while the backward recomputed in fp32. Fixed to fp32 with
         one rounding at the store (bf16 autocast q/k 3.9e-3 -> 1.66e-3 = the floor; time within
         1 %). It was the whole decode gap: 4.1e-3 -> 2.4e-5. Training fwd+bwd moves the grad 1.5e-2
-        relative, so a paired check runs before the merge
-        (`lab/experiments/planned/2026-10-10-cca-prologue-rounds-once-paired.md`, from 13:02).
+        relative. Paired check SUCCESS under its rule and MERGED
+        (`lab/experiments/successes/2026-10-10-cca-prologue-rounds-once-paired.md`): CE@6 +0.0011,
+        K1-K6 -0.0017, val +0.0007, all leaning against the fix at the resolution (run 3 missed,
+        its rerun held). Open: from-scratch 5k pair to tell a resume transient from a real cost.
         Side finding: on lxtul-pointer-rerun step_5000 (trained with the hinge fixed on pass 6),
         pinning the hinge on passes 0-2 reads gain 1.8-2.0 (gain_reg_weighted 87-126, loss 95):
         the passes the old hinge never read drifted expansive. Resuming a long fixed-pass
