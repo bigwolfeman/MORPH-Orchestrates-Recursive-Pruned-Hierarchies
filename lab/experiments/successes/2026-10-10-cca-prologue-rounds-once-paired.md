@@ -1,6 +1,6 @@
 # CCA prologue rounds once: paired continuations against the bf16-per-op kernel
 
-Status: planned
+Status: success
 
 ## Question
 
@@ -54,6 +54,36 @@ checkpoint. Chain: `/home/wolfe/morph-scratch/prologue/paired/chain.sh <commit>`
 
 ## Results
 
+Run 2026-10-10 13:02-13:51, tree `git archive 2e434a60`. Artifacts:
+`lab/experiments/results/2026-10-10-cca-prologue-rounds-once-paired/` (`chain.txt`, `sweep_*.json`).
+Every run drew the baseline's exact pass sequence (counts 108, 119, 135, 129, 131, 119, 130, 128).
+
+| Run | CE@6 | vs 4.04830 | K1-K6 (ce_tokens, 480 rows) | trainer val | spandec_ce K1-K6 |
+|---|---|---|---|---|---|
+| prologue 1 | 4.0487 | +0.0004 | +0.0107 [+0.0101, +0.0114] | 4.0930 | +0.0179 |
+| prologue 2 | 4.0495 | +0.0012 | +0.0102 [+0.0095, +0.0109] | 4.0951 | +0.0159 |
+| prologue 3 | 4.0508 | +0.0025 MISS | +0.0101 [+0.0094, +0.0108] | 4.0961 | +0.0179 |
+| prologue 3 rerun (decision rule) | 4.0494 | +0.0011 | +0.0101 [+0.0094, +0.0108] | 4.0947 | +0.0182 |
+| baseline mean (fresh-pass arm) | 4.04830 | | +0.01207 | 4.0940 | +0.0131 (fresh 1, 3) |
+
+Against the predictions:
+- CE@6 within 0.002: runs 1 and 2 hold; run 3 missed by 0.0005; under the stated rule (a miss
+  on one run only -> rerun that run once) its rerun reads +0.0011 and holds.
+- Mean K1-K6 at or above +0.0094: +0.01033 with run 3 or with its rerun. Held (best guess +0.0121).
+- Trainer val within 0.003 of 4.0940: 4.0930 / 4.0951 / 4.0961 / 4.0947. Held.
+
 ## Verdict
 
+Success under the decision rule; the fix merges. Stated plainly: every reading leans the same
+way, against the fix, by about the test's resolution: CE@6 +0.0011 (mean of 1, 2, 3 rerun), K1-K6
+-0.0017 (1.4x the 0.0012 paired noise), trainer val +0.0007, and the original run 3 missed. The
+span decoder's own depth curve moves the other way (spandec_ce K1-K6 about +0.0175 vs +0.013).
+
 ## Updated hypothesis
+
+The fix is a correctness fix (the old forward was not the function its backward differentiated)
+and its cost here is at the edge of detection. One untested reading: the step_2500 checkpoint
+adapted for 2500 steps to the old kernel's per-op rounding, so a 1000-step continuation under the
+exact kernel starts slightly off the function its weights fit, and the shift is a resume
+transient. The test that separates "transient" from "the exact kernel trains worse" is a pair of
+5k runs from scratch, one per kernel, read on CE@6 and K1-K6 at 5k; not run.
