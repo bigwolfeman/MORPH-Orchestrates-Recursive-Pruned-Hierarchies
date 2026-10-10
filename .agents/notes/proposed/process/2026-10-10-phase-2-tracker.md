@@ -43,7 +43,7 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       the CPU generator back after the draw, which froze the pass). Rejected: one pass per run
       (the constrained region is a seed accident); every pass per step (8x the hinge, about
       +200 ms per step at 29.5 ms per pass).
-- [ ] A3 Build it: a per-step draw that keeps `graph_step` capturable (8 captured graphs sharing
+- [x] A3 Build it: a per-step draw that keeps `graph_step` capturable (8 captured graphs sharing
       one pool, or a device-side index into the stored per-pass detached states; the hard part
       is replaying pass t's dropout masks). Byte gate: with the draw forced to pass 6 it must
       equal today's step. Then a paired check (3 continuations from the rerun step_2500) against
@@ -62,8 +62,10 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       steps, all passes 0-7, seed 2 a different sequence, eager seed 1 = fast seed 1); CUDA
       graph-step tests 36 passed; sabotage (replay pass 0's graph) fails 4/4. 16 graphs record
       in 5.1 s. Bench 420 steps: 233.9 / 235.6 ms/step vs base 230.0 / 230.1 (+2.0 %; likely the
-      hinge now reads earlier passes, which carry more rows under slot_compact). Paired chain
-      (prereg) running on be624816 from 11:15.
+      hinge now reads earlier passes, which carry more rows under slot_compact). Paired check
+      SUCCESS (perf/hinge-draw 55ecb33f, `lab/experiments/successes/2026-10-10-hinge-fresh-pass-paired.md`):
+      CE@6 4.0482 / 4.0480 / 4.0487 vs fixed mean 4.0473; K1-K6 mean +0.0121 vs +0.0104; every
+      pass drawn (chi2 4.38). Not merged to master yet.
 - [ ] A4 Interaction with C4 (skipping the inactive hinge): decide A first.
 
 ### B. Variable cell count (owner note: [`2026-10-05-lxtul-variable-cell-count.md`](../architecture/2026-10-05-lxtul-variable-cell-count.md))
