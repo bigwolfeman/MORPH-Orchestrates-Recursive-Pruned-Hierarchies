@@ -48,6 +48,14 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       is replaying pass t's dropout masks). Byte gate: with the draw forced to pass 6 it must
       equal today's step. Then a paired check (3 continuations from the rerun step_2500) against
       the fixed pass on CE@6 and K1-K6; if it holds, it goes into `lxtul_pointer_fast`.
+      2026-10-10: [~] built on perf/hinge-draw e19234c2 (rebased on 7b028dab). Private CPU
+      generator, one uniform per step; `model.slot_gain_pass_force` (-1 fresh, k pins); one
+      graph per (kind, pass), 16 in one pool; kept gradients in one shared buffer set. CPU
+      tests pass (gain_pass_draw 14, graph_safe 13, graph_step 8 + 9 CUDA skipped). NOT run:
+      byte gates at forced pass 6, CUDA graph-step tests, speed, memory, recording time
+      (queued in go_queue.sh). Prereg `lab/experiments/planned/2026-10-10-hinge-fresh-pass-paired.md`
+      is in the commit; the paired chain runs after the gates pass. Open: `model.core_gain_lambda`
+      (`_core_region`) has the same frozen draw; no decision covers it.
 - [ ] A4 Interaction with C4 (skipping the inactive hinge): decide A first.
 
 ### B. Variable cell count (owner note: [`2026-10-05-lxtul-variable-cell-count.md`](../architecture/2026-10-05-lxtul-variable-cell-count.md))
