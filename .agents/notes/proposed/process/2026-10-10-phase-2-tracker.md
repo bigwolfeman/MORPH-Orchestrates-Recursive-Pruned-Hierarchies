@@ -117,6 +117,13 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         687 kernels (bucket 1). Tokens equal graphed and eager for 256 tokens on prompts 0 and 1;
         B = 4/8/16 rows equal B=1. TARGET MET at B=1 and B=8 (B=8 margin thin). Open: prompts 2-7
         against the references, sampling, B=16 vs plain, slot-step fusion (~55 us per layer).
+        Fusion (perf/lx-decode-megakernel 6952a5e8, merged b792581d; note
+        `.agents/notes/proposed/feature/2026-10-10-lx-decode-megakernel.md`): 8 kernels per layer,
+        latent cache, glue kernels, int6-codes LM head. Median of 3, same invocation: 1338 / 4357 /
+        5251 tok/s vs plain 268 / 999 / 1212 = 4.99x / 4.36x / 4.33x at B = 1 / 8 / 16; repeat on
+        final kernels 5.12x / 4.22x / 4.32x (plain 309 / 1149 / 1387). Token step 0.369 ms / 74
+        kernels, slot bucket 1 1.56 ms / 438. Open: host gap (busy 0.86-0.91), slot seed/register
+        glue (~100 us), logits row stride, persistent megakernel (<= 0.3-0.4 ms per slot step).
         FINDING: the Triton `fused_cca_prologue` (training forward too) is ~3e-3 relative off fp64
         for q/k; `cca_prologue_reference` is 1e-7. Likely source of the eager-vs-cached logit gaps.
         RESOLVED in the kernel (fix/cca-prologue-precision 2e434a60, not merged): the forward
