@@ -46,7 +46,7 @@ command as the references. One seed (seed 1, the references' seed).
 
 Run 2026-10-10, tree `git archive 6a33958e`, seed 1, launch (GPU lock taken) 10:43:50, final
 checkpoint 11:10:16. Artifacts: `lab/experiments/results/2026-10-10-lxtul-fast-no-spandec-5k/`
-(chain log with the readout line, trainer rate lines, final val line).
+(`chain.txt`: chain log with the readout line; trainer rate lines, final val line).
 
 | Reading | Prediction | Result | Span-decoder references |
 |---|---|---|---|

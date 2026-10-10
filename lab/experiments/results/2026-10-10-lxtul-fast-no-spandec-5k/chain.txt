@@ -1,0 +1,10 @@
+[10-10 02:32:09] waiting for gaussian-jepa pids 331302 557458 576522
+[10-10 02:32:09] gpu free; 9859, 44 MiB 9860, 44 MiB 550883, 725 MiB 
+[10-10 02:32:09] train start
+[10-10 02:32:27] aborted by orchestrator: other project still active, relaunch with time gate
+[10-10 02:32:34] waiting until 03:15 and 3 clean GPU checks (no foreign compute app over 1 GB)
+[10-10 03:15:51] held by orchestrator: UPS alarm, Wolfe killed a run; relaunch only on his word
+[10-10 10:35:22] gpu free; 9859, 44 MiB 9860, 44 MiB 550883, 727 MiB 
+[10-10 10:35:22] train start
+[10-10 11:10:47] train exit=0 Final val_loss=3.9806
+[10-10 11:14:22] sweep exit=0 ckpt=step_5000.pt nospan depth=1 ce=3.9947 span_first=3.8467 nospan depth=6 ce=3.9927 span_first=3.8075 nospan ce_tokens K1-K6: +0.0020 [+0.0014, +0.0026] over 480 rows 
