@@ -15,6 +15,19 @@ holds only status.
 
 Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-] dropped (with why).
 
+### Targets (Wolfe 2026-10-10)
+
+- **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
+  2026-10-08 flame ledger). 9.1 is the analytic LXTUL step: three times the decode forward,
+  i.e. the loop once per span plus prelude and coda per token, with no train-only extras
+  (`/home/wolfe/morph-scratch/research/lxtul-decode-savings.md`). Where the other 12.6 TFLOP
+  sits today: span decoder 5.68 (26 %), gain hinge 1.64 (7.6 %), EMA twin 0.72 (3.3 %), the
+  4-cell loop on all 8 passes (core 5.87; 1 cell would be about 1.47; up to 2.33 is discarded
+  pass work), slot rows in the LM head about 0.34, and 16.9 % of slots are pads.
+- **Decode: at least plain MORPH's cached speed x 2.3** per token (the analytic ratio for
+  4 cells; 3.3x at 1 cell, 3.9x with zero span cost). Today eager LXTUL + pointer decodes at
+  7.1 tok/s against plain MORPH's 86 (eager, same run): 12x slower, not 2.3x faster.
+
 ### A. The gain hinge's fixed pass (Wolfe's decision)
 
 The hinge draws its pass from the CPU generator and restores it, so it regularises ONE pass per
@@ -26,10 +39,15 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       seed 1 (the winner's seed) and 54 of 54 are pass 3 on seed 2 (`n_grad_iters` 8). The pass
       is fixed per run and differs between seeds, so two seeds of one recipe regularise
       different passes. Scripts and logs: `/home/wolfe/morph-scratch/perf/hingepass/`.
-- [ ] A2 Wolfe decides: keep one pass per run, a fresh pass per step, or every grad pass.
-- [ ] A3 If per step: device-side draw (one-hot over passes or one graph per pass) that keeps
-      `graph_step` capturable; byte gate with the draw fixed; paired check (3 pairs) against
-      the fixed pass.
+- [x] A2 Wolfe decided 2026-10-10: a fresh pass per step (the 2026-09-04 intent; 34d94a04 put
+      the CPU generator back after the draw, which froze the pass). Rejected: one pass per run
+      (the constrained region is a seed accident); every pass per step (8x the hinge, about
+      +200 ms per step at 29.5 ms per pass).
+- [ ] A3 Build it: a per-step draw that keeps `graph_step` capturable (8 captured graphs sharing
+      one pool, or a device-side index into the stored per-pass detached states; the hard part
+      is replaying pass t's dropout masks). Byte gate: with the draw forced to pass 6 it must
+      equal today's step. Then a paired check (3 continuations from the rerun step_2500) against
+      the fixed pass on CE@6 and K1-K6; if it holds, it goes into `lxtul_pointer_fast`.
 - [ ] A4 Interaction with C4 (skipping the inactive hinge): decide A first.
 
 ### B. Variable cell count (owner note: [`2026-10-05-lxtul-variable-cell-count.md`](../architecture/2026-10-05-lxtul-variable-cell-count.md))
@@ -58,6 +76,8 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         train-only terms are 37.5 % (span decoder 26 %, hinge 7.6 %, twin 3.3 %); an ideal LXTUL
         step is about 9.1 TFLOP vs 21.67 today. Parcae evidence: bare strict loop 37.2k tok/s
         vs plain 21.8k; Parcae LXTUL without the span decoder 28.2k vs 24.4k at CE@6 +0.006.
+  - [~] C1b..C1f: agent `decode`, branch `perf/lxtul-decode` (worktree /home/wolfe/morph-wt-decode),
+        launched 2026-10-10 02:10; vlt thread `lxtul-decode`.
   - [ ] C1b Decode bench today: eager LXTUL vs cached plain vs Parcae, tok/s at batch 1 and N.
   - [ ] C1c Cached + graphed LXTUL decode, bit-equal tokens to `generate_tul`. Refused today at
         `tul_generate_cached.py:85-159` (fan_k, slot_cells, pointer_heads, code_enum_k > 1,
@@ -66,9 +86,13 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         router pick + reset_to_winner; routed winner write; coda on the cells (all 4 stay as
         keys); one-rollout read; pointer head with a cache over all earlier tokens. Cell count
         M as a decoder argument from the start (item B).
-  - [ ] C1d Training-side: the span decoder is 26 % of training FLOPs. A no-span-decoder arm
-        on MORPH (Parcae: +16 % speed at CE@6 +0.006) is a recipe change and needs Wolfe's go
-        and a quality arm. Also 1-cell vs 4-cell loop cost (core 1.47 vs 5.87 TFLOP).
+  - [~] C1d Training-side, Wolfe's go 2026-10-10: a no-span-decoder arm on MORPH. The span
+        decoder is 5.68 TFLOP (26 %), runs on 2 rows per token, and half of those rows carry no
+        label. Parcae evidence (one 5k seed each): Parcae LXTUL 24.4k tok/s with it, 28.2k
+        without, CE@6 +0.006. Plan: prereg, then `lxtul_pointer_fast` with the span decoder off
+        at 5k, read against the two fast 5k runs (CE@6 3.9248 / 3.9229, K1-K6 +0.0104 /
+        +0.0091). Next on the same axis: the 1-cell vs 4-cell loop cost (core 1.47 vs 5.87
+        TFLOP) meets item B.
   - [ ] C1e The eager generator runs the training-only span decoder on every step
         (`transformer.py` ~14526, no gate; OOM trace
         `lab/experiments/results/2026-10-07-lxtul-pointer-coverage/gen/gen_oom.log`). Add an
