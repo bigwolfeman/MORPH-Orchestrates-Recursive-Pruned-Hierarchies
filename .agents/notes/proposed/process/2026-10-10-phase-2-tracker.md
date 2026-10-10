@@ -122,6 +122,18 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       the predictable factors); its ceiling is the best-of-4 oracle (-0.0207 nats) and the
       teacher is not better than the router today. Verdict: optional later ablation, as Wolfe
       said; a cheap offline pick-agreement probe gates it.
+- [ ] D2 DiscoLoop (arXiv 2607.00341, read 2026-10-10). Between loop passes it adds
+      `alpha * RMSNorm(sum_v softmax(W h / tau)_v W[v])` (tied W, top-128 approximation, sigmoid
+      gate, last pass ungated). Multi-hop toy: OOD 8.3 % -> about 100 %. 440M / 20B-token
+      pretrain: behind the plain loop until about 13B tokens, then about 0.01 loss ahead,
+      benchmark mean 50.5 vs 49.3. Not built in MORPH: `tul.pseudo_k` (snap) writes a span-token
+      mixture AFTER the last pass, not between passes. Open questions before an arm: the slot
+      cell has no trained token readout (`emit_weight: 0`), so its logit lens may give the
+      slot-shared unigram mean (the carrier constant again); the soft bridge already failed us
+      in DiffusionBlocks (norm 0.27, hard argmax fixed it); cost is about 4 block applications
+      per cell per pass (one 1024 x 49169 GEMM), against the 9.1 TFLOP target. Its 5k signal
+      would be inside our noise (their gain shows after 13B tokens; our 5k is 31M). A fair test
+      is a multi-hop task on the Parcae testbed, not a 5k web-text arm. Wolfe decides.
 
 ## Alternatives considered
 
