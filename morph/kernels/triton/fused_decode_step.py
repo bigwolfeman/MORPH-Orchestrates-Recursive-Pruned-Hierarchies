@@ -678,7 +678,7 @@ def _psum_r(PB, r, col0, offs, OP: tl.constexpr, KS: tl.constexpr):
 @triton.jit
 def _front_post_kernel(
     PART, COS, SIN, WDWQ, WGPQ, WDWK, WGPK, QNW, KNW, ETEMP,
-    Q, WK, WV, XRES, GATEH, QI, POSP,
+    Q, WK, WV, XRES, GATEH, QI, POSP, KVROW,
     eps,
     H: tl.constexpr, HKV: tl.constexpr, NREP: tl.constexpr,
     D: tl.constexpr, HD2: tl.constexpr,
@@ -686,10 +686,14 @@ def _front_post_kernel(
     DI: tl.constexpr,
     KC: tl.constexpr, KS: tl.constexpr, OP: tl.constexpr,
     IS_CSA: tl.constexpr, WWIN: tl.constexpr, NU: tl.constexpr,
+    HAS_KVROW: tl.constexpr,
     sq_b, sq_h, sk_b, sk_h, sk_w, sxr_b, sgh_b, sqi_b, scos_b,
 ):
     """Combine the K-split partials + conv + qk-mean + RMS + temp + RoPE + v-assembly
-    + staging/gate/q_I stores. All inputs are the just-written PART scratch (L2-hot)."""
+    + staging/gate/q_I stores. All inputs are the just-written PART scratch (L2-hot).
+    HAS_KVROW: query row b stores its K/V into cache row KVROW[b] (the LXTUL decoder's
+    slot buckets, whose query rows are a gather of cache rows); False = row b, the
+    engine's kernel unchanged (KVROW is then a dummy pointer that is never read)."""
     pid = tl.program_id(0)
     b = pid // NU
     u = pid % NU
@@ -751,12 +755,16 @@ def _front_post_kernel(
         v2 = tl.trans(tl.reshape(av, (2, HD2)))
         v_lo, v_hi = tl.split(v2)
         wslot = (tl.load(POSP + b) % WWIN).to(tl.int32)     # ring slot of THIS stream's pos
+        if HAS_KVROW:
+            kvb = tl.load(KVROW + b).to(tl.int64)            # the cache row of query row b
+        else:
+            kvb = b
         for r in tl.static_range(NREP):
             hh = g * NREP + r
-            wkb = WK + b * sk_b + hh * sk_h + wslot * sk_w
+            wkb = WK + kvb * sk_b + hh * sk_h + wslot * sk_w
             tl.store(wkb + offs_h, ky_lo)
             tl.store(wkb + HD2 + offs_h, ky_hi)
-            wvb = WV + b * sk_b + hh * sk_h + wslot * sk_w
+            wvb = WV + kvb * sk_b + hh * sk_h + wslot * sk_w
             tl.store(wvb + offs_h, v_lo)
             tl.store(wvb + HD2 + offs_h, v_hi)
     else:
@@ -787,7 +795,8 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
                  part: Tensor,
                  n_heads: int, n_kv: int, d_head: int, lq: int, lk: int, vh: int,
                  gh: int, k_conv: int, eps: float,
-                 wqkv_scale: Tensor | None = None, wqkv_pack4: bool = False) -> None:
+                 wqkv_scale: Tensor | None = None, wqkv_pack4: bool = False,
+                 kv_row: Tensor | None = None) -> None:
     """Two-launch site front-end replacing cuBLAS-GEMM + decode_prologue + gate2 GEMV:
       A) _front_gemm_kernel — K-split (KS=4) lat GEMM into the `part` scratch
          [B, KS, 7, OP]; NT·KS CTAs, zero weight duplication.
@@ -797,8 +806,23 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
     pos_dev [1] int64 = p, staging slot p%WWIN); wqkv [LQ+LK+2VH+GH(+DI), d] contiguous —
     fp32/bf16 weights, or int8 codes with wqkv_scale [O] fp32 per-row scales
     (Int8RowLinear deploy stacks). qi [B, DI] (CSA sites): the indexer query, DI =
-    d_indexer read from qi's width (need not equal d_head)."""
+    d_indexer read from qi's width (need not equal d_head). The post kernel reads
+    pos_dev per query row (``pos_dev[b]``), so it needs B entries.
+    kv_row [B] int32/int64 (optional): query row b writes its K/V into
+    ``win_k[kv_row[b]]`` / ``win_v[kv_row[b]]`` at entry ``pos_dev[b] % win_k.shape[2]``
+    instead of row b. The LXTUL fused decoder's slot buckets
+    (``morph/inference/lx_fused_decode.py``) gather a few cache rows into a dense query
+    batch; ``None`` is the engine's kernel unchanged (a constexpr branch). Every
+    ``kv_row[b]`` must lie in ``[0, win_k.shape[0])``; the device does not check it.
+    A stride-0 ``x_hist`` (an expanded flat table, ``x_off`` = absolute rows) is legal:
+    the kernels index ``X + b * x_hist.stride(0) + x_off[b, r] * x_hist.stride(1)``
+    (pinned by ``tests/test_decode_front_kvrow.py``)."""
     B = x_hist.shape[0]
+    if kv_row is not None:
+        assert kv_row.shape == (B,) and kv_row.dtype in (torch.int32, torch.int64), (
+            f"kv_row {tuple(kv_row.shape)} {kv_row.dtype}: want [{B}] int32/int64")
+        assert kv_row.device == win_k.device and kv_row.is_contiguous()
+    assert pos_dev.numel() >= B, f"pos_dev has {pos_dev.numel()} entries for {B} rows"
     is_csa = qi is not None
     O, KDIM = wqkv.shape
     OP = part.shape[-1]
@@ -838,10 +862,11 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
     NU = n_heads + n_kv + ntail
     _front_post_kernel[(B * NU,)](
         part, cos, sin, wdwq, wgpq, wdwk, wgpk, qnw, knw, etemp,
-        q_out, win_k, win_v, xres, gateh, qi if is_csa else gateh, pos_dev, eps,
+        q_out, win_k, win_v, xres, gateh, qi if is_csa else gateh, pos_dev,
+        kv_row if kv_row is not None else pos_dev, eps,
         H=n_heads, HKV=n_kv, NREP=n_heads // n_kv, D=d_head, HD2=d_head // 2,
         LQ=lq, LK=lk, VH=vh, GH=gh, DI=d_idx, KC=k_conv, KS=KS, OP=OP,
-        IS_CSA=is_csa, WWIN=win_k.shape[2], NU=NU,
+        IS_CSA=is_csa, WWIN=win_k.shape[2], NU=NU, HAS_KVROW=kv_row is not None,
         sq_b=q_out.stride(0), sq_h=q_out.stride(1),
         sk_b=win_k.stride(0), sk_h=win_k.stride(1), sk_w=win_k.stride(2),
         sxr_b=xres.stride(0), sgh_b=gateh.stride(0),
