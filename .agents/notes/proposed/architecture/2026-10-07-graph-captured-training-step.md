@@ -45,6 +45,9 @@ final state SHA-256).
 - [ ] 1.2 Gain hinge pass: keep the CPU draw (it needs no device sync) and capture one
       graph per drawn pass (8 graphs sharing one memory pool); replay the drawn one.
       Exact. Fallback if memory does not allow it: a device-side one-hot over passes.
+      2026-10-10: the CPU draw put the stream back, so it never moved (one pass per run);
+      built as GraphStep variants with a private generator, see
+      [`2026-10-10-gain-hinge-fresh-pass.md`](2026-10-10-gain-hinge-fresh-pass.md).
 - [ ] 1.3 Replace the host-shadow gathers with fixed-shape masked ops (`torch.where`,
       index tensors of fixed length). Exact in forward values; gate the grads.
 - [ ] 1.4 GradScaler: replace `scaler.step` / `scaler.update` with a device-side

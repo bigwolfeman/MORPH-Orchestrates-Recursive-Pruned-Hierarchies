@@ -14,6 +14,19 @@ run. Measured on the 300M winner (2026-10-07): pool 16.6 GiB, and the eager inst
 step 20 ran out of memory on the 31.4 GiB card. The graphs never run concurrently, so they
 may reuse each other's free blocks; a graph's outputs are read only right after its replay.
 
+VARIANTS (2026-10-10): a host choice a step makes that changes its op sequence and so cannot
+live inside one recording. The one in use is the gain hinge's pass (``model.slot_gain_pass_
+force``; the hinge runs at ONE loop pass, a Python branch): the trainer passes the model's
+``gain_pass_choices()`` as ``variants``, ``draw_gain_pass`` as ``draw_variant`` and
+``pin_gain_pass`` as ``set_variant``. ONE graph is recorded per (kind, variant), all in the
+same pool; every step, eager or replayed, draws its variant once on the host, and a replay
+runs the graph recorded for it. The draw is the eager forward's own draw (same generator, one
+uniform per step), so a GraphStep run draws the same passes as an eager run. Why one graph
+per pass and not a device-side index into one recording: under ``model.slot_compact`` each
+pass runs the hinge on that pass's own row count (a different shape per pass), and the
+hinge's dropout masks come from the CUDA stream at its call site, so one shared hinge would
+be a different function from the eager one, not the same function picked late.
+
 What a replay relies on, and where each is kept:
   * Inputs at fixed addresses. ``StaticBatch`` holds ids, labels and every ``SlotLayout``
     tensor (``ditto_prev`` included); each step ``copy_``s its batch in before the replay.
@@ -24,15 +37,20 @@ What a replay relies on, and where each is kept:
     capture every gradient is allocated from the graph's pool, written by the backward and
     read by the clip and the optimizer within one replay. No eager step can free them; an
     eager step between replays allocates its own (the trainer's ``zero_grad`` drops the
-    references every step, as today).
+    references every step, as today). A KEPT kind (``keep_grads``, the trainer's log block
+    reads ``p.grad`` after the step) ends its recording with a copy of every gradient into
+    ONE set of buffers outside the pool, shared by all graphs (``_grad_bufs``); a replay binds
+    ``p.grad`` to them. Kept per graph instead, the 8 instrument graphs of the hinge's 8 passes
+    would hold 8 gradient sets (8 x 1.2 GB on the 300M winner).
   * Per-step scalars on the device (``training.capturable_optimizer``):
     ``optimizer.write_step_scalars()`` runs before the replay, outside the graph.
   * One op sequence and fixed shapes (``model.graph_safe``: fixed pass count, no host read).
   * Randomness: the CUDA generator is registered with the graph (philox seed and offset are
     read at replay and the offset advances by the graph's increment), so a replay draws what
-    an eager step at that point would. The gain hinge's pass is drawn on the HOST from the CPU
-    generator, which the draw saves and restores, so it is the same pass while the CPU
-    generator stays where it was at capture: compared before every replay, raises if not.
+    an eager step at that point would. The gain hinge's pass is a VARIANT (above), drawn on
+    the host from the model's private generator before each step. The global CPU generator
+    is read by nothing in the step: a recording that moves it raises (a host draw inside the
+    step would be frozen into the graph).
   * Compiled frames: the capture runs under the ``fail_on_recompile`` stance, so a guard miss
     raises instead of silently recording an eager fallback (the trainer's
     ``eager_on_recompile`` stance would), and the dynamo graph count must not move.
@@ -41,20 +59,24 @@ What a replay relies on, and where each is kept:
     compared across each recording; a change raises.
 
 Order: every step runs eager, on the capture side stream (the PyTorch recipe's warm-up),
-until ``first_capture`` and until every kind has run once. On the next step every kind is
-recorded on that step's batch, then that step's kind is REPLAYED (a recording executes no
-kernel). From there on every step is a replay.
+until ``first_capture`` and until every kind has run once. On the next step every (kind,
+variant) is recorded on that step's batch, then that step's (kind, variant) is REPLAYED (a
+recording executes no kernel). From there on every step is a replay. Every variant's compiled
+frames must exist before the recording (``fail_on_recompile``): the trainer's warm-up compile
+runs one forward per hinge pass (train.py ``warmup_compile_all_shapes``).
 
 Eval and generation do not fit beside the pool either (measured: eval's pointer mixture OOM
 at step 25 with the 15.4 GiB pool held, also when it borrowed the pool's free blocks). The
 trainer runs them inside ``released()``: the graphs and their pool are freed (after a device
-sync), and the next step records both kinds again on its own batch and replays. A recording
-executes no kernel and records the same op sequence, so this costs recording time only; the
-45-step gate trace is byte-identical either way.
+sync), and the next step records every graph again on its own batch and replays. A recording
+executes no kernel and records the same op sequence, so this costs recording time only (once
+per (kind, variant): the message prints the seconds); the 45-step gate trace is byte-identical
+either way.
 """
 from __future__ import annotations
 
 import gc
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -186,14 +208,14 @@ class StaticBatch:
 
 @dataclass
 class _Captured:
-    """One step kind's graph and the tensors it writes."""
+    """One (kind, variant)'s graph and the tensors it writes."""
 
     graph: torch.cuda.CUDAGraph
     out: dict
     loss: torch.Tensor
     gnorm: torch.Tensor
-    grads: Optional[list]             # the graph's own gradient buffers, when kept
-    cpu_rng: torch.Tensor             # CPU generator state at capture (the hinge's draw)
+    present: Optional[list]           # kept kinds: which params had a gradient (copied to
+                                      # the shared `_grad_bufs`); None = gradients not kept
     context: Any                      # the trainer's per-capture key (the phase)
     replays: int = 0
 
@@ -226,8 +248,15 @@ class GraphStep:
     first recording no training step runs eager, because an eager step needs activation memory
     of its own next to the graphs' pool (on the 300M winner the two do not fit on 32 GB:
     measured, an eager instrument step after the regular capture ran out of memory).
-    ``keep_grads``: kinds whose gradient buffers stay referenced, so a replay can bind them to
-    ``p.grad`` (the log block's per-region gradient norms read them)."""
+    ``keep_grads``: kinds whose gradients a replay binds to ``p.grad`` afterwards (the log
+    block's per-region gradient norms read them); each such recording ends by copying them into
+    the shared ``_grad_bufs`` (module notes, Gradients).
+
+    ``variants``, ``draw_variant``, ``set_variant`` (module notes, VARIANTS): the host choices
+    besides the kind, one graph per (kind, variant). ``draw_variant()`` runs once per training
+    step, eager or replayed, and returns one of ``variants``; ``set_variant(v)`` makes the
+    following forwards run variant ``v`` (``set_variant(None)`` after every step). Default: one
+    variant, ``None``, and no callbacks: the two-graph step from before."""
 
     def __init__(self, model: nn.Module, optimizer, *, grad_clip: float,
                  forward: Callable[[torch.Tensor, torch.Tensor, Optional[SlotLayout]], dict],
@@ -235,10 +264,20 @@ class GraphStep:
                  loss_terms: Optional[Callable[[], Optional[torch.Tensor]]] = None,
                  after_step: Optional[Callable[[], None]] = None,
                  first_capture: int = 3, keep_grads: tuple = (True,),
-                 compiled: bool = True):
+                 compiled: bool = True, variants: tuple = (None,),
+                 draw_variant: Optional[Callable[[], Any]] = None,
+                 set_variant: Optional[Callable[[Any], None]] = None):
         if not getattr(optimizer, "capturable", False):
             raise ValueError("GraphStep needs a capturable optimizer "
                              "(training.capturable_optimizer)")
+        variants = tuple(variants)
+        if not variants:
+            raise ValueError("GraphStep: variants must hold at least one value")
+        if len(variants) > 1 and (draw_variant is None or set_variant is None):
+            raise ValueError(f"GraphStep: {len(variants)} variants need draw_variant and "
+                             f"set_variant (which one a step runs is a host draw)")
+        if variants != (None,) and set_variant is None:
+            raise ValueError("GraphStep: a variant other than None needs set_variant")
         self.model = model
         self.root = getattr(model, "_orig_mod", model)
         self.optimizer = optimizer
@@ -252,18 +291,42 @@ class GraphStep:
         self.first_capture = int(first_capture)
         self.keep_grads = tuple(keep_grads)
         self.compiled = bool(compiled)
+        self.variants = variants
+        self.draw_variant = draw_variant
+        self.set_variant = set_variant
         self.stream = torch.cuda.Stream()
         # The graphs' private pool (a fresh one after every `released`).
         self.mempool = torch.cuda.MemPool()
         self.static: Optional[StaticBatch] = None
-        self.graphs: dict[Any, _Captured] = {}
+        self.graphs: dict[Any, _Captured] = {}    # keyed (kind, variant)
         self.stats = GraphStepStats()
         self._warm: set = set()               # kinds that have run eager on the stream
         self._addresses: Optional[list] = None
         self._dirty = True                    # eager work since the last address check
+        # The kept kinds' gradients, ONE set for every graph (module notes, Gradients).
+        # Allocated outside the pool before a recording, freed with the graphs.
+        self._grad_bufs: Optional[list] = None
+
+    # ── the variant (module notes, VARIANTS) ────────────────────────────────────────────
+    def _next_variant(self):
+        """This step's variant: drawn once per training step (eager or replayed) and set on
+        the model, so the forwards of the step run it. Released by ``_end_variant``."""
+        v = self.draw_variant() if self.draw_variant is not None else self.variants[0]
+        if v not in self.variants:
+            raise RuntimeError(f"graph_step: the step drew variant {v!r}, not one of the "
+                               f"recorded {self.variants}")
+        if self.set_variant is not None:
+            self.set_variant(v)
+        return v
+
+    def _end_variant(self) -> None:
+        if self.set_variant is not None:
+            self.set_variant(None)
 
     # ── the step body: the trainer's eager sequence (train.py, fwd .. opt) ──────────────
-    def _body(self, x, y, layout):
+    def _body(self, x, y, layout, keep: bool = False):
+        """The step. ``keep`` (a kept kind's RECORDING only): end by copying every gradient
+        into the shared ``_grad_bufs``, bits unchanged, so the replay can bind them."""
         self.optimizer.zero_grad(set_to_none=True)
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out = self.forward(x, y, layout)
@@ -280,6 +343,11 @@ class GraphStep:
         self.optimizer.step()
         if self.after_step is not None:
             self.after_step()
+        if keep:
+            have = [(b, p.grad) for b, p in zip(self._grad_bufs, self.params)
+                    if p.grad is not None]
+            if have:
+                torch._foreach_copy_([b for b, _ in have], [g for _, g in have])
         return out, loss, gnorm
 
     @staticmethod
@@ -355,6 +423,7 @@ class GraphStep:
         self._addresses = None
         for p in self.params:                     # a replay's bound gradient buffers
             p.grad = None
+        self._grad_bufs = None                    # the kept gradients, 1.2 GB on the winner
         self.mempool = torch.cuda.MemPool()       # the old pool dies with its last graph
         gc.collect()
         torch.cuda.empty_cache()
@@ -373,86 +442,101 @@ class GraphStep:
     # ── the two ways to run a step ──────────────────────────────────────────────────────
     def step(self, step: int, kind: Any, x, y, layout, context: Any = None):
         """Run training step ``step`` of ``kind``. Returns ``(out, loss, gnorm, mode)``;
-        mode is "eager", "capture" (every kind recorded, then this step replayed) or
-        "replay". ``context`` is any hashable value the recording bakes in (the phase); a
-        replay under a different one raises."""
+        mode is "eager", "capture" (every (kind, variant) recorded, then this step replayed)
+        or "replay". The step's variant is drawn first, once, whichever way it runs.
+        ``context`` is any hashable value the recording bakes in (the phase); a replay under a
+        different one raises."""
         if kind not in self.kinds:
             raise ValueError(f"graph_step: kind {kind!r} is not one of {self.kinds}")
-        mode = "replay"
-        if not self.graphs:
-            if step < self.first_capture or set(self.kinds) - self._warm:
-                self._warm.add(kind)
-                return (*self.run_eager(x, y, layout), "eager")
-            self._capture_all(kind, x, y, layout, context)
-            mode = "capture"
-        return (*self._replay(self.graphs[kind], kind, x, y, layout, context), mode)
+        v = self._next_variant()
+        try:
+            mode = "replay"
+            if not self.graphs:
+                if step < self.first_capture or set(self.kinds) - self._warm:
+                    self._warm.add(kind)
+                    return (*self._eager(x, y, layout), "eager")
+                self._capture_all(kind, v, x, y, layout, context)
+                mode = "capture"
+            return (*self._replay(self.graphs[(kind, v)], kind, v, x, y, layout, context),
+                    mode)
+        finally:
+            self._end_variant()
 
-    def _capture_all(self, kind, x, y, layout, context):
-        """Record every kind's step on this step's batch. Recording executes no kernel; the
-        caller replays this step's kind right after."""
+    def _capture_all(self, kind, variant, x, y, layout, context):
+        """Record every (kind, variant)'s step on this step's batch. Recording executes no
+        kernel; the caller replays this step's (kind, variant) right after."""
         from torch.compiler import set_stance
+        t0 = time.perf_counter()
         self.static = StaticBatch(x, y, layout)
         self.static.load(x, y, layout)
         sx, sy, sl = self.static.x, self.static.y, self.static.layout
         # Lazy optimizer state must exist BEFORE a recording (its zero fill would otherwise
         # be recorded and replayed every step); every kind has stepped once, so it does.
         self.optimizer.init_state()
+        if self._grad_bufs is None and any(k in self.keep_grads for k in self.kinds):
+            self._grad_bufs = [torch.empty_like(p) for p in self.params]
         n_graphs = self._dynamo_graphs()
         cpu_rng = torch.get_rng_state()
         try:
             for k in self.kinds:
                 self.set_kind(k)
-                py_before = self._python_state()
-                g = torch.cuda.CUDAGraph()
-                with set_stance("fail_on_recompile"):
-                    with torch.cuda.graph(g, pool=self.mempool.id, stream=self.stream,
-                                          capture_error_mode="thread_local"):
-                        c_out, c_loss, c_gnorm = self._body(sx, sy, sl)
-                py_after = self._python_state()
-                changed = sorted(n for n in py_before.keys() | py_after.keys()
-                                 if py_before.get(n) != py_after.get(n))
-                if changed:
-                    raise RuntimeError(f"graph_step: a training step of kind {k!r} changes "
-                                       f"module attributes a replay would freeze: "
-                                       f"{changed[:12]}")
-                if not torch.equal(torch.get_rng_state(), cpu_rng):
-                    raise RuntimeError("graph_step: the step consumes the CPU generator (a draw "
-                                       "with no restore); a replay cannot reproduce that")
-                # The kept kinds' gradient buffers; every other kind's are released to the
-                # pool, so the next recording may reuse them.
-                grads = [p.grad for p in self.params] if k in self.keep_grads else None
-                self.optimizer.zero_grad(set_to_none=True)
-                self.graphs[k] = _Captured(graph=g, out=self._detached(c_out),
-                                           loss=c_loss.detach(), gnorm=c_gnorm.detach(),
-                                           grads=grads, cpu_rng=cpu_rng, context=context)
-                del c_out, c_loss, c_gnorm
-                self.stats.captures += 1
+                keep = k in self.keep_grads
+                for var in self.variants:
+                    if self.set_variant is not None:
+                        self.set_variant(var)
+                    py_before = self._python_state()
+                    g = torch.cuda.CUDAGraph()
+                    with set_stance("fail_on_recompile"):
+                        with torch.cuda.graph(g, pool=self.mempool.id, stream=self.stream,
+                                              capture_error_mode="thread_local"):
+                            c_out, c_loss, c_gnorm = self._body(sx, sy, sl, keep=keep)
+                    py_after = self._python_state()
+                    changed = sorted(n for n in py_before.keys() | py_after.keys()
+                                     if py_before.get(n) != py_after.get(n))
+                    if changed:
+                        raise RuntimeError(f"graph_step: a training step of kind {k!r} "
+                                           f"(variant {var!r}) changes module attributes a "
+                                           f"replay would freeze: {changed[:12]}")
+                    if not torch.equal(torch.get_rng_state(), cpu_rng):
+                        raise RuntimeError("graph_step: the step consumes the CPU generator (a "
+                                           "draw with no restore); a replay cannot reproduce "
+                                           "that")
+                    # A kept kind's gradients were copied into `_grad_bufs` by the recording;
+                    # its own buffers, like every other kind's, go back to the pool so the
+                    # next recording may reuse them.
+                    present = [p.grad is not None for p in self.params] if keep else None
+                    self.optimizer.zero_grad(set_to_none=True)
+                    self.graphs[(k, var)] = _Captured(
+                        graph=g, out=self._detached(c_out), loss=c_loss.detach(),
+                        gnorm=c_gnorm.detach(), present=present, context=context)
+                    del c_out, c_loss, c_gnorm
+                    self.stats.captures += 1
         finally:
             self.set_kind(kind)
+            if self.set_variant is not None:
+                self.set_variant(variant)
         if self.compiled and self._dynamo_graphs() != n_graphs:
             raise RuntimeError(f"graph_step: dynamo compiled {self._dynamo_graphs() - n_graphs} "
                                f"new graph(s) while recording")
         self._addresses = self._persistent()
         self._dirty = False
-        print(f"  [graph-step] recorded {len(self.graphs)} graph(s) (kinds {list(self.kinds)}); "
+        print(f"  [graph-step] recorded {len(self.graphs)} graph(s) (kinds {list(self.kinds)} x "
+              f"{len(self.variants)} variant(s)) in {time.perf_counter() - t0:.1f} s; "
               f"{torch.cuda.memory_reserved() / 2**30:.2f} GiB reserved", flush=True)
 
-    def _replay(self, cap: _Captured, kind, x, y, layout, context):
+    def _replay(self, cap: _Captured, kind, variant, x, y, layout, context):
         if context != cap.context:
             raise RuntimeError(f"graph_step: kind {kind!r} was captured under {cap.context!r}, "
                                f"this step runs under {context!r}")
-        if not torch.equal(torch.get_rng_state(), cap.cpu_rng):
-            raise RuntimeError("graph_step: the CPU generator moved since capture, so the gain "
-                               "hinge's host draw may pick another pass than the recorded one")
         if self._dirty:
             self._check_addresses()
         self.static.load(x, y, layout)
         cap.graph.replay()
         cap.replays += 1
         self.stats.replayed += 1
-        if cap.grads is not None:
-            for p, gr in zip(self.params, cap.grads):
-                p.grad = gr
+        if cap.present is not None:
+            for p, b, has in zip(self.params, self._grad_bufs, cap.present):
+                p.grad = b if has else None
         return cap.out, cap.loss, cap.gnorm
 
     def _side(self, x, y, layout):
@@ -470,8 +554,17 @@ class GraphStep:
         return res
 
     def run_eager(self, x, y, layout):
-        """An eager training step (the warm-up, and the test's step between replays).
-        Leaves every address a replay reads where it was; checked at the next replay."""
+        """An eager training step (the test's step between replays). Draws the step's
+        variant like any other step. Leaves every address a replay reads where it was;
+        checked at the next replay."""
+        self._next_variant()
+        try:
+            return self._eager(x, y, layout)
+        finally:
+            self._end_variant()
+
+    def _eager(self, x, y, layout):
+        """The eager step under the variant already set (the warm-up, ``run_eager``)."""
         self._dirty = True
         self.stats.eager += 1
         return self._side(x, y, layout)

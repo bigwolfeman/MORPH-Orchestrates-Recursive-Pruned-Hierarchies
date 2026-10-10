@@ -15,9 +15,14 @@ What each test pins:
      released and their re-recording after it, and a step whose gradients are
      inf (skipped on the device). After every step the loss, the grad norm, every `out`
      reading (the fan's instruments), every gradient, every parameter and buffer (the EMA
-     twin included), the optimizer state and the step counters are equal bit for bit.
-  2. The CPU generator moving after capture (the gain hinge would draw another pass) raises
-     before the replay.
+     twin included), the optimizer state and the step counters are equal bit for bit. The
+     gain hinge's pass is a VARIANT (one graph per (kind, pass), 2026-10-10): the eager
+     reference draws it in the forward, GraphStep on the host before each step, and both
+     read the same pass every step (several distinct passes are replayed).
+  2. The hinge's pass: a replay runs the graph of the pass the step drew (a scripted draw
+     sequence, per-graph replay counts); a drawn pass with no graph raises; a recording
+     whose forward DRAWS the pass (GraphStep given no variants) raises instead of freezing
+     one pass into the graph; a recording that consumes the global CPU generator raises.
   3. A rebound parameter raises before the replay (the address check); a different phase
      context or a missing DITTO field raises.
   4. Config refusals (CPU): without its two halves, with `ce_compact_rows`, a probe, an
@@ -30,6 +35,8 @@ Sabotage checks, run and reverted (session report, not committed):
       bypassed) -> the recording fails (cudaErrorStreamCaptureImplicit) and test 1 errors.
   (c) a replay does not bind its graph's gradient buffers to `p.grad` -> test 1 fails at
       the first replay ("grad presence").
+  (d) 2026-10-10: GraphStep replays the graph of the FIRST pass instead of the drawn one ->
+      test 1 fails at the first replay whose drawn pass differs (session report).
 CUDA (the capture), fp32 params, bf16 autocast as the trainer runs it.
 """
 from __future__ import annotations
@@ -276,6 +283,8 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
         pa.fill_(float("inf") if s == _INF_STEP else 1.0)
         out, loss, gn = _eager_step(ma, oa, x, y, lay, clip)
         ref.append(_snap(ma, oa, out, loss, gn, [p.grad for p in ma.parameters()]))
+        ref[-1]["pass"] = ma._gain_pass_last          # the forward's own draw
+        ma._gain_pass_last = None
         if s == _EVAL_AFTER:
             ref_eval = _eval_forward(ma, x, y, lay)
     assert not torch.isfinite(ref[_INF_STEP]["gnorm"])
@@ -289,7 +298,9 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
     gs = GraphStep(mb, ob, grad_clip=clip, forward=_fwd(mb), kinds=(False, True),
                    set_kind=lambda k: setattr(mb, "_train_instruments", k),
                    loss_terms=_zero_pen, after_step=mb.tul_fan_after_step, first_capture=2,
-                   keep_grads=(True, False), compiled=False)
+                   keep_grads=(True, False), compiled=False, **_variants(mb))
+    n_var = len(gs.variants)
+    assert n_var == int(mb.cfg.max_depth) > 1, gs.variants
     torch.manual_seed(1234)
     for s, ((kind, how), (x, y, lay)) in enumerate(zip(_PLAN, batches)):
         mb._train_instruments = kind
@@ -308,6 +319,8 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
         # which is what the trainer's log block reads.
         grads = [p.grad for p in mb.parameters()]
         _same(ref[s], _snap(mb, ob, out, loss, gn, grads), f"step {s} ({how}, kind={kind})")
+        assert mb._gain_pass_last == ref[s]["pass"], (s, mb._gain_pass_last, ref[s]["pass"])
+        mb._gain_pass_last = None
         if s == _EVAL_AFTER:
             # eval with the graphs released (the trainer's eval and generation); the
             # re-recording after it must change nothing
@@ -315,35 +328,98 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
                 assert gs.graphs == {}
                 ev = _eval_forward(mb, x, y, lay)
             assert _eq(ev, ref_eval)
-    assert gs.stats.replayed == 8 and gs.stats.captures == 4 and gs.stats.eager == 4
+    assert gs.stats.replayed == 8 and gs.stats.captures == 4 * n_var and gs.stats.eager == 4
     assert gs.stats.releases == 1
-    assert {k: c.replays for k, c in gs.graphs.items()} == {False: 3, True: 1}
+    # the replays since the re-recording, per (kind, pass): exactly the steps' own draws
+    after = [(k, ref[s]["pass"]) for s, (k, how) in enumerate(_PLAN)
+             if s > _EVAL_AFTER and how in ("capture", "replay")]
+    want = {}
+    for key in after:
+        want[key] = want.get(key, 0) + 1
+    assert {k: c.replays for k, c in gs.graphs.items() if c.replays} == want
+    replayed = [ref[s]["pass"] for s, (_k, how) in enumerate(_PLAN)
+                if how in ("capture", "replay")]
+    assert len(set(replayed)) >= 2, f"the fixture replayed one pass only: {replayed}"
 
 
-def _captured(monkeypatch):
-    """A tiny winner with both kinds recorded (steps 0-1 eager, step 2 records)."""
+def _captured(monkeypatch, variants=None, holder=None):
+    """A tiny winner with both kinds recorded for every hinge pass (steps 0-1 eager, step 2
+    records). ``variants``: GraphStep's variant keywords (default: train.py's wiring)."""
     from morph.training.graph_step import GraphStep
     cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON)
     m, opt = _build(cfg, rt)
+    if holder is not None:
+        holder["m"] = m
+    batches = _batches(rt, 7)
     gs = GraphStep(m, opt, grad_clip=float(cfg.training.grad_clip), forward=_fwd(m),
                    kinds=(False, True), set_kind=lambda k: setattr(m, "_train_instruments", k),
-                   after_step=m.tul_fan_after_step, first_capture=2, compiled=False)
-    batches = _batches(rt, 5)
+                   after_step=m.tul_fan_after_step, first_capture=2, compiled=False,
+                   **(variants if variants is not None else _variants(m)))
     for s in range(3):
         m._train_instruments = s == 0
         opt.write_step_scalars()
         gs.step(s, s == 0, *batches[s], context="tul")
-    assert gs.stats.captures == 2
+    assert gs.stats.captures == 2 * len(gs.variants)
     return m, opt, gs, batches
 
 
+def _variants(m) -> dict:
+    """train.py's wiring of the gain hinge's pass as GraphStep's variant."""
+    return {"variants": m.gain_pass_choices(), "draw_variant": m.draw_gain_pass,
+            "set_variant": m.pin_gain_pass}
+
+
 @cuda
-def test_cpu_generator_moving_after_capture_raises(monkeypatch):
-    m, opt, gs, batches = _captured(monkeypatch)
-    gs.step(3, False, *batches[3], context="tul")                  # a replay: fine
-    torch.rand(1)                                                    # the CPU generator moves
-    with pytest.raises(RuntimeError, match="CPU generator moved"):
-        gs.step(4, False, *batches[4], context="tul")
+def test_a_replay_runs_the_graph_of_the_drawn_pass(monkeypatch):
+    """A scripted draw (the trainer's draw is the model's generator; here the sequence is
+    chosen so two passes alternate): each replay advances exactly its own graph's count."""
+    seq = iter([6, 6, 6, 2, 6, 2, 9])
+
+    def draw():
+        return next(seq)
+    holder = {}
+    m, opt, gs, batches = _captured(
+        monkeypatch, variants={"variants": tuple(range(8)), "draw_variant": draw,
+                               "set_variant": lambda t: holder["m"].pin_gain_pass(t)},
+        holder=holder)
+    # steps 0-2 drew 6 (2 eager, the capture replays (False, 6))
+    assert gs.graphs[(False, 6)].replays == 1
+    gs.step(3, False, *batches[3], context="tul")                  # drew 2
+    gs.step(4, False, *batches[4], context="tul")                  # drew 6
+    gs.step(5, False, *batches[5], context="tul")                  # drew 2
+    assert gs.graphs[(False, 2)].replays == 2 and gs.graphs[(False, 6)].replays == 2
+    assert sum(c.replays for c in gs.graphs.values()) == 4
+    with pytest.raises(RuntimeError, match="not one of the recorded"):  # drew 9
+        gs.step(6, False, *batches[6], context="tul")
+    assert m._gain_pass_pin is None                                  # released after a step
+
+
+@cuda
+def test_a_recording_whose_forward_draws_the_pass_raises(monkeypatch):
+    """GraphStep given no variants on a model that draws: the forward's draw would be frozen
+    into the graph (every replay reading one pass, the defect the draw replaced)."""
+    with pytest.raises(RuntimeError, match="drew its pass inside a CUDA graph capture"):
+        _captured(monkeypatch, variants={})
+
+
+@cuda
+def test_a_recording_that_consumes_the_cpu_generator_raises(monkeypatch):
+    from morph.training.graph_step import GraphStep
+    cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON)
+    m, opt = _build(cfg, rt)
+
+    def after():
+        m.tul_fan_after_step()
+        torch.rand(1)                                   # a host draw with no restore
+    gs = GraphStep(m, opt, grad_clip=float(cfg.training.grad_clip), forward=_fwd(m),
+                   kinds=(False, True), set_kind=lambda k: setattr(m, "_train_instruments", k),
+                   after_step=after, first_capture=2, compiled=False, **_variants(m))
+    batches = _batches(rt, 3)
+    with pytest.raises(RuntimeError, match="consumes the CPU generator"):
+        for s in range(3):
+            m._train_instruments = s == 0
+            opt.write_step_scalars()
+            gs.step(s, s == 0, *batches[s], context="tul")
 
 
 @cuda

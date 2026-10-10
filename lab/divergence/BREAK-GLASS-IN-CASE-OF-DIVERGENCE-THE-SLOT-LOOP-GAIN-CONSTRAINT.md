@@ -29,7 +29,11 @@ If a slot-loop run still shows the spike train, check three things in order:
    target for hundreds of steps means lambda is too small for the shape; double it.
 3. **Is the drift somewhere the penalty does not look?** The penalty regularises ONE random
    grad iteration per step. Iteration 0 (the entry state) is drawn 1 time in 8 and its gain
-   still drifts (0.94 → 0.996 over 5000 steps on the measured arm). If a run detonates with
+   still drifts (0.94 → 0.996 over 5000 steps on the measured arm). CORRECTION 2026-10-10:
+   until then every step of a run read the SAME iteration (the draw put the CPU stream back;
+   pass 6 on seed 1, pass 3 on seed 2), so the measured arm may never have read iteration 0.
+   The draw is fresh per step since `model.slot_gain_pass_force` (-1); `loop/gain_pass`
+   logs it. If a run detonates with
    `gain_est` held, read `jac/rms_t0` from `lab/divergence/jac_sweep.py` on its checkpoints
    before changing anything else.
 
