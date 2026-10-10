@@ -41,6 +41,7 @@ import morph.model.attention as attn_mod  # noqa: E402
 from morph.inference.lx_fused_decode import LxFusedDecoder, generate_lx_fused_batch  # noqa: E402
 from morph.inference.tul_generate import TulRowBuilder  # noqa: E402
 from morph.inference.tul_generate_graphed import TulGraphDecoder, generate_tul_graphed  # noqa: E402
+from morph.model.embed_quant import apply_embed_quant  # noqa: E402
 from morph.model.tul_layout import BoundaryRule  # noqa: E402
 from test_loop_attn_center import LXTUL_KW  # noqa: E402
 from test_tul_fan_lsel import _lsel  # noqa: E402
@@ -217,6 +218,71 @@ def test_bf16_weight_copies_on_bf16_values_match(_fp32_reference):
         assert worst < TOL_EXACT, (exact, worst)
 
 
+@pytest.fixture(scope="module")
+def lx_q():
+    """The fixture with ``model.embed_quant: int6`` (the production setting): the tied
+    head's euclidean block is then IntNRowSTE codes x row scale."""
+    m = _model()
+    apply_embed_quant(m, "int6")
+    return m
+
+
+@pytest.mark.parametrize("emit", ["token", "slot"])
+def test_codes_head_matches_the_graphed_decoder(lx_q, _fp32_reference, emit):
+    """``head="codes"`` (morph/kernels/triton/lm_head_codes.py) on the int6 model: every
+    token row (and cell row) against the graphed decoder, which reads the fp32 table."""
+    s = _stream(140, 2)
+    rt, rc, n_slots = _ref_rows(lx_q, s, emit)
+    dec = LxFusedDecoder(lx_q, _spec_lx(), _rule(), 1, emit, max_tokens=len(s) + 4,
+                         head="codes")
+    try:
+        assert dec.head_impl == "codes" and dec.W_head is None
+        ft, fc = _fused_rows(lx_q, [s], emit, dec=dec)
+    finally:
+        dec.__exit__(None, None, None)
+    worst = _worst(rt, ft[0])
+    if emit == "slot":
+        worst = max(worst, _worst(rc, fc[0]))
+    print(f"teacher-forced worst (codes head, {emit}): {worst:.3e}")
+    assert worst < TOL_EXACT, worst
+
+
+def test_head_choice(lx, lx_q):
+    """"auto" takes the codes only where they are the table; "codes" refuses otherwise."""
+    spec, rule = _spec_lx(), _rule()
+    with LxFusedDecoder(lx, spec, rule, 1, max_tokens=16) as d:
+        assert d.head_impl == "table"             # no IntNRowSTE: the other tests' head
+    with LxFusedDecoder(lx_q, spec, rule, 1, max_tokens=16) as d:
+        assert d.head_impl == "codes"
+    with LxFusedDecoder(lx_q, spec, rule, 1, max_tokens=16, exact_weights=False) as d:
+        assert d.head_impl == "table"             # bf16 copies: the bf16 table
+    with pytest.raises(ValueError, match="head='codes'"):
+        LxFusedDecoder(lx, spec, rule, 1, max_tokens=16, head="codes")
+
+
+def test_feed_refuses_an_out_of_range_token_id(lx):
+    """``tok_entry`` reads row ``tok`` of the embedding table, so ``feed`` must refuse an id
+    outside [0, V) before anything reaches the GPU (Z3 precondition, 2026-10-10)."""
+    spec, rule = _spec_lx(), _rule()
+    with LxFusedDecoder(lx, spec, rule, 1, max_tokens=16) as d:
+        d.reset()
+        for bad in (d.V, -1):
+            with pytest.raises(ValueError, match="token id outside"):
+                d.feed([bad], [TulRowBuilder(rule=rule, spec=spec)])
+
+
+def test_the_fixture_takes_the_fused_glue(lx):
+    """The other tests compare the DEFAULT decoder against the graphed one: they pin the
+    fused glue only if the default takes it on this fixture. The fixture is the shipped
+    geometry (rms cell norm, latent selector, M == Kp = 4, pointer heads), so the token
+    step runs the fused entry / hand-off / exit and the slot loop ``_loop_fused`` +
+    ``prefix_write``."""
+    with LxFusedDecoder(lx, _spec_lx(), _rule(), 1, max_tokens=16) as d:
+        assert d.layers == "fused" and d.slot_glue and d.lsel and d.ptr
+    with LxFusedDecoder(lx, _spec_lx(), _rule(), 1, max_tokens=16, layers="engine") as d:
+        assert not d.slot_glue                    # the engine keeps the PyTorch glue
+
+
 @pytest.mark.parametrize("attn", ["reference", "kernel"])  # K1 or its stand-in; K2 follows
 def test_batched_rows_match_their_single_row_reference(lx, _fp32_reference, attn):
     streams = [_stream(120, 10 + b) for b in range(3)]
@@ -250,8 +316,10 @@ def _sabotaged(lx, patch, streams=None) -> float:
     applied, against the graphed reference, row by row."""
     streams = streams or [_stream(120, 0)]
     spec, rule = _spec_lx(), _rule()
+    # layers="engine": these sabotages break the engine path's own state (the x-history
+    # commits, the cell table's zero row); the fused path's are in test_lx_layer_decode.py
     dec = LxFusedDecoder(lx, spec, rule, len(streams), "token", use_graphs=False,
-                         max_tokens=len(streams[0]) + 4)
+                         max_tokens=len(streams[0]) + 4, layers="engine")
     try:
         patch(dec)
         ft, _fc = _fused_rows(lx, streams, "token", dec=dec)

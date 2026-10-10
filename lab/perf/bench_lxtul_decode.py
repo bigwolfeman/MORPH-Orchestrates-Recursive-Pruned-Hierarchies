@@ -8,8 +8,12 @@ Arms (each on real validation prompts read the trainer's way, greedy, ``--new`` 
   lx_eager         generate_tul_batch with the generation forward (C1e), same budget
   lx_cached        generate_tul_cached, one row at a time (the decoder holds one row)
   lx_graphed       generate_tul_graphed, one row at a time, graphs captured once per run
-  lx_fused         morph/inference/lx_fused_decode.py: every block on the plain engine's
-                   kernels, the strict attention through lx_attn, real batching (one token
+  lx_fused         morph/inference/lx_fused_decode.py: every block on the row-batched
+                   kernels of morph/kernels/triton/lx_layer_decode.py (layers="fused"),
+                   the token step's entry / hand-off / exit and the slot loop's glue on
+                   morph/kernels/triton/lx_glue_decode.py, the LM head as int codes x row
+                   scale where that is bit-exactly the table (head="auto"), the strict
+                   attention through lx_attn, real batching (one token
                    graph over all B rows, slot graphs per bucket of cutting rows); one
                    decoder per batch size built and captured once outside the timing;
                    fp32 weight copies (exact). ``--check_fused`` gates its tokens and rows
@@ -17,6 +21,14 @@ Arms (each on real validation prompts read the trainer's way, greedy, ``--new`` 
                    every batch row against its B=1 run. ``--fused_attn`` /
                    ``--fused_kv_row`` pick the K1 / K2 kernels or their PyTorch stand-ins.
   lx_fused_bf16    the same with bf16 weight copies (the plain engine's default)
+  lx_fused_eng     lx_fused with ``layers="engine"`` and ``head="table"``: every block on
+                   the plain engine's kernels and the fp32 head table (the decoder before
+                   the row-batched layer kernels of morph/kernels/triton/lx_layer_decode.py
+                   and the int-code head of lm_head_codes.py; note
+                   .agents/notes/proposed/feature/2026-10-10-lx-decode-megakernel.md). With
+                   it, ``--check_fused`` also gates lx_fused against it (prompts 0 and 1:
+                   greedy tokens, worst row difference) and ``--tf_time`` compares their
+                   teacher-forced log-prob rows on real text.
   plain_eager      generate_plain_batch (recompute per step, the gen eval's plain arm)
   plain_cached     morph/inference/kv_cache.py prefill + decode_step, batched
   plain_graphed    morph/inference/engine.py StaticDecodeEngine, one engine per batch size
@@ -245,7 +257,7 @@ def run_arm(arm: str, model, prompts, new: int, ctx: dict) -> list[list[int]]:
         return [generate_tul_graphed(model, p, rule, spec_tight, max_new_tokens=new,
                                      temperature=0.0, device="cuda", emit_source="token",
                                      decoder=dec)[0] for p in prompts]
-    if arm in ("lx_fused", "lx_fused_bf16"):
+    if arm in ("lx_fused", "lx_fused_bf16", "lx_fused_eng"):
         dec = ctx["fused_decs"][(arm, len(prompts))]
         return generate_lx_fused_batch(model, prompts, rule, spec_tight, max_new_tokens=new,
                                        emit_source="token", decoder=dec)[0]
@@ -397,11 +409,17 @@ def _fused_setup(model, prompts, new, batches, arms, ctx, payload, attn, kv_row)
         for B in sorted(set(batches) | {1}):
             ctx["fused_decs"][(arm, B)] = LxFusedDecoder(
                 model, ctx["spec_tight"], ctx["rule"], B, "token",
-                exact_weights=(arm == "lx_fused"), max_tokens=steps, attn=attn,
-                kv_row=kv_row)
+                exact_weights=(arm != "lx_fused_bf16"), max_tokens=steps, attn=attn,
+                kv_row=kv_row, layers="engine" if arm == "lx_fused_eng" else "fused",
+                # lx_fused_eng is the decoder as it was before this work: engine layers
+                # AND the fp32 table head; lx_fused takes the int-code head where it is
+                # bit-exact (head="auto": morph/kernels/triton/lm_head_codes.py)
+                head="table" if arm == "lx_fused_eng" else "auto")
     _sync()
     payload["fused_capture_s"] = time.perf_counter() - t0
     payload["fused_attn"], payload["fused_kv_row"] = attn, kv_row
+    payload["fused_head_impl"] = {f"{a}_B{b}": d.head_impl
+                                  for (a, b), d in ctx["fused_decs"].items()}
     print(f"fused decoders build+capture {payload['fused_capture_s']:.1f}s", flush=True)
 
 
@@ -430,7 +448,14 @@ def check_fused(model, prompts, new, ctx, arm, nbs) -> dict:
         e_tok, _ = generate_tul(model, p, rule, spec_eval, max_new_tokens=new,
                                 temperature=0.0, device="cuda", emit_source="token")
         undo()
-        for name, rt, rr in (("graphed", g_tok, gr), ("eager", e_tok, er)):
+        refs = [("graphed", g_tok, gr), ("eager", e_tok, er)]
+        eng = ctx["fused_decs"].get(("lx_fused_eng", 1))
+        if eng is not None and arm != "lx_fused_eng":
+            o2, _b2, r2 = generate_lx_fused_batch(model, [p], rule, spec_tight, new,
+                                                  emit_source="token", return_logits=True,
+                                                  decoder=eng)
+            refs.append(("engine_layers", o2[0], [r.float().cpu() for r in r2[0]]))
+        for name, rt, rr in refs:
             n = _first_diff(rt, f_tok)
             upto = len(f_tok) if n < 0 else n + 1
             row = {"tokens_equal": rt == f_tok, "first_diff": n,
@@ -460,6 +485,65 @@ def check_fused(model, prompts, new, ctx, arm, nbs) -> dict:
                         "worst_row_diff_until_first_diff": _worst(
                             s_rows[:upto], [r.float().cpu() for r in rows[b][:upto]])})
         res[f"batch{nb}_vs_b1"] = per
+    return res
+
+
+@torch.no_grad()
+def tf_time(model, ctx, arms, rows, T: int, batches) -> dict:
+    """Teacher-forced decode of real validation text (the data's own boundary rate), T
+    tokens per row, through each fused arm at each batch size: ms per step (CUDA-synced
+    wall, the generator's per-step ``next_tok`` read included, second of two reps), slot
+    events per bucket. With lx_fused_eng present, every lx_fused log-prob row of rows 0 and
+    1 (B = 1) is compared with it: worst difference and argmax agreement."""
+    from morph.inference.tul_generate import TulRowBuilder
+    rule = ctx["rule"]
+    spec = dataclasses.replace(ctx["spec_tight"], max_slots=T // rule.min_span + 1)
+    res = {}
+    streams = [list(r[:T]) for r in rows]
+    for arm in arms:
+        for B in batches:
+            dec = LxFusedDecoder(model, spec, rule, B, "token",
+                                 exact_weights=arm != "lx_fused_bf16", max_tokens=T + 4,
+                                 layers="engine" if arm == "lx_fused_eng" else "fused")
+            for rep in range(2):
+                dec.reset()
+                bs = [TulRowBuilder(rule=rule, spec=spec) for _ in range(B)]
+                _sync()
+                t0 = time.perf_counter()
+                for k in range(T):
+                    dec.feed([s[k] for s in streams[:B]], bs)
+                    _ = dec.next_tok.tolist()
+                _sync()
+                wall = time.perf_counter() - t0
+            res[f"{arm}_B{B}"] = {"ms_per_step": 1e3 * wall / T, "tok_s": B * T / wall,
+                                  "cuts": int(sum(b.n_slots for b in bs)),
+                                  "slot_events": dict(dec.slot_events)}
+            print("TF_TIME", arm, B, json.dumps(res[f"{arm}_B{B}"]), flush=True)
+            dec.__exit__(None, None, None)
+    if "lx_fused_eng" in arms and "lx_fused" in arms:
+        cmp = {}
+        for ri in range(min(2, len(rows))):
+            got = {}
+            for arm in ("lx_fused", "lx_fused_eng"):
+                dec = LxFusedDecoder(model, spec, rule, 1, "token", exact_weights=True,
+                                     max_tokens=T + 4,
+                                     layers="engine" if arm == "lx_fused_eng" else "fused")
+                dec.reset()
+                b = [TulRowBuilder(rule=rule, spec=spec)]
+                out = torch.empty(T, dec.V, device="cuda")
+                for k in range(T):
+                    dec.feed([streams[ri][k]], b)
+                    out[k] = dec.logp_tok[0]
+                got[arm] = out
+                dec.__exit__(None, None, None)
+            a, e = got["lx_fused"].double(), got["lx_fused_eng"].double()
+            f = torch.isfinite(a) & torch.isfinite(e)
+            assert torch.equal(torch.isfinite(a), torch.isfinite(e))
+            cmp[f"row{ri}"] = {"worst_logp_diff": float((a[f] - e[f]).abs().max()),
+                               "argmax_equal": int((a.argmax(-1) == e.argmax(-1)).sum()),
+                               "steps": T}
+        res["fused_vs_engine_layers_teacher_forced"] = cmp
+        print("TF_CMP", json.dumps(cmp), flush=True)
     return res
 
 
@@ -514,6 +598,10 @@ def main() -> None:
     ap.add_argument("--batches", default="1,8")
     ap.add_argument("--new", type=int, default=256)
     ap.add_argument("--prof_new", type=int, default=32)
+    ap.add_argument("--gen_reps", type=int, default=1,
+                    help="timed generation runs per arm and batch size; tok_s is the "
+                         "MEDIAN wall's, every wall is kept in the row (the GPU also "
+                         "drives the desktop: one run can lose 2x to a stall)")
     ap.add_argument("--prompt_len", type=int, default=128)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--check_plain", action="store_true",
@@ -529,6 +617,9 @@ def main() -> None:
                          "max batch's rows against their B=1 runs; needs an lx_fused arm")
     ap.add_argument("--fused_attn", default="kernel", choices=("kernel", "reference"))
     ap.add_argument("--fused_kv_row", default="kernel", choices=("kernel", "reference"))
+    ap.add_argument("--tf_time", type=int, default=0,
+                    help="teacher-forced real-text timing of the fused arms, this many "
+                         "tokens per row (0: off); see tf_time()")
     ap.add_argument("--no_tf32", action="store_true",
                     help="cuDNN TF32 off (it is ON by default and runs the CCA conv1d in fp32 "
                          "models at TF32 precision)")
@@ -611,10 +702,16 @@ def main() -> None:
                     print("CHECK_FUSED", json.dumps(payload["check_fused"]), flush=True)
                     flush()
                 if a.step_profile:
-                    payload["fused_step_profile"] = fused_step_profile(model, ctx,
-                                                                       fused_arms[0])
+                    payload["fused_step_profile"] = {
+                        fa: fused_step_profile(model, ctx, fa) for fa in fused_arms}
                     print("FUSED_STEP_PROFILE", json.dumps(payload["fused_step_profile"]),
                           flush=True)
+                    flush()
+                if a.tf_time:
+                    tf_rows = read_val_rows(cfg.data.tokenizer, cfg.data.dataset, nmax,
+                                            a.tf_time, 0)
+                    payload["tf_time"] = tf_time(model, ctx, fused_arms, tf_rows, a.tf_time,
+                                                 batches)
                     flush()
             elif a.check_fused:
                 raise SystemExit("--check_fused needs an lx_fused arm")
@@ -630,7 +727,11 @@ def main() -> None:
                 ps = prompts[:B]
                 try:
                     run_arm(arm, model, ps[:1], 4, ctx)              # warm-up (compile, alloc)
-                    out, wall = timed(arm, model, ps, a.new, ctx)
+                    walls = []
+                    for _rep in range(a.gen_reps):
+                        out, w_ = timed(arm, model, ps, a.new, ctx)
+                        walls.append(w_)
+                    wall = sorted(walls)[len(walls) // 2]           # the median (upper)
                     fdec = ctx.get("fused_decs", {}).get((arm, B))
                     events = None if fdec is None else {      # the timed run's, before
                         "token_steps": fdec.token_steps,       # gpu_busy reruns it
@@ -640,6 +741,7 @@ def main() -> None:
                     tok = B * a.new
                     row = {"arm": arm, "batch": B, "new": a.new, "wall_s": wall,
                            "tok_s": tok / wall, "wall_ms_per_tok": 1e3 * wall / tok,
+                           "walls_s": walls,
                            "prof_new": a.prof_new,
                            "short_wall_ms_per_tok": 1e3 * wall_s / (B * a.prof_new),
                            "gpu_busy_ms_per_tok": 1e3 * kern / (B * a.prof_new),
