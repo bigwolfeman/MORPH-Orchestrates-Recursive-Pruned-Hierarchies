@@ -74,6 +74,7 @@ from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
 from .tul_spandec import (SpanDecoder, horizon_span_slots, next_span_slots,
                           own_span_slots, span_slots)
 from .tul_snap import TULPseudoSnap
+from .tul_disco import TULDisco
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
 from .tul_nextlat import SpanTransition, nextlat_pairs, span_token_embeddings
 from .tul_code_enum import TULCodeEnum
@@ -1947,6 +1948,14 @@ class MORPHTransformer(nn.Module):
     # add: the injected carrier is consumed by `_core_step` and never returned. None by
     # default — a Python-level branch, so the shipped graph never sees it.
     _trigger_capture: list | None = None
+
+    # `tul.disco`'s test hook (the `_trigger_capture` pattern): attach a list and
+    # `_tul_core` appends ``{"t", "pre" (the carrier before the term), "post" (after),
+    # "mask" (the cells that got it), "term" (the per-cell single-stream term, zero
+    # outside the mask)}`` (detached) once per pass t >= 1. It is the ONLY way a test
+    # can see the add: the injected carrier is consumed by `_core_step` and never
+    # returned. None by default, so the shipped graph never sees it.
+    _disco_capture: list | None = None
 
     # Whether a TRAINING forward computes the per-pass readings no loss term reads (the
     # fan's `stream_cos_t{t}` and the no-grad `epi_t{t}` / `vol_t{t}`). True by default, so
@@ -4039,6 +4048,43 @@ class MORPHTransformer(nn.Module):
                   f"ternary; cell keys {'ON' if cfg.tul.pointer_cell_key else 'off'}; coverage "
                   f"lambda {float(cfg.tul.pointer_coverage_lambda)}", flush=True)
 
+        # ── tul.disco: DiscoLoop re-embedding between slot-loop passes (tul_disco.py) ──
+        # Off builds nothing: `tul_disco` stays None and the one site in `_tul_core` traces
+        # out. On: an RMSNorm gain on Phi and, under the learned gate, a zero-init `[C]`
+        # direction and a constant bias. Every one is a deterministic constant (no RNG
+        # drawn), so the model's other weights equal the same-seed model without the key.
+        # `TULConfig._check_disco` refuses the tul-level paths; the model-level ones here.
+        self.tul_disco: TULDisco | None = None
+        self._disco_stats: dict | None = None
+        if cfg.tul is not None and bool(cfg.tul.disco):
+            _tc = cfg.tul
+            _dbad = [
+                (getattr(cfg, "fm", None) is not None,
+                 "an FM planner (cfg.fm): the planner replaces the slot loop"),
+                (int(cfg.n_core) == 0, "n_core=0: a coreless TUL model has no passes"),
+                (bool(cfg.scse_enabled),
+                 "model.scse_enabled: the loop carries the DEVIATION from h*, which the "
+                 "token head cannot read as a state"),
+                (_tc.disco_bridge != "soft" and int(_tc.disco_topk) >= int(cfg.vocab_size),
+                 f"tul.disco_topk={_tc.disco_topk} >= vocab_size={cfg.vocab_size} (use "
+                 f"disco_bridge='soft' for the whole vocabulary)"),
+            ]
+            for _bad, _why in _dbad:
+                if _bad:
+                    raise NotImplementedError(f"tul.disco with {_why}.")
+            self.tul_disco = TULDisco(
+                cfg.d_model, bridge=str(_tc.disco_bridge), topk=int(_tc.disco_topk),
+                tau=float(_tc.disco_tau), gate=str(_tc.disco_gate),
+                alpha=float(_tc.disco_alpha), gate_bias=float(_tc.disco_gate_bias))
+            print(f"  TUL DISCO ON: re-embedding between slot-loop passes, bridge "
+                  f"{_tc.disco_bridge}"
+                  f"{'' if _tc.disco_bridge == 'soft' else f' (k {_tc.disco_topk})'}, tau "
+                  f"{_tc.disco_tau}, gate {_tc.disco_gate} "
+                  f"({'bias ' + str(_tc.disco_gate_bias) if _tc.disco_gate == 'learned' else 'alpha ' + str(_tc.disco_alpha)}), "
+                  f"table {'detached' if _tc.disco_detach_table else 'LIVE'}; "
+                  f"{sum(p.numel() for p in self.tul_disco.parameters()):,} params, never "
+                  f"ternary", flush=True)
+
         if cfg.retention_carry_mode == "acausal_final":
             print("  WARNING: retention_carry='acausal_final' — the cross-iteration GLA "
                   "carry feeds the WHOLE-SEQUENCE final state into loop iteration 2+, so "
@@ -4242,6 +4288,81 @@ class MORPHTransformer(nn.Module):
             out["slot_cell_norm_g_std"] = g.std()
             out["slot_cell_norm_g_rms"] = g.pow(2).mean().sqrt()
         return out
+
+    def _disco_term(self, h: Tensor, t: int, active: Tensor, layout: SlotLayout,
+                    m_cells: int) -> tuple[Tensor, Tensor, Tensor]:
+        """``tul.disco``: the DiscoLoop term for the ENTRY of slot-loop pass ``t`` (>= 1).
+
+        ``h`` ``[B, S*M, *carrier]`` is the carried state at the top of the pass (the
+        previous pass's output after the slot-cell norm and, on the latent-selected loop,
+        after the reset to the winner); ``active`` / ``layout`` are the loop's CELL-level
+        mask and layout. Returns ``(term, mask, ratio_den)``: ``term`` ``[B, S*M, C]`` (one
+        single-stream vector per cell, zero outside ``mask``), ``mask`` ``[B, S*M]`` the
+        cells that get it (depth continues into pass ``t``, valid), and the carried cell's
+        RMS over streams and channels for the eval reading.
+
+        THE READ: the model's token head, by its own functions — ``_readout`` (the
+        Hyper-Connection stream mean, ``lm_mixer``, ``final_norm``) and ``embed.attend``
+        (the tied table, detached under ``tul.disco_detach_table``) with the structural
+        slot id at ``-inf`` (the generation head's mask). No logit scale or softcap exists
+        on that head; the pointer mixture is a copy head over earlier TOKEN states and is
+        not part of a cell's read.
+
+        ONCE PER SLOT on the latent-selected loop (``tul.fan_loop_select``): after pass
+        ``t - 1`` every cell of a slot whose depth continues was reset to that pass's
+        winner (``_lsel_pass`` -> ``reset_to_winner``, mask ``depth > t``, the same mask
+        as here), so the M cells are bit-equal and cell 0 IS the winner; slots outside the
+        mask get no term. On any other multi-cell loop (a fan without the selection) the
+        cells differ and every cell gets its own read. Pinned by
+        ``tests/test_tul_disco.py``."""
+        B, SM = int(h.shape[0]), int(h.shape[1])
+        m = int(m_cells)
+        S = SM // m
+        rest = tuple(h.shape[2:])
+        mask = active & layout.slot_valid                                     # [B, S*M]
+        per_slot = m > 1 and self._lsel_mode != "off"
+        if per_slot:
+            hs = h.view(B, S, m, *rest)[:, :, 0]                              # the winner
+            ms = mask.view(B, S, m)[:, :, 0]
+        else:
+            hs, ms = h, mask
+        n_rows = int(hs.shape[0]) * int(hs.shape[1])
+        tc = self.cfg.tul
+        z = self._readout(hs)                                                 # [B, S', C]
+        logits = self.embed.attend(z, detach_table=bool(tc.disco_detach_table))
+        # The slot id's column to -inf by a scalar fill on a view: no index tensor, so no
+        # host-to-device copy, which CUDA graph capture refuses (`training.graph_step`;
+        # the `index_fill(torch.tensor([slot_id]))` form of the eval head did exactly that
+        # in the first graph-step smoke). In place on the matmul's output, whose backward
+        # does not read it; the filled column gets no gradient, as under `index_fill`.
+        logits[..., int(tc.slot_id)] = float("-inf")
+        table = self.embed.lm_weight()
+        if tc.disco_detach_table:
+            table = table.detach()
+        term, alpha, p, top1 = self.tul_disco(logits.reshape(n_rows, -1), table)
+        term = term.view(*hs.shape[:2], -1) * ms.unsqueeze(-1).to(term.dtype)
+        if per_slot:
+            term = term.unsqueeze(2).expand(B, S, m, term.shape[-1]).reshape(B, SM, -1)
+        den = None
+        if self._disco_stats is not None:
+            # EVAL ONLY (diagnostics, never a verdict). Over the rows that got the term:
+            # the gate, the bridge distribution's entropy and top-1 probability (the full
+            # softmax under "soft", the renormalised top-k under "topk" / "hard"), and the
+            # number of DISTINCT argmax tokens over the number of rows - the unigram-mean
+            # collapse check (the slot carrier was 98 % one slot-shared vector before).
+            with torch.no_grad():
+                mf = ms.reshape(-1).float()
+                n = mf.sum().clamp_min(1.0)
+                st = self._disco_stats
+                st[f"disco_n_t{t}"] = mf.sum()
+                st[f"disco_gate_mean_t{t}"] = (alpha.reshape(-1).float() * mf).sum() / n
+                st[f"disco_entropy_t{t}"] = (torch.special.entr(p.float()).sum(-1)
+                                             * mf).sum() / n
+                st[f"disco_top1_p_t{t}"] = (p.float().amax(-1) * mf).sum() / n
+                st[f"disco_distinct_frac_t{t}"] = (
+                    torch.unique(top1[ms.reshape(-1)]).numel() / n)
+                den = h.detach().float().flatten(2).pow(2).mean(-1).sqrt()     # [B, S*M]
+        return term, mask, den
 
     @staticmethod
     def _apply_injection(h: Tensor, term: Tensor) -> Tensor:
@@ -6617,6 +6738,10 @@ class MORPHTransformer(nn.Module):
         # tul.slot_cell_pass_norm's eval readings: reset at EVERY forward of a normed
         # model (a train forward leaves None, so a stale eval dict never reaches a train
         # step's outputs), filled per pass by `_slot_cell_norm` at eval only.
+        # tul.disco's eval readings: reset at every forward of a disco model, filled per
+        # pass by `_disco_term` at eval only (a train forward leaves None).
+        if self.tul_disco is not None:
+            self._disco_stats = None if self.training else {}
         if self.tul_cell_norm is not None:
             self._cell_norm_stats = None
             if not self.training:
@@ -7292,6 +7417,35 @@ class MORPHTransformer(nn.Module):
                     # cannot change a gradient; `None` by default, so it traces out.
                     self._trigger_capture.append({
                         "t": t, "pre": _trig_pre.detach(), "post": _h_in.detach()})
+            # ── tul.disco: DiscoLoop re-embedding, at the INPUT of pass t >= 1 ─────────
+            # `alpha * RMSNorm(Phi(h))` read off the CARRIED cell `h` (the previous pass's
+            # normed output, the winner on the latent-selected loop) through the token
+            # head, added to `_h_in` of the cells whose depth continues into this pass
+            # (`_disco_term`). HERE, for the trigger's reasons: `_h_in` is a positional
+            # input of the checkpointed step (the recompute replays the term), and the gain
+            # hinge below probes the map at `_h_in`, i.e. at the input this pass actually
+            # got (the term is a constant there). Never after a slot's last pass: the exit
+            # is the raw output of that pass (the paper's "last pass ungated"). `h`, which
+            # the fixed-point term, the recurrence gate and `db_traj` read, never holds it.
+            # A Python-level constant: `None` traces the graph from before the key.
+            if self.tul_disco is not None and t > 0:
+                _disco_pre = _h_in
+                _dterm, _dmask, _dden = self._disco_term(h, t, active, layout, _m_cells)
+                _h_in = self._apply_injection(_h_in, _dterm.to(_h_in.dtype))
+                if _dden is not None:
+                    with torch.no_grad():
+                        # RMS of what the add MOVED the carrier (read off `_h_in`, the
+                        # `inject_ratio` rule) over the carried cell's RMS, per cell.
+                        _dnum = (_h_in - _disco_pre).detach().float().flatten(2).pow(
+                            2).mean(-1).sqrt()
+                        _dmf = _dmask.float()
+                        self._disco_stats[f"disco_term_ratio_t{t}"] = (
+                            (_dnum / _dden.clamp_min(1e-12) * _dmf).sum()
+                            / _dmf.sum().clamp_min(1.0))
+                if self._disco_capture is not None:
+                    self._disco_capture.append({
+                        "t": t, "pre": _disco_pre.detach(), "post": _h_in.detach(),
+                        "mask": _dmask.detach(), "term": _dterm.detach()})
             # progressive: this slot's pass t is inside its private no-grad prefix.
             _pfx = (_pk > t) if _prog else None
             _pv = None if _pfx is None else _pfx.view(*_pfx.shape, *([1] * (h.dim() - 2)))
@@ -10101,6 +10255,7 @@ class MORPHTransformer(nn.Module):
         _xn, h, _depths, _g, db_traj, gain_reg, _mep = self._tul_core(
             x, x0, bigram_emb, layout, input_ids=input_ids, slot_depths=slot_depths)
         _cn_stats = self._cell_norm_stats if self.tul_cell_norm is not None else None
+        _disco_st = self._disco_stats if self.tul_disco is not None else None
         B, S = layout.slot_valid.shape
         pred = self._latent_pre_predict(h, B, S)                          # [B, S, M, C]
         M = int(pred.shape[2])
@@ -10133,6 +10288,8 @@ class MORPHTransformer(nn.Module):
         for k, v in stats.items():
             out[f"latent_pre_{k}"] = v
         out = self._fold_cell_norm_stats(out, _cn_stats)
+        for _k, _v in (_disco_st or {}).items():
+            out[_k] = _v.detach()
         if gain_reg is not None:
             out = self._fold_gain_reg(out, gain_reg)
         if self._core_aux is not None:
@@ -13855,6 +14012,8 @@ class MORPHTransformer(nn.Module):
         # tul.slot_cell_pass_norm's eval readings, taken right after the slot loop (only
         # the slot-loop branch below can produce them; TULConfig refuses the others).
         _cn_stats: dict | None = None
+        # tul.disco's eval readings (`_disco_term`), the same contract.
+        _disco_st: dict | None = None
         _fan_cells = None
         # LX efficient-exploration knobs 3/4/6 (2026-09-29). Bound here for the same
         # reason as `fan_repel_loss` above: the fold sits AFTER the branch dispatch, and
@@ -14081,6 +14240,9 @@ class MORPHTransformer(nn.Module):
                     # Taken NOW: a later `_tul_core` call in this forward (an ablation
                     # replay) would overwrite the stash with its own readings.
                     _cn_stats = self._cell_norm_stats
+                if self.tul_disco is not None:
+                    # tul.disco's eval readings: the same rule.
+                    _disco_st = self._disco_stats
                 if self._lsel_mode == "detached":
                     # ── THE DETACHED VARIANT: no token-driven gradient into the loop ──
                     # ONE cut, at the loop's output and upstream of EVERY reader of it:
@@ -15420,6 +15582,12 @@ class MORPHTransformer(nn.Module):
             # tul.slot_cell_pass_norm (eval only): the per-pass cell RMS and the gain's
             # mean / std. No loss term. A scan in train.py's `evaluate` (`slot_cell_*`).
             groups = self._fold_cell_norm_stats(groups, _cn_stats)
+        if _disco_st and groups is not None:
+            # tul.disco (eval only): the per-pass `disco_*_t{t}` readings of `_disco_term`
+            # and the loop. No loss term. A scan in train.py's `evaluate` (`disco_*`).
+            groups = dict(groups)
+            for _k, _v in _disco_st.items():
+                groups[_k] = _v.detach()
 
         if fan_stats and groups is not None:
             # Every fan reading travels as a `fan_*` key so train.py can scan for the

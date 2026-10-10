@@ -22,6 +22,7 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_carry import LOOP_CARRY_MODES
 from .tul_denoise import LOOP_DENOISE_GRIDS
+from .tul_disco import DISCO_BRIDGES, DISCO_GATES
 from .tul_latent_pre import LATENT_PRE_LOSSES, LATENT_PRE_TARGET_NORMS, LATENT_PRE_TARGETS
 from .tul_layout import SlotLayout
 
@@ -2663,6 +2664,37 @@ class TULConfig:
     #   see; DITTO trains on the repeat itself.
     ditto_rows: int = 0
     ditto_lambda: float = 0.5
+    # disco (2026-10-10, phase-2 tracker D2a): DiscoLoop re-embedding (Fu et al. 2026, arXiv
+    #   2607.00341) between slot-loop passes, `morph/model/tul_disco.py`. At the INPUT of
+    #   every pass t >= 1, every cell whose depth continues into pass t gets
+    #   `alpha * RMSNorm(Phi(h))`, `Phi(h) = sum_v softmax(head(h) / tau)_v W[v]`, read off
+    #   the carried cell (after the slot-cell pass norm) through the model's own token head
+    #   (`_readout` then `embed.attend`, slot id masked). Nothing is added after a slot's
+    #   last pass (the paper's "last pass ungated"). Off builds nothing and draws no RNG.
+    #   On the latent-selected loop the M cells of a continuing slot all hold the winner at
+    #   the next pass's entry (`reset_to_winner`), so Phi is computed ONCE per slot.
+    # disco_bridge: "soft" (the paper, full softmax) | "topk" (softmax over the top
+    #   `disco_topk` logits; the paper's LM form) | "hard" (forward = the argmax row exactly,
+    #   backward = the top-k mixture's gradient; the DiffusionBlocks lesson
+    #   `db-bridge-is-the-bug`: the soft bridge's norm fell to 0.27 there).
+    # disco_topk: k of "topk" / "hard" (refused off its default under "soft", where nothing
+    #   reads it).
+    # disco_tau: the softmax temperature on the head's logits.
+    # disco_gate: "learned" (sigmoid(<w, Phi_n> + b) per position, w init 0, b init
+    #   `disco_gate_bias`: 0.0 starts the gate OPEN at 0.5 - the snap arm's gate started at
+    #   0 and never opened) | "fixed" (the constant `disco_alpha`; 0.0 is the bit-identity
+    #   control of tests/test_tul_disco.py).
+    # disco_detach_table: the tied table enters Phi and the head DETACHED (default). An
+    #   undetached auxiliary head through the tied table diverged arm v1a by step 2800
+    #   (`mux_detach_head`); the gradient still reaches the loop through the logits.
+    disco: bool = False
+    disco_bridge: str = "topk"
+    disco_topk: int = 128
+    disco_tau: float = 1.0
+    disco_gate: str = "learned"
+    disco_gate_bias: float = 0.0
+    disco_alpha: float = 0.5
+    disco_detach_table: bool = True
 
     def __post_init__(self) -> None:
         # FIRST, so a gram model that also sets a refused mode is told about `tul.gram`
@@ -2685,6 +2717,8 @@ class TULConfig:
         self._check_loop_attn()
         self._check_pointer()
         self._check_ditto()
+        # DiscoLoop re-embedding (2026-10-10): the same rule, near the top and unconditional.
+        self._check_disco()
         # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
         # Checked FIRST, unconditionally: every other block below this point guards an
         # OFF-by-default feature with its own early `return` (see `tul.vq_codes` at the
@@ -5144,6 +5178,58 @@ class TULConfig:
         if self.gate is not None:
             raise ValueError("tul.ditto_rows with tul.gate: the gate's truncation re-cuts "
                              "spans and breaks the copy alignment")
+
+    def _check_disco(self) -> None:
+        """``tul.disco``: DiscoLoop re-embedding between slot-loop passes
+        (``morph/model/tul_disco.py``). Refuses a ``disco_*`` knob that nothing would read
+        (the ``pseudo_k`` rule) and every path whose loop is not ``_tul_core``'s carried
+        slot state. The model-level refusals (n_core 0, SCSE, the FM planner, a vocabulary
+        smaller than ``disco_topk``) are in ``MORPHTransformer.__init__``."""
+        _defaults = dict(disco_bridge="topk", disco_topk=128, disco_tau=1.0,
+                         disco_gate="learned", disco_gate_bias=0.0, disco_alpha=0.5,
+                         disco_detach_table=True)
+        if not self.disco:
+            _set = [k for k, v in _defaults.items() if getattr(self, k) != v]
+            if _set:
+                raise ValueError(
+                    f"tul.{', tul.'.join(_set)} set with tul.disco=false: a silent no-op.")
+            return
+        if self.disco_bridge not in DISCO_BRIDGES:
+            raise ValueError(f"tul.disco_bridge must be one of {DISCO_BRIDGES}, "
+                             f"got {self.disco_bridge!r}")
+        if self.disco_gate not in DISCO_GATES:
+            raise ValueError(f"tul.disco_gate must be one of {DISCO_GATES}, "
+                             f"got {self.disco_gate!r}")
+        if int(self.disco_topk) < 1:
+            raise ValueError(f"tul.disco_topk must be >= 1, got {self.disco_topk}")
+        if not float(self.disco_tau) > 0.0:
+            raise ValueError(f"tul.disco_tau must be > 0, got {self.disco_tau}")
+        if not 0.0 <= float(self.disco_alpha) <= 1.0:
+            raise ValueError(f"tul.disco_alpha must be in [0, 1], got {self.disco_alpha}")
+        if self.disco_bridge == "soft" and int(self.disco_topk) != 128:
+            raise ValueError("tul.disco_topk set with tul.disco_bridge='soft': the soft "
+                             "bridge reads the whole vocabulary, so k would be ignored.")
+        if self.disco_gate == "learned" and float(self.disco_alpha) != 0.5:
+            raise ValueError("tul.disco_alpha set with tul.disco_gate='learned': the gate "
+                             "computes alpha, so the constant would be ignored.")
+        if self.disco_gate == "fixed" and float(self.disco_gate_bias) != 0.0:
+            raise ValueError("tul.disco_gate_bias set with tul.disco_gate='fixed': no gate "
+                             "is built, so the bias would be ignored.")
+        _refused = [
+            (self.tokens_through_core,
+             "tul.tokens_through_core (the paid loop runs `_core_region`, not the slot "
+             "loop the term is placed in)"),
+            (self.loop_reads_tokens,
+             "tul.loop_reads_tokens (token positions inside the slot loop; the term is "
+             "defined on slot cells)"),
+            (self.code, "tul.code (LCTUL: no slot-loop passes, a flow thinker)"),
+            (self.loop_denoise,
+             "tul.loop_denoise (the entry of every pass is REPLACED by the noised code, so "
+             "the carried state the term reads never enters the next pass)"),
+        ]
+        for _bad, _why in _refused:
+            if _bad:
+                raise ValueError(f"tul.disco with {_why}.")
 
     def _check_pointer(self) -> None:
         """``tul.pointer_heads``: the head scores TOKEN positions of a slot-layout forward

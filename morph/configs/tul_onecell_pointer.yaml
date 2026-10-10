@@ -1,0 +1,47 @@
+# The ONE-CELL control of DiscoTUL (phase-2 tracker D2a, 2026-10-10): the winner
+# (lxtul_pointer) with the fan taken out. The strict slot loop, one cell per slot, carries
+# everything else the winner carries: strict geometry, the fixed-point term at 0.1, the
+# per-pass cell RMSNorm, the pointer head (4), the span decoder, the gain hinge (100 @ 0.9)
+# and the cotangent clip. DiscoTUL (discotul.yaml) is THIS file plus `tul.disco` and
+# nothing else, so the later comparison reads the re-embedding alone.
+#
+# Composed from the strict one-cell ruler (`tul_slot_spandec_strict`), not from the winner:
+# a Hydra child cannot delete a parent's keys, and the fan's keys are refused or read as
+# a different model at one cell. Composed diff against lxtul_pointer (the eager winner),
+# every line justified:
+#   tul.fan_k, fan_mix, fan_select_eps, fan_all_wta_lambda, fan_repel_*, fan_epi_*,
+#   slot_cell_init          absent: the fan (M = 4 write-all cells and their diversity
+#                           term) IS what this arm removes
+#   tul.fan_loop_select, fan_lsel_*   absent: the latent-selected loop needs the fan, and
+#                           with it its factor-fan teacher and EMA twin (no EMA twin here)
+# Kept as in the winner (set below because the strict ruler differs):
+#   model.core_fixed_point_lambda 0.1, tul.slot_cell_pass_norm rms, tul.pointer_heads 4,
+#   model.ckpt_grad_iters 4, training.ademamix_fused_fp32 (byte-identical speed keys)
+#   tul.prefix_k 4          the winner's coda width: one cell written through W_prefix
+#                           into 4 prefix positions (single source), so the coda reads
+#                           the same number of slot positions as the winner and a CE
+#                           difference is not prefix WIDTH (trajectory-prefix-is-width-
+#                           plus-pad-artefact)
+#   training.steps 5000     the winner's 5k
+# Eager twin of tul_onecell_pointer_fast.yaml: the fixed-weight readout
+# (core_depth_sweep.py) builds its model from this config.
+# Note: .agents/notes/proposed/architecture/2026-10-10-discotul.md
+defaults:
+  - tul_slot_spandec_strict
+  - _self_
+
+model:
+  core_fixed_point_lambda: 0.1
+  ckpt_grad_iters: 4
+
+tul:
+  prefix_k: 4
+  slot_cell_pass_norm: rms
+  pointer_heads: 4
+
+training:
+  steps: 5000
+  ademamix_fused_fp32: true
+
+wandb:
+  name: tul-onecell-pointer

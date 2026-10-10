@@ -146,6 +146,12 @@ def evaluate(
             for _sk in [k for k in out if str(k).startswith(_CELL_NORM_KEYS)]:
                 if torch.is_tensor(out[_sk]):
                     acc.setdefault(f"val/{_sk}", []).append(float(out[_sk]))
+            # tul.disco (eval only): the per-pass `disco_*_t{t}` readings (gate mean,
+            # bridge entropy and top-1 probability, distinct argmax fraction, term / cell
+            # RMS). A scan, for the same reason: the pass count is the batch's max depth.
+            for _dk in [k for k in out if str(k).startswith("disco_")]:
+                if torch.is_tensor(out[_dk]):
+                    acc.setdefault(f"val/{_dk}", []).append(float(out[_dk]))
             if out.get("latent_pre") is not None:
                 # Stage-1 latent pretraining (tul.latent_pre_target): NO coda ran, so there
                 # is no token CE and none of the coda readings below exist. The val loss of
