@@ -38,7 +38,9 @@ from torch.nn.utils import parametrize
 from morph.inference.sampling import sample_next
 from morph.inference.tul_generate import TulRowBuilder
 from morph.inference.tul_generate_cached import (_block, _branches, _cca_rows,
-                                                 _check_supported)
+                                                 _check_supported, loop_cell_count,
+                                                 loop_relation, lsel_step, pointer_keys,
+                                                 pointer_mix, prefix_write, register_term)
 from morph.model.tul_layout import BoundaryRule, TulLayoutSpec
 
 __all__ = ["TulGraphDecoder", "generate_tul_graphed"]
@@ -82,11 +84,12 @@ class _Site:
 
 
 def _site_rows(xa: Tensor, *, site: _Site, pos: Tensor, widx: Tensor, seg_mode: bool,
-               slot_range: tuple[int, int], fresh: bool = False) -> Tensor:
+               slot_range: tuple[int, int], fresh: bool = False, cells: int = 0) -> Tensor:
     """One attention application of the new row(s) ``xa`` at ``pos``: project against the
     site's history (or a fresh segment), write K/V at ``widx``, attend over every live
     entry at or before ``pos`` (window: within ``window_size``, never itself; slot branch:
-    the static column range ``slot_range``), gate + up."""
+    the static column range ``slot_range``), gate + up. ``cells > 0``: the slot loop's
+    cell relation (``loop_relation``) in place of ``at or before``."""
     impl = site.impl
     lat, vp = (site.zlat, site.zvprev) if fresh else (site.lat, site.vprev)
     q, k, v, q_lat, gate_pre, win, v_prev_raw = _cca_rows(impl, xa, pos, lat, vp, seg_mode)
@@ -95,8 +98,9 @@ def _site_rows(xa: Tensor, *, site: _Site, pos: Tensor, widx: Tensor, seg_mode: 
         site.vprev.copy_(v_prev_raw[:, -1:])
     site.write(widx, k, v, pos)
     dist = pos.view(-1, 1) - site.pos.view(1, -1)
-    allow = site.valid.view(1, -1) & (dist >= 0)
-    win_mask = allow & (dist < impl.cca.window_size) & (dist != 0)
+    rel = loop_relation(pos, site.pos, cells) if cells else dist >= 0
+    allow = site.valid.view(1, -1) & rel
+    win_mask = allow & (dist.abs() < impl.cca.window_size) & (dist != 0)
     a, b = slot_range
     out_win, out_comp = _branches(impl, q, site.k, site.v, win_mask, site.k[:, :, a:b],
                                   site.v[:, :, a:b], allow[:, a:b])
@@ -126,7 +130,7 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
     fixed addresses. Reusable across generations (``reset`` between rows)."""
 
     def __init__(self, model, spec: TulLayoutSpec, rule: BoundaryRule, emit_source: str,
-                 use_graphs: bool = True):
+                 use_graphs: bool = True, cells: int | None = None):
         if emit_source not in ("slot", "token"):
             raise ValueError(f"emit_source must be 'slot' or 'token', got {emit_source!r}")
         _check_supported(model)
@@ -140,7 +144,10 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
         self.use_graphs = bool(use_graphs)
         if self.use_graphs and self.dev.type != "cuda":
             raise ValueError("CUDA graphs need a CUDA model; pass use_graphs=False on CPU")
-        self.K = int(m._code_enum_k)
+        self.K = int(m._code_enum_k) if m.tul_code_enum is not None else 1
+        self.M = loop_cell_count(m, cells)            # looped cells per slot
+        self.lsel = m._lsel_mode != "off"
+        self.ptr = m.tul_pointer is not None
         self.depth = (int(tc.slot_depth_fixed) if int(tc.slot_depth_fixed) > 0
                       else int(tc.slot_mean_depth or cfg.mean_depth))
         self.Kp = int(tc.prefix_k)
@@ -164,10 +171,11 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
         C = m.cfg.d_model
         self.w_head = m.embed.lm_weight()
         self.slot_col = torch.tensor([self.slot_id], device=dev)
-        # Prelude: P token entries + ONE cell entry (index P) for the seed's own read.
-        self.pre = [_Site(b.attention._impl, 1, self.P + 1, dev, dt) for b in m.prelude]
-        # Loop: one site per (pass, layer), every slot of the row.
-        self.core = [[_Site(b.attention._impl, self.K, self.S, dev, dt) for b in m.core]
+        Mc = self.M
+        # Prelude: P token entries + the M looped cells (indices P ..) for their own read.
+        self.pre = [_Site(b.attention._impl, 1, self.P + Mc, dev, dt) for b in m.prelude]
+        # Loop: one site per (pass, layer), every cell of every slot of the row (s*M + i).
+        self.core = [[_Site(b.attention._impl, self.K, self.S * Mc, dev, dt) for b in m.core]
                      for _ in range(self.depth)]
         # Coda: Cc cell entries (permanent) then P token entries (span-local).
         self.coda = [_Site(b.attention._impl, self.K, self.Cc + self.P, dev, dt)
@@ -178,18 +186,29 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
         self.span_ve = [torch.zeros(1, self.P, m.value_embeds[k].precompute(
             m.value_embed_tables[k](torch.zeros(1, 1, dtype=torch.long, device=dev))
         ).shape[-1], device=dev, dtype=dt) for k in range(self.n_ve)]
+        # The register pools the span's token rows (prelude output, stream mean).
+        self.span_xn = (torch.zeros(1, self.P, C, device=dev, dtype=dt)
+                        if m.tul_register is not None else None)
         V = self.w_head.shape[0]
+        # The pointer: every token of the row (capacity: the RoPE cache), its key and the
+        # token that followed it; an entry turns valid when its follower is fed.
+        if self.ptr:
+            ph, pd = m.tul_pointer.h, m.tul_pointer.dh
+            self.ptr_keys = torch.zeros(ph, self.max_pos, pd, device=dev, dtype=torch.float32)
+            self.ptr_cand = torch.zeros(self.max_pos, dtype=torch.long, device=dev)
+            self.ptr_valid = torch.zeros(self.max_pos, dtype=torch.bool, device=dev)
         self.C = torch.zeros(self.K, dtype=torch.float64, device=dev)
         self.last_logp = torch.zeros(self.K, V, dtype=torch.float32, device=dev)
         self.logits_out = torch.zeros(V, dtype=torch.float32, device=dev)
         self.cell_logits_out = torch.zeros(V, dtype=torch.float32, device=dev)
         self.arP = torch.arange(self.P, device=dev)
         self.arKp = torch.arange(self.Kp, device=dev)
-        self.idxP = torch.tensor([self.P], device=dev)
+        self.arM = torch.arange(Mc, device=dev)
+        self.idxP = self.P + self.arM
         # Host -> device step inputs, one copy per step.
         pin = self.dev.type == "cuda"
-        self.h_tok = torch.zeros(5, dtype=torch.long, pin_memory=pin)
-        self.d_tok = torch.zeros(5, dtype=torch.long, device=dev)
+        self.h_tok = torch.zeros(6, dtype=torch.long, pin_memory=pin)
+        self.d_tok = torch.zeros(6, dtype=torch.long, device=dev)
         self.h_slot = torch.zeros(3, dtype=torch.long, pin_memory=pin)
         self.d_slot = torch.zeros(3, dtype=torch.long, device=dev)
         # The async copy out of a pinned buffer reads it when the stream gets there, so a
@@ -205,7 +224,7 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
     def _capture(self) -> None:
         # Warm up on a side stream (compiles / autotunes every Triton kernel at these
         # shapes and settles the allocator), then capture each step once.
-        self.h_tok.copy_(torch.tensor([5, 0, 0, 0, 0]))
+        self.h_tok.copy_(torch.tensor([5, 0, 0, 0, 0, 0]))
         self.d_tok.copy_(self.h_tok)
         self.h_slot.copy_(torch.tensor([0, 1, 1]))
         self.d_slot.copy_(self.h_slot)
@@ -229,8 +248,11 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
         """Empty every cache: a new row."""
         for site in self.pre + self.coda + [s for row in self.core for s in row]:
             site.clear()
+        if self.ptr:
+            self.ptr_valid.zero_()
         self.C.zero_()
         self.last_logp.zero_()
+        self.n_tok = 0
         self.span_len = 0
         self.n_slots = 0
         self.prev_id = 0
@@ -241,7 +263,7 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
 
     # -- the two steps (device-only: no host sync, fixed shapes) -------------------
     def _rep(self, t: Tensor) -> Tensor:
-        return t.repeat(self.K, *([1] * (t.dim() - 1)))
+        return t.repeat(self.K, *([1] * (t.dim() - 1))) if self.K > 1 else t
 
     def _logp(self, xh: Tensor) -> Tensor:
         logits = (xh[:, -1] @ self.w_head.T).index_fill(-1, self.slot_col, float("-inf"))
@@ -259,7 +281,7 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
         m = self.m
         d = self.d_tok
         tok, prev = d[0:1].view(1, 1), d[1:2].view(1, 1)
-        p, sidx, hasp = d[2:3], d[3:4], d[4:5] != 0
+        p, sidx, hasp, tidx = d[2:3], d[3:4], d[4:5] != 0, d[5:6]
         emb = m.embed(tok)
         x = m.embed_drop(emb)
         bg = m.embed.get_bigram(torch.cat([prev, tok], dim=1))[:, 1:]
@@ -276,7 +298,10 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
             h = m._apply_injection(h, term)
             h = _block(blk, h, partial(_site_rows, site=self.pre[i], pos=p, widx=sidx,
                                        seg_mode=True, slot_range=(self.P, self.P + 1)), 0)
-        xc = self._rep(m.input_norm(h))
+        xn = m.input_norm(h)
+        if self.span_xn is not None:
+            self.span_xn.index_copy_(1, sidx, xn.mean(dim=2))
+        xc = self._rep(xn)
         x0K, bgK = self._rep(x), self._rep(bg)
         cidx = sidx + self.Cc
         base_i = m.cfg.n_prelude + m.cfg.n_core
@@ -287,12 +312,26 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
             xc = m._apply_injection(xc, term)
             xc = _block(blk, xc, partial(_site_rows, site=self.coda[i], pos=p, widx=cidx,
                                          seg_mode=True, slot_range=(0, self.Cc)), 0)
-        logp = self._logp(m._readout(xc))
-        ev = self.last_logp.gather(1, tok.expand(self.K, 1)).squeeze(1).double()
-        Cn = self.C + torch.where(hasp, ev, torch.zeros_like(ev))
-        self.logits_out.copy_(self._mix(logp, Cn))
-        self.C.copy_(Cn)
-        self.last_logp.copy_(logp)
+        xh = m._readout(xc)
+        logp = self._logp(xh)
+        if self.K > 1:
+            ev = self.last_logp.gather(1, tok.expand(self.K, 1)).squeeze(1).double()
+            Cn = self.C + torch.where(hasp, ev, torch.zeros_like(ev))
+            self.logits_out.copy_(self._mix(logp, Cn))
+            self.C.copy_(Cn)
+            self.last_logp.copy_(logp)
+        elif self.ptr:
+            # The previous token's entry gets its follower (this token) and turns valid;
+            # this token's key is written at its own index, valid from the next token on.
+            j = (tidx - 1).clamp_min(0)
+            self.ptr_cand.index_copy_(0, j, tok.view(1))
+            self.ptr_valid.index_copy_(0, j, (tidx > 0).view(1))
+            q, k = pointer_keys(m, xh[:, -1])
+            self.logits_out.copy_(pointer_mix(m, xh[:, -1], logp[0], q, self.ptr_keys,
+                                              self.ptr_cand, self.ptr_valid))
+            self.ptr_keys.index_copy_(1, tidx, k.unsqueeze(1))
+        else:
+            self.logits_out.copy_(logp[0])
 
     def _slot_step(self) -> None:
         m, tc = self.m, self.m.cfg.tul
@@ -309,39 +348,51 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
         x_cell = m.embed_drop(seed)
         bg_cell = torch.bmm(rows, self.span_bg) / nf
         ve_cell = [torch.bmm(rows, self.span_ve[k]) / nf for k in range(self.n_ve)]
-        # ── the first cell's prelude: it reads its span's tokens and itself ─────────
-        h = x_cell.unsqueeze(2).expand(1, 1, m._n_streams, x_cell.shape[-1]).contiguous()
+        # ── the looped cells' prelude: each reads its span's tokens, its earlier
+        #    siblings and itself ─────────────────────────────────────────────────────
+        Mc = self.M
+        x_m, bg_m = x_cell.expand(1, Mc, -1), bg_cell.expand(1, Mc, -1)
+        ve_m = [v.expand(1, Mc, -1) for v in ve_cell]
+        h = x_m.unsqueeze(2).expand(1, Mc, m._n_streams, x_m.shape[-1]).contiguous()
         for i, blk in enumerate(m.prelude):
-            term = m._build_injection_term(i, m.x0_injects[i].precompute(x_cell), None,
-                                           bg_cell, h.dtype,
-                                           ve_bagged=ve_cell if self.n_ve else None)
+            term = m._build_injection_term(i, m.x0_injects[i].precompute(x_m), None,
+                                           bg_m, h.dtype,
+                                           ve_bagged=ve_m if self.n_ve else None)
             h = m._apply_injection(h, term)
-            h = _block(blk, h, partial(_site_rows, site=self.pre[i], pos=fp,
+            h = _block(blk, h, partial(_site_rows, site=self.pre[i], pos=fp + self.arM,
                                        widx=self.idxP, seg_mode=True,
-                                       slot_range=(self.P, self.P + 1), fresh=True), 0)
-        eK = self._rep(m.input_norm(h))
-        # ── the slot loop for slot s (K rollouts) ──────────────────────────────────
-        x0K, bgK = self._rep(x_cell), self._rep(bg_cell)
+                                       slot_range=(self.P, self.P + Mc), fresh=True), 0)
+        e = m.input_norm(h)                                              # [1, M, n, C]
+        ctx = e[:, :1].mean(dim=2) if self.lsel else None
+        if self.span_xn is not None:
+            e = e + register_term(m, self.span_xn, self.arP < n).unsqueeze(2).to(e.dtype)
+        eK = self._rep(e)
+        # ── the slot loop for slot s (K rollouts, M cells at s*M + i) ──────────────
+        x0K, bgK = self._rep(x_m), self._rep(bg_m)
         hs = m.core_init(eK)
         np_ = m.cfg.n_prelude
         inj = torch.stack(
             [m._build_injection_term(np_ + i, m.x0_injects[np_ + i].precompute(x0K), None,
                                      bgK, hs.dtype) for i in range(m.cfg.n_core)], dim=0)
         valid = torch.ones(self.K, 1, dtype=torch.bool, device=self.dev)
+        cpos = s * Mc + self.arM
+        pick = None
         for t in range(self.depth):
             hi = m.injection(hs, eK)
             for i, blk in enumerate(m.core):
                 hi = m._apply_injection(hi, inj[i])
-                hi = _block(blk, hi, partial(_site_rows, site=self.core[t][i], pos=s,
-                                             widx=s, seg_mode=False,
-                                             slot_range=(0, self.S)), t)
-            hs = m._apply_injection(hi, m.tul_code_enum.term(hi, valid, self.K))
+                hi = _block(blk, hi, partial(_site_rows, site=self.core[t][i], pos=cpos,
+                                             widx=cpos, seg_mode=False,
+                                             slot_range=(0, self.S * Mc), cells=Mc), t)
+            hs = hi
+            if self.K > 1:
+                hs = m._apply_injection(hi, m.tul_code_enum.term(hi, valid, self.K))
+            if m.tul_cell_norm is not None:
+                hs = m._cell_norm_apply(hs)                     # as tul_generate_cached
+            if self.lsel:
+                hs, pick = lsel_step(m, hs, ctx, Mc, reset=t + 1 < self.depth)
         # ── the prefix write and the coda of the cells ─────────────────────────────
-        w = m.tul.W_prefix.to(hs.dtype)
-        Cd = hs.shape[-1]
-        hm = hs.reshape(self.K, 1, -1, Cd)
-        proj = torch.stack([torch.matmul(hm, w[k]) for k in range(self.Kp)], dim=2)
-        xc = proj.reshape(self.K, self.Kp, *hs.shape[2:-1], Cd).to(eK.dtype)
+        xc = prefix_write(m, hs, pick, self.Kp).to(eK.dtype)
         pc = fp + self.arKp
         widx = s * self.Kp + self.arKp
         x0c = self._rep(x_cell.expand(1, self.Kp, -1))
@@ -354,7 +405,8 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
             xc = m._apply_injection(xc, term)
             xc = _block(blk, xc, partial(_cell_rows, site=self.coda[i], pos=pc, widx=widx), 0)
         if self.emit_source == "slot":
-            self.cell_logits_out.copy_(self._mix(self._logp(m._readout(xc)), self.C))
+            lp = self._logp(m._readout(xc))
+            self.cell_logits_out.copy_(self._mix(lp, self.C) if self.K > 1 else lp[0])
         # ── the span is closed: every span-local cache empties ─────────────────────
         for site in self.pre:
             site.clear()
@@ -372,6 +424,7 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
             self._ev_tok.synchronize()
         self.h_tok[0], self.h_tok[1], self.h_tok[2] = tok, self.prev_id, pos
         self.h_tok[3], self.h_tok[4] = self.span_len, int(self.span_len > 0)
+        self.h_tok[5] = self.n_tok
         self.d_tok.copy_(self.h_tok, non_blocking=True)
         if self._ev_tok is not None:
             self._ev_tok.record()
@@ -380,6 +433,7 @@ class TulGraphDecoder(contextlib.AbstractContextManager):
         else:
             self._token_step()
         self.span_len += 1
+        self.n_tok += 1
         self.prev_id = tok
 
     def feed_slot(self, first_pos: int) -> None:
@@ -417,6 +471,7 @@ def generate_tul_graphed(
     use_graphs: bool = True,
     decoder: TulGraphDecoder | None = None,
     top_p: float = 0.0,
+    cells: int | None = None,
 ):
     """``generate_tul`` / ``generate_tul_cached`` with every decode event one CUDA graph
     replay. Same arguments and returns ``(token_ids, builder)``. Pass a live ``decoder``
@@ -432,7 +487,7 @@ def generate_tul_graphed(
     if not prompt_ids:
         raise ValueError("generate_tul_graphed needs at least one prompt token")
     own = decoder is None
-    dec = decoder or TulGraphDecoder(model, spec, rule, emit_source, use_graphs)
+    dec = decoder or TulGraphDecoder(model, spec, rule, emit_source, use_graphs, cells)
     if dec.m is not model or dec.spec != spec or dec.rule is not rule \
             or dec.emit_source != emit_source:
         raise ValueError("decoder was built for a different model / spec / rule / emit_source")

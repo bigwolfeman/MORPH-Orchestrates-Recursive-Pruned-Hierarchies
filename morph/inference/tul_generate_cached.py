@@ -33,6 +33,24 @@ WHY THE STRICT GEOMETRY MAKES THIS EXACT (``tul.tg_geometry="strict"``; the rela
   position are the softmax over rollouts of the summed log-probs each rollout gave the
   span's earlier tokens. Kept as a running per-span sum.
 
+LXTUL (``K = 1``, ``M = tul.slot_cells`` looped cells per slot; added 2026-10-10, tracker
+item C1c; Agent Note ``.agents/notes/proposed/feature/2026-10-10-lxtul-cached-decode.md``):
+
+* The M cells sit at the slot's first M prefix positions. Their prelude reads the span's
+  tokens, the earlier sibling cells and itself (one conv segment). The register adds its
+  seed term (``TULSlotRegister`` over the span's token rows, cached per span); the
+  router's context is the first cell's prelude output (``_lsel_begin``).
+* The loop cache holds every cell of every earlier slot per (pass, layer), on the compact
+  cell axis ``s*M + i`` (the RoPE position and the conv order). A cell reads every cell of
+  earlier slots and every cell of its own slot, later siblings included
+  (:func:`loop_relation`). After each pass: the cell norm, then the router's pick and,
+  while the depth continues, every cell reset to the winner (``_lsel_pass`` at eval).
+* The write keeps the final winner only (losers exactly 0, ``_fan_route_cells``), cell i
+  through ``W_prefix[i]``; all ``prefix_k`` cells stay coda keys.
+* The read is the one-rollout slot-masked log-softmax, mixed with the pointer head
+  (``TULPointer.mixed_logprobs``): the pointer cache holds every earlier token's key and
+  the token that followed it, row-wide (it is not span-local).
+
 Everything outside this list is REFUSED at construction (``_check_supported``): a model
 whose forward carries a mechanism this file does not reproduce raises instead of
 generating from a different function.
@@ -45,6 +63,7 @@ branch keeps its per-head sink logit.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from functools import partial
 
@@ -59,7 +78,10 @@ from morph.inference.tul_generate import TulRowBuilder
 from morph.kernels.triton.fused_cca_conv import fused_cca_conv
 from morph.kernels.triton.fused_cca_prologue import fused_cca_prologue
 from morph.model.attention import segment_causal_conv
-from morph.model.tul_layout import BoundaryRule, TulLayoutSpec
+from morph.model.tul_fan import _cell_readout
+from morph.model.tul_fan_route import reset_to_winner
+from morph.model.tul_layout import BoundaryRule, SlotLayout, TulLayoutSpec
+from morph.model.tul_pointer import _rms as _ptr_rms
 
 __all__ = ["TulCachedDecoder", "generate_tul_cached"]
 
@@ -73,13 +95,37 @@ __all__ = ["TulCachedDecoder", "generate_tul_cached"]
 _MUST_BE_NONE = (
     "fm_planner", "scse", "tul_stage_cond", "tul_cond", "tul_recur_gate", "tul_center",
     "tul_code_enc", "tul_code_proj", "tul_code_time", "tul_code_head", "tul_code_sym",
-    "tul_fan", "tul_gate", "tul_grad_pass", "tul_gram", "tul_carry", "tul_loop_denoise",
-    "tul_pass_gate", "tul_reread", "tul_chain", "tul_register", "tul_code_vq", "tul_vq",
+    "tul_code_cell", "tul_code_clean", "tul_code_null", "tul_code_sym_head",
+    "tul_gate", "tul_grad_pass", "tul_gram", "tul_carry", "tul_loop_denoise",
+    "tul_pass_gate", "tul_reread", "tul_chain", "tul_code_vq", "tul_vq",
     "mtp",
     # arm B (tul.code_policy_k, 2026-09-29): a per-slot policy choice inside ONE rollout;
     # the loop caches here hold one code per rollout, never a per-slot pick.
     "tul_code_policy",
+    # The fan's other routes (a learned gate over the written cells, the factor fan, the
+    # pseudo-snap write) and the LX exploration knobs' hypothesis merge: each changes
+    # what the coda reads. Only the latent-selected loop's router pick is reproduced.
+    "tul_fan_router", "tul_fan_opf", "tul_pseudo_snap", "tul_hyp_merge_gate",
+    "tul_hyp_score_head", "tul_latent_pre_head",
 )
+
+
+def loop_cell_count(model, cells: int | None = None) -> int:
+    """The number of looped cells per slot ``M`` the decoders run (``tul.slot_cells``; 1 on
+    every model without the Thought Register).
+
+    ``cells`` is the decoder's argument for the variable cell count (phase-2 item B: train
+    with a sampled M, sweep M at inference). Today every part that reads a cell does so by
+    its INDEX (the register's query ``Q_i`` and ``P_cell[i]``, ``W_prefix[i]``, the router's
+    per-cell ``bias``), so a forward at any other M is undefined and is REFUSED here rather
+    than guessed. The caches, masks and loops below are sized by ``M``, not by the config."""
+    m = int(model.cfg.tul.slot_cells)
+    if cells is not None and int(cells) != m:
+        raise NotImplementedError(
+            f"cells={cells}: this model defines its forward at M={m} only (the register's "
+            f"per-cell queries, W_prefix[i] and the router's bias are indexed by cell; "
+            f"the index-free design is tracker item B1)")
+    return m
 
 
 def _check_supported(model) -> None:
@@ -98,16 +144,33 @@ def _check_supported(model) -> None:
     need(not tc.tokens_through_core, "the paid loop (tul.tokens_through_core)")
     need(not getattr(tc, "loop_reads_tokens", False), "tul.loop_reads_tokens")
     need(not tc.code and not tc.code_target, "TUL-Code / code_target")
-    # LX-Fan (fan_k > 0 under code_enum_k, 2026-09-26): the loop caches here hold ONE cell
-    # per slot per rollout and the coda cell cache one write per slot; M write-all cells
-    # per slot were not built. Named before the register line so the refusal says so.
-    need(int(tc.fan_k) == 0, "the fan (tul.fan_k > 0, incl. LX-Fan's K rollouts x M cells)")
-    # Transitively covered by the fan_k==0 line above (tul.prefix_per_cell > 1 is refused
-    # at construction without fan_k > 0 and fan_mix='all'), named explicitly so the
-    # message says what is unsupported rather than relying on a reader to trace the
-    # construction-time refusal back here.
+    rollouts = model.tul_code_enum is not None
+    need(not rollouts or model._code_enum_k > 1, "tul.code_enum_k == 1 with a code module")
+    # The fan (fan_k > 0): reproduced ONLY as LXTUL builds it. M = fan_k = slot_cells =
+    # prefix_k looped cells per slot (the Thought Register), the write-all route
+    # (fan_mix 'all', one cell 1:1 into each prefix cell) and, when the latent-selected
+    # loop is on, the router's pick and reset after every pass and the winner-only write.
+    # LX-Fan (fan_k > 0 under code_enum_k: K rollouts x M cells) is not built.
+    if int(tc.fan_k) > 0 or int(tc.slot_cells) > 1:
+        need(not rollouts, "the fan under tul.code_enum_k (LX-Fan's K rollouts x M cells)")
+        need(model.tul_fan is not None and model.tul_register is not None
+             and int(tc.fan_k) == int(tc.slot_cells) == int(tc.prefix_k),
+             "the fan or the Thought Register outside LXTUL's shape (needs fan_k == "
+             "slot_cells == prefix_k with both built)")
+        need(str(tc.fan_mix) == "all", f"tul.fan_mix={tc.fan_mix!r} (only 'all')")
+        need(model._lsel_mode in ("off", "joint", "detached") and not model._lsel_read_all,
+             f"tul.fan_loop_select={model._lsel_mode!r} / fan_lsel_read "
+             f"{tc.fan_lsel_read!r} (only the winner read)")
+        need(not model._fan_lineage, "tul.fan_lineage (the per-stream cross-slot relation)")
+        need(int(model._fan_history_streams) == 0, "tul.fan_history_streams")
+        need(not model._fan_trigger_every_pass, "tul.fan_trigger_every_pass")
+        need(not model._fan_head_grader, "tul.fan_all_wta_grader='head'")
+    # Transitively covered by the fan line above (tul.prefix_per_cell > 1 is refused at
+    # construction without fan_k > 0 and fan_mix='all'), named explicitly so the message
+    # says what is unsupported rather than relying on a reader to trace it back here.
     need(int(tc.prefix_per_cell) == 1, "tul.prefix_per_cell > 1 (the wider write)")
-    need(int(tc.slot_cells) == 1, "the Thought Register (tul.slot_cells > 1)")
+    need(tc.latent_set_loss == "none" and not tc.hyp_score_head and tc.hyp_merge == "none",
+         "the LX exploration knobs (latent_set_loss / hyp_score_head / hyp_merge)")
     need(tc.prefix_source == "exit", f"tul.prefix_source={tc.prefix_source!r}")
     need(tc.slot_seed in ("boundary", "bag_mean"), f"tul.slot_seed={tc.slot_seed!r}")
     need(tc.coda_token_input == "prelude", f"tul.coda_token_input={tc.coda_token_input!r}")
@@ -126,9 +189,11 @@ def _check_supported(model) -> None:
          "tul.loop_attn_center (the centered slot-loop attention)")
     need(getattr(tc, "loop_attn_hc", "cayley") == "cayley",
          "tul.loop_attn_hc (the uniform slot-loop attention residual)")
-    need(int(getattr(tc, "pointer_heads", 0)) == 0,
-         "tul.pointer_heads (the pointer head reads every earlier token's final state; the "
-         "eager generate_tul runs it)")
+    if model.tul_pointer is not None:
+        # The pointer is cached over every earlier token (`_PointerCache`); its two
+        # variants that read more than a token's own final state are not.
+        need(not model.tul_pointer.cell_key, "tul.pointer_cell_key (the cell key term)")
+        need(not model.tul_pointer.coverage, "tul.pointer_coverage_lambda (the coverage term)")
     need(not tc.slot_source_once, "tul.slot_source_once")
     need(not tc.tg_span_comp, "tul.tg_span_comp")
     need(not tc.center_bag_mean, "tul.center_bag_mean")
@@ -145,8 +210,6 @@ def _check_supported(model) -> None:
          f"core_init {type(model.core_init).__name__} (only h_0 = e)")
     need(getattr(model.tul, "E_pass", None) is None, "tul E_pass")
     need(model.tul.W_prefix is not None, "a model without W_prefix")
-    need(model.tul_code_enum is not None and model._code_enum_k > 1,
-         "a model without tul.code_enum_k > 1 (the plain one-rollout read)")
     for name in _MUST_BE_NONE:
         need(getattr(model, name, None) is None, f"model.{name}")
     for blk in list(model.prelude) + list(model.core) + list(model.coda):
@@ -321,7 +384,10 @@ def _branches(impl, q: Tensor, k: Tensor, v: Tensor, win_mask: Tensor,
     cca = impl.cca
     scale = cca.d_head ** -0.5
     B, H, n, _ = q.shape
-    bias = torch.where(win_mask, 0.0, float("-inf"))[None, None]
+    # The bias in the query's dtype: CPU SDPA reads an fp32 mask under fp64 queries wrongly
+    # once there are more than 16 keys (measured, torch 2.11), which broke the fp64
+    # reference the tolerances are argued from. In fp32 the cast is a no-op.
+    bias = torch.where(win_mask, 0.0, float("-inf")).to(q.dtype)[None, None]
     out_win = F.scaled_dot_product_attention(q, k, v, attn_mask=bias, scale=scale)
     has = win_mask.any(dim=-1)
     out_win = torch.where(has.view(1, 1, -1, 1), out_win, torch.zeros_like(out_win))
@@ -335,16 +401,34 @@ def _branches(impl, q: Tensor, k: Tensor, v: Tensor, win_mask: Tensor,
     return out_win, torch.einsum("bhij,bhjd->bhid", weights[..., :-1], v_s)
 
 
-def _attend(impl, q: Tensor, keys: _KV, qpos: Tensor, self_only: bool):
+def loop_relation(qpos: Tensor, kpos: Tensor, cells: int) -> Tensor:
+    """``[n, N]`` the slot loop's relation on the compact CELL axis (index ``s*M + i``):
+    a cell reads every cell of earlier slots and every cell of its OWN slot, later siblings
+    included (``transformer.slot_cell_relation`` at reach 0, delivered as ``tg_relation``,
+    which REPLACES the attention's causal term). At ``cells == 1`` it is plain causal."""
+    if cells == 1:
+        return qpos.view(-1, 1) >= kpos.view(1, -1)
+    return (qpos.view(-1, 1) // cells) >= (kpos.view(1, -1) // cells)
+
+
+def _attend(impl, q: Tensor, keys: _KV, qpos: Tensor, self_only: bool, cells: int = 0):
     """``(out_win, out_comp)`` for queries at ``qpos`` over the key set ``keys``.
 
     ``keys`` is the full set the query's relation can reach (the caller assembles it per
     region); the masks built here add what every region shares: causal order, the window
     size, XSA self-exclusion on the window branch, the slot-column restriction on the slot
-    branch, and ``self_only`` (a strict coda prefix cell reads itself alone)."""
+    branch, and ``self_only`` (a strict coda prefix cell reads itself alone). ``cells > 0``
+    is the slot loop's cell relation (:func:`loop_relation`) in place of causal order; its
+    window keeps ``|dist| < window_size`` (``attention._window_fallback`` under a relation),
+    which reaches a later sibling."""
     dist = qpos.view(-1, 1) - keys.pos.view(1, -1)
-    allow = (dist == 0) if self_only else (dist >= 0)
-    win_mask = allow & (dist < impl.cca.window_size) & (dist != 0)       # [n, N]
+    if self_only:
+        allow = dist == 0
+    elif cells:
+        allow = loop_relation(qpos, keys.pos, cells)
+    else:
+        allow = dist >= 0
+    win_mask = allow & (dist.abs() < impl.cca.window_size) & (dist != 0)  # [n, N]
     cols = keys.slot.nonzero().flatten()
     if cols.numel() == 0:
         return _branches(impl, q, keys.k, keys.v, win_mask, None, None, None)
@@ -353,9 +437,10 @@ def _attend(impl, q: Tensor, keys: _KV, qpos: Tensor, self_only: bool):
 
 
 def _site(x: Tensor, *, impl, pos: Tensor, is_slot: Tensor, hist: _ConvHist, seg_mode: bool,
-          store: _KV, key_sets: list[_KV], self_only: bool = False) -> Tensor:
+          store: _KV, key_sets: list[_KV], self_only: bool = False, cells: int = 0) -> Tensor:
     """One attention application on NEW rows: project, append to ``store``, attend over
-    the union of ``key_sets`` (``store`` is expected to be one of them), gate + up."""
+    the union of ``key_sets`` (``store`` is expected to be one of them), gate + up.
+    ``cells``: the slot loop's cell relation (:func:`_attend`)."""
     q, k, v, q_lat, gate_pre = _project_new(impl, x, pos, hist, seg_mode)
     store.append(k, v, pos, is_slot)
     if len(key_sets) == 1:
@@ -366,7 +451,7 @@ def _site(x: Tensor, *, impl, pos: Tensor, is_slot: Tensor, hist: _ConvHist, seg
                    v=torch.cat([ks.v for ks in live], dim=2),
                    pos=torch.cat([ks.pos for ks in live]),
                    slot=torch.cat([ks.slot for ks in live]))
-    out_win, out_comp = _attend(impl, q, keys, pos, self_only)
+    out_win, out_comp = _attend(impl, q, keys, pos, self_only, cells)
     return impl.cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat, gate_pre=gate_pre)
 
 
@@ -394,27 +479,125 @@ def _block(block, h: Tensor, attn_call, iter_idx: int) -> Tensor:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Shared per-slot / per-token pieces of LXTUL (the cached and the graphed decoder)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def register_term(model, xs: Tensor, valid: Tensor | None = None) -> Tensor:
+    """``[1, M, C]``: the Thought Register's seed term for ONE slot (``TULSlotRegister``).
+
+    ``xs`` ``[1, n, C]`` are the span's token rows the full forward pools: the prelude
+    output after ``input_norm``, stream mean. ``valid`` ``[n]`` marks the live rows of a
+    fixed-capacity buffer (``None``: all). The model's own module runs on a one-slot layout
+    whose span is exactly those rows, so the pooling is the forward's, not a copy."""
+    n = xs.shape[1]
+    dev = xs.device
+    bag = (torch.zeros(1, n, dtype=torch.long, device=dev) if valid is None
+           else (~valid).long().view(1, n))                  # a dead row joins bag 1
+    lay = SlotLayout(slot_mask=torch.zeros(1, n, dtype=torch.bool, device=dev), bag_id=bag,
+                     slot_index=torch.zeros(1, 1, dtype=torch.long, device=dev),
+                     slot_valid=torch.ones(1, 1, dtype=torch.bool, device=dev),
+                     prefix_k=int(model.cfg.tul.prefix_k))
+    return model.tul_register(xs, lay)
+
+
+def lsel_step(model, h: Tensor, ctx: Tensor, m: int, reset: bool) -> tuple[Tensor, Tensor]:
+    """One pass's latent-selected-loop step for ONE slot (``_lsel_pass`` at eval, where
+    the loop follows the router): the router scores the ``m`` cells of ``h`` ``[1, m, *, C]``
+    against ``ctx`` ``[1, 1, C]``, picks one, and (``reset``: the slot's depth continues)
+    every cell takes the winner's state (``reset_to_winner``). Returns ``(h, pick [1, 1])``."""
+    cr = _cell_readout(h.view(1, 1, m, *h.shape[2:]))
+    pick = model.tul_fan_lsel_router.select(model.tul_fan_lsel_router.scores(cr, ctx))[0]
+    if reset:
+        h = reset_to_winner(h, pick, torch.ones(1, 1, dtype=torch.bool, device=h.device), m)
+    return h, pick
+
+
+def prefix_write(model, h: Tensor, pick: Tensor | None, kp: int) -> Tensor:
+    """``[R, kp, *, C]`` the slot's prefix-cell values (``TULSlots.prefix_project``) from the
+    loop's exit ``h`` ``[R, m, *, C]``: one cell (``m == 1``) through every ``W_prefix[k]``;
+    ``m == kp`` cells 1:1, after the winner route (``_fan_route_cells``: losers exactly 0)
+    when ``pick`` is given."""
+    w = model.tul.W_prefix.to(h.dtype)
+    m = h.shape[1]
+    if m == 1:
+        return torch.stack([torch.matmul(h[:, 0], w[k]) for k in range(kp)], dim=1)
+    if pick is not None:
+        # one_hot(pick) as a comparison: the same exact 0 / 1, and no value check that
+        # could sync with the host inside a CUDA graph.
+        oh = (torch.arange(m, device=h.device) == pick.view(-1, 1)).to(h.dtype)   # [1, m]
+        h = h * oh.view(1, m, *([1] * (h.dim() - 2)))
+    return torch.stack([torch.matmul(h[:, k], w[k]) for k in range(kp)], dim=1)
+
+
+def pointer_keys(model, h: Tensor) -> tuple[Tensor, Tensor]:
+    """``(q, k)`` ``[H, dh]`` fp32 of one token's final hidden state ``h`` ``[1, C]``
+    (``TULPointer.attend``: per-head RMS-normed projections)."""
+    p = model.tul_pointer
+    q = _ptr_rms(p.q(h).view(p.h, p.dh)).float()
+    k = _ptr_rms(p.k(h).view(p.h, p.dh)).float()
+    return q, k
+
+
+def pointer_mix(model, h: Tensor, lm: Tensor, q: Tensor, keys: Tensor, cand: Tensor,
+                valid: Tensor | None = None) -> Tensor:
+    """``[V]`` the model + pointer mixture at one token (``TULPointer.mixed_logprobs``).
+
+    ``h`` ``[1, C]`` the token's final hidden state, ``lm`` ``[V]`` the model's slot-masked
+    log-softmax, ``q`` ``[H, dh]`` its query; ``keys`` ``[H, N, dh]`` every EARLIER token's
+    key in token order and ``cand`` ``[N]`` the token that followed each (the next token's
+    id: every earlier token has one); ``valid`` ``[N]`` the live entries of a fixed-capacity
+    buffer. The null key's abstain mass goes back to the model."""
+    p = model.tul_pointer
+    scale = (p.log_scale_bias.exp() / math.sqrt(p.dh)).float()                     # [H]
+    s = torch.einsum("hd,hnd->hn", q, keys) * scale[:, None]
+    if valid is not None:
+        s = s.masked_fill(~valid.view(1, -1), float("-inf"))
+    s_null = (q * _ptr_rms(p.null_k_bias).float()).sum(-1) * scale                  # [H]
+    pr = torch.softmax(torch.cat([s, s_null[:, None]], -1), -1)
+    alpha, null = pr[:, :-1], pr[:, -1]
+    a = torch.softmax(p.gate_norm_head(h).float(), -1)[0]                          # [1+H]
+    w0 = a[0] + (a[1:] * null).sum()
+    beta = (alpha * a[1:, None]).sum(0)                                            # [N]
+    if valid is not None:
+        beta = beta * valid.to(beta.dtype)
+    p_ptr = torch.zeros_like(lm).scatter_add_(0, cand.clamp_min(0), beta)
+    return torch.log(w0 * lm.exp() + p_ptr)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The decoder
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TulCachedDecoder:
     """Incremental state of ONE row. Feed it tokens in row order with the slot decisions
-    ``TulRowBuilder.append`` made; read the mixture log-probs it produced.
+    ``TulRowBuilder.append`` made; read the log-probs it produced.
+
+    Two model families share this state machine (``_check_supported`` admits nothing else):
+
+    * the K-rollout model (``tul.code_enum_k = K > 1``, one looped cell): the rollouts are
+      the batch axis and the read is the per-span Bayes mixture;
+    * LXTUL (``K = 1``): ``M = tul.slot_cells`` looped cells per slot on the cache's
+      position axis, the register's seed, the per-pass cell norm, the router's pick and
+      reset, the winner-only write, the one-rollout read and the pointer head. ``M = 1``
+      with no fan is the plain one-cell slot loop.
 
     The builder stays the ONE source of the layout: this class never decides a boundary,
     it only mirrors the positions the builder assigned (so a divergence from the loader's
     layout is impossible here by construction, and ``generate_tul``'s parity test covers
     the builder)."""
 
-    def __init__(self, model, spec: TulLayoutSpec):
+    def __init__(self, model, spec: TulLayoutSpec, cells: int | None = None):
         _check_supported(model)
         self.m = model
         self.spec = spec
         cfg, tc = model.cfg, model.cfg.tul
         if spec.prefix_k != tc.prefix_k:
             raise ValueError(f"spec prefix_k {spec.prefix_k} != model {tc.prefix_k}")
-        self.K = int(model._code_enum_k)
+        self.K = int(model._code_enum_k) if model.tul_code_enum is not None else 1
+        self.M = loop_cell_count(model, cells)
+        self.lsel = model._lsel_mode != "off"
         self.depth = int(tc.slot_depth_fixed) if int(tc.slot_depth_fixed) > 0 else int(
             tc.slot_mean_depth or cfg.mean_depth)
         self.np, self.nc, self.nd = cfg.n_prelude, cfg.n_core, cfg.n_coda
@@ -431,12 +614,20 @@ class TulCachedDecoder:
         self.prev_id = 0                   # the row's previous input id (bigram key)
         self.span_bigram: list[Tensor] = []
         self.span_emb: list[Tensor] = []
+        self.span_xn: list[Tensor] = []    # the register's pooled rows (register only)
         self.n_ve = len(model._ve_layer_map)
         self.span_ve: list[list[Tensor]] = [[] for _ in range(self.n_ve)]
         self.seed_mode = str(tc.slot_seed)
+        # The pointer's cache: every earlier token's key and the token that followed it
+        # (row-wide, never dropped), plus the newest token's key, whose follower is the
+        # NEXT fed token.
+        self.ptr = model.tul_pointer is not None
+        self.ptr_keys: Tensor | None = None       # [H, N, dh] fp32
+        self.ptr_cand: Tensor | None = None       # [N] long
+        self.ptr_pending: Tensor | None = None    # [H, 1, dh]
         self.C: Tensor | None = None        # [K] fp64 per-span evidence sum
         self.last_logp: Tensor | None = None   # [K, V] of the open span's last token
-        self.logits: Tensor | None = None   # [V] mixture log-probs of the last token
+        self.logits: Tensor | None = None   # [V] log-probs of the last token
         self.cell_logits: Tensor | None = None  # [V] at the last prefix cell (emit "slot")
 
     # -- per-position pieces ------------------------------------------------------
@@ -464,6 +655,8 @@ class TulCachedDecoder:
             h = m._apply_injection(h, term)
             impl = blk.attention._impl
             if cell:
+                # A slot's cells: their own conv segment, each reading its span's tokens,
+                # its earlier sibling cells and itself (same bag, causal).
                 tmp = _KV()
                 call = partial(_site, impl=impl, pos=pos, is_slot=is_slot, hist=_ConvHist(),
                                seg_mode=True, store=tmp, key_sets=[self.pre.kv[i], tmp])
@@ -500,7 +693,7 @@ class TulCachedDecoder:
         return m._readout(xc)
 
     def _rep(self, t: Tensor) -> Tensor:
-        return t.repeat(self.K, *([1] * (t.dim() - 1)))
+        return t.repeat(self.K, *([1] * (t.dim() - 1))) if self.K > 1 else t
 
     def _logp(self, xh: Tensor) -> Tensor:
         """``[K, V]`` fp32 slot-masked log-softmax per rollout (``_enum_mixture_logprobs``)."""
@@ -515,9 +708,28 @@ class TulCachedDecoder:
             acc = term if acc is None else torch.logaddexp(acc, term)
         return acc
 
+    def _pointer(self, xh: Tensor, lm: Tensor, tok: int) -> Tensor:
+        """The pointer mixture at the token just fed (``lm`` its model log-probs), then its
+        key joins the cache; the previous token's key gets its follower, this token."""
+        h = xh[:, -1]                                                     # [1, C]
+        q, k = pointer_keys(self.m, h)
+        if self.ptr_pending is not None:
+            c = torch.tensor([tok], dtype=torch.long, device=self.dev)
+            if self.ptr_keys is None:
+                self.ptr_keys, self.ptr_cand = self.ptr_pending, c
+            else:
+                self.ptr_keys = torch.cat([self.ptr_keys, self.ptr_pending], dim=1)
+                self.ptr_cand = torch.cat([self.ptr_cand, c])
+        self.ptr_pending = k.unsqueeze(1)
+        keys = (self.ptr_keys if self.ptr_keys is not None
+                else k.new_zeros(k.shape[0], 0, k.shape[1]))
+        cand = (self.ptr_cand if self.ptr_cand is not None
+                else torch.zeros(0, dtype=torch.long, device=self.dev))
+        return pointer_mix(self.m, h, lm, q, keys, cand)
+
     # -- the two events ----------------------------------------------------------
     def feed_token(self, tok: int, pos: int) -> None:
-        """One TOKEN at row position ``pos``: prelude (span-local), coda, mixture read."""
+        """One TOKEN at row position ``pos``: prelude (span-local), coda, the read."""
         if pos >= self.max_pos:
             raise ValueError(f"row position {pos} exceeds the RoPE cache {self.max_pos}")
         emb, x, bg, ve = self._front_inputs(tok)
@@ -528,26 +740,31 @@ class TulCachedDecoder:
         p = torch.tensor([pos], dtype=torch.long, device=self.dev)
         no = torch.zeros(1, dtype=torch.bool, device=self.dev)
         xn = self._prelude(x, x, bg, ve, p, no, cell=False)
+        if self.m.tul_register is not None:
+            self.span_xn.append(xn.mean(dim=2))
         xh = self._coda(self._rep(xn), self._rep(x), self._rep(bg), p, no, 1.0, cells=False)
         logp = self._logp(xh)
-        if self.C is None:
-            self.C = torch.zeros(self.K, dtype=torch.float64, device=self.dev)
-        elif self.last_logp is not None:
-            # The previous position is a token of THIS span: its label (this token) is
-            # evidence for every later position of the span (``evidence_labels``).
-            self.C = self.C + self.last_logp[:, tok].double()
-        self.logits = self._mix(logp, self.C)
-        self.last_logp = logp
+        if self.K > 1:
+            if self.C is None:
+                self.C = torch.zeros(self.K, dtype=torch.float64, device=self.dev)
+            elif self.last_logp is not None:
+                # The previous position is a token of THIS span: its label (this token)
+                # is evidence for every later position of the span (``evidence_labels``).
+                self.C = self.C + self.last_logp[:, tok].double()
+            self.logits = self._mix(logp, self.C)
+            self.last_logp = logp
+        else:
+            self.logits = self._pointer(xh, logp[0], tok) if self.ptr else logp[0]
         self.prev_id = tok
 
     def feed_slot(self, first_pos: int, want_cell_logits: bool) -> None:
         """The slot the builder just inserted after the span's last token, its
-        ``prefix_k`` cells at ``first_pos ..``: seed, prelude of the first cell, the loop
-        for the new slot (K rollouts, cached per pass and layer), the prefix write and the
+        ``prefix_k`` cells at ``first_pos ..``: seed, prelude of the ``M`` looped cells,
+        the loop for the new slot (cached per pass and layer), the prefix write and the
         coda of the cells. Then the span-local caches are dropped."""
         m, tc = self.m, self.m.cfg.tul
         s = self.n_slots
-        Kp = tc.prefix_k
+        Kp, Mc = tc.prefix_k, self.M
         if first_pos + Kp - 1 >= self.max_pos:
             raise ValueError(f"row position {first_pos + Kp - 1} exceeds the RoPE cache")
         dtype = self.span_emb[-1].dtype
@@ -559,50 +776,66 @@ class TulCachedDecoder:
             seed = _span_mean(self.span_emb) + m.tul._e_slot_term(bag, dtype)
         x_cell = m.embed_drop(seed)
         bg_cell = _span_mean(self.span_bigram)
-        p1 = torch.tensor([first_pos], dtype=torch.long, device=self.dev)
-        yes = torch.ones(1, dtype=torch.bool, device=self.dev)
         ve_cell = [_span_mean(self.span_ve[k]) for k in range(self.n_ve)]
-        e = self._prelude(x_cell, x_cell, bg_cell, ve_cell, p1, yes, cell=True)   # [1,1,n,C]
-        # ── the slot loop for slot s, K rollouts on the batch axis ──────────────────
+        # ── the prelude of the looped cells (every prefix position carries the seed) ──
+        pm = torch.arange(first_pos, first_pos + Mc, dtype=torch.long, device=self.dev)
+        ym = torch.ones(Mc, dtype=torch.bool, device=self.dev)
+        x_m, bg_m = x_cell.expand(1, Mc, -1), bg_cell.expand(1, Mc, -1)
+        ve_m = [v.expand(1, Mc, -1) for v in ve_cell]
+        e = self._prelude(x_m, x_m, bg_m, ve_m, pm, ym, cell=True)      # [1, M, n, C]
+        ctx = e[:, :1].mean(dim=2) if self.lsel else None                # [1, 1, C]
+        if m.tul_register is not None:
+            e = e + register_term(m, torch.cat(self.span_xn, dim=1)).unsqueeze(2).to(e.dtype)
+        # ── the slot loop for slot s: K rollouts on the batch axis, M cells on the
+        #    compact cell axis (positions s*M + i) ──────────────────────────────────────
         eK = self._rep(e)
-        x0K, bgK = self._rep(x_cell), self._rep(bg_cell)
+        x0K, bgK = self._rep(x_m), self._rep(bg_m)
         h = m.core_init(eK)
         np_ = self.np
         inj = torch.stack(
             [m._build_injection_term(np_ + i, m.x0_injects[np_ + i].precompute(x0K), None,
                                      bgK, h.dtype) for i in range(self.nc)], dim=0)
-        sp = torch.tensor([s], dtype=torch.long, device=self.dev)
+        sp = torch.arange(s * Mc, s * Mc + Mc, dtype=torch.long, device=self.dev)
         valid = torch.ones(self.K, 1, dtype=torch.bool, device=self.dev)
+        pick = None
         for t in range(self.depth):
             reg = self.core[t]
             hi = m.injection(h, eK)
             for i, blk in enumerate(m.core):
                 hi = m._apply_injection(hi, inj[i])
                 impl = blk.attention._impl
-                call = partial(_site, impl=impl, pos=sp, is_slot=yes, hist=reg.hist[i],
-                               seg_mode=False, store=reg.kv[i], key_sets=[reg.kv[i]])
+                call = partial(_site, impl=impl, pos=sp, is_slot=ym, hist=reg.hist[i],
+                               seg_mode=False, store=reg.kv[i], key_sets=[reg.kv[i]],
+                               cells=Mc)
                 hi = _block(blk, hi, call, t)
-            h = m._apply_injection(hi, m.tul_code_enum.term(hi, valid, self.K))
-        # ── the prefix write: cell k = h W_prefix[k] (``TULSlots.prefix_project``) ────
-        w = m.tul.W_prefix.to(h.dtype)
-        C = h.shape[-1]
-        hm = h.reshape(self.K, 1, -1, C)
-        proj = torch.stack([torch.matmul(hm, w[k]) for k in range(Kp)], dim=2)
-        values = proj.reshape(self.K, Kp, *h.shape[2:-1], C)
-        # ── the coda of the cells (self-only relation, injections zeroed) ─────────────
+            h = hi
+            if self.K > 1:
+                h = m._apply_injection(hi, m.tul_code_enum.term(hi, valid, self.K))
+            if m.tul_cell_norm is not None:
+                # tul.slot_cell_pass_norm: the full forward norms every carried cell after
+                # every pass, after the code term (`_tul_core` -> `_slot_cell_norm`).
+                h = m._cell_norm_apply(h)
+            if self.lsel:
+                h, pick = lsel_step(m, h, ctx, Mc, reset=t + 1 < self.depth)
+        # ── the prefix write and the coda of the cells (self-only, injections zeroed) ─
+        values = prefix_write(m, h, pick, Kp)
         pc = torch.arange(first_pos, first_pos + Kp, dtype=torch.long, device=self.dev)
         yk = torch.ones(Kp, dtype=torch.bool, device=self.dev)
         x0c = self._rep(x_cell.expand(1, Kp, -1))
         bgc = self._rep(bg_cell.expand(1, Kp, -1))
         xh = self._coda(values.to(eK.dtype), x0c, bgc, pc, yk, 0.0, cells=True)
-        self.cell_logits = (self._mix(self._logp(xh), self.C) if want_cell_logits
-                            else None)
+        if want_cell_logits:
+            lp = self._logp(xh)
+            self.cell_logits = self._mix(lp, self.C) if self.K > 1 else lp[0]
+        else:
+            self.cell_logits = None
         # ── the span is closed: drop everything span-local ─────────────────────────
         self.n_slots += 1
         self.pre.reset()
         self.coda_span.reset()
         self.span_bigram = []
         self.span_emb = []
+        self.span_xn = []
         self.span_ve = [[] for _ in range(self.n_ve)]
         self.C = None
         self.last_logp = None
@@ -623,10 +856,13 @@ def generate_tul_cached(
     emit_source: str = "slot",
     return_logits: bool = False,
     top_p: float = 0.0,
+    cells: int | None = None,
 ):
     """``generate_tul`` with the KV cache: same arguments (no ``halt``: the gate is
-    refused; ``top_p`` is the eager generator's nucleus knob, default off), same sampling step, same returned ``(token_ids, builder)``. With
-    ``return_logits`` a third value, the ``[V]`` log-prob row each step sampled from."""
+    refused; ``top_p`` is the eager generator's nucleus knob, default off), same sampling
+    step, same returned ``(token_ids, builder)``. With ``return_logits`` a third value, the
+    ``[V]`` log-prob row each step sampled from. ``cells``: the looped cell count M
+    (:func:`loop_cell_count`; ``None`` = the model's)."""
     if emit_source not in ("slot", "token"):
         raise ValueError(f"emit_source must be 'slot' or 'token', got {emit_source!r}")
     was_training = model.training
@@ -640,7 +876,7 @@ def generate_tul_cached(
     if not prompt_ids:
         raise ValueError("generate_tul_cached needs at least one prompt token")
     builder = TulRowBuilder(rule=rule, spec=spec)
-    dec = TulCachedDecoder(model, spec)
+    dec = TulCachedDecoder(model, spec, cells)
     emitted: list[int] = []
     rows: list[Tensor] = []
     try:
