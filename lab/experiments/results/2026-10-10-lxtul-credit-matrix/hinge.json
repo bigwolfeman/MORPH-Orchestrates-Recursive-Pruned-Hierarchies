@@ -1,0 +1,265 @@
+{
+ "config": "lxtul_pointer",
+ "ckpt": "/home/wolfe/morph-wt-graph/checkpoints/morph/lxtul-pointer-rerun/step_5000.pt",
+ "step": 5000,
+ "target": 0.9,
+ "lambda": 100.0,
+ "rows": [
+  {
+   "batch": 0,
+   "pass": 0,
+   "reached": true,
+   "gain_est": 1.8355993032455444,
+   "gain_est_max": 1.9654805660247803,
+   "penalty": 88.0318374633789
+  },
+  {
+   "batch": 0,
+   "pass": 1,
+   "reached": true,
+   "gain_est": 2.0880496501922607,
+   "gain_est_max": 2.137352705001831,
+   "penalty": 141.30230712890625
+  },
+  {
+   "batch": 0,
+   "pass": 2,
+   "reached": true,
+   "gain_est": 1.1220622062683105,
+   "gain_est_max": 1.5829890966415405,
+   "penalty": 9.402254104614258
+  },
+  {
+   "batch": 0,
+   "pass": 3,
+   "reached": true,
+   "gain_est": 0.8713597059249878,
+   "gain_est_max": 0.8874541521072388,
+   "penalty": 0.0
+  },
+  {
+   "batch": 0,
+   "pass": 4,
+   "reached": true,
+   "gain_est": 0.8388764262199402,
+   "gain_est_max": 0.8586954474449158,
+   "penalty": 0.0
+  },
+  {
+   "batch": 0,
+   "pass": 5,
+   "reached": true,
+   "gain_est": 0.8393122553825378,
+   "gain_est_max": 0.8548399806022644,
+   "penalty": 0.0
+  },
+  {
+   "batch": 0,
+   "pass": 6,
+   "reached": true,
+   "gain_est": 0.8312615752220154,
+   "gain_est_max": 0.8658998608589172,
+   "penalty": 0.0
+  },
+  {
+   "batch": 0,
+   "pass": 7,
+   "reached": true,
+   "gain_est": 0.8301979899406433,
+   "gain_est_max": 0.8491065502166748,
+   "penalty": 0.0
+  },
+  {
+   "batch": 1,
+   "pass": 0,
+   "reached": true,
+   "gain_est": 1.7906742095947266,
+   "gain_est_max": 1.8950660228729248,
+   "penalty": 79.5927734375
+  },
+  {
+   "batch": 1,
+   "pass": 1,
+   "reached": true,
+   "gain_est": 2.1073696613311768,
+   "gain_est_max": 2.131072998046875,
+   "penalty": 145.86288452148438
+  },
+  {
+   "batch": 1,
+   "pass": 2,
+   "reached": true,
+   "gain_est": 0.9438834190368652,
+   "gain_est_max": 0.9832596182823181,
+   "penalty": 0.2692011892795563
+  },
+  {
+   "batch": 1,
+   "pass": 3,
+   "reached": true,
+   "gain_est": 0.8450657725334167,
+   "gain_est_max": 0.8553258180618286,
+   "penalty": 0.0
+  },
+  {
+   "batch": 1,
+   "pass": 4,
+   "reached": true,
+   "gain_est": 0.8417571783065796,
+   "gain_est_max": 0.860645055770874,
+   "penalty": 0.0
+  },
+  {
+   "batch": 1,
+   "pass": 5,
+   "reached": true,
+   "gain_est": 0.8499953746795654,
+   "gain_est_max": 0.8865808248519897,
+   "penalty": 0.0
+  },
+  {
+   "batch": 1,
+   "pass": 6,
+   "reached": true,
+   "gain_est": 0.8421204090118408,
+   "gain_est_max": 0.8688295483589172,
+   "penalty": 0.0
+  },
+  {
+   "batch": 1,
+   "pass": 7,
+   "reached": true,
+   "gain_est": 0.842658519744873,
+   "gain_est_max": 0.8825781345367432,
+   "penalty": 0.0
+  },
+  {
+   "batch": 2,
+   "pass": 0,
+   "reached": true,
+   "gain_est": 1.7918719053268433,
+   "gain_est_max": 1.8646708726882935,
+   "penalty": 79.82162475585938
+  },
+  {
+   "batch": 2,
+   "pass": 1,
+   "reached": true,
+   "gain_est": 2.0302562713623047,
+   "gain_est_max": 2.1299214363098145,
+   "penalty": 128.33106994628906
+  },
+  {
+   "batch": 2,
+   "pass": 2,
+   "reached": true,
+   "gain_est": 1.008475422859192,
+   "gain_est_max": 1.0990318059921265,
+   "penalty": 1.3847293853759766
+  },
+  {
+   "batch": 2,
+   "pass": 3,
+   "reached": true,
+   "gain_est": 0.8495625853538513,
+   "gain_est_max": 0.8818901777267456,
+   "penalty": 0.0
+  },
+  {
+   "batch": 2,
+   "pass": 4,
+   "reached": true,
+   "gain_est": 0.8574720621109009,
+   "gain_est_max": 0.8678840398788452,
+   "penalty": 0.0
+  },
+  {
+   "batch": 2,
+   "pass": 5,
+   "reached": true,
+   "gain_est": 0.8577629327774048,
+   "gain_est_max": 0.892763614654541,
+   "penalty": 0.0
+  },
+  {
+   "batch": 2,
+   "pass": 6,
+   "reached": true,
+   "gain_est": 0.8338022232055664,
+   "gain_est_max": 0.8594909310340881,
+   "penalty": 0.0
+  },
+  {
+   "batch": 2,
+   "pass": 7,
+   "reached": true,
+   "gain_est": 0.82359778881073,
+   "gain_est_max": 0.8544045090675354,
+   "penalty": 0.0
+  },
+  {
+   "batch": 3,
+   "pass": 0,
+   "reached": true,
+   "gain_est": 1.8085969686508179,
+   "gain_est_max": 1.8638873100280762,
+   "penalty": 82.68939971923828
+  },
+  {
+   "batch": 3,
+   "pass": 1,
+   "reached": true,
+   "gain_est": 2.079773187637329,
+   "gain_est_max": 2.131171941757202,
+   "penalty": 139.29380798339844
+  },
+  {
+   "batch": 3,
+   "pass": 2,
+   "reached": true,
+   "gain_est": 0.9924153685569763,
+   "gain_est_max": 1.0703526735305786,
+   "penalty": 0.9926397204399109
+  },
+  {
+   "batch": 3,
+   "pass": 3,
+   "reached": true,
+   "gain_est": 0.8600203394889832,
+   "gain_est_max": 0.8896148800849915,
+   "penalty": 0.0
+  },
+  {
+   "batch": 3,
+   "pass": 4,
+   "reached": true,
+   "gain_est": 0.8513092398643494,
+   "gain_est_max": 0.8752732872962952,
+   "penalty": 0.0
+  },
+  {
+   "batch": 3,
+   "pass": 5,
+   "reached": true,
+   "gain_est": 0.8466027975082397,
+   "gain_est_max": 0.8710905313491821,
+   "penalty": 0.0
+  },
+  {
+   "batch": 3,
+   "pass": 6,
+   "reached": true,
+   "gain_est": 0.8405656218528748,
+   "gain_est_max": 0.8481705784797668,
+   "penalty": 0.0
+  },
+  {
+   "batch": 3,
+   "pass": 7,
+   "reached": true,
+   "gain_est": 0.8448430299758911,
+   "gain_est_max": 0.9030225276947021,
+   "penalty": 0.0001522636302979663
+  }
+ ]
+}
