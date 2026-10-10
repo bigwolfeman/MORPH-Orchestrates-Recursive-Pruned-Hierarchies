@@ -21,8 +21,11 @@ The hinge draws its pass from the CPU generator and restores it, so it regularis
 run, chosen by the seed (`transformer.py` `_t_gain`; filing
 `lab/experiments/mixed/2026-10-08-fast2-package-paired.md`). Every winner number trained that way.
 
-- [ ] A1 Read the drawn pass directly: log `_t_gain` per step for 50 eager steps on two seeds
-      (anchor: one constant value per seed if the inference is right).
+- [x] A1 Read the drawn pass directly (2026-10-10, eager `lxtul_pointer`, 50 steps, a wrapper
+      logging every `torch.randint` drawn inside `_tul_core`): 54 of 54 draws are pass 6 on
+      seed 1 (the winner's seed) and 54 of 54 are pass 3 on seed 2 (`n_grad_iters` 8). The pass
+      is fixed per run and differs between seeds, so two seeds of one recipe regularise
+      different passes. Scripts and logs: `/home/wolfe/morph-scratch/perf/hingepass/`.
 - [ ] A2 Wolfe decides: keep one pass per run, a fresh pass per step, or every grad pass.
 - [ ] A3 If per step: device-side draw (one-hot over passes or one graph per pass) that keeps
       `graph_step` capturable; byte gate with the draw fixed; paired check (3 pairs) against
