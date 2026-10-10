@@ -78,8 +78,17 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         vs plain 21.8k; Parcae LXTUL without the span decoder 28.2k vs 24.4k at CE@6 +0.006.
   - [~] C1b..C1f: agent `decode`, branch `perf/lxtul-decode` (worktree /home/wolfe/morph-wt-decode),
         launched 2026-10-10 02:10; vlt thread `lxtul-decode`.
-  - [ ] C1b Decode bench today: eager LXTUL vs cached plain vs Parcae, tok/s at batch 1 and N.
-  - [ ] C1c Cached + graphed LXTUL decode, bit-equal tokens to `generate_tul`. Refused today at
+  - [~] C1b Decode bench (2026-10-10, `lab/perf/bench_lxtul_decode.py`, fp32 greedy, prompt 128
+        + 256 new, batch 1): LXTUL + pointer graphed 294.8 tok/s, cached 82.9, eager 12.2
+        (generation forward) / 6.2 (old forward); plain MORPH eager 16.6, `kv_cache` 11.2.
+        Graphed LXTUL token step 1.94 ms (835 kernels, about 6x the 0.31 ms weight-read
+        floor), slot step 11.7 ms. Open: graphed plain MORPH (`StaticDecodeEngine`), so the
+        ratio against the 2.3x target is NOT measured; Parcae arm; true batching (the LXTUL
+        decoders hold one row).
+  - [x] C1c Cached + graphed LXTUL decode: `perf/lxtul-decode` 46c2fa0d (not merged). On
+        step_5000 row 0, 256 greedy tokens equal eager (row diff 4.1e-3, not explained; TF32
+        conv1d suspected, `--no_tf32` run queued); fp64 agrees to 3e-14 on CPU fixtures. M other
+        than the trained 4 is refused until B1. Original item: bit-equal tokens to `generate_tul`. Refused today at
         `tul_generate_cached.py:85-159` (fan_k, slot_cells, pointer_heads, code_enum_k > 1,
         tul_fan / tul_register). Minimal set: 4 cells through the prelude; register seed with a
         per-span token K/V cache; 4-cell loop caches with sibling reads; per-pass cell RMSNorm;
@@ -95,12 +104,12 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         at 5k, read against the two fast 5k runs (CE@6 3.9248 / 3.9229, K1-K6 +0.0104 /
         +0.0091). Next on the same axis: the 1-cell vs 4-cell loop cost (core 1.47 vs 5.87
         TFLOP) meets item B.
-  - [ ] C1e The eager generator runs the training-only span decoder on every step
+  - [x] C1e (46c2fa0d: `forward(generate=True)`) The eager generator runs the training-only span decoder on every step
         (`transformer.py` ~14526, no gate; OOM trace
         `lab/experiments/results/2026-10-07-lxtul-pointer-coverage/gen/gen_oom.log`). Add an
         explicit generation forward that skips every loss head; do not gate on `labels` or
         `self.training` (the val pass and the offline sweep read the span decoder).
-  - [ ] C1f Hole in the existing cached decoder: `tul_cell_norm` is not refused, so a one-cell
+  - [x] C1f (46c2fa0d, test `test_cell_norm_matches_eager`) Hole in the existing cached decoder: `tul_cell_norm` is not refused, so a one-cell
         multi-rollout model with the cell norm would decode a different function silently.
         Refuse or implement first.
 - [ ] C2 LM-head slot rows (Lemma 3: needs `pointer_cell_key: false`; the coda keeps K/V at slot
