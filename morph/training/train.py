@@ -2164,6 +2164,12 @@ def warmup_compile_all_shapes(
                     need = batch_size * (spec.l_total + 1)
                     buf = torch.randint(0, model.cfg.vocab_size, (need + 8,),
                                         generator=g).tolist()
+                    # The packer refuses a row holding slot_id (spec §3.1). A uniform row of
+                    # ~7.7k tokens holds it about 1 time in 7: the first 4 rows of this seed
+                    # miss it, the 8 rows of a fresh-pass hinge do not (2026-10-10 gate
+                    # gn-fast-s1). Remap it to the next id; a row without it is unchanged.
+                    buf = [(t + 1) % model.cfg.vocab_size if t == spec.slot_id else t
+                           for t in buf]
                     ids, labs, layout = pack_tul_batch(buf, rule, spec, batch_size)
                     ids, labs, layout = ids.to(device), labs.to(device), layout.to(device)
                     if _passes:
