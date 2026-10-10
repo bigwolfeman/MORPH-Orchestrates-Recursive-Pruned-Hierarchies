@@ -67,10 +67,17 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
 
 ### D. Literature: JEPA-Anything (arXiv 2609.20800)
 
-- [~] D1 Read the paper against MORPH's existing implementation of its method (`tul.fan_opf`,
-      arm F, `tul.py` ~596) and that arm's filed results; say what, if anything, is untested
-      (research agent, 2026-10-10). Wolfe's prior: an optional later ablation on the latent
-      loss, not the base.
+- [x] D1 Read (2026-10-10, research agent; write-up `/home/wolfe/morph-scratch/research/jepa-anything.md`).
+      MORPH built from this paper twice: `tul.fan_opf` (factor fan, weight 1 and 10), both filed
+      failures (`lab/experiments/failures/2026-09-30-fan-opf-and-routers.md`,
+      `2026-09-30-factor-fan-10x-latent.md`): only one factor of four learned (R^2 +0.13 / +0.17,
+      others below 0), weight 10 cost +0.131 CE, both floor terms read 0. Our arm differed from
+      the paper: each predictor read its own fan cell (not one shared context), no recombination.
+      The winner already carries the paper's EMA target and variance floor. The only untested
+      placement is a factored version of the rank-only latent head (shared input, ranking on
+      the predictable factors); its ceiling is the best-of-4 oracle (-0.0207 nats) and the
+      teacher is not better than the router today. Verdict: optional later ablation, as Wolfe
+      said; a cheap offline pick-agreement probe gates it.
 
 ## Alternatives considered
 
