@@ -139,9 +139,18 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
   - Wolfe 2026-10-10: test it as an ALTERNATIVE to LXTUL, both ways: DiscoTUL (the strict slot
     loop, one cell, re-embedding between passes) and LX-DiscoTUL (LXTUL with it on every cell).
     Build now; run after the optimization work (A, C).
-  - [~] D2a Build both arms on the fast path (`graph_step`), branch `feat/discotul`. Bridge
-    modes soft (the paper), top-k and hard argmax (our DiffusionBlocks lesson); sigmoid gate
-    starting open, last pass ungated; at gate 0 the forward must equal its base config.
+  - [~] D2a Built on `feat/discotul` cf65bd7a (not merged): `tul.disco` (`tul_disco.py`,
+    `_disco_term`), term `alpha * RMSNorm(Phi(h))` at the input of pass t >= 1 through the
+    model's own token head, table detached; bridges soft / topk (arm default, k 128) / hard;
+    learned gate starts at 0.5. On the latent-selected loop Phi is read once per slot (cells
+    are bit-equal at each pass entry). Arms `discotul_fast`, `lxtul_disco_fast`, control
+    `tul_onecell_pointer_fast` (+ eager twins). One-cell arms cannot carry
+    `tg_fused_attention` / `slot_compact`, so they run slower than LXTUL. 41 CPU tests, 10/10
+    sabotages, three 30-step graph_step smokes clean. Open: ms/step of the three arms (GPU
+    hold 2026-10-10 03:15), graph replay vs eager with disco on, soft / hard on GPU.
+  - [ ] Four CPU tests fail at master 6a33958e (`test_tul_strict_geometry` sabotage_2, three
+    per-slot-depth tests in `test_tul_forward`); bisect and fix on
+    `fix/master-test-regressions`.
   - [ ] D2b Prereg + runs, after A and C.
 
 ## Alternatives considered
