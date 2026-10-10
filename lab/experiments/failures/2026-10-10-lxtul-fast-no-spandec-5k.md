@@ -56,8 +56,22 @@ checkpoint 11:10:16. Artifacts: `lab/experiments/results/2026-10-10-lxtul-fast-n
 | K1-K6 (ce_tokens) | >= +0.0060 (guess +0.008) | +0.0020 [+0.0014, +0.0026] | +0.0104 / +0.0091 |
 | Final val | <= 3.925 (guess 3.919) | 3.9806 | 3.9161 / 3.9129 |
 
-CE@1 3.9947. The two speed predictions held; the three quality predictions missed by far more
-than the 0.006 run-to-run spread of K1-K6 (the drop is 0.0071-0.0084) and the CE gap is 0.068-0.070.
+CE@1 3.9947 (references 3.9352 / 3.9320). K1-K6 is the loop's own contribution on each
+checkpoint (CE@1 - CE@6, same 480 rows), not a difference between arms. The two speed
+predictions held; the three quality predictions missed.
+
+How strong each miss is (corrected 2026-10-10, the first filing overstated K1-K6):
+- K1-K6: the drop is 0.0071-0.0084, about 1.3x the 0.006 spread of independent 5k runs. On one
+  seed that is suggestive, not decisive.
+- CE: 0.068-0.070 at CE@6, and 0.058-0.063 already at CE@1, against a 0.002 spread between the
+  two references. Decisive. The span decoder makes the whole model better, not only passes 2-6.
+- Trainer val gap by step (no span decoder minus the mean of the two references, same val
+  batches per step): -0.10 at 250, -0.067 at 500, -0.010 at 750, +0.004 at 1000-1250, +0.03 to
+  +0.04 from 1500 to 2250, +0.05 to +0.06 from 2500 to 3750, +0.064 to +0.068 from 4000 to 5000.
+  The arm without the decoder leads early and falls behind from step 1000; the gap grows, then
+  holds flat from step 4000.
+- Matched wall clock is NOT measured: at 26.4 min the references were near step 4200, and the
+  val batches differ by step, so their val at that point cannot be read against this arm's 5000.
 
 ## Verdict
 
@@ -70,7 +84,8 @@ speed target instead of a cut.
 
 On MORPH the latent teacher and the coda's token CE do not replace the span decoder as a training
 signal for the loop: the whole-span target is still the term that makes passes 2-6 useful, as it
-was on 2026-09-11 when it first moved the slot channel. One seed only; the gap is about ten times
-the spread, so a second seed is not needed to keep the decoder. Next: make the decoder cheaper,
+was on 2026-09-11 when it first moved the slot channel. One seed only; the CE gap is about 30x the
+spread between the references, so a second seed is not needed to keep the decoder. The K1-K6
+part of the claim rests on one seed at 1.3x the spread. Next: make the decoder cheaper,
 not absent (tracker C1d follow-up: its CE row cap, fewer layers, or a decoder on a subset of
 slots per step), each as its own preregistered arm.
