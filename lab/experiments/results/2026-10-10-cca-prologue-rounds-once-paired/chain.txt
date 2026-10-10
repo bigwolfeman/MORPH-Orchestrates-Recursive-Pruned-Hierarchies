@@ -1,0 +1,18 @@
+[10-10 13:02:35] tree = git archive 2e434a60
+[10-10 13:02:35] train prologue-1 start
+[10-10 13:13:51] train prologue-1 exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) | [gain-pass] the checkpoint predates the per-step hinge pass draw | recordings=4 total 16 s | Final val_loss=4.0930
+[10-10 13:13:51] passes prologue-1: steps 2501..3499 n=999 counts(pass 0..7)=[108, 119, 135, 129, 131, 119, 130, 128] chi2=4.38 (dof 7) run=/home/wolfe/morph-scratch/prologue/paired/wandb/offline-run-20261010_130437-5iok9ey5
+[10-10 13:13:51] train prologue-2 start
+[10-10 13:23:34] train prologue-2 exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) | [gain-pass] the checkpoint predates the per-step hinge pass draw | recordings=4 total 15 s | Final val_loss=4.0951
+[10-10 13:23:34] passes prologue-2: steps 2501..3499 n=999 counts(pass 0..7)=[108, 119, 135, 129, 131, 119, 130, 128] chi2=4.38 (dof 7) run=/home/wolfe/morph-scratch/prologue/paired/wandb/offline-run-20261010_131427-n6ee99bp
+[10-10 13:23:34] train prologue-3 start
+[10-10 13:33:26] train prologue-3 exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) | [gain-pass] the checkpoint predates the per-step hinge pass draw | recordings=4 total 15 s | Final val_loss=4.0961
+[10-10 13:33:26] passes prologue-3: steps 2501..3499 n=999 counts(pass 0..7)=[108, 119, 135, 129, 131, 119, 130, 128] chi2=4.38 (dof 7) run=/home/wolfe/morph-scratch/prologue/paired/wandb/offline-run-20261010_132416-zelkmslp
+[10-10 13:35:28] sweep prologue-1 exit=0 ckpt=step_3500.pt prologue1 depth=1 ce=4.0594 span_first=3.6710 spandec_ce=4.6904 prologue1 depth=6 ce=4.0487 span_first=3.6323 spandec_ce=4.6725 prologue1 ce_tokens K1-K6: +0.0107 [+0.0101, +0.0114] over 480 rows prologue1 spandec_ce K1-K6: +0.0179 [+0.0169, +0.0190] over 160 batches 
+[10-10 13:37:16] sweep prologue-2 exit=0 ckpt=step_3500.pt prologue2 depth=1 ce=4.0597 span_first=3.6708 spandec_ce=4.6900 prologue2 depth=6 ce=4.0495 span_first=3.6332 spandec_ce=4.6740 prologue2 ce_tokens K1-K6: +0.0102 [+0.0095, +0.0109] over 480 rows prologue2 spandec_ce K1-K6: +0.0159 [+0.0150, +0.0168] over 160 batches 
+[10-10 13:39:05] sweep prologue-3 exit=0 ckpt=step_3500.pt prologue3 depth=1 ce=4.0610 span_first=3.6738 spandec_ce=4.6938 prologue3 depth=6 ce=4.0508 span_first=3.6343 spandec_ce=4.6759 prologue3 ce_tokens K1-K6: +0.0101 [+0.0094, +0.0108] over 480 rows prologue3 spandec_ce K1-K6: +0.0179 [+0.0169, +0.0189] over 160 batches 
+[10-10 13:39:05] done
+[10-10 13:39:24] train prologue-3r start (prereg rerun of prologue-3)
+[10-10 13:49:16] train prologue-3r exit=0 Final val_loss=4.0947
+[10-10 13:51:18] sweep prologue-3r exit=0 ckpt=step_3500.pt prologue3r depth=1 ce=4.0595 span_first=3.6725 spandec_ce=4.6909 prologue3r depth=6 ce=4.0494 span_first=3.6326 spandec_ce=4.6727 prologue3r ce_tokens K1-K6: +0.0101 [+0.0094, +0.0108] over 480 rows prologue3r spandec_ce K1-K6: +0.0182 [+0.0173, +0.0192] over 160 batches 
+[10-10 13:51:18] rerun done

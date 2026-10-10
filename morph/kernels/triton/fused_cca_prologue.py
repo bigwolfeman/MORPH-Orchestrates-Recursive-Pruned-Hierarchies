@@ -17,12 +17,26 @@ Fused region, in order (byte-faithful to ``ignore/p1_prologue_harness.py``):
   6. k = repeat_interleave(k, n_rep) over heads -> [B, H, S, D]
   7. v = cat(v_curr, v_prev, dim=-1).reshape(B,S,Hkv,D).transpose -> repeat_interleave
 
-Output: q, k, v each [B, H, S, D] (H query heads, GQA-expanded), dtype bf16.
+Output: q, k, v each [B, H, S, D] (H query heads, GQA-expanded), dtype = q_lat.dtype.
+
+Precision (fixed 2026-10-10, branch fix/cca-prologue-precision): the forward computes in
+fp32 from the load to the store and rounds ONCE, to the output dtype, at the store. The
+first version rounded every intermediate to bf16 (qk-mean, the pre-norm sum, the
+normalized value, norm * weight, exp(temp), cos/sin, both RoPE products and their sum) to
+copy a bf16-parameter reference. That made the kernel wrong in both dtypes it meets:
+  * fp32 inputs (the fp32 decoders): q / k relative error vs fp64 3.8e-3 / 4.6e-3, where
+    the eager reference gets 6e-8. A bf16 quantization of an fp32 model.
+  * bf16 inputs under training autocast: the norm weights and temp are fp32 parameters, so
+    the eager path computes norm * weight, temp and RoPE in fp32 (bf16 * fp32 promotes);
+    the kernel was less exact than that path (q 3.9e-3 vs 2.6e-3), not a copy of it.
+The backward already recomputed the forward in fp32 with no rounding, so it now
+differentiates the function the forward computes. tests/test_cca_prologue_precision.py
+holds the bounds.
 
 Design for sm_120 (RTX 5090 / Blackwell):
   * num_stages=1, num_warps=8 (consumer Blackwell has NO TMA pipeline).
-  * bf16 in/out, fp32 accumulation for ALL reductions (RMSNorm mean, qk-mean,
-    GQA grad-accumulation).
+  * input-dtype loads and output-dtype stores (bf16 under autocast); fp32 for all
+    arithmetic and ALL reductions (RMSNorm mean, qk-mean, GQA grad-accumulation).
   * D=32 head dim fits in registers; the whole per-row computation is register-resident.
   * One program = one (batch, seq-pos) row processing one head (Q) or one kv-head
     group (K / V). Reductions over D and over the n_rep group are in-register.
@@ -40,7 +54,6 @@ from typing import Optional
 
 import torch
 from ._eager_flag import kernel_fence
-import torch.nn.functional as F
 from torch import Tensor
 
 try:
@@ -88,35 +101,28 @@ if TRITON_AVAILABLE:
         kl = tl.load(k_lat_ptr + (b * S + s) * (Hkv * D) + kv * D + d, mask=dmask, other=0.0)
         qc = tl.load(q_conv_ptr + (b * S + s) * (H * D) + h * D + d, mask=dmask, other=0.0)
 
-        # match reference bf16 elementwise: qkm=((ql+kl)*0.5).bf16 ; a=(qc+qkm).bf16
-        qkm = (((ql.to(tl.float32) + kl.to(tl.float32)) * 0.5).to(tl.bfloat16))
-        a_bf = (qc + qkm).to(tl.bfloat16)
-        a = a_bf.to(tl.float32)                        # fp32 accumulation for RMSNorm
+        # fp32 from the load to the store; ONE rounding, to the output dtype, at the store
+        # (see "Precision" in the module docstring). The backward recomputes this same fp32
+        # function, so the gradient is the gradient of what the forward computed.
+        a = qc.to(tl.float32) + 0.5 * (ql.to(tl.float32) + kl.to(tl.float32))
 
-        # RMSNorm over D (fp32)
+        # RMSNorm over D
         ms = tl.sum(a * a, axis=0) / D
         inv = 1.0 / tl.sqrt(ms + EPS)
-        w = tl.load(wq_ptr + d, mask=dmask, other=0.0)             # keep bf16 like ref
-        # reference: (a*inv).to(bf16) * weight(bf16)  -> bf16  (match rounding)
-        n_bf = (a * inv).to(tl.bfloat16)
-        y = (n_bf * w).to(tl.bfloat16)                             # bf16, like ref
+        w = tl.load(wq_ptr + d, mask=dmask, other=0.0).to(tl.float32)
+        y = a * inv * w
 
-        # RoPE (rotate_half). last n_skip_rope positions skip. Reference runs rope
-        # in bf16 (cos/sin cast to q.dtype), so cast inputs to bf16 here too.
+        # RoPE (rotate_half). The last n_skip_rope positions skip it.
         do_rope = s < (S - n_skip_rope)
-        cos = tl.load(cos_ptr + s * D + d, mask=dmask, other=0.0).to(tl.bfloat16)
-        sin = tl.load(sin_ptr + s * D + d, mask=dmask, other=0.0).to(tl.bfloat16)
+        cos = tl.load(cos_ptr + s * D + d, mask=dmask, other=0.0).to(tl.float32)
+        sin = tl.load(sin_ptr + s * D + d, mask=dmask, other=0.0).to(tl.float32)
         half = D // 2
         # rotate_half(y)[i] = -y[i+half] if i<half else y[i-half]
         is_lo = d < half
         partner = tl.where(is_lo, d + half, d - half)
-        yf = y.to(tl.float32)
-        y_part = tl.sum(tl.where(d[None, :] == partner[:, None], yf[None, :], 0.0), axis=1)
-        rot = tl.where(is_lo, -y_part, y_part).to(tl.bfloat16)
-        # reference rounds each product to bf16 before the add (torch bf16 *,*,+)
-        t1 = (y * cos).to(tl.bfloat16)
-        t2 = (rot * sin).to(tl.bfloat16)
-        out = tl.where(do_rope, (t1 + t2).to(tl.bfloat16), y)
+        y_part = tl.sum(tl.where(d[None, :] == partner[:, None], y[None, :], 0.0), axis=1)
+        rot = tl.where(is_lo, -y_part, y_part)
+        out = tl.where(do_rope, y * cos + rot * sin, y)
 
         out_off = ((b * H + h) * S + s) * D + d
         tl.store(out_q_ptr + out_off, out.to(out_q_ptr.dtype.element_ty), mask=dmask)
@@ -149,43 +155,32 @@ if TRITON_AVAILABLE:
         kl = tl.load(k_lat_ptr + (b * S + s) * (Hkv * D) + kv * D + d, mask=dmask, other=0.0)
         kc = tl.load(k_conv_ptr + (b * S + s) * (Hkv * D) + kv * D + d, mask=dmask, other=0.0)
 
-        # reference: qk_mean_q[g] = ((q_lat[g]+k_lat[kv])*0.5).bf16  (per q-head)
-        #            qk_mean_k[kv] = mean_g qk_mean_q[g]  (torch mean: fp32 accum -> bf16)
-        klf = kl.to(tl.float32)
-        qkm_sum = tl.zeros((BLOCK_D,), dtype=tl.float32)
+        # fp32 from the load to the store (as _cca_q_fwd_kernel):
+        #   qk_mean_k[kv] = mean_g 0.5*(q_lat[g] + k_lat[kv]) = 0.5*(mean_g q_lat[g] + k_lat[kv])
+        # summed in _cca_k_bwd_kernel's order, so the backward recomputes this exact value.
+        qmean = tl.zeros((BLOCK_D,), dtype=tl.float32)
         for r in tl.static_range(N_REP):
             h = kv * N_REP + r
-            ql = tl.load(q_lat_ptr + (b * S + s) * (H * D) + h * D + d, mask=dmask, other=0.0)
-            qkm_g = (((ql.to(tl.float32) + klf) * 0.5).to(tl.bfloat16)).to(tl.float32)
-            qkm_sum += qkm_g
-        qkm_k = (qkm_sum / N_REP).to(tl.bfloat16)        # bf16 mean result
-        # a = (k_conv + qk_mean_k).bf16
-        a_bf = (kc + qkm_k).to(tl.bfloat16)
-        a = a_bf.to(tl.float32)
+            qmean += tl.load(q_lat_ptr + (b * S + s) * (H * D) + h * D + d,
+                             mask=dmask, other=0.0).to(tl.float32)
+        qmean = qmean / N_REP
+        a = kc.to(tl.float32) + 0.5 * (qmean + kl.to(tl.float32))
 
         ms = tl.sum(a * a, axis=0) / D
         inv = 1.0 / tl.sqrt(ms + EPS)
-        w = tl.load(wk_ptr + d, mask=dmask, other=0.0)             # bf16 like ref
-        n_bf = (a * inv).to(tl.bfloat16)
-        yw = (n_bf * w).to(tl.bfloat16)                            # bf16 (RMSNorm out)
-
-        # reference: k(bf16) * exp(temp).to(bf16)  -> bf16
-        temp = tl.load(temp_ptr + kv).to(tl.float32)
-        etemp = tl.exp(temp).to(tl.bfloat16)
-        y = (yw * etemp).to(tl.bfloat16)
+        w = tl.load(wk_ptr + d, mask=dmask, other=0.0).to(tl.float32)
+        etemp = tl.exp(tl.load(temp_ptr + kv).to(tl.float32))
+        y = a * inv * w * etemp
 
         do_rope = s < (S - n_skip_rope)
-        cos = tl.load(cos_ptr + s * D + d, mask=dmask, other=0.0).to(tl.bfloat16)
-        sin = tl.load(sin_ptr + s * D + d, mask=dmask, other=0.0).to(tl.bfloat16)
+        cos = tl.load(cos_ptr + s * D + d, mask=dmask, other=0.0).to(tl.float32)
+        sin = tl.load(sin_ptr + s * D + d, mask=dmask, other=0.0).to(tl.float32)
         half = D // 2
         is_lo = d < half
         partner = tl.where(is_lo, d + half, d - half)
-        yf = y.to(tl.float32)
-        y_part = tl.sum(tl.where(d[None, :] == partner[:, None], yf[None, :], 0.0), axis=1)
-        rot = tl.where(is_lo, -y_part, y_part).to(tl.bfloat16)
-        t1 = (y * cos).to(tl.bfloat16)
-        t2 = (rot * sin).to(tl.bfloat16)
-        out = tl.where(do_rope, (t1 + t2).to(tl.bfloat16), y)
+        y_part = tl.sum(tl.where(d[None, :] == partner[:, None], y[None, :], 0.0), axis=1)
+        rot = tl.where(is_lo, -y_part, y_part)
+        out = tl.where(do_rope, y * cos + rot * sin, y)
 
         outc = out.to(out_k_ptr.dtype.element_ty)
         for r in tl.static_range(N_REP):
@@ -599,8 +594,8 @@ class _FusedCCAPrologue(torch.autograd.Function):
 # and the inputs are read through their strides (the fused GEMM's slices and the conv's
 # transposed output need no `.contiguous()` copy).
 #
-# Arithmetic: op for op the kernels above (the forward rounds to bf16 where the reference
-# does; the backward is fp32 from a recomputed forward). The differences are reduction
+# Arithmetic: op for op the kernels above (fp32 throughout, one rounding at the store; the
+# backward is fp32 from a recomputed forward). The differences are reduction
 # orders only: the RMSNorm sums over D (a [BR, D] tile reduces in a different order than
 # a [D] vector), and the norm-weight / temp grads, summed per program and then over
 # programs instead of over (row, head). Not bit-identical; tests/test_cca_prologue_tiled.py
@@ -615,13 +610,10 @@ if TRITON_AVAILABLE:
         return ptr + (b * sb + s * ss)[:, None] + (col * sc)[None, :]
 
     @triton.jit
-    def _rope_bf16(y, y_p, cos, sin, is_lo, do_rope):
-        """_cca_q_fwd_kernel's RoPE on a tile: y, y_p (y at the rotated column) bf16."""
-        yp = y_p.to(tl.float32)
-        rot = tl.where(is_lo[None, :], -yp, yp).to(tl.bfloat16)
-        t1 = (y * cos).to(tl.bfloat16)
-        t2 = (rot * sin).to(tl.bfloat16)
-        return tl.where(do_rope[:, None], (t1 + t2).to(tl.bfloat16), y)
+    def _rope_f32(y, y_p, cos, sin, is_lo, do_rope):
+        """_cca_q_fwd_kernel's RoPE on a tile, fp32: y_p is y at the rotated column."""
+        rot = tl.where(is_lo[None, :], -y_p, y_p)
+        return tl.where(do_rope[:, None], y * cos + rot * sin, y)
 
     @triton.jit
     def _cca_rows_fwd_kernel(
@@ -647,61 +639,57 @@ if TRITON_AVAILABLE:
         dp = tl.where(is_lo, d + half, d - half)          # rotate_half partner column
         m2 = rmask[:, None]
         do_rope = s < (S - n_skip_rope)
-        cos = tl.load(cos_ptr + s[:, None] * D + d[None, :], mask=m2, other=0.0).to(tl.bfloat16)
-        sin = tl.load(sin_ptr + s[:, None] * D + d[None, :], mask=m2, other=0.0).to(tl.bfloat16)
-        wq = tl.load(wq_ptr + d)
-        wq_p = tl.load(wq_ptr + dp)
-        wk = tl.load(wk_ptr + d)
-        wk_p = tl.load(wk_ptr + dp)
+        cos = tl.load(cos_ptr + s[:, None] * D + d[None, :], mask=m2, other=0.0).to(tl.float32)
+        sin = tl.load(sin_ptr + s[:, None] * D + d[None, :], mask=m2, other=0.0).to(tl.float32)
+        wq = tl.load(wq_ptr + d).to(tl.float32)
+        wq_p = tl.load(wq_ptr + dp).to(tl.float32)
+        wk = tl.load(wk_ptr + d).to(tl.float32)
+        wk_p = tl.load(wk_ptr + dp).to(tl.float32)
         o_row = (b * H * S + s) * D                        # + h*S*D + d
 
+        # fp32 from the load to the store, one rounding at the store (module docstring,
+        # "Precision"); each value op for op as the per-(row, head) kernels compute it.
         for kv in tl.static_range(Hkv):
-            kl = tl.load(_rows_ptrs(kl_ptr, b, s, s_kl_b, s_kl_s, s_kl_c, kv * D + d),
-                         mask=m2, other=0.0)
-            kl_p = tl.load(_rows_ptrs(kl_ptr, b, s, s_kl_b, s_kl_s, s_kl_c, kv * D + dp),
-                           mask=m2, other=0.0)
-            klf = kl.to(tl.float32)
-            klf_p = kl_p.to(tl.float32)
-            qkm_sum = tl.zeros((BR, D), dtype=tl.float32)
-            qkm_sum_p = tl.zeros((BR, D), dtype=tl.float32)
+            klf = tl.load(_rows_ptrs(kl_ptr, b, s, s_kl_b, s_kl_s, s_kl_c, kv * D + d),
+                          mask=m2, other=0.0).to(tl.float32)
+            klf_p = tl.load(_rows_ptrs(kl_ptr, b, s, s_kl_b, s_kl_s, s_kl_c, kv * D + dp),
+                            mask=m2, other=0.0).to(tl.float32)
+            qmean = tl.zeros((BR, D), dtype=tl.float32)
+            qmean_p = tl.zeros((BR, D), dtype=tl.float32)
             for rr in tl.static_range(N_REP):
                 h = kv * N_REP + rr
                 ql = tl.load(_rows_ptrs(ql_ptr, b, s, s_ql_b, s_ql_s, s_ql_c, h * D + d),
-                             mask=m2, other=0.0)
+                             mask=m2, other=0.0).to(tl.float32)
                 ql_p = tl.load(_rows_ptrs(ql_ptr, b, s, s_ql_b, s_ql_s, s_ql_c, h * D + dp),
-                               mask=m2, other=0.0)
+                               mask=m2, other=0.0).to(tl.float32)
                 qc = tl.load(_rows_ptrs(qc_ptr, b, s, s_qc_b, s_qc_s, s_qc_c, h * D + d),
-                             mask=m2, other=0.0)
+                             mask=m2, other=0.0).to(tl.float32)
                 qc_p = tl.load(_rows_ptrs(qc_ptr, b, s, s_qc_b, s_qc_s, s_qc_c, h * D + dp),
-                               mask=m2, other=0.0)
+                               mask=m2, other=0.0).to(tl.float32)
                 # Q: _cca_q_fwd_kernel, per element
-                qkm = (((ql.to(tl.float32) + klf) * 0.5).to(tl.bfloat16))
-                qkm_p = (((ql_p.to(tl.float32) + klf_p) * 0.5).to(tl.bfloat16))
-                a = (qc + qkm).to(tl.bfloat16).to(tl.float32)
-                a_p = (qc_p + qkm_p).to(tl.bfloat16).to(tl.float32)
+                a = qc + 0.5 * (ql + klf)
+                a_p = qc_p + 0.5 * (ql_p + klf_p)
                 inv = 1.0 / tl.sqrt(tl.sum(a * a, axis=1) / D + EPS)
-                y = ((a * inv[:, None]).to(tl.bfloat16) * wq[None, :]).to(tl.bfloat16)
-                y_p = ((a_p * inv[:, None]).to(tl.bfloat16) * wq_p[None, :]).to(tl.bfloat16)
-                out = _rope_bf16(y, y_p, cos, sin, is_lo, do_rope)
+                y = a * inv[:, None] * wq[None, :]
+                y_p = a_p * inv[:, None] * wq_p[None, :]
+                out = _rope_f32(y, y_p, cos, sin, is_lo, do_rope)
                 tl.store(oq_ptr + o_row[:, None] + h * S * D + d[None, :],
                          out.to(oq_ptr.dtype.element_ty), mask=m2)
-                # K: the group mean of the bf16 qk-means (_cca_k_fwd_kernel)
-                qkm_sum += qkm.to(tl.float32)
-                qkm_sum_p += qkm_p.to(tl.float32)
+                # K: the group mean of q_lat (_cca_k_fwd_kernel)
+                qmean += ql
+                qmean_p += ql_p
 
             kc = tl.load(_rows_ptrs(kc_ptr, b, s, s_kc_b, s_kc_s, s_kc_c, kv * D + d),
-                         mask=m2, other=0.0)
+                         mask=m2, other=0.0).to(tl.float32)
             kc_p = tl.load(_rows_ptrs(kc_ptr, b, s, s_kc_b, s_kc_s, s_kc_c, kv * D + dp),
-                           mask=m2, other=0.0)
-            a = (kc + (qkm_sum / N_REP).to(tl.bfloat16)).to(tl.bfloat16).to(tl.float32)
-            a_p = (kc_p + (qkm_sum_p / N_REP).to(tl.bfloat16)).to(tl.bfloat16).to(tl.float32)
+                           mask=m2, other=0.0).to(tl.float32)
+            a = kc + 0.5 * (qmean / N_REP + klf)
+            a_p = kc_p + 0.5 * (qmean_p / N_REP + klf_p)
             inv = 1.0 / tl.sqrt(tl.sum(a * a, axis=1) / D + EPS)
-            etemp = tl.exp(tl.load(temp_ptr + kv).to(tl.float32)).to(tl.bfloat16)
-            yw = ((a * inv[:, None]).to(tl.bfloat16) * wk[None, :]).to(tl.bfloat16)
-            yw_p = ((a_p * inv[:, None]).to(tl.bfloat16) * wk_p[None, :]).to(tl.bfloat16)
-            y = (yw * etemp).to(tl.bfloat16)
-            y_p = (yw_p * etemp).to(tl.bfloat16)
-            outk = _rope_bf16(y, y_p, cos, sin, is_lo, do_rope).to(ok_ptr.dtype.element_ty)
+            etemp = tl.exp(tl.load(temp_ptr + kv).to(tl.float32))
+            y = a * inv[:, None] * wk[None, :] * etemp
+            y_p = a_p * inv[:, None] * wk_p[None, :] * etemp
+            outk = _rope_f32(y, y_p, cos, sin, is_lo, do_rope).to(ok_ptr.dtype.element_ty)
             # V: cat(v_curr, v_prev) column kv*D + d, GQA-broadcast like K
             ci = kv * D + d
             from_c = ci < VHALF
@@ -1056,8 +1044,9 @@ if __name__ == "__main__":
     print(f"  Device: {torch.cuda.get_device_name(0)}")
     print("=" * 100)
 
-    d_model, H, Hkv, comp = 768, 12, 4, 2
-    D = d_model // (comp * H)         # 32
+    d_model, H, Hkv, comp = 1024, 8, 4, 2   # base.yaml widths
+    D = d_model // (comp * H)         # 64
+    pdt = torch.float32               # params stay fp32 under training autocast
     n_rep = H // Hkv
     VHALF = Hkv * (D // 2)
     eps = 1e-6
@@ -1083,93 +1072,62 @@ if __name__ == "__main__":
             "k_conv": torch.randn(B, S, Hkv * D, device=dev, dtype=dt),
             "v_curr": torch.randn(B, S, VHALF, device=dev, dtype=dt),
             "v_prev": torch.randn(B, S, VHALF, device=dev, dtype=dt),
-            "q_norm_w": torch.randn(D, device=dev, dtype=dt).mul_(0.1).add_(1.0),
-            "k_norm_w": torch.randn(D, device=dev, dtype=dt).mul_(0.1).add_(1.0),
-            "temp":   torch.randn(Hkv, device=dev, dtype=dt).mul_(0.3),
+            "q_norm_w": torch.randn(D, device=dev, dtype=pdt).mul_(0.1).add_(1.0),
+            "k_norm_w": torch.randn(D, device=dev, dtype=pdt).mul_(0.1).add_(1.0),
+            "temp":   torch.randn(Hkv, device=dev, dtype=pdt).mul_(0.3),
         }
         return ins
 
     def clone_req(ins):
         return {k: v.detach().clone().requires_grad_(True) for k, v in ins.items()}
 
-    def run_case(B, S, n_skip,
-                 mean_tol=2e-3, max_tol=4e-2, cos_thresh=0.9999, gcos_thresh=0.995):
-        """Honest gates. NOTE on the max-err tolerance:
+    def _rel(x, ref):
+        x, ref = x.double(), ref.double()
+        return ((x - ref).norm() / ref.norm().clamp_min(1e-300)).item()
 
-        The bf16 reference itself differs from an fp32 ground-truth run of the SAME
-        reference by ~4e-2 at the few large-magnitude elements (bf16 ULP at |x|~2.5
-        is 0.0156, so a 2-3 ULP rounding-order difference = ~0.03-0.04). The asked-for
-        2e-2 MAX-error gate is therefore below the bf16 representation floor of this
-        computation and is unachievable by ANY bf16 implementation, not just this one
-        (verified: bf16-ref vs fp32-truth = 4.0e-2). We instead gate on the contracts
-        that actually matter and ARE meetable:
-          * MEAN abs err < 2e-3   (kernel is ~8e-4, i.e. sub-ULP on average)
-          * MAX abs err  < 4e-2   (the demonstrated bf16 noise floor)
-          * fwd cosine    > 0.9999 (direction is essentially exact)
-          * grad cosine   > 0.995  for ALL kernel inputs
-        The fp32-truth comparison is also printed so the reader can see the kernel is
-        as close to truth as the reference is.
-        """
+    def run_case(B, S, n_skip, floor_slack=1.05, grad_slack=1.02):
+        """Gates against float64 truth (cca_prologue_reference on fp64 copies of the same
+        inputs), NOT against the bf16 reference: that reference rounds every bf16 op and is
+        the less exact path (module docstring, "Precision").
+          * forward: q / k / v relative L2 error <= floor_slack x the one-rounding floor
+            (the fp64 truth rounded once to bf16);
+          * backward: every input grad's relative L2 error <= grad_slack x the bf16
+            reference's own error.
+        The same tests/test_cca_prologue_precision.py holds for the training layouts."""
         ins = make_inputs(B, S)
-        a = clone_req(ins)   # fused
-        r = clone_req(ins)   # bf16 reference
+        a = clone_req(ins)                                               # kernel
+        r = clone_req(ins)                                               # bf16 reference
+        t = {k: v.detach().double().requires_grad_(True) for k, v in ins.items()}   # truth
+        outs = {
+            "kernel": fused_cca_prologue(*(a[n] for n in INPUT_NAMES), COS, SIN,
+                                         H, Hkv, D, n_skip, eps),
+            "bf16ref": cca_prologue_reference(*(r[n] for n in INPUT_NAMES), COS, SIN,
+                                              H, Hkv, D, n_skip, eps),
+            "fp64": cca_prologue_reference(*(t[n] for n in INPUT_NAMES), COS.double(),
+                                           SIN.double(), H, Hkv, D, n_skip, eps),
+        }
+        # One upstream grad, bf16-representable, so all three paths see the same values.
+        gos = [torch.randn(o.shape, device=dev, dtype=dt) for o in outs["fp64"]]
+        for name in outs:
+            torch.autograd.backward(list(outs[name]),
+                                    [g.to(o.dtype) for g, o in zip(gos, outs[name])])
 
-        qf, kf, vf = fused_cca_prologue(
-            a["q_lat"], a["k_lat"], a["q_conv"], a["k_conv"], a["v_curr"], a["v_prev"],
-            a["q_norm_w"], a["k_norm_w"], a["temp"], COS, SIN,
-            H, Hkv, D, n_skip, eps,
-        )
-        qr, kr, vr = cca_prologue_reference(
-            r["q_lat"], r["k_lat"], r["q_conv"], r["k_conv"], r["v_curr"], r["v_prev"],
-            r["q_norm_w"], r["k_norm_w"], r["temp"], COS, SIN,
-            H, Hkv, D, n_skip, eps,
-        )
-
-        # fp32 ground-truth of the reference (same math, fp32 inputs)
-        r32 = {k: (v.detach().float() if v.dtype == dt else v.detach()) for k, v in ins.items()}
-        qt, kt, vt = cca_prologue_reference(
-            r32["q_lat"], r32["k_lat"], r32["q_conv"], r32["k_conv"], r32["v_curr"], r32["v_prev"],
-            r32["q_norm_w"], r32["k_norm_w"], r32["temp"], COS, SIN,
-            H, Hkv, D, n_skip, eps,
-        )
-
-        def stats(f, r):
-            e = (f.float() - r.float()).abs()
-            return e.max().item(), e.mean().item(), F.cosine_similarity(
-                f.reshape(-1).float(), r.reshape(-1).float(), dim=0).item()
-
-        emax = emean = 0.0
-        cos_min = 1.0
-        for f, rr in [(qf, qr), (kf, kr), (vf, vr)]:
-            mx, mn, cs = stats(f, rr)
-            emax = max(emax, mx); emean = max(emean, mn); cos_min = min(cos_min, cs)
-        # kernel-vs-truth and ref-vs-truth (for context)
-        kvt = max(stats(qf, qt)[0], stats(kf, kt)[0], stats(vf, vt)[0])
-        rvt = max(stats(qr, qt)[0], stats(kr, kt)[0], stats(vr, vt)[0])
-
-        go_q = torch.randn_like(qf); go_k = torch.randn_like(kf); go_v = torch.randn_like(vf)
-        (qf.float() * go_q.float()).sum().add_((kf.float() * go_k.float()).sum()).add_(
-            (vf.float() * go_v.float()).sum()).backward()
-        (qr.float() * go_q.float()).sum().add_((kr.float() * go_k.float()).sum()).add_(
-            (vr.float() * go_v.float()).sum()).backward()
-
-        cosines = {}
-        worst = 1.0
-        for name in INPUT_NAMES:
-            ga = a[name].grad.reshape(-1).float()
-            gr = r[name].grad.reshape(-1).float()
-            c = F.cosine_similarity(ga, gr, dim=0).item()
-            cosines[name] = c
-            worst = min(worst, c)
-
-        fwd_ok = (emean < mean_tol) and (emax < max_tol) and (cos_min > cos_thresh)
-        bwd_ok = worst > gcos_thresh
+        fwd_ok, cells = True, []
+        for i, on in enumerate("qkv"):
+            truth = outs["fp64"][i]
+            floor = _rel(truth.to(dt), truth)
+            ek, er = _rel(outs["kernel"][i], truth), _rel(outs["bf16ref"][i], truth)
+            fwd_ok &= ek <= floor_slack * floor
+            cells.append(f"{on} {ek:.2e}/{er:.2e}/{floor:.2e}")
+        bwd_ok, gcells = True, []
+        for n in INPUT_NAMES:
+            ek, er = _rel(a[n].grad, t[n].grad), _rel(r[n].grad, t[n].grad)
+            bwd_ok &= ek <= grad_slack * er + 1e-7
+            gcells.append(f"{n}={ek:.1e}/{er:.1e}")
         status = "PASS" if (fwd_ok and bwd_ok) else "FAIL"
-        cs = "  ".join(f"{n}={cosines[n]:.4f}" for n in INPUT_NAMES)
-        print(f"  [{status}] B={B} S={S:<5} n_skip={n_skip}  "
-              f"fwd_max={emax:.2e} fwd_mean={emean:.2e} fwd_cos={cos_min:.6f} | worst_gcos={worst:.4f}")
-        print(f"           vs-fp32-truth: kernel={kvt:.2e}  bf16ref={rvt:.2e}  (kernel <= ref means as-correct-as-ref)")
-        print(f"           grad cosines: {cs}")
+        print(f"  [{status}] B={B} S={S:<5} n_skip={n_skip}  fwd rel err kernel/bf16ref/floor: "
+              + "  ".join(cells))
+        print(f"           grad rel err kernel/bf16ref: {'  '.join(gcells)}")
         return fwd_ok and bwd_ok
 
     print("\n[Correctness — forward + backward across dim sweep]")
@@ -1237,55 +1195,49 @@ if __name__ == "__main__":
     print(f"\n  [fwd-only] eager: {t_ef:.3f} ms  fused: {t_ff:.3f} ms  speedup: {t_ef / t_ff:.2f}x")
 
     # =====================================================================
-    # End-to-end vs the REAL _CCABase._cca_project (production contract).
-    # The kernel is fed the eager pre-region outputs (prologue_inputs) and its
-    # output is compared to the real module's q,k,v. This is what actually ships.
+    # End-to-end: the REAL _CCABase._cca_project under bf16 autocast (what ships). Its
+    # prologue inputs are captured at the fused_cca_prologue call and scored in float64.
     # =====================================================================
-    print("\n[End-to-end vs real _CCABase._cca_project]")
-    e2e_ok = True
-    try:
-        from morph.model.attention import _CCABase
-        from ignore.p1_prologue_harness import prologue_inputs
+    print("\n[End-to-end: real _CCABase._cca_project, bf16 autocast]")
+    import morph.model.attention as _attn
+    from morph.model.attention import _CCABase
 
+    e2e_ok = True
+    captured = {}
+    _real_prologue = _attn.fused_cca_prologue
+
+    def _capture(*args, **kw):
+        captured["args"], captured["kw"] = args, kw
+        return _real_prologue(*args, **kw)
+
+    _attn.fused_cca_prologue = _capture
+    try:
         for S in (512, 1024, 2048):
-            cca = _CCABase(d_model=768, n_heads=12, n_kv_heads=4, compression=2,
+            cca = _CCABase(d_model=d_model, n_heads=H, n_kv_heads=Hkv, compression=comp,
                            max_seq_len=8192, context_len=4096, window_size=128,
                            init_alpha=0.1, conv_kernel=4).to(dev)
             with torch.no_grad():
                 cca.temp.normal_(0, 0.3)
                 cca.q_norm.weight.normal_(1.0, 0.1)
                 cca.k_norm.weight.normal_(1.0, 0.1)
-            x = torch.randn(2, S, 768, device=dev, dtype=dt)
-            with torch.autocast("cuda", dtype=dt):
-                qr, kr, vr = cca._cca_project(x, 0)
-                ql, kl, qc, kc, vc, vp = prologue_inputs(cca, x)
-                qf, kf, vf = fused_cca_prologue(
-                    ql, kl, qc, kc, vc, vp,
-                    cca.q_norm.weight, cca.k_norm.weight, cca.temp,
-                    cca.rope.cos_cached, cca.rope.sin_cached,
-                    cca.n_heads, cca.n_kv_heads, cca.d_head, 0, cca.q_norm.eps,
-                )
-            emax = max((qf.float() - qr.float()).abs().max().item(),
-                       (kf.float() - kr.float()).abs().max().item(),
-                       (vf.float() - vr.float()).abs().max().item())
-            emean = max((qf.float() - qr.float()).abs().mean().item(),
-                        (kf.float() - kr.float()).abs().mean().item(),
-                        (vf.float() - vr.float()).abs().mean().item())
-            cmin = min(
-                F.cosine_similarity(qf.reshape(-1).float(), qr.reshape(-1).float(), 0).item(),
-                F.cosine_similarity(kf.reshape(-1).float(), kr.reshape(-1).float(), 0).item(),
-                F.cosine_similarity(vf.reshape(-1).float(), vr.reshape(-1).float(), 0).item())
-            # Gate vs the real module's OWN intrinsic bf16 noise floor, measured
-            # (real-module vs fp32-truth): mean 2.0-2.4e-3, max 2.3-4.0e-2 over
-            # S=512..2048. The kernel cannot beat that floor (it's the dtype, not
-            # the impl). We allow ~1.5x headroom on mean and a 5e-2 max ceiling.
-            ok = (emean < 3.5e-3) and (emax < 5e-2) and (cmin > 0.9999)
+            x = torch.randn(2, S, d_model, device=dev, dtype=dt)
+            with torch.no_grad(), torch.autocast("cuda", dtype=dt):
+                got = cca._cca_project(x, 0)
+            args, kw = captured["args"], captured["kw"]
+            a64 = [v.double() if torch.is_tensor(v) else v for v in args]
+            with torch.no_grad():
+                truth = cca_prologue_reference(*a64[:14], kw.get("n_skip_rope", 0),
+                                               kw.get("eps", 1e-6))
+            cells, ok = [], True
+            for on, o, tr in zip("qkv", got, truth):
+                floor = _rel(tr.to(o.dtype), tr)
+                e = _rel(o, tr)
+                ok &= e <= 1.05 * floor
+                cells.append(f"{on} {e:.2e} (floor {floor:.2e}, {str(o.dtype)[6:]})")
             e2e_ok &= ok
-            print(f"  [{'PASS' if ok else 'FAIL'}] S={S:<5} real_cca: "
-                  f"max={emax:.2e} mean={emean:.2e} cos={cmin:.6f}")
-    except Exception as ex:  # surface, don't swallow
-        e2e_ok = False
-        print(f"  [FAIL] end-to-end raised: {type(ex).__name__}: {ex}")
+            print(f"  [{'PASS' if ok else 'FAIL'}] S={S:<5} " + "  ".join(cells))
+    finally:
+        _attn.fused_cca_prologue = _real_prologue
 
     all_ok &= e2e_ok
 
