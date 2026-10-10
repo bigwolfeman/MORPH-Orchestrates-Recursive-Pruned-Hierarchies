@@ -30,6 +30,11 @@ _LAUNCH = dict(num_stages=1, num_warps=4)
 _dummy_cache: dict = {}
 
 
+def _is_pow2(n: int) -> bool:
+    """tl.arange extents must be powers of two; the wrappers check their shapes with it."""
+    return n >= 1 and (n & (n - 1)) == 0
+
+
 def _dummy_idx(dev) -> Tensor:
     """Persistent dummy top-idx for the HCA branch (avoids a per-call fill kernel)."""
     t = _dummy_cache.get(dev)
@@ -78,9 +83,15 @@ def _decode_attn_kernel(
     wm = tl.load(WMASK + b * swm_b + offs_w)                            # per-stream mask row
     s_win = tl.where(wm != 0, s_win, float("-inf"))
     m_w = tl.max(s_win, 0)
+    # Empty window (p == 0, only reachable from StaticDecodeEngine.reset): every key is
+    # masked, m_w = -inf and exp(-inf - -inf) is NaN. The eager _window_step returns 0
+    # there. Shift by 0 instead so every p_w is exp(-inf) = 0 and the branch is 0. With
+    # >= 1 valid key m_w is finite and this is the old arithmetic, bit for bit.
+    m_w = tl.where(m_w == float("-inf"), 0.0, m_w)
     p_w = tl.exp(s_win - m_w)
     vw = tl.load(WV + b * sk_b + h * sk_h + slot[:, None] * sk_w + offs_d[None, :])
-    ow = tl.sum(p_w[:, None] * vw, 0) / tl.sum(p_w, 0)                  # [D]
+    den_w = tl.sum(p_w, 0)
+    ow = tl.sum(p_w[:, None] * vw, 0) / tl.where(den_w > 0.0, den_w, 1.0)   # [D]
 
     # ── compressed branch: HCA dense blocks / CSA gathered top-k, with sink ──
     offs_n = tl.arange(0, NB)
@@ -213,7 +224,8 @@ def csa_select(q_i: Tensor, k_i: Tensor, cnt: Tensor, scratch: Tensor, k: int) -
     Returns top-k indices [B,k] int64 — exact torch.topk(value desc, index asc) order."""
     B, NB, DI = k_i.shape
     out = torch.empty(B, k, device=q_i.device, dtype=torch.long)
-    BN = 128                                    # 8 CTAs + w8: 1.67 -> 1.06 µs measured
+    BN = min(128, NB)                           # 8 CTAs + w8: 1.67 -> 1.06 µs measured
+    assert NB % BN == 0 and _is_pow2(NB) and _is_pow2(DI), (NB, DI)
     _csa_scores_kernel[(NB // BN, B)](
         q_i, k_i, cnt, scratch, DI=DI, BN=BN,
         sq_b=q_i.stride(0), sk_b=k_i.stride(0), sk_n=k_i.stride(1),
@@ -671,6 +683,7 @@ def _front_post_kernel(
     H: tl.constexpr, HKV: tl.constexpr, NREP: tl.constexpr,
     D: tl.constexpr, HD2: tl.constexpr,
     LQ: tl.constexpr, LK: tl.constexpr, VH: tl.constexpr, GH: tl.constexpr,
+    DI: tl.constexpr,
     KC: tl.constexpr, KS: tl.constexpr, OP: tl.constexpr,
     IS_CSA: tl.constexpr, WWIN: tl.constexpr, NU: tl.constexpr,
     sq_b, sq_h, sk_b, sk_h, sk_w, sxr_b, sgh_b, sqi_b, scos_b,
@@ -747,12 +760,13 @@ def _front_post_kernel(
             tl.store(wvb + offs_h, v_lo)
             tl.store(wvb + HD2 + offs_h, v_hi)
     else:
-        # gate hidden (GH) + CSA indexer query (DI=D), 256-col chunks per unit
-        # (row6 partial sums). One unit at GH<=224 (the 276M shape — identical math);
-        # ceil((GH+D)/256) units at larger gate widths (e.g. d=8192 → GH=2048).
+        # gate hidden (GH) + CSA indexer query (DI = d_indexer, its OWN width: the 276M
+        # stack had DI == D, the 265M plain panel model has DI 32 against D 64), 256-col
+        # chunks per unit (row6 partial sums). One unit at GH+DI<=256 (the 276M shape —
+        # identical math); ceil((GH+DI)/256) units at larger widths (d=8192 → GH=2048).
         tc = u - (H + HKV)
         cols = tc * 256 + tl.arange(0, 256)
-        ncols = GH + D if IS_CSA else GH
+        ncols = GH + DI if IS_CSA else GH
         mc = cols < ncols
         base = LQ + LK + 2 * VH
         a = tl.load(pb + 0 * (7 * OP) + 6 * OP + base + cols, mask=mc, other=0.0)
@@ -761,7 +775,7 @@ def _front_post_kernel(
         tl.store(GATEH + b * sgh_b + cols, a, mask=cols < GH)
         if IS_CSA:
             tl.store(QI + b * sqi_b + (cols - GH), a,
-                     mask=(cols >= GH) & (cols < GH + D))
+                     mask=(cols >= GH) & (cols < GH + DI))
 
 
 def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
@@ -780,9 +794,10 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
       B) _front_post_kernel — partial combine + conv/qk-mean/RMS/temp/RoPE/v-assembly,
          window staging + XRES/GATEH/QI stores (scratch is L2-hot).
     x_hist [B,Wx,d] RING buffer (x_off [7] int32 = ring rows of positions p-6..p;
-    pos_dev [1] int64 = p, staging slot p%WWIN); wqkv [LQ+LK+2VH+GH(+D), d] contiguous —
+    pos_dev [1] int64 = p, staging slot p%WWIN); wqkv [LQ+LK+2VH+GH(+DI), d] contiguous —
     fp32/bf16 weights, or int8 codes with wqkv_scale [O] fp32 per-row scales
-    (Int8RowLinear deploy stacks)."""
+    (Int8RowLinear deploy stacks). qi [B, DI] (CSA sites): the indexer query, DI =
+    d_indexer read from qi's width (need not equal d_head)."""
     B = x_hist.shape[0]
     is_csa = qi is not None
     O, KDIM = wqkv.shape
@@ -815,20 +830,27 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
         sx_b=x_hist.stride(0), sx_r=x_hist.stride(1), sxoff_b=x_off.stride(0),
         num_stages=3 if has_sc else 1, num_warps=4 if has_sc else 8,
     )
-    ntail = triton.cdiv(gh + (d_head if is_csa else 0), 256)
+    # q_I width = the indexer's own width (qi [B, DI]); the Wqkv stack's last DI rows.
+    d_idx = int(qi.shape[1]) if is_csa else 0
+    assert O == lq + lk + 2 * vh + gh + d_idx, (
+        f"Wqkv rows {O} != LQ+LK+2VH+GH+DI = {lq}+{lk}+2*{vh}+{gh}+{d_idx}")
+    ntail = triton.cdiv(gh + d_idx, 256)
     NU = n_heads + n_kv + ntail
     _front_post_kernel[(B * NU,)](
         part, cos, sin, wdwq, wgpq, wdwk, wgpk, qnw, knw, etemp,
         q_out, win_k, win_v, xres, gateh, qi if is_csa else gateh, pos_dev, eps,
         H=n_heads, HKV=n_kv, NREP=n_heads // n_kv, D=d_head, HD2=d_head // 2,
-        LQ=lq, LK=lk, VH=vh, GH=gh, KC=k_conv, KS=KS, OP=OP,
+        LQ=lq, LK=lk, VH=vh, GH=gh, DI=d_idx, KC=k_conv, KS=KS, OP=OP,
         IS_CSA=is_csa, WWIN=win_k.shape[2], NU=NU,
         sq_b=q_out.stride(0), sq_h=q_out.stride(1),
         sk_b=win_k.stride(0), sk_h=win_k.stride(1), sk_w=win_k.stride(2),
         sxr_b=xres.stride(0), sgh_b=gateh.stride(0),
         sqi_b=qi.stride(0) if is_csa else gateh.stride(0),
         scos_b=cos.stride(0) if cos.dim() > 1 else 0,
-        num_stages=1, num_warps=1,
+        # w1 = the validated 276M launch (d_head 32). At d_head 64 the per-head conv tile
+        # is [64, 64] x 4 taps: w2 measured 7.7 vs 11.1 us/call on the 265M plain model
+        # (w4 63 us, w8 9.9 us; lab microbench 2026-10-10). Reduction order only.
+        num_stages=1, num_warps=1 if d_head <= 32 else 2,
     )
 
 
@@ -836,72 +858,78 @@ def decode_front(x_hist: Tensor, x_off: Tensor, pos_dev: Tensor,
 # csa_emit — fused CSA block emission (GatedPoolCompressor + comp_norm + indexer)
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# The eager emit path (every csa_m=4 tokens, 21 sites) was ~20 kernels/site
+# The eager emit path (every csa_m tokens, every CSA site) was ~20 kernels/site
 # (6 cuBLAS GEMMs + pad/cat/softmax/mul/sum/norm glue) ≈ +1.2 ms on emit tokens.
 # Two launches per site instead:
-#   E1 — six [4,768]→[4,32] GEMVs (aKV/aZ on x[4:8], bKV/bZ on x[0:4], iKV/iZ on
-#        x[4:8]) into a [6,4,32] scratch; stacked weight tensor, front_gemm pattern.
-#   E2 — one CTA: +B_a/+B_b bias, joint 8-way softmax (max-subtract like torch),
-#        gated pooling, comp_norm RMS → C_comp[idx]; indexer 4-way softmax pooling
-#        → K_I[idx] (idx read from the device CNT counter).
-# Mirrors GatedPoolCompressor.forward for the LAST block at pos≥8 (stream B = real
-# tokens, no -inf pad). fp32 throughout; deviation = reduction order, gated.
+#   E1 — six [M, d] → [M, width] GEMVs (aKV/aZ on the current block x[M:2M], bKV/bZ on
+#        the previous block x[0:M], iKV/iZ on x[M:2M]) into a [KS, M, R] scratch,
+#        R = 4·C + 2·CI rows of the stacked weight (C = compressor width = d_head,
+#        CI = indexer compressor width = d_indexer), 32-row tiles, front_gemm pattern.
+#   E2 — one CTA per stream: +B_a/+B_b bias, joint 2M-way softmax (max-subtract like
+#        torch), gated pooling, comp_norm RMS → C_comp[idx]; indexer M-way softmax
+#        pooling → K_I[idx] (idx read from the device CNT counter).
+# Widths, M and the two streams' sizes are READ FROM THE WEIGHTS (b_a [M, C], b_ia
+# [M, CI]): the 276M stack is M=4, C=CI=32; the 265M plain panel model is M=8, C=64,
+# CI=32. Mirrors GatedPoolCompressor.forward for the LAST block: stream B = the previous
+# block's real tokens, EXCEPT the first block (CNT == 0), whose B stream is -inf gated
+# exactly as the eager F.pad(value=-inf) does (reached only from StaticDecodeEngine.reset;
+# a conversion from an eager cache starts at pos >= 2M, past block 0). fp32 throughout;
+# the pooling divides before it sums, the eager order ((S·C).sum); deviation = reduction
+# tree order only, gated by the token match.
 
 
 @triton.jit
 def _csa_emit_gemm_kernel(X, XOFF, WEMIT, SCR,
                           KDIM: tl.constexpr, BK: tl.constexpr, KS: tl.constexpr,
-                          M: tl.constexpr, NUNIT: tl.constexpr,
+                          M: tl.constexpr, R: tl.constexpr, NT: tl.constexpr,
+                          PREV_LO: tl.constexpr, PREV_HI: tl.constexpr,
                           sx_b, sx_r, sxoff_b):
     pid = tl.program_id(0)
-    NU: tl.constexpr = NUNIT * KS
+    NU: tl.constexpr = NT * KS
     b = pid // NU
-    u = (pid % NU) // KS
+    t = (pid % NU) // KS
     s = (pid % NU) % KS
     offs = tl.arange(0, 32)
     offs_k = tl.arange(0, BK)
+    offs_m = tl.arange(0, M)
     KCH: tl.constexpr = KDIM // KS
-    # units 0,1 (aKV,aZ) and 4,5 (iKV,iZ) read rows M..2M-1; units 2,3 rows 0..M-1.
-    # X is a RING (+ staging row); XOFF [B,2M] int32 = per-stream ring rows of
-    # positions p[b]-7..p[b] (mixed-length: each stream's emit window from its OWN pos).
-    roff = tl.where((u == 2) | (u == 3), 0, M)
+    r0 = t * 32
+    # rows [PREV_LO, PREV_HI) = bKV|bZ read the previous block (window rows 0..M-1);
+    # every other tile (aKV|aZ, iKV|iZ) reads the current block (rows M..2M-1).
+    # X is a RING (+ staging row); XOFF [B, 2M] int32 = per-stream ring rows of
+    # positions p[b]-2M+1..p[b] (mixed-length: each stream's window from its OWN pos).
+    roff = tl.where((r0 >= PREV_LO) & (r0 < PREV_HI), 0, M)
     xb = X + b * sx_b
-    xoff_b = XOFF + b * sxoff_b
-    e0 = tl.load(xoff_b + roff + 0); e1 = tl.load(xoff_b + roff + 1)
-    e2 = tl.load(xoff_b + roff + 2); e3 = tl.load(xoff_b + roff + 3)
-    p0 = tl.zeros((32, BK), tl.float32); p1 = tl.zeros((32, BK), tl.float32)
-    p2 = tl.zeros((32, BK), tl.float32); p3 = tl.zeros((32, BK), tl.float32)
+    xrow = tl.load(XOFF + b * sxoff_b + roff + offs_m)                 # [M] ring rows
+    acc = tl.zeros((M, 32, BK), tl.float32)
     for k0 in range(s * KCH, (s + 1) * KCH, BK):
         kk = k0 + offs_k
-        w = tl.load(WEMIT + (u * 32 + offs)[:, None] * KDIM + kk[None, :])
-        p0 += w * tl.load(xb + e0 * sx_r + kk)[None, :]
-        p1 += w * tl.load(xb + e1 * sx_r + kk)[None, :]
-        p2 += w * tl.load(xb + e2 * sx_r + kk)[None, :]
-        p3 += w * tl.load(xb + e3 * sx_r + kk)[None, :]
-    sb = SCR + b * (KS * NUNIT * 4 * 32) + s * (NUNIT * 4 * 32) + u * (4 * 32)
-    tl.store(sb + 0 * 32 + offs, tl.sum(p0, 1))
-    tl.store(sb + 1 * 32 + offs, tl.sum(p1, 1))
-    tl.store(sb + 2 * 32 + offs, tl.sum(p2, 1))
-    tl.store(sb + 3 * 32 + offs, tl.sum(p3, 1))
+        w = tl.load(WEMIT + (r0 + offs)[:, None] * KDIM + kk[None, :]).to(tl.float32)
+        xv = tl.load(xb + xrow[:, None] * sx_r + kk[None, :]).to(tl.float32)   # [M, BK]
+        acc += w[None, :, :] * xv[:, None, :]
+    part = tl.sum(acc, 2)                                               # [M, 32]
+    sb = SCR + b * (KS * M * R) + s * (M * R)
+    tl.store(sb + offs_m[:, None] * R + (r0 + offs)[None, :], part)
 
 
 @triton.jit
-def _emit_unit(SCR, b, u: tl.constexpr, KS: tl.constexpr, NUNIT: tl.constexpr):
-    """Sum the K-split partials (fixed order) for emit unit u: a [4,32] tile."""
-    offs = tl.arange(0, 32)
-    r4 = tl.arange(0, 4)
-    a = tl.load(SCR + b * (KS * NUNIT * 128) + u * 128
-                + r4[:, None] * 32 + offs[None, :])
+def _emit_unit(SCR, b, col0: tl.constexpr, W: tl.constexpr, M: tl.constexpr,
+               R: tl.constexpr, KS: tl.constexpr):
+    """Sum the K-split partials (fixed order) for scratch columns col0..col0+W: [M, W]."""
+    offs = tl.arange(0, W)
+    rm = tl.arange(0, M)
+    base = SCR + b * (KS * M * R) + rm[:, None] * R + col0 + offs[None, :]
+    a = tl.load(base)
     for s in tl.static_range(1, KS):
-        a += tl.load(SCR + b * (KS * NUNIT * 128) + s * (NUNIT * 128) + u * 128
-                     + r4[:, None] * 32 + offs[None, :])
+        a += tl.load(base + s * (M * R))
     return a
 
 
 @triton.jit
 def _csa_emit_combine_kernel(SCR, BA, BB, BIA, CNW, CC, KI, CNT, EMASK,
                              eps,
-                             KS: tl.constexpr, NUNIT: tl.constexpr,
+                             KS: tl.constexpr, M: tl.constexpr, C: tl.constexpr,
+                             CI: tl.constexpr, R: tl.constexpr,
                              HAS_MASK: tl.constexpr,
                              sc_b, sc_n, ski_b, ski_n):
     b = tl.program_id(0)
@@ -914,58 +942,84 @@ def _csa_emit_combine_kernel(SCR, BA, BB, BIA, CNW, CC, KI, CNT, EMASK,
         em = tl.load(EMASK + b)
         if em == 0:
             return
-    offs = tl.arange(0, 32)
-    r4 = tl.arange(0, 4)
+    offs = tl.arange(0, C)
+    rm = tl.arange(0, M)
+    idx = tl.load(CNT + b)                       # per-stream next-block index
 
-    c_a = _emit_unit(SCR, b, 0, KS, NUNIT)
-    z_a = _emit_unit(SCR, b, 1, KS, NUNIT) + tl.load(BA + r4[:, None] * 32 + offs[None, :])
-    c_b = _emit_unit(SCR, b, 2, KS, NUNIT)
-    z_b = _emit_unit(SCR, b, 3, KS, NUNIT) + tl.load(BB + r4[:, None] * 32 + offs[None, :])
-    # joint softmax over the 8 rows (per feature c): max-subtract like torch.softmax
-    mx = tl.maximum(tl.max(z_a, 0), tl.max(z_b, 0))                       # [32]
+    c_a = _emit_unit(SCR, b, 0, C, M, R, KS)
+    z_a = _emit_unit(SCR, b, C, C, M, R, KS) + tl.load(BA + rm[:, None] * C + offs[None, :])
+    c_b = _emit_unit(SCR, b, 2 * C, C, M, R, KS)
+    z_b = _emit_unit(SCR, b, 3 * C, C, M, R, KS) + tl.load(BB + rm[:, None] * C
+                                                          + offs[None, :])
+    # first block (idx 0): no previous block — the eager F.pad gives its B stream -inf
+    # gates (weight exactly 0) and zero values.
+    z_b = tl.where(idx == 0, float("-inf"), z_b)
+    # joint softmax over the 2M rows (per feature c): max-subtract like torch.softmax
+    mx = tl.maximum(tl.max(z_a, 0), tl.max(z_b, 0))                       # [C]
     ea = tl.exp(z_a - mx[None, :])
     eb = tl.exp(z_b - mx[None, :])
     den = tl.sum(ea, 0) + tl.sum(eb, 0)
-    out = (tl.sum(ea * c_a, 0) + tl.sum(eb * c_b, 0)) / den               # [32]
-    # comp_norm (RMSNorm over c=32)
-    rms = 1.0 / tl.sqrt(tl.sum(out * out, 0) / 32 + eps)
+    sa = ea / den[None, :]
+    sbw = eb / den[None, :]
+    pb = tl.where(idx == 0, 0.0, sbw * c_b)
+    out = tl.sum(sa * c_a, 0) + tl.sum(pb, 0)                             # [C]
+    # comp_norm (RMSNorm over C)
+    rms = 1.0 / tl.sqrt(tl.sum(out * out, 0) / C + eps)
     out = (out * rms) * tl.load(CNW + offs)
-    idx = tl.load(CNT + b)                       # per-stream next-block index
     tl.store(CC + b * sc_b + idx * sc_n + offs, out)
 
-    # indexer: single-stream softmax over m=4 rows
-    c_i = _emit_unit(SCR, b, 4, KS, NUNIT)
-    z_i = _emit_unit(SCR, b, 5, KS, NUNIT) + tl.load(BIA + r4[:, None] * 32 + offs[None, :])
+    # indexer: single-stream softmax over the M rows of the current block, width CI
+    offs_i = tl.arange(0, CI)
+    c_i = _emit_unit(SCR, b, 4 * C, CI, M, R, KS)
+    z_i = _emit_unit(SCR, b, 4 * C + CI, CI, M, R, KS) + tl.load(
+        BIA + rm[:, None] * CI + offs_i[None, :])
     mi = tl.max(z_i, 0)
     ei = tl.exp(z_i - mi[None, :])
-    ki = tl.sum(ei * c_i, 0) / tl.sum(ei, 0)
-    tl.store(KI + b * ski_b + idx * ski_n + offs, ki)
+    wi = ei / tl.sum(ei, 0)[None, :]
+    ki = tl.sum(wi * c_i, 0)
+    tl.store(KI + b * ski_b + idx * ski_n + offs_i, ki)
 
 
 def csa_emit(x_hist: Tensor, x_off: Tensor, w_emit: Tensor, b_a: Tensor, b_b: Tensor,
              b_ia: Tensor, cn_w: Tensor, cn_eps: float, c_comp: Tensor, k_i: Tensor,
              cnt: Tensor, scratch: Tensor, emit_mask: Tensor | None = None) -> None:
-    """x_hist [B, Wx, d] RING (x_off [B, 8] int32 = per-stream ring rows of positions
-    p[b]-7..p[b], tokens of blocks j-1 | j). Writes C_comp[b, cnt[b]] (comp_norm'd
-    gated pool) and K_I[b, cnt[b]] (indexer pool). cnt [B] int64 = pos[b]//csa_m.
-    emit_mask [B] int32 (mixed-length): stream b writes iff emit_mask[b]!=0 — a stream
-    not completing a block this token leaves its C_comp/K_I untouched. None ⇒ every
-    stream emits (the equal-length / B=1 emit step, byte-identical to the old kernel).
-    w_emit [6*32, d] = cat[aKV,aZ,bKV,bZ,iKV,iZ]; scratch [B, KS, 6, 4, 32] fp32."""
+    """x_hist [B, Wx, d] RING (x_off [B, 2M] int32 = per-stream ring rows of positions
+    p[b]-2M+1..p[b], tokens of blocks j-1 | j). Writes C_comp[b, cnt[b]] (comp_norm'd
+    gated pool, width C) and K_I[b, cnt[b]] (indexer pool, width CI). cnt [B] int64 =
+    pos[b]//M. emit_mask [B] int32 (mixed-length): stream b writes iff emit_mask[b]!=0 —
+    a stream not completing a block this token leaves its C_comp/K_I untouched. None ⇒
+    every stream emits (the equal-length / B=1 emit step).
+    w_emit [4C+2CI, d] = cat[aKV,aZ,bKV,bZ,iKV,iZ]; b_a/b_b [M, C]; b_ia [M, CI];
+    scratch [B, KS, M, 4C+2CI] fp32."""
     B = x_hist.shape[0]
     KDIM = x_hist.shape[-1]
+    M, C = b_a.shape
+    CI = b_ia.shape[1]
+    R = 4 * C + 2 * CI
     KS = scratch.shape[1]
-    _csa_emit_gemm_kernel[(B * 6 * KS,)](
-        x_hist, x_off, w_emit, scratch, KDIM=KDIM, BK=64, KS=KS, M=4, NUNIT=6,
+    assert tuple(scratch.shape) == (B, KS, M, R), (tuple(scratch.shape), (B, KS, M, R))
+    assert w_emit.shape == (R, KDIM) and w_emit.is_contiguous(), tuple(w_emit.shape)
+    assert tuple(b_b.shape) == (M, C) and b_ia.shape[0] == M
+    assert x_off.shape[1] == 2 * M, (tuple(x_off.shape), M)
+    assert c_comp.shape[-1] == C and k_i.shape[-1] == CI
+    assert C % 32 == 0 and CI % 32 == 0, (C, CI)     # 32-row weight tiles never straddle
+    assert _is_pow2(M) and _is_pow2(C) and _is_pow2(CI), (M, C, CI)
+    # [M, 32, BK] fp32 accumulator over 128 threads: keep it at 8192 values (64 regs).
+    BK = max(8, min(64, 256 // M))
+    assert KDIM % (KS * BK) == 0, (KDIM, KS, BK)
+    NT = R // 32
+    _csa_emit_gemm_kernel[(B * NT * KS,)](
+        x_hist, x_off, w_emit, scratch, KDIM=KDIM, BK=BK, KS=KS, M=M, R=R, NT=NT,
+        PREV_LO=2 * C, PREV_HI=4 * C,
         sx_b=x_hist.stride(0), sx_r=x_hist.stride(1), sxoff_b=x_off.stride(0),
         num_stages=1, num_warps=4)
     _csa_emit_combine_kernel[(B,)](
         scratch, b_a, b_b, b_ia, cn_w, c_comp, k_i, cnt,
         emit_mask if emit_mask is not None else scratch,
-        cn_eps, KS=KS, NUNIT=6, HAS_MASK=emit_mask is not None,
+        cn_eps, KS=KS, M=M, C=C, CI=CI, R=R, HAS_MASK=emit_mask is not None,
         sc_b=c_comp.stride(0), sc_n=c_comp.stride(1),
         ski_b=k_i.stride(0), ski_n=k_i.stride(1),
-        num_stages=1, num_warps=1)
+        num_stages=1, num_warps=4 if M * C > 256 else 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -984,23 +1038,29 @@ def _bf16_gemv_kernel(X, W, OUT, I: tl.constexpr, O: tl.constexpr,
     pid_o = tl.program_id(0)
     b = tl.program_id(1)
     offs_o = pid_o * BO + tl.arange(0, BO)
+    # O tail: a vocab that is not a multiple of BO (the 265M plain model's 49169) has a
+    # last tile with rows past O; they load 0 and are not stored. Full tiles are the old
+    # unmasked arithmetic (a mask changes no value that is loaded).
+    mo = offs_o < O
     acc = tl.zeros((BO, BI), tl.float32)
     for i0 in range(0, I, BI):
         offs_i = i0 + tl.arange(0, BI)
         x = tl.load(X + b * sx_b + offs_i)
-        w = tl.load(W + offs_o[:, None] * I + offs_i[None, :]).to(tl.float32)
+        w = tl.load(W + offs_o[:, None] * I + offs_i[None, :], mask=mo[:, None],
+                    other=0.0).to(tl.float32)
         acc += w * x[None, :]
-    tl.store(OUT + b * so_b + offs_o, tl.sum(acc, 1))
+    tl.store(OUT + b * so_b + offs_o, tl.sum(acc, 1), mask=mo)
 
 
 def bf16_gemv(x: Tensor, w_bf16: Tensor) -> Tensor:
-    """x [B, I] fp32; w_bf16 [O, I] bf16 contiguous (I % BI == 0). Returns [B, O] fp32."""
+    """x [B, I] fp32; w_bf16 [O, I] bf16 contiguous (I % BI == 0; any O, the last
+    output tile is masked). Returns [B, O] fp32."""
     O, I = w_bf16.shape
     B = x.shape[0]
     out = torch.empty(B, O, device=x.device, dtype=torch.float32)
     BO, BI = 16, 64
-    assert O % BO == 0 and I % BI == 0, (O, I)
-    _bf16_gemv_kernel[(O // BO, B)](
+    assert I % BI == 0, (O, I)
+    _bf16_gemv_kernel[(triton.cdiv(O, BO), B)](
         x, w_bf16, out, I=I, O=O, BI=BI, BO=BO,
         sx_b=x.stride(0), so_b=out.stride(0), num_stages=2, num_warps=4)
     return out
@@ -1808,6 +1868,7 @@ def ternary_gemv_rs(x: Tensor, codes: Tensor, row_scale: Tensor) -> Tensor:
 @triton.jit
 def _ring_meta_kernel(POS, WMASK, XC, XH, XE,
                       WWIN: tl.constexpr, WXC: tl.constexpr, WXH: tl.constexpr,
+                      NE: tl.constexpr,
                       sm_b, sxc_b, sxh_b, sxe_b):
     # PER-STREAM: one CTA per batch item b. Each stream carries its OWN absolute
     # position POS[b] (mixed-length support: streams prefilled to different P).
@@ -1825,11 +1886,22 @@ def _ring_meta_kernel(POS, WMASK, XC, XH, XE,
     tl.store(WMASK + b * sm_b + s, valid.to(tl.int8))
     i8 = tl.arange(0, 8)
     # x positions p-6..p-1 → ring rows; current token → staging row WXC/WXH.
-    tl.store(XC + b * sxc_b + i8, tl.where(i8 == 6, WXC, (p - 6 + i8) % WXC).to(tl.int32),
-             mask=i8 < 7)
-    tl.store(XH + b * sxh_b + i8, tl.where(i8 == 6, WXH, (p - 6 + i8) % WXH).to(tl.int32),
-             mask=i8 < 7)
-    tl.store(XE + b * sxe_b + i8, tl.where(i8 == 7, WXC, (p - 7 + i8) % WXC).to(tl.int32))
+    # Ring rows use a NON-NEGATIVE modulo ((q % W) + W) % W: Triton's % truncates like C,
+    # so a position q < 0 (only while p < 6, i.e. a decode started from the empty state
+    # by StaticDecodeEngine.reset) would index row -k. The ring rows of negative
+    # positions hold zeros there (reset zeroes X and no position >= 0 has reached them
+    # yet), which is the eager decode's zero-padded history. For q >= 0 the formula is
+    # the old one.
+    qc = p - 6 + i8
+    tl.store(XC + b * sxc_b + i8, tl.where(i8 == 6, WXC, ((qc % WXC) + WXC) % WXC)
+             .to(tl.int32), mask=i8 < 7)
+    tl.store(XH + b * sxh_b + i8, tl.where(i8 == 6, WXH, ((qc % WXH) + WXH) % WXH)
+             .to(tl.int32), mask=i8 < 7)
+    # CSA emit window: positions p-(NE-1)..p (blocks j-1 | j, NE = 2·csa_m rows).
+    ie = tl.arange(0, NE)
+    qe = p - (NE - 1) + ie
+    tl.store(XE + b * sxe_b + ie,
+             tl.where(ie == NE - 1, WXC, ((qe % WXC) + WXC) % WXC).to(tl.int32))
 
 
 @triton.jit
@@ -1842,7 +1914,10 @@ def _ring_commit_kernel(X, POSP, WR: tl.constexpr, D: tl.constexpr,
     nb = tl.program_id(0)
     ch = tl.program_id(1)
     b = nb % B
-    tgt = ((tl.load(POSP + b) - 1) % WR).to(tl.int32)
+    # non-negative modulo: at p == 0 (an engine started by reset) (p-1) % WR would be -1
+    # under Triton's truncating %; the staging row then holds reset's zeros, and they
+    # land in ring row WR-1, which is position -1's row (zero history). p >= 1: unchanged.
+    tgt = ((((tl.load(POSP + b) - 1) % WR) + WR) % WR).to(tl.int32)
     offs = ch * BD + tl.arange(0, BD)
     m = offs < D
     base = X + nb * ((WR + 1) * s_row)
@@ -1853,13 +1928,17 @@ def _ring_commit_kernel(X, POSP, WR: tl.constexpr, D: tl.constexpr,
 def ring_meta(pos_dev: Tensor, wmask: Tensor, xoff_csa: Tensor, xoff_hca: Tensor,
               xoff_emit: Tensor, wwin: int, wxc: int, wxh: int) -> None:
     """pos_dev [B] int64 (per-stream absolute positions). wmask [B, WWIN] int8,
-    xoff_csa/hca/emit [B, 8] int32 — one row per stream. One CTA per stream; each
+    xoff_csa/hca [B, >=7] int32 (conv window p-6..p), xoff_emit [B, 2·csa_m] int32 (the
+    CSA emit window p-2m+1..p) — one row per stream. One CTA per stream; each
     reads ONLY pos_dev[b] and writes ONLY row b (per-stream independence). When all
     pos_dev[b] are equal (B=1 / equal-length) every row is identical → byte-equal to
     the former scalar kernel broadcast across rows."""
     B = pos_dev.shape[0]
+    ne = xoff_emit.shape[1]                     # 2·csa_m CSA emit-window rows
+    assert ne >= 2 and (ne & (ne - 1)) == 0, f"xoff_emit width {ne} must be a power of 2"
+    assert xoff_csa.shape[1] >= 7 and xoff_hca.shape[1] >= 7
     _ring_meta_kernel[(B,)](pos_dev, wmask, xoff_csa, xoff_hca, xoff_emit,
-                            WWIN=wwin, WXC=wxc, WXH=wxh,
+                            WWIN=wwin, WXC=wxc, WXH=wxh, NE=ne,
                             sm_b=wmask.stride(0), sxc_b=xoff_csa.stride(0),
                             sxh_b=xoff_hca.stride(0), sxe_b=xoff_emit.stride(0),
                             num_stages=1, num_warps=4)

@@ -10,9 +10,12 @@ Arms (each on real validation prompts read the trainer's way, greedy, ``--new`` 
   lx_graphed       generate_tul_graphed, one row at a time, graphs captured once per run
   plain_eager      generate_plain_batch (recompute per step, the gen eval's plain arm)
   plain_cached     morph/inference/kv_cache.py prefill + decode_step, batched
-  plain_graphed    morph/inference/engine.py StaticDecodeEngine (kv_cache prefill, then
-                   CUDA-graph replay per token; bf16 LM-head GEMV). It MATERIALISES the
-                   QAT weights in place, so it must run last in its group.
+  plain_graphed    morph/inference/engine.py StaticDecodeEngine, one engine per batch size
+                   built and captured once outside the timing (as lx_graphed's decoder);
+                   each call reset()s it and feeds prompt and new tokens through CUDA-graph
+                   replay (bf16 LM-head GEMV). It MATERIALISES the QAT weights in place, so
+                   it must run last in its group. ``--check_plain`` gates it against
+                   plain_cached (tokens, worst row difference as log-probs).
 
 Timing: CUDA-synchronised wall over the whole call, prompt included (prefill is part of a
 decode request); tok/s counts generated tokens. GPU-busy: the same arm for ``--prof_new``
@@ -74,44 +77,142 @@ def _no_generate_mode():
     return _Ctx()
 
 
-@torch.no_grad()
-def _plain_cached(model, prompts, new):
-    ids = torch.tensor(prompts, dtype=torch.long, device="cuda")
+def _eager_prefill(model, ids):
+    """kv_cache prefill of ``ids`` [B, P]; returns (last logits, cache)."""
     cache = MORPHKVCache()
     cache.csa_pool_len = model.cfg.context_len
     logits = None
     for t in range(ids.shape[1]):
         logits = decode_step(model, ids[:, t], cache)
-    out = [[] for _ in prompts]
+    return logits, cache
+
+
+def _greedy_tail(logits, step_fn, n_rows, new, rows):
+    """Greedy loop shared by the kv_cache and engine arms: read the argmax of ``logits``,
+    feed it to ``step_fn`` for the next logits. ``rows`` (a list or None) collects each
+    step's logits on the host (the check only)."""
+    out = [[] for _ in range(n_rows)]
     for step in range(new):
+        if rows is not None:
+            rows.append(logits.detach().float().cpu().clone())
         nxt = logits.float().argmax(-1)
         for i, v in enumerate(nxt.tolist()):
             out[i].append(int(v))
         if step + 1 < new:
-            logits = decode_step(model, nxt, cache)
+            logits = step_fn(nxt)
     return out
 
 
 @torch.no_grad()
-def _plain_graphed(model, prompts, new):
+def _plain_cached(model, prompts, new, rows=None):
+    ids = torch.tensor(prompts, dtype=torch.long, device="cuda")
+    logits, cache = _eager_prefill(model, ids)
+    return _greedy_tail(logits, lambda nxt: decode_step(model, nxt, cache), len(prompts),
+                        new, rows)
+
+
+@torch.no_grad()
+def _plain_graphed(model, prompts, new, ctx, rows=None, convert=False, eng=None):
+    """StaticDecodeEngine greedy decode on the engine built and captured ONCE for this
+    batch size (``ctx["plain_engines"][B]``, see ``_plain_setup``), as the LXTUL graphed
+    arm reuses its ``TulGraphDecoder``. Default: ``reset()`` and feed the WHOLE prompt
+    through the graphs (no eager step at all). ``convert``: the engine's original entry,
+    a kv_cache prefill of the prompt and ``load_from_eager`` (the check runs both)."""
+    eng = ctx["plain_engines"][len(prompts)] if eng is None else eng
+    ids = torch.tensor(prompts, dtype=torch.long, device="cuda")
+    if convert:
+        logits, cache = _eager_prefill(model, ids)
+        eng.load_from_eager(cache)
+    else:
+        eng.reset()
+        logits = None
+        for t in range(ids.shape[1]):
+            logits = eng.decode_step(ids[:, t])
+    return _greedy_tail(logits, eng.decode_step, len(prompts), new, rows)
+
+
+@torch.no_grad()
+def _plain_setup(model, prompts, new, batches, check_plain, payload, ctx,
+                 exact_weights=False) -> None:
+    """Build and capture one StaticDecodeEngine per batch size (it MATERIALISES the QAT
+    weights in place, bit-identical reads), timed into ``payload["plain_capture_s"]``.
+    ``check_plain``: first record the kv_cache references (before materialising), then
+    gate the engine against them (``payload["check_plain"]``). ``exact_weights``: the
+    timed engines keep fp32 weight copies (the engine's parity mode)."""
     from morph.inference.engine import StaticDecodeEngine
-    ids = torch.tensor(prompts, dtype=torch.long, device="cuda")
-    cache = MORPHKVCache()
-    cache.csa_pool_len = model.cfg.context_len
-    logits = None
-    for t in range(ids.shape[1]):
-        logits = decode_step(model, ids[:, t], cache)
-    eng = StaticDecodeEngine(model, batch_size=ids.shape[0])
-    eng.load_from_eager(cache)
-    eng.capture()
-    out = [[] for _ in prompts]
-    for step in range(new):
-        nxt = logits.float().argmax(-1)
-        for i, v in enumerate(nxt.tolist()):
-            out[i].append(int(v))
-        if step + 1 < new:
-            logits = eng.decode_step(nxt)
-    return out
+    refs = _plain_refs(model, prompts, new, max(batches)) if check_plain else None
+    _sync()
+    t0 = time.perf_counter()
+    ctx["plain_engines"] = {}
+    for B in sorted(set(batches) | ({1, max(batches)} if check_plain else set())):
+        eng = StaticDecodeEngine(model, batch_size=B, exact_weights=exact_weights)
+        eng.capture()
+        ctx["plain_engines"][B] = eng
+    _sync()
+    payload["plain_capture_s"] = time.perf_counter() - t0
+    print(f"plain engine build+capture {payload['plain_capture_s']:.1f}s", flush=True)
+    if refs is not None:
+        payload["check_plain"] = _plain_check(model, prompts, new, refs, ctx)
+        print("CHECK_PLAIN", json.dumps(payload["check_plain"]), flush=True)
+
+
+def _plain_refs(model, prompts, new, nb) -> dict:
+    """kv_cache greedy references: prompts 0 and 1 alone, prompt 0 again (the eager
+    path's own run-to-run spread), and the first ``nb`` prompts as one batch."""
+    refs = {}
+    for name, ps in (("p0", prompts[:1]), ("p1", prompts[1:2]), ("p0_repeat", prompts[:1]),
+                     (f"batch{nb}", prompts[:nb])):
+        rows: list[torch.Tensor] = []
+        refs[name] = (_plain_cached(model, ps, new, rows), rows)
+    return refs
+
+
+def _cmp_rows(ref_tok, ref_rows, tok, rows) -> dict:
+    """Per batch row: tokens equal, first differing step, worst log-prob difference over
+    the steps up to and including the first flip (after it the inputs differ)."""
+    res = {"tokens_equal": ref_tok == tok, "rows": []}
+    for b, (a, c) in enumerate(zip(ref_tok, tok)):
+        n = _first_diff(a, c)
+        upto = len(c) if n < 0 else n + 1
+        row = {"first_diff": n, "worst_row_diff_until_first_diff": _worst(
+            [r[b] for r in ref_rows[:upto]], [r[b] for r in rows[:upto]])}
+        if n >= 0:
+            # the reference's own top-1 minus top-2 log-prob at the flip: a flip inside the
+            # engine's worst row difference is a near tie, one far outside it is a bug.
+            top = torch.log_softmax(ref_rows[n][b].double(), -1).topk(2).values
+            row["ref_top2_margin_at_flip"] = float(top[0] - top[1])
+        res["rows"].append(row)
+    res["worst_row_diff"] = max(r["worst_row_diff_until_first_diff"] for r in res["rows"])
+    return res
+
+
+def _plain_check(model, prompts, new, refs, ctx) -> dict:
+    res = {}
+    t0, r0 = refs["p0"]
+    res["eager_repeat"] = _cmp_rows(t0, r0, *refs["p0_repeat"])
+    for name, ps in (("p0", prompts[:1]), ("p1", prompts[1:2])):
+        rt, rr = refs[name]
+        for mode, conv in (("reset", False), ("convert", True)):
+            rows: list[torch.Tensor] = []
+            tok = _plain_graphed(model, ps, new, ctx, rows, convert=conv)
+            res[f"{name}_{mode}"] = _cmp_rows(rt, rr, tok, rows)
+    # parity mode (fp32 weight copies): what is left is the engine's own arithmetic.
+    from morph.inference.engine import StaticDecodeEngine
+    ex = StaticDecodeEngine(model, batch_size=1, exact_weights=True)
+    ex.capture()
+    for name, ps in (("p0", prompts[:1]), ("p1", prompts[1:2])):
+        rows = []
+        tok = _plain_graphed(model, ps, new, ctx, rows, eng=ex)
+        res[f"{name}_reset_exact_weights"] = _cmp_rows(*refs[name], tok, rows)
+    del ex
+    bname = next(k for k in refs if k.startswith("batch"))
+    nb = int(bname[5:])
+    rt, rr = refs[bname]
+    for mode, conv in (("reset", False), ("convert", True)):
+        rows = []
+        tok = _plain_graphed(model, prompts[:nb], new, ctx, rows, convert=conv)
+        res[f"{bname}_{mode}"] = _cmp_rows(rt, rr, tok, rows)
+    return res
 
 
 def run_arm(arm: str, model, prompts, new: int, ctx: dict) -> list[list[int]]:
@@ -140,7 +241,7 @@ def run_arm(arm: str, model, prompts, new: int, ctx: dict) -> list[list[int]]:
     if arm == "plain_cached":
         return _plain_cached(model, prompts, new)
     if arm == "plain_graphed":
-        return _plain_graphed(model, prompts, new)
+        return _plain_graphed(model, prompts, new, ctx)
     raise ValueError(arm)
 
 
@@ -285,6 +386,13 @@ def main() -> None:
     ap.add_argument("--prof_new", type=int, default=32)
     ap.add_argument("--prompt_len", type=int, default=128)
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--check_plain", action="store_true",
+                    help="gate plain_graphed against the kv_cache greedy path (prompts 0 "
+                         "and 1 alone, the max batch; reset and convert entries); needs "
+                         "the plain_graphed arm")
+    ap.add_argument("--plain_exact_weights", action="store_true",
+                    help="plain_graphed engines keep fp32 weight copies "
+                         "(StaticDecodeEngine(exact_weights=True))")
     ap.add_argument("--step_profile", action="store_true")
     ap.add_argument("--no_tf32", action="store_true",
                     help="cuDNN TF32 off (it is ON by default and runs the CCA conv1d in fp32 "
@@ -350,7 +458,14 @@ def main() -> None:
                 payload["check"] = check(model, prompts[0], a.new, ctx)
                 print("CHECK", json.dumps(payload["check"]), flush=True)
                 flush()
+        if a.check_plain and group == "plain" and "plain_graphed" not in g_arms:
+            raise SystemExit("--check_plain needs the plain_graphed arm")
         for arm in g_arms:
+            if arm == "plain_graphed" and "plain_engines" not in ctx:
+                _plain_setup(model, prompts, a.new, batches, a.check_plain, payload, ctx,
+                             exact_weights=a.plain_exact_weights)
+                payload["plain_exact_weights"] = a.plain_exact_weights
+                flush()
             for B in batches:
                 ps = prompts[:B]
                 try:

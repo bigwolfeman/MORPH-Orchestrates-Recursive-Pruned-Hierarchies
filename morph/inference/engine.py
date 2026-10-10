@@ -41,8 +41,17 @@ Usage:
     eng.capture()                                    # optional: CUDA-graph replay
     logits = eng.decode_step(next_ids)               # O(1) static per-token step
 
+  or, with no eager prefill at all (the prompt goes through the graphs too):
+    eng = StaticDecodeEngine(model, batch_size=B); eng.capture()   # once per model
+    eng.reset()                                      # position 0, empty state
+    for t in range(prompt_len):
+        logits = eng.decode_step(prompt[:, t])
+
 Constraints (asserted): kv_quant off; eval mode; conversion position >= 2*csa_m (the first CSA
-block must already have been emitted by the eager prefill); position < context_len.
+block must already have been emitted by the eager prefill — reset() has no such floor);
+position < context_len. Geometry (asserted at build): conv k = 4; every site's compress
+ratio equals its kind's global csa_m / hca_m; CSA compressor width = d_head, indexer
+compressor width = d_indexer (any width, one per model); h_0 = e loop entry.
 """
 from __future__ import annotations
 
@@ -124,7 +133,8 @@ class StaticDecodeEngine:
     """Fixed-shape O(1)-per-token MORPH decoder with optional CUDA-graph replay."""
 
     def __init__(self, model, batch_size: int = 1, materialize: bool = True,
-                 mlp_dense_expand: bool = False, attn_pack4: bool | None = None):
+                 mlp_dense_expand: bool = False, attn_pack4: bool | None = None,
+                 exact_weights: bool = False):
         """mlp_dense_expand (MORTAR-carved models only): expand the carved 2-bit BCSR
         MLP into a DENSE strip-packed ternary tensor (pruned blocks = code 0) and run
         it through the proven ternary_gemv — the dense arm of the carved-vs-dense
@@ -134,7 +144,13 @@ class StaticDecodeEngine:
         (Int8RowLinear.hi==7 → int4 → pack). This is the SINGLE KNOB: a model built with
         ``to_deploy_inference(attn_bits=4)`` decodes packed automatically — no separate
         flag to forget (forgetting it = int4 quality cost with zero bandwidth win). Pass
-        True/False to force; auto raises on a mixed-bit attention (can't uniformly pack)."""
+        True/False to force; auto raises on a mixed-bit attention (can't uniformly pack).
+        exact_weights: keep fp32 copies of every weight the engine otherwise rounds to bf16
+        for bandwidth (LM head, attention projection stacks, gate2, W_up, HC mapping, x0 /
+        value-embed / mixer GEMV fallbacks). A PARITY mode, not a speed mode: it separates
+        the engine's arithmetic (reduction order only — 1.0e-5 nats worst over 256 steps on
+        the 265M plain model) from the bf16 rounding (2.9e-2 nats there). The kernels load
+        either dtype and accumulate fp32. Default False = the shipped decoder."""
         assert not model.training, "engine is inference-only — call model.eval() first"
         # Auto-resolve a carved-but-unpacked training/SFT checkpoint to the deploy storage
         # format the fast kernels require (2-bit-packed MORTAR MLPs + int8/row attention).
@@ -184,7 +200,9 @@ class StaticDecodeEngine:
             # bf16 copy for the LOGITS GEMV only (halves the 151MB/tok head read; x and
             # accumulation stay fp32 — deviation = weight rounding only, re-gated).
             # The fp32 table is still used for the exact input-embedding row reads.
-            self.W_lm_bf16 = self.W_lm.to(torch.bfloat16).contiguous()
+            # (exact_weights: fp32, the parity mode.) wdt = the dtype of every such copy.
+            self._wdt = wdt = torch.float32 if exact_weights else torch.bfloat16
+            self.W_lm_bf16 = self.W_lm.to(wdt).contiguous()
 
         self.csa_m = int(cfg.csa_compress_ratio)
         self.hca_m = int(cfg.hca_compress_ratio)
@@ -221,6 +239,20 @@ class StaticDecodeEngine:
         self.Vh = cca0.W_v_curr.out_features               # value half width
         self.k_conv = cca0.conv_q_dw.kernel_size[0]
         self.hist = 2 * (self.k_conv - 1) + 1              # conv window incl. current (7)
+        # decode_front's _conv7 unrolls exactly 7 history rows (2·(k-1)+1 at k = 4), and
+        # the window ring / x-history are sized per KIND from the GLOBAL csa_m / hca_m: a
+        # site whose own compress ratio differed (model.core_hca_compress_ratio) would read
+        # the wrong ring. Both are checked, not assumed.
+        assert self.k_conv == 4, f"engine front unrolls a k=4 conv, model has {self.k_conv}"
+        for s in self.sites:
+            want = int(cfg.csa_compress_ratio) if s.is_csa else int(cfg.hca_compress_ratio)
+            assert s.m == want, f"{s.key}: compress ratio {s.m} != the engine's {want}"
+            assert s.impl.cca.window_size == cca0.window_size, f"{s.key}: window differs"
+        # h_0 = e: the engine (like kv_cache.decode_step) enters the loop at the input-
+        # normed prelude output; a noise / SCSE loop entry is a different model.
+        assert type(model.core_init).__name__ == "_CloneInit", (
+            f"engine decodes the h_0 = e loop entry only, model has "
+            f"{type(model.core_init).__name__}")
         self.w1 = cca0.window_size - 1                     # window keys excl. self (127)
         self.W_win = self.w1 + 1                           # ring width incl. staging slot
 
@@ -338,7 +370,7 @@ class StaticDecodeEngine:
                         cca.q_norm.weight.contiguous(),
                         cca.k_norm.weight.contiguous(),
                     )
-                    bf16 = torch.bfloat16
+                    bf16 = wdt                      # bf16, or fp32 under exact_weights
                     if q8:
                         wup = cca.W_up.codes.contiguous()
                         if self._pack4:  # resolved flag — MUST match the kernel's pack4
@@ -433,20 +465,26 @@ class StaticDecodeEngine:
         # decode_front layout contract (one launch computes the whole site front-end)
         assert cca0.W_v_prev.out_features == self.Vh, "Wqkv stack: v_prev width != v_curr"
         assert self.G_hidden % self.D == 0, "gate hidden must tile by d_head"
-        for s in self.sites:
-            if s.is_csa:
-                assert s.impl.indexer.W_IQ.out_features == self.D, "q_I width != d_head"
+        # value assembly: v = cat[v_curr, v_prev] split into Hkv heads of D (front_post).
+        assert 2 * self.Vh == self.Hkv * self.D, "v_curr|v_prev must fill Hkv·d_head"
+        # CSA indexer query width = d_indexer, its OWN width (276M: == d_head; the 265M
+        # plain panel model: 32 against d_head 64). One width for every CSA site, since
+        # the q_I scratch is shared across sites.
+        dis = {int(s.impl.indexer.W_IQ.out_features) for s in csa_sites}
+        assert len(dis) <= 1, f"CSA sites disagree on d_indexer: {sorted(dis)}"
+        self.DI = dis.pop() if dis else 0
+        for s in csa_sites:
+            assert s.K_I.shape[-1] == self.DI
         # per-step scratch (shared across sites — strictly sequential consumption)
         self._q_scr = z(B, self.H, self.D)
         self._xres_scr = z(B, self.LQ)
         self._gateh_scr = z(B, self.G_hidden)
-        self._qi_scr = z(B, self.D)
+        self._qi_scr = z(B, max(self.DI, 1))
         # K-split lat partials for decode_front kernel A (max site width = CSA 864).
         # KS=4 is the validated 276M fp32 launch (byte-identical); the int8 deploy
         # stack wants KS=8 (lab7c: 5.93 vs 6.73 ms/tok at d=8192, tolerance-gated).
         omax = max(s.Wqkv.shape[0] for s in self.sites)
         self._part_scr = z(B, 8 if deploy_quant else 4, 7, omax)
-        self._emit_scr = z(B, 2, 6, 4, 32)                 # CSA-emit GEMV partials
 
         # fused CSA-emit weight stacks (per layer): cat[aKV,aZ,bKV,bZ,iKV,iZ] + biases
         with torch.no_grad():
@@ -459,8 +497,16 @@ class StaticDecodeEngine:
                 if lid not in emit_stacks:
                     comp = s.impl.compressor
                     idxc = s.impl.indexer.compressor
-                    assert comp.c == 32 and comp.m == self.csa_m and comp.two_stream
-                    assert idxc.c == 32 and not idxc.two_stream
+                    # widths come from the weights (csa_emit reads them from B_a/B_ia):
+                    # the compressed block is attended by q, so its width is d_head; the
+                    # indexer key is scored against q_I, so its width is d_indexer.
+                    assert comp.c == self.D and comp.m == self.csa_m and comp.two_stream, (
+                        f"{s.key}: CSA compressor c={comp.c} m={comp.m} two_stream="
+                        f"{comp.two_stream}, engine needs c=d_head={self.D}, m={self.csa_m}")
+                    assert idxc.c == self.DI and idxc.m == self.csa_m \
+                        and not idxc.two_stream, (
+                        f"{s.key}: indexer compressor c={idxc.c} m={idxc.m}, engine needs "
+                        f"c=d_indexer={self.DI}, m={self.csa_m}, single stream")
                     emit_stacks[lid] = (
                         torch.cat([comp.W_aKV.weight, comp.W_aZ.weight,
                                    comp.W_bKV.weight, comp.W_bZ.weight,
@@ -472,6 +518,8 @@ class StaticDecodeEngine:
                         s.impl.comp_norm.weight.detach().float().contiguous(),
                     )
                 (s.Wemit, s.Ba, s.Bb, s.Bia, s.CnW) = emit_stacks[lid]
+        # CSA-emit GEMV partials [B, KS=2, csa_m, 4·C + 2·CI] (C = d_head, CI = d_indexer).
+        self._emit_scr = z(B, 2, self.csa_m, 4 * self.D + 2 * max(self.DI, 1))
 
         # ternary int8 packing for the backbone MLP GEMVs (4× weight traffic at M=1).
         # Exactness-checked per tensor (ternary_pack returns None on any non-ternary weight
@@ -521,7 +569,7 @@ class StaticDecodeEngine:
                 self._W_mix = None
             else:
                 self._Tmix = self._Tmix_rs = None
-                self._W_mix = w_mix.to(torch.bfloat16)
+                self._W_mix = w_mix.to(wdt)
             del w_mix
 
         # injection constants (12 layers): stacked x0 projections + scales, bigram lambdas,
@@ -544,7 +592,7 @@ class StaticDecodeEngine:
                 self.W_x0 = None
             else:
                 self.Tx0 = self.Tx0_rs = None
-                self.W_x0 = torch.cat(x0_w, dim=0).contiguous().to(torch.bfloat16)
+                self.W_x0 = torch.cat(x0_w, dim=0).contiguous().to(wdt)
             del x0_w, x0_packs
             self.x0_scales = torch.stack([model.x0_injects[i].log_scale
                                           for i in range(n_tot)]).view(n_tot, 1, 1, 1)
@@ -558,7 +606,7 @@ class StaticDecodeEngine:
                     self.ve_proj_w.append(("tern", p[0],
                                            p[1].expand(w.shape[0]).contiguous()))
                 else:
-                    self.ve_proj_w.append(("bf16", w.to(torch.bfloat16), None))
+                    self.ve_proj_w.append(("gemv", w.to(wdt), None))
             self.ve_scales = [model.value_embeds[k].log_scale for k in range(self.n_ve)]
             self.ctx_width = ctx_w
             self.n_layers_tot = n_tot
@@ -583,7 +631,8 @@ class StaticDecodeEngine:
         self._win_mask_i8 = torch.zeros(B, self.W_win, device=dev, dtype=torch.int8)
         self._xoff_csa = torch.zeros(B, 8, device=dev, dtype=torch.int32)
         self._xoff_hca = torch.zeros(B, 8, device=dev, dtype=torch.int32)
-        self._xoff_emit = torch.zeros(B, 8, device=dev, dtype=torch.int32)
+        # CSA emit window: positions p-2m+1..p (blocks j-1 | j) — 2·csa_m ring rows.
+        self._xoff_emit = torch.zeros(B, 2 * self.csa_m, device=dev, dtype=torch.int32)
         # per-stream emit masks (1 = stream completes a CSA/HCA block this token).
         # In the collapsed single-graph step EVERY emit-capable site runs every token;
         # these masks gate the per-stream writes (no-op for streams that don't complete).
@@ -614,7 +663,7 @@ class StaticDecodeEngine:
                 for mod in (s.block.mrr_attn, s.block.mrr_mlp):
                     if id(mod) not in self._hcw:
                         self._hcw[id(mod)] = mod.proj.weight.detach().contiguous() \
-                            .to(torch.bfloat16)
+                            .to(wdt)
                         self._hcb[id(mod)] = mod.proj.bias.detach().float().contiguous()
         # wide-HC kernels load a bias unconditionally — dedicated zeros when absent
         # (model untouched; the 276M small_gemv path keeps its bias=None branch).
@@ -761,6 +810,34 @@ class StaticDecodeEngine:
                 if s.ret_state is not None:
                     assert sc.ret_state is not None, f"{s.key}[b={b}]: missing ret_state"
                     s.ret_state[b].copy_(sc.ret_state[0])
+
+    @torch.no_grad()
+    def reset(self) -> None:
+        """Put every stream at position 0 with the EMPTY state, the state an eager
+        ``MORPHKVCache()`` starts from, so the prompt itself can be fed through
+        ``decode_step`` (graph replay) with no eager prefill and no conversion.
+
+        Every buffer is zeroed in place (the captured graphs keep their addresses, so a
+        reset after ``capture()`` replays the same graphs). Zero is the eager start state
+        for each piece: the x-history (the conv's and v_prev's zero-padded history, and the
+        first CSA block's absent B stream, gated -inf in csa_emit), the window ring (empty:
+        the mask admits no key), C_comp/K_I (no block yet: count 0), the GLA state (None →
+        zero seed) and prev_id (None → token 0 for the bigram hash)."""
+        self._mixed = False
+        self.pos = 0
+        self.pos_host = [0] * self.B
+        self.pos_dev.zero_()
+        self.prev_id.zero_()
+        self.win_k_all.zero_()
+        self.win_v_all.zero_()
+        self.X_csa.zero_()
+        self.X_hca.zero_()
+        for s in self.sites:
+            s.C_comp.zero_()
+            if s.K_I is not None:
+                s.K_I.zero_()
+            if s.ret_state is not None:
+                s.ret_state.zero_()
 
     # ── per-step shared precompute ─────────────────────────────────────────────
 
