@@ -49,14 +49,34 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       every token. Today the KV-cached generators refuse the fan (`tul_generate_cached.py`
       `_check_supported`: `tul.fan_k > 0`), so LXTUL decodes with the eager recompute-per-step
       generator. Steps:
-  - [~] C1a Per-token compute accounting (train and decode) for LXTUL, plain MORPH and the Parcae
-        testbed, and the minimal set of features the cached generator must learn for
-        `lxtul_pointer` (research agent, 2026-10-10).
-  - [ ] C1b Decode bench today: eager LXTUL vs cached plain vs Parcae, tok/s at batch 1 and batch N.
-  - [ ] C1c Cached + graphed LXTUL decode, bit-equal tokens to `generate_tul` (the existing
-        cached generators' contract). Design so B's variable M fits.
-  - [ ] C1d Any training-side saving from the same idea (train-only span decoder rows, slot rows
-        through prelude/coda), from C1a's numbers.
+  - [x] C1a Accounting (2026-10-10, research agent; `/home/wolfe/morph-scratch/research/lxtul-decode-savings.md`).
+        Decode, analytic: plain 44 block applications per token (about 1139 MFLOP); LXTUL as
+        trained 16.95 (about 496 MFLOP, 2.3x fewer); 1 cell at inference 3.3x fewer; zero span
+        cost 3.9x. Measured eager decode is INVERTED: LXTUL + pointer 7.1 tok/s vs plain MORPH
+        86 tok/s, same run (`lab/experiments/results/2026-10-07-lxtul-pointer-ditto/gen/gen.log`).
+        Training: LXTUL and plain MORPH are at about equal FLOPs per token because the
+        train-only terms are 37.5 % (span decoder 26 %, hinge 7.6 %, twin 3.3 %); an ideal LXTUL
+        step is about 9.1 TFLOP vs 21.67 today. Parcae evidence: bare strict loop 37.2k tok/s
+        vs plain 21.8k; Parcae LXTUL without the span decoder 28.2k vs 24.4k at CE@6 +0.006.
+  - [ ] C1b Decode bench today: eager LXTUL vs cached plain vs Parcae, tok/s at batch 1 and N.
+  - [ ] C1c Cached + graphed LXTUL decode, bit-equal tokens to `generate_tul`. Refused today at
+        `tul_generate_cached.py:85-159` (fan_k, slot_cells, pointer_heads, code_enum_k > 1,
+        tul_fan / tul_register). Minimal set: 4 cells through the prelude; register seed with a
+        per-span token K/V cache; 4-cell loop caches with sibling reads; per-pass cell RMSNorm;
+        router pick + reset_to_winner; routed winner write; coda on the cells (all 4 stay as
+        keys); one-rollout read; pointer head with a cache over all earlier tokens. Cell count
+        M as a decoder argument from the start (item B).
+  - [ ] C1d Training-side: the span decoder is 26 % of training FLOPs. A no-span-decoder arm
+        on MORPH (Parcae: +16 % speed at CE@6 +0.006) is a recipe change and needs Wolfe's go
+        and a quality arm. Also 1-cell vs 4-cell loop cost (core 1.47 vs 5.87 TFLOP).
+  - [ ] C1e The eager generator runs the training-only span decoder on every step
+        (`transformer.py` ~14526, no gate; OOM trace
+        `lab/experiments/results/2026-10-07-lxtul-pointer-coverage/gen/gen_oom.log`). Add an
+        explicit generation forward that skips every loss head; do not gate on `labels` or
+        `self.training` (the val pass and the offline sweep read the span decoder).
+  - [ ] C1f Hole in the existing cached decoder: `tul_cell_norm` is not refused, so a one-cell
+        multi-rollout model with the cell norm would decode a different function silently.
+        Refuse or implement first.
 - [ ] C2 LM-head slot rows (Lemma 3: needs `pointer_cell_key: false`; the coda keeps K/V at slot
       rows). About 0.34 TF per step.
 - [ ] C3 Drop the logits recompute GEMM in the token head (keep bf16 logits, about +0.76 GB).
