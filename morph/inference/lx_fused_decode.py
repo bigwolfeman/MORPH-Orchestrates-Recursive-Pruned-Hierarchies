@@ -51,6 +51,7 @@ import math
 import numpy as np
 import torch
 import torch.nn.functional as F
+import triton
 from torch import Tensor
 from torch.nn.utils import parametrize
 
@@ -62,6 +63,14 @@ from morph.kernels.triton.fused_decode_step import (bf16_gemv, decode_front, loo
                                                     ring_commit, rmsnorm_rows, small_gemv,
                                                     swiglu_rows, ternary_gemv,
                                                     ternary_gemv_rs, ternary_pack)
+from morph.kernels.triton.lm_head_codes import head_codes_logits, head_codes_pack
+from morph.kernels.triton.lx_glue_decode import (MIX_BLOCK, argmax_rows, mix_logp, ptr_attn,
+                                                 ptr_proj, ptr_scatter, readout_gemv, row_lse,
+                                                 tok_entry, tok_mid, tok_x0, cell_norm,
+                                                 loop_entry, prefix_write, route)
+from morph.kernels.triton.lx_layer_decode import (HC_NO, PART_TILE, conv_taps_major, dn_post,
+                                                   gu_swiglu, hc_partials, hc_pre, lat_gemm,
+                                                   lat_post, up_post)
 from morph.model.tul_fan_route import reset_to_winner
 from morph.model.tul_layout import BoundaryRule, SlotLayout, TulLayoutSpec
 from morph.model.tul_pointer import _rms as _ptr_rms
@@ -162,6 +171,10 @@ class _Layer:
             cca.conv_k_gp.weight.detach().contiguous(),
             cca.q_norm.weight.detach().contiguous(),
             cca.k_norm.weight.detach().contiguous())
+        # lat_post (layers="fused") reads the grouped conv weights tap-major
+        cp = self.conv_pack
+        self.conv_pack_t = (cp[0], conv_taps_major(cp[1]), cp[2], conv_taps_major(cp[3]),
+                            cp[4], cp[5])
         self.qk_eps = float(cca.q_norm.eps)
         self.exp_temp = torch.exp(cca.temp.detach()).float().view(-1).contiguous()
         self.alpha = cca.alpha.detach().float().view(-1).contiguous()
@@ -174,6 +187,8 @@ class _Layer:
         for mod in (block.mrr_attn, block.mrr_mlp):
             self.hc[id(mod)] = (mod.proj.weight.detach().contiguous().to(wdt),
                                 mod.proj.bias.detach().float().contiguous())
+        self.hca_w, self.hca_b = self.hc[id(block.mrr_attn)]      # the attention side's
+        self.hcm_w, self.hcm_b = self.hc[id(block.mrr_mlp)]       # and the MLP side's
         mlp = block.mlp[0] if hasattr(block.mlp, "__getitem__") else block.mlp
         gu, dn = mlp.gate_up._cms, mlp.down._cms
         if getattr(gu, "_mortar", False) or not gu._dense_mode:
@@ -191,7 +206,7 @@ class _Site:
     """Where one attention application reads and writes (see the module docstring)."""
 
     __slots__ = ("x_hist", "x_off", "kc", "vc", "widx", "kv_row", "cos", "sin", "meta",
-                 "kpos", "nout", "snout")
+                 "kpos", "nout", "snout", "lat")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -222,9 +237,28 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
     def __init__(self, model, spec: TulLayoutSpec, rule: BoundaryRule, batch_size: int = 1,
                  emit_source: str = "token", exact_weights: bool = True,
                  use_graphs: bool = True, max_tokens: int | None = None,
-                 cells: int | None = None, attn: str = "kernel", kv_row: str = "kernel"):
+                 cells: int | None = None, attn: str = "kernel", kv_row: str = "kernel",
+                 layers: str = "fused", head: str = "auto"):
         if emit_source not in ("slot", "token"):
             raise ValueError(f"emit_source must be 'slot' or 'token', got {emit_source!r}")
+        if layers not in ("fused", "engine"):
+            raise ValueError(f"layers must be 'fused' or 'engine', got {layers!r}")
+        # ``layers``: how ONE block application runs. "fused" = the row-batched kernels of
+        # morph/kernels/triton/lx_layer_decode.py (8 launches, every weight tile read once
+        # per event, the conv's history kept as latents); "engine" = the plain engine's
+        # kernels (12 launches, weights read once per row, the conv history recomputed),
+        # kept as the reference the fused path is gated against. Same function up to fp32
+        # reduction order (note 2026-10-10-lx-decode-megakernel.md).
+        self.layers = layers
+        if head not in ("auto", "codes", "table"):
+            raise ValueError(f"head must be 'auto', 'codes' or 'table', got {head!r}")
+        # ``head``: how the tied LM head is read. "codes" = int codes x row scale for the
+        # euclidean block + the fp32 Lorentz block (morph/kernels/triton/lm_head_codes.py,
+        # 88 MB per step instead of 201 MB); built only when fp32(code) * scale IS the
+        # head table bit for bit, so it is the table's function up to fp32 sum order.
+        # "table" = the fp32 (or bf16, exact_weights=False) table. "auto" = codes when the
+        # bit-exact pack exists, else the table. ``self.head_impl`` says which one runs.
+        self.head_req = head
         _check_supported(model)
         m, cfg, tc = model, model.cfg, model.cfg.tul
         if m.tul_code_enum is not None:
@@ -348,8 +382,18 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         else:
             self.Tmix = self.Tmix_rs = None
             self.W_mix = w_mix.contiguous().to(wdt)
-        self.W_head = m.embed.lm_weight().detach().contiguous().to(wdt)
-        self.V = int(self.W_head.shape[0])
+        w_head = m.embed.lm_weight().detach().contiguous()
+        self.V = int(w_head.shape[0])
+        self.head_pk = None
+        if self.head_req != "table" and self.exact:
+            euc = getattr(getattr(m.embed, "hybrid", None), "euc_embed", None)
+            self.head_pk = None if euc is None else head_codes_pack(euc, w_head)
+        if self.head_req == "codes" and self.head_pk is None:
+            raise ValueError("head='codes': the euclidean head block is not bit-exactly "
+                             "IntNRowSTE codes x row scale (or exact_weights=False)")
+        self.head_impl = "codes" if self.head_pk is not None else "table"
+        self.W_head = w_head.to(wdt) if self.head_pk is None else None
+        del w_head
         inj = m.injection
         self.loop_A = inj.log_A.detach().exp().clamp(max=0.9999).contiguous()
         self.loop_dt = inj.log_dt.detach().exp().contiguous()
@@ -363,15 +407,42 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         def z(*sh):
             return torch.zeros(*sh, device=dev, dtype=f32)
 
-        self.X_tok = z(self.np_ + self.nd, B, P + 2, C)          # zero row P, staging P+1
         self.cmax = max(M, Kp)
-        self.CX = z(self.Bmax * self.cmax + 1, C)                # cell conv history table
-        self.CX_zero = self.Bmax * self.cmax
-        self.RW = max(8, M)                                      # loop history cells / row
-        self.L_stage = R * self.RW
-        self.L_zero = self.L_stage + self.Bmax * M
         self.n_ls = self.depth * self.nc
-        self.XL = z(self.n_ls, self.L_zero + 1, C)
+        if self.layers == "engine":
+            # the conv history as normed x rows (decode_front recomputes the projections)
+            self.X_tok = z(self.np_ + self.nd, B, P + 2, C)      # zero row P, staging P+1
+            self.CX = z(self.Bmax * self.cmax + 1, C)            # cell conv history table
+            self.CX_zero = self.Bmax * self.cmax
+            self.RW = max(8, M)                                  # loop history cells / row
+            self.L_stage = R * self.RW
+            self.L_zero = self.L_stage + self.Bmax * M
+            self.XL = z(self.n_ls, self.L_zero + 1, C)
+        else:
+            # the conv history as LATENT rows (q_lat | k_lat | W_v_prev x of a position,
+            # lat_post writes them; module docstring of lx_layer_decode.py). Token sites:
+            # row b*P + j of the span's position j. Loop sites: a ring of RW cells per cache
+            # row, cell c at r*RW + c % RW; RW = M + 6 because the M cells an event writes
+            # must not land on the 6 history cells the same event reads. Cell sites (the
+            # prelude and coda cells, a fresh segment each) read only this event's rows.
+            self.LATW = self.LQ + self.LK + self.Vh
+            self.RW = M + 6
+            self.LAT_tok = z(self.np_ + self.nd, B * P, self.LATW)
+            self.LAT_loop = z(self.n_ls, R * self.RW, self.LATW)
+            self.LAT_none = z(1, self.LATW)                      # never read (no idx >= 0)
+            self.KS = 4
+            self.FF = None
+            for L in self.pre + self.core + self.coda:
+                if L.Tgu is None:
+                    raise NotImplementedError("layers='fused': the MLP weights are not "
+                                              "ternary (no 2-bit pack); use layers='engine'")
+                ff = L.Tdown[0].shape[1] * 4
+                if self.FF not in (None, ff):
+                    raise NotImplementedError("layers='fused': blocks with different d_ff")
+                self.FF = ff
+            if self.N != 4 or C % PART_TILE or C % (self.KS * 32):
+                raise NotImplementedError(f"layers='fused' needs 4 HC streams and d_model a "
+                                          f"multiple of {self.KS * 32} (N={self.N}, C={C})")
         self.Kpre = z(self.np_, R, H, P + M, D)
         self.Vpre = z(self.np_, R, H, P + M, D)
         self.Kcoda = z(self.nd, R, H, self.Cc + P, D)
@@ -396,8 +467,60 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         self.arM = torch.arange(M, device=dev)
         if self.ptr:
             self.arNk = torch.arange(self.max_tokens, device=dev).view(1, -1)
+        if self.layers == "fused":
+            # the token step's exit in 9 launches (morph/kernels/triton/lx_glue_decode.py):
+            # the readout's mixer as its 2-bit pack, the pointer's q | k | gate weights
+            # stacked into one GEMV, its null key and score scale computed once here with
+            # the ops ``_pointer`` runs every step (same values), a dense [B, V] buffer for
+            # the pointer's scatter (zero between steps: mix_logp zeroes what it read)
+            if self.Tmix is None or self.Tx0 is None:
+                raise NotImplementedError("layers='fused': the lm_mixer or x0 weights are "
+                                          "not ternary (no 2-bit pack); use layers='engine'")
+            if m.embed.bigram is None:
+                raise NotImplementedError("layers='fused': no bigram table")
+            # the entry's tables: the input embedding as the head table's rows (the codes,
+            # or an fp32 lm_weight() when the head reads a bf16 copy), the bigram table's
+            # forward weight (the cached int6 STE output under parametrize.cached)
+            if self.head_pk is not None:
+                self.emb_table = self.head_pk
+            elif self.W_head is not None and self.W_head.dtype == f32:
+                self.emb_table = (self.W_head,)
+            else:
+                self.emb_table = (m.embed.lm_weight().detach().float().contiguous(),)
+            self.bg_table = m.embed.bigram.embed.weight.detach().float().contiguous()
+            self.lam_v = self.lambdas.reshape(-1).contiguous()
+            self.x0s_v = self.x0_scales.reshape(-1).contiguous()
+            if self.ptr:
+                p = m.tul_pointer
+                self.ptr_nqk = 2 * p.h * p.dh
+                self.ptr_w = torch.cat([p.q.weight, p.k.weight, p.gate_norm_head.weight]
+                                       ).detach().float().contiguous()
+                self.ptr_gb = p.gate_norm_head.bias.detach().float().contiguous()
+                self.ptr_nullk = _ptr_rms(p.null_k_bias.detach()).float().contiguous()
+                self.ptr_scale = (p.log_scale_bias.detach().exp()
+                                  / math.sqrt(p.dh)).float().contiguous()
+                hp = 1 << (p.h - 1).bit_length()
+                self.ptr_s = z(B, hp, self.max_tokens)
+                self.ptr_pd = z(B, self.V)
+        # the slot loop's fused glue (``_loop_fused`` + ``prefix_write``) covers the shipped
+        # LXTUL geometry: the rms cell norm, M == Kp cells (cell k -> prefix cell k), and a
+        # power-of-two router rank and cell count; any other geometry keeps the PyTorch
+        # glue (``_loop_torch`` / ``_prefix_torch``) around the same fused layers
+        rt = m.tul_fan_lsel_router if self.lsel else None
+        self.slot_glue = bool(
+            self.layers == "fused" and m.tul_cell_norm is not None and self.cn_rms
+            and self.M == self.Kp and self.M & (self.M - 1) == 0
+            and (rt is None or (rt.W_c.weight.shape[0] & (rt.W_c.weight.shape[0] - 1)) == 0))
+        if self.slot_glue:
+            self.W_prefix_f = m.tul.W_prefix.detach().float().contiguous()
+            if rt is not None:
+                self.rt_wc = rt.W_c.weight.detach().float().contiguous()
+                self.rt_wx = rt.W_x.weight.detach().float()
+                self.rt_bx = rt.W_x.bias.detach().float()
+                self.rt_v = rt.v.detach().float().contiguous()
         nbm = self.Bmax * self.cmax
-        self.q_stage_all = self.L_stage + torch.arange(self.Bmax * M, device=dev)
+        if self.layers == "engine":
+            self.q_stage_all = self.L_stage + torch.arange(self.Bmax * M, device=dev)
         self.ones_q = torch.ones(self.Bmax, 1, dtype=torch.bool, device=dev)
         self.reg_mask = torch.zeros(self.Bmax, P, dtype=torch.bool, device=dev)
         self.reg_index = torch.zeros(self.Bmax, 1, dtype=torch.long, device=dev)
@@ -469,9 +592,15 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         h[_T_CJ], h[_T_JP1], h[_T_TIM1] = j + Cc, j + 1, np.maximum(ti - 1, 0)
         hist = j[:, None] + _HIST6[None, :]
         x = self.h_tok32_np
-        x[0, :, :6] = np.where(hist >= 0, hist, P)
-        x[0, :, 6], x[0, :, 7] = P + 1, 0
         b = np.arange(self.B)
+        if self.layers == "engine":
+            x[0, :, :6] = np.where(hist >= 0, hist, P)
+            x[0, :, 6], x[0, :, 7] = P + 1, 0
+        else:
+            # latent rows b*P + j' of the span's earlier tokens, -1 before the span; the
+            # token's own latents go to row b*P + j
+            x[0, :, :6] = np.where(hist >= 0, b[:, None] * P + hist, -1)
+            x[0, :, 6], x[0, :, 7] = 0, b * P + j
         x[1] = 0
         x[1, :, 0], x[1, :, 4], x[1, :, 6] = b, j, j               # prelude: [0, j) window
         x[2, :, 0], x[2, :, 1], x[2, :, 2] = b, 0, ncell            # coda: every cell,
@@ -481,13 +610,18 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
     def _cell_xoff(self, nb: int, cnt: int) -> np.ndarray:
         """``x_off`` ``[nb*cnt, 8]`` of the cells of a fresh segment: cell i of bucket row
         q reads cells 0..i of its own block ``q*cnt`` of the cell table, the zero row
-        before them."""
+        before them. ``layers="fused"``: the same cells as this event's rows
+        ``-2 - (q*cnt + i')``, ``-1`` before the segment, no latent write."""
         i = np.tile(np.arange(cnt), nb)
         base = np.repeat(np.arange(nb), cnt) * cnt
         hist = i[:, None] + _HIST6[None, :]
         out = np.empty((nb * cnt, 8), dtype=np.int32)
-        out[:, :6] = np.where(hist >= 0, base[:, None] + hist, self.CX_zero)
-        out[:, 6], out[:, 7] = base + i, 0
+        if self.layers == "engine":
+            out[:, :6] = np.where(hist >= 0, base[:, None] + hist, self.CX_zero)
+            out[:, 6], out[:, 7] = base + i, 0
+        else:
+            out[:, :6] = np.where(hist >= 0, -2 - (base[:, None] + hist), -1)
+            out[:, 6], out[:, 7] = 0, -1
         return out
 
     def _host_slot(self, entries: list[tuple[int, int, int, int, int]], nb: int) -> None:
@@ -520,11 +654,20 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         # this slot's earlier cells (staging rows), the zero row before cell 0
         hist = c[:, None] + _HIST6[None, :]
         cur = (sm * M)[:, None]
-        stage = self.L_stage + np.arange(q)
-        rows = np.where(hist < 0, self.L_zero,
-                        np.where(hist >= cur, (stage - im)[:, None] + (hist - cur),
-                                 rm[:, None] * RW + hist % RW))
-        x[2, :q, :6], x[2, :q, 6], x[2, :q, 7] = rows, stage, 0
+        if self.layers == "engine":
+            stage = self.L_stage + np.arange(q)
+            rows = np.where(hist < 0, self.L_zero,
+                            np.where(hist >= cur, (stage - im)[:, None] + (hist - cur),
+                                     rm[:, None] * RW + hist % RW))
+            x[2, :q, :6], x[2, :q, 6], x[2, :q, 7] = rows, stage, 0
+        else:
+            # earlier slots' cells from the ring, this slot's earlier cells from this
+            # event's rows (query row - (c - c')), -1 before the row's first cell; the cell
+            # writes its latents into the ring at r*RW + c % RW
+            ev = -2 - (np.arange(q)[:, None] - (c[:, None] - hist))
+            rows = np.where(hist < 0, -1,
+                            np.where(hist >= cur, ev, rm[:, None] * RW + hist % RW))
+            x[2, :q, :6], x[2, :q, 6], x[2, :q, 7] = rows, 0, rm * RW + c % RW
         x[3, :q] = 0
         x[3, :q, 0], x[3, :q, 2], x[3, :q, 5] = rm, (sm + 1) * M, c
         # the Kp coda cells: each reads itself alone
@@ -601,7 +744,11 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         return bf16_gemv(x, w) if w is self.W_head else small_gemv(x, w)
 
     def _logp(self, xh: Tensor) -> Tensor:
-        logits = self._gemv(xh, self.W_head, 2)
+        if self.head_pk is not None:
+            logits = head_codes_logits(xh, *self.head_pk, torch.empty(
+                xh.shape[0], self.V, device=self.dev, dtype=torch.float32))
+        else:
+            logits = self._gemv(xh, self.W_head, 2)
         logits = logits.index_fill(-1, self.slot_col, float("-inf"))
         return torch.log_softmax(logits, dim=-1)
 
@@ -675,11 +822,129 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         wm, bm = L.hc[id(blk.mrr_mlp)]
         return hc_apply(blk.mrr_mlp, h, _mlp_fn, wm, bm, self.hcb_zero, term=term_next)
 
+    def _block_f(self, L: _Layer, h: Tensor, rawp: Tensor, st: _Site,
+                 term_next: Tensor | None, L_next: _Layer | None,
+                 front_only: bool = False) -> tuple[Tensor, Tensor | None]:
+        """``MORPHBlock.forward`` on the row-batched kernels (``lx_layer_decode.py``, the
+        8 launches of its module docstring). ``h`` [R, N, C] contiguous; ``rawp`` the
+        partials of THIS layer's attention HC projection of ``h``. Returns the carrier and
+        the partials of ``L_next``'s attention HC projection of it (None without
+        ``L_next``). ``front_only``: the pre-map and the front (the K/V store) only."""
+        R, dev, f32 = h.shape[0], self.dev, torch.float32
+        C, H, D = self.C, self.H, self.D
+        blk = L.block
+        xn = torch.empty(R, C, device=dev, dtype=f32)
+        hres = torch.empty(R, self.N * self.N, device=dev, dtype=f32)
+        hpost = torch.empty(R, self.N, device=dev, dtype=f32)
+        hc_pre(h, rawp, L.hca_b, blk.mrr_attn, L.na_w, L.na_eps, xn, hres, hpost)
+        part = torch.empty(R, self.KS, L.Wqkv.shape[0], device=dev, dtype=f32)
+        lat_gemm(xn, L.Wqkv, part)
+        q = torch.empty(R, H, D, device=dev, dtype=f32)
+        xres = torch.empty(R, self.LQ, device=dev, dtype=f32)
+        gateh = torch.empty(R, self.GH, device=dev, dtype=f32)
+        if not st.widx.is_contiguous():
+            st.widx = st.widx.contiguous()
+        lat_post(part, st.lat, st.x_off, st.widx, st.cos, st.sin, *L.conv_pack_t, L.exp_temp,
+                 st.kc, st.vc, q, xres, gateh, H, self.Hkv, D, self.LQ, self.LK, self.Vh,
+                 self.GH, self.k_conv, L.qk_eps, kv_row=st.kv_row)
+        if front_only:
+            return h, None
+        o = self.lx_attn(q, st.kc, st.vc, st.meta, st.kpos, gateh, L.Wgate2, xres, L.sink,
+                         L.alpha, self.window, D ** -0.5)
+        h1 = torch.empty_like(h)
+        rawm = torch.empty(R, C // PART_TILE, 48, device=dev, dtype=f32)
+        up_post(o, L.Wup, hres, hpost, h, h1, None, L.hcm_w, rawm)
+        hc_pre(h1, rawm, L.hcm_b, blk.mrr_mlp, L.nm_w, L.nm_eps, xn, hres, hpost)
+        hsw = torch.empty(R, self.FF, device=dev, dtype=f32)
+        gu_swiglu(xn, *L.Tgu, hsw)
+        h2 = torch.empty_like(h)
+        rawn = (torch.empty(R, C // PART_TILE, 48, device=dev, dtype=f32)
+                if L_next is not None else None)
+        dn_post(hsw, *L.Tdown, hres, hpost, h1, h2, term_next,
+                L_next.hca_w if L_next is not None else None, rawn)
+        return h2, rawn
+
+    def _group(self, Ls: list, h: Tensor, sites: list, terms_next: list,
+               front_only_last: bool = False, rawp: Tensor | None = None) -> Tensor:
+        """Apply the blocks ``Ls`` in order to the carrier ``h`` [Bh, Sh, N, C]; block i
+        reads ``sites[i]`` and folds ``terms_next[i]`` (the NEXT block's injection term, or
+        None) into its MLP post. ``front_only_last``: the last block stores its K/V only
+        and the returned carrier is not meaningful (nothing reads it). ``rawp``
+        (layers="fused" only): the first block's HC-projection partials of ``h``, already
+        written by the kernel that wrote ``h`` (``loop_entry``); None computes them here."""
+        n = len(Ls)
+        if self.layers == "engine":
+            for i, L in enumerate(Ls):
+                fo = front_only_last and i + 1 == n
+                out = self._block(L, h, sites[i], terms_next[i], front_only=fo)
+                h = h if fo else out
+            return h
+        Bh, Sh = h.shape[0], h.shape[1]
+        x = h.reshape(Bh * Sh, self.N, self.C).contiguous()
+        if rawp is None:
+            rawp = hc_partials(x, Ls[0].hca_w)
+        for i, L in enumerate(Ls):
+            L_next = Ls[i + 1] if i + 1 < n else None
+            fo = front_only_last and L_next is None
+            nt = terms_next[i]
+            x, rawp = self._block_f(L, x, rawp, sites[i],
+                                    None if nt is None else nt.reshape(-1, self.C), L_next, fo)
+        return x.view(Bh, Sh, self.N, self.C)
+
     def _rope(self, pos: Tensor) -> tuple[Tensor, Tensor]:
         return self.cos_flat.index_select(0, pos), self.sin_flat.index_select(0, pos)
 
     # -- the token step ----------------------------------------------------------------
     def _token_step(self) -> None:
+        if self.layers == "fused":
+            self._token_step_fused()
+        else:
+            self._token_step_engine()
+
+    def _token_step_fused(self) -> None:
+        """``_token_step_engine``'s function on the fused glue (entry, hand-off and exit of
+        morph/kernels/triton/lx_glue_decode.py) and the row-batched layers."""
+        m = self.m
+        B, C, N, dev, f32 = self.B, self.C, self.N, self.dev, torch.float32
+        d = self.d_tok
+        tok, pos, j, ti, cj = d[_T_TOK], d[_T_POS], d[_T_J], d[_T_TI], d[_T_CJ]
+        x_off, meta_pre, meta_coda = self.d_tok32[0], self.d_tok32[1], self.d_tok32[2]
+        x2 = torch.empty(B, C, device=dev, dtype=f32)
+        bg2 = torch.empty(B, C, device=dev, dtype=f32)
+        terms = torch.empty(self.n_tot, B, C, device=dev, dtype=f32)
+        h = torch.empty(B, 1, N, C, device=dev, dtype=f32)
+        cos = torch.empty(B, self.D, device=dev, dtype=f32)
+        sin = torch.empty(B, self.D, device=dev, dtype=f32)
+        tok_entry(tok, d[_T_PREV], pos, j, self.emb_table, self.bg_table, self.lam_v,
+                  self.cos_flat, self.sin_flat, self.cs, self.ce, x2, bg2, self.span_emb,
+                  self.span_bg, terms, h.view(B, N, C), cos, sin)
+        ve = None
+        if self.n_ve:
+            ve = self._ve_signal(tok).contiguous()                      # [n_ve, B, cw]
+            self.span_ve[:, self.arB, j] = ve
+        tok_x0(x2, bg2, self.Tx0, self.Tx0_rs, self.x0s_v, self.lam_v, self.cs, terms,
+               h.view(B, N, C), ve)
+        # ── prelude: the span's earlier tokens; no slot column ─────────────────────
+        sites = [self._tok_site(i, x_off, self.Kpre[i], self.Vpre[i], j, cos, sin, meta_pre,
+                                None) for i in range(self.np_)]
+        nts = [terms[i + 1].view(B, 1, C) if i + 1 < self.np_ else None
+               for i in range(self.np_)]
+        h = self._group(self.pre, h, sites, nts)
+        # ── coda: every written cell (window by absolute position) + the span's tokens
+        base = self.np_ + self.nc
+        xc = torch.empty(B, 1, N, C, device=dev, dtype=f32)
+        inn = m.input_norm
+        tok_mid(h.view(B, N, C), inn.weight, inn.eps, terms[base], xc.view(B, N, C),
+                self.span_xn, j)
+        sites = [self._tok_site(self.np_ + i, x_off, self.Kcoda[i], self.Vcoda[i], cj, cos,
+                                sin, meta_coda, self.kpos) for i in range(self.nd)]
+        nts = [terms[base + i + 1].view(B, 1, C) if i + 1 < self.nd else None
+               for i in range(self.nd)]
+        xc = self._group(self.coda, xc, sites, nts)
+        self._exit_fused(xc[:, 0], tok, ti, d[_T_TIM1])
+        # (lat_post wrote each token's latents at row b*P + j: no history commit)
+
+    def _token_step_engine(self) -> None:
         m = self.m
         B, P, C, N = self.B, self.P, self.C, self.N
         d = self.d_tok
@@ -697,30 +962,24 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         self.span_emb[self.arB, j] = emb[:, 0].float()
         cos, sin = self._rope(pos)
         # ── prelude: the span's earlier tokens; no slot column ─────────────────────
-        meta = meta_pre
         h = (x2.view(B, 1, 1, C) + terms[0].view(B, 1, 1, C)).expand(B, 1, N, C).contiguous()
-        for i, L in enumerate(self.pre):
-            X = self.X_tok[i]
-            st = _Site(x_hist=X, x_off=x_off, kc=self.Kpre[i], vc=self.Vpre[i], widx=j,
-                       kv_row=None, cos=cos, sin=sin, meta=meta, kpos=None,
-                       nout=X[:, P + 1], snout=X.stride(0))
-            nt = terms[i + 1].view(B, 1, C) if i + 1 < self.np_ else None
-            h = self._block(L, h, st, nt)
+        sites = [self._tok_site(i, x_off, self.Kpre[i], self.Vpre[i], j, cos, sin, meta_pre,
+                                None) for i in range(self.np_)]
+        nts = [terms[i + 1].view(B, 1, C) if i + 1 < self.np_ else None
+               for i in range(self.np_)]
+        h = self._group(self.pre, h, sites, nts)
         inn = m.input_norm
         e = rmsnorm_rows(h, inn.weight, inn.eps)                       # [B, 1, N, C]
         if self.span_xn is not None:
             self.span_xn[self.arB, j] = e.mean(dim=2)[:, 0]
         # ── coda: every written cell (window by absolute position) + the span's tokens
         base = self.np_ + self.nc
-        meta = meta_coda
         xc = (e + terms[base].view(B, 1, 1, C)).contiguous()
-        for i, L in enumerate(self.coda):
-            X = self.X_tok[self.np_ + i]
-            st = _Site(x_hist=X, x_off=x_off, kc=self.Kcoda[i], vc=self.Vcoda[i], widx=cj,
-                       kv_row=None, cos=cos, sin=sin, meta=meta, kpos=self.kpos,
-                       nout=X[:, P + 1], snout=X.stride(0))
-            nt = terms[base + i + 1].view(B, 1, C) if i + 1 < self.nd else None
-            xc = self._block(L, xc, st, nt)
+        sites = [self._tok_site(self.np_ + i, x_off, self.Kcoda[i], self.Vcoda[i], cj, cos,
+                                sin, meta_coda, self.kpos) for i in range(self.nd)]
+        nts = [terms[base + i + 1].view(B, 1, C) if i + 1 < self.nd else None
+               for i in range(self.nd)]
+        xc = self._group(self.coda, xc, sites, nts)
         xh = self._readout(xc[:, 0])                                   # [B, C]
         logp = self._logp(xh)
         if self.ptr:
@@ -728,6 +987,50 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         self.logp_tok.copy_(logp)
         self.next_tok.copy_(logp.argmax(dim=-1))
         ring_commit(self.X_tok, d[_T_JP1])                 # staging row -> row j
+
+    def _exit_fused(self, x: Tensor, tok: Tensor, ti: Tensor, ti_m1: Tensor) -> None:
+        """``_readout`` + ``_logp`` + ``_pointer`` + the copy into ``logp_tok`` and the
+        argmax into ``next_tok``, in the 9 launches of lx_glue_decode.py. ``x`` [B, N, C]
+        the coda's carrier rows."""
+        B, dev, f32 = self.B, self.dev, torch.float32
+        fn = self.m.final_norm
+        y = readout_gemv(x, self.lm_scale, self.Tmix, self.Tmix_rs,
+                         torch.empty(B, self.C, device=dev, dtype=f32))
+        xh = rmsnorm_rows(y, fn.weight, fn.eps)
+        if self.head_pk is not None:
+            logits = head_codes_logits(xh, *self.head_pk,
+                                       torch.empty(B, self.V, device=dev, dtype=f32))
+        else:
+            logits = self._gemv(xh, self.W_head, 2)
+        w0 = None
+        if self.ptr:
+            proj = ptr_proj(xh, self.ptr_w, self.ptr_gb, self.ptr_nqk,
+                            torch.empty(B, self.ptr_w.shape[0], device=dev, dtype=f32))
+            beta = torch.empty(B, self.max_tokens, device=dev, dtype=f32)
+            w0 = torch.empty(B, device=dev, dtype=f32)
+            ptr_attn(proj, self.ptr_keys, self.ptr_cand, ti, ti_m1, tok, self.ptr_nullk,
+                     self.ptr_scale, self.ptr_s, beta, w0)
+        mx = torch.empty(B, device=dev, dtype=f32)
+        ls = torch.empty(B, device=dev, dtype=f32)
+        row_lse(logits, self.slot_id, mx, ls)
+        if self.ptr:
+            ptr_scatter(self.ptr_cand, beta, ti, self.ptr_pd)
+        nt = triton.cdiv(self.V, MIX_BLOCK)
+        pav = torch.empty(B, nt, device=dev, dtype=f32)
+        pai = torch.empty(B, nt, device=dev, dtype=torch.int32)
+        mix_logp(logits, mx, ls, w0, self.ptr_pd if self.ptr else None, self.slot_id,
+                 self.logp_tok, pav, pai)
+        argmax_rows(pav, pai, self.next_tok)
+
+    def _tok_site(self, k: int, x_off, kc, vc, widx, cos, sin, meta, kpos) -> _Site:
+        """Token site k (prelude 0..n_pre-1, then the coda) of the token step."""
+        if self.layers == "engine":
+            X = self.X_tok[k]
+            return _Site(x_hist=X, x_off=x_off, kc=kc, vc=vc, widx=widx, kv_row=None,
+                         cos=cos, sin=sin, meta=meta, kpos=kpos, nout=X[:, self.P + 1],
+                         snout=X.stride(0))
+        return _Site(lat=self.LAT_tok[k], x_off=x_off, kc=kc, vc=vc, widx=widx, kv_row=None,
+                     cos=cos, sin=sin, meta=meta, kpos=kpos)
 
     def _pointer(self, xh: Tensor, lm: Tensor, tok: Tensor, ti: Tensor,
                  ti_m1: Tensor) -> Tensor:
@@ -781,15 +1084,12 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         # ── the M cells' prelude: the span's tokens + cells 0..i ───────────────────
         cos, sin = self._rope(d[_S_PPOS, :q])
         x_off, meta = d32[0, :q], d32[1, :q]
-        x_hist = self.CX.unsqueeze(0).expand(nb * M, *self.CX.shape)
         h = (x_cell.view(nb, 1, 1, C) + terms_m[0].view(nb, M, 1, C)).expand(
             nb, M, N, C).contiguous()
-        for i, L in enumerate(self.pre):
-            st = _Site(x_hist=x_hist, x_off=x_off, kc=self.Kpre[i], vc=self.Vpre[i],
-                       widx=d[_S_PW, :q], kv_row=rm, cos=cos, sin=sin, meta=meta, kpos=None,
-                       nout=self.CX, snout=C)
-            nt = terms_m[i + 1] if i + 1 < self.np_ else None
-            h = self._block(L, h, st, nt)
+        sites = [self._cell_site(nb * M, x_off, self.Kpre[i], self.Vpre[i], d[_S_PW, :q], rm,
+                                 cos, sin, meta) for i in range(self.np_)]
+        nts = [terms_m[i + 1] if i + 1 < self.np_ else None for i in range(self.np_)]
+        h = self._group(self.pre, h, sites, nts)
         inn = m.input_norm
         e = rmsnorm_rows(h, inn.weight, inn.eps)                               # [nb, M, N, C]
         ctx = e[:, :1].mean(dim=2) if self.lsel else None                      # [nb, 1, C]
@@ -798,22 +1098,81 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         # ── the loop: depth passes x n_core layers, M cells at s*M + i ────────────────
         cos, sin = self._rope(c)
         x_off, meta = d32[2, :q], d32[3, :q]
-        q_stage = self.q_stage_all[:q]
-        hs = e
+        if self.slot_glue:
+            hs, pick = self._loop_fused(nb, e, terms, terms_m, x_off, c, rm, cos, sin, meta,
+                                        ctx)
+        else:
+            hs, pick = self._loop_torch(nb, e, terms_m, x_off, c, rm, cos, sin, meta, ctx)
+        # ── the prefix write (``tul_generate_cached.prefix_write``, batched) ────────────
+        if self.slot_glue:
+            vals = torch.empty(nb, Kp, N, C, device=self.dev, dtype=torch.float32)
+            prefix_write(hs.view(q, N, C), pick, self.W_prefix_f, vals.view(k, N, C))
+        else:
+            vals = self._prefix_torch(nb, hs, pick)
+        self._slot_coda(nb, vals)
+
+    def _loop_fused(self, nb: int, e: Tensor, terms: Tensor, terms_m: Tensor, x_off, c, rm,
+                    cos, sin, meta, ctx: Tensor | None) -> tuple[Tensor, Tensor | None]:
+        """``_loop_torch``'s function in 3 glue launches per pass (morph/kernels/triton/
+        lx_glue_decode.py): ``loop_entry`` (the winner reset of the previous pass, the
+        injection, the first core layer's HC partials), ``cell_norm`` (the rms cell norm
+        and, with the latent selector, the router's layer-normed cell), ``route`` (the
+        router's scores and winner). ``terms`` [L, nb, C] / ``terms_m`` [L, nb, M, C] the
+        injection terms per slot / per cell. Returns the normed cells [nb, M, N, C] of the
+        last pass and its winner [nb] (None without the selector)."""
+        M, N, C, dev, f32 = self.M, self.N, self.C, self.dev, torch.float32
+        q = nb * M
         npc = self.np_
+        term = terms[npc]                              # [nb, C]: one row for the M cells
+        ef = e.reshape(q, N, C)
+        if not ef.is_contiguous():
+            ef = ef.contiguous()
+        src, pick = ef, None
+        hn = torch.empty(q, N, C, device=dev, dtype=f32)
+        ln = pk = xp = None
+        if self.lsel:
+            rt = self.m.tul_fan_lsel_router
+            ln = torch.empty(q, C, device=dev, dtype=f32)
+            pk = torch.empty(nb, device=dev, dtype=torch.int64)
+            sp = torch.empty(q, self.rt_wc.shape[0] // 8, device=dev, dtype=f32)
+            # the router's context term W_x LN(ctx) + b_x: one value per slot for every
+            # pass (``FanRouter.scores`` recomputes the same value each pass)
+            xp = F.linear(F.layer_norm(ctx[:, 0].float(), (C,)), self.rt_wx, self.rt_bx)
+        NT = C // PART_TILE
+        for t in range(self.depth):
+            x = torch.empty(q, N, C, device=dev, dtype=f32)
+            rawp = torch.empty(q, NT, HC_NO, device=dev, dtype=f32)
+            loop_entry(src, pick, ef, self.loop_A, self.loop_dt, term, self.loop_lo,
+                       self.loop_hi, self.core[0].hca_w, x, rawp, M)
+            sites = [self._loop_site(t * self.nc + i, q, x_off, c, rm, cos, sin, meta)
+                     for i in range(self.nc)]
+            nts = [terms_m[npc + i + 1] if i + 1 < self.nc else None for i in range(self.nc)]
+            hs = self._group(self.core, x.view(nb, M, N, C), sites, nts, rawp=rawp)
+            cell_norm(hs.view(q, N, C), self.cn_w, self.cn_eps, hn, ln)
+            if self.lsel:
+                route(ln, self.rt_wc, xp, self.rt_v, rt.bias, pk, sp)
+                pick = pk
+            src = hn
+        return hn.view(nb, M, N, C), pick
+
+    def _loop_torch(self, nb: int, e: Tensor, terms_m: Tensor, x_off, c, rm, cos, sin, meta,
+                    ctx: Tensor | None) -> tuple[Tensor, Tensor | None]:
+        """The loop: depth passes x n_core layers, M cells at s*M + i; the cell norm and
+        the latent selector's reset between passes. Returns the cells after the last pass
+        [nb, M, N, C] and the last winner [nb, 1] (None without the selector)."""
+        m = self.m
+        M, N, C = self.M, self.N, self.C
+        npc = self.np_
+        hs = e
         pick = None
         for t in range(self.depth):
             hs = loop_ssm_term(hs.view(nb * M, 1, N, C), e.view(nb * M, 1, N, C), self.loop_A,
                                self.loop_dt, terms_m[npc].view(nb * M, 1, C), self.loop_lo,
                                self.loop_hi).view(nb, M, N, C)
-            for i, L in enumerate(self.core):
-                si = t * self.nc + i
-                XLs = self.XL[si]
-                st = _Site(x_hist=XLs.unsqueeze(0).expand(nb * M, *XLs.shape), x_off=x_off,
-                           kc=self.Kloop[si], vc=self.Vloop[si], widx=c, kv_row=rm, cos=cos,
-                           sin=sin, meta=meta, kpos=None, nout=XLs[self.L_stage:], snout=C)
-                nt = terms_m[npc + i + 1] if i + 1 < self.nc else None
-                hs = self._block(L, hs, st, nt)
+            sites = [self._loop_site(t * self.nc + i, nb * M, x_off, c, rm, cos, sin, meta)
+                     for i in range(self.nc)]
+            nts = [terms_m[npc + i + 1] if i + 1 < self.nc else None for i in range(self.nc)]
+            hs = self._group(self.core, hs, sites, nts)
             if m.tul_cell_norm is not None:
                 hs = (rmsnorm_rows(hs, self.cn_w, self.cn_eps) if self.cn_rms
                       else m._cell_norm_apply(hs))
@@ -823,8 +1182,13 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
                 pick = rt.select(rt.scores(cr, ctx))[0]                        # [nb, 1]
                 if t + 1 < self.depth:
                     hs = reset_to_winner(hs, pick, self.ones_q[:nb], M).contiguous()
-        # ── the prefix write (``tul_generate_cached.prefix_write``, batched) ────────────
-        w = m.tul.W_prefix.to(hs.dtype)
+        return hs, pick
+
+    def _prefix_torch(self, nb: int, hs: Tensor, pick: Tensor | None) -> Tensor:
+        """The prefix write: coda cell k's input = cell k's state (only the winner's when
+        the selector picked one) through ``W_prefix[k]``; [nb, Kp, N, C]."""
+        M, Kp = self.M, self.Kp
+        w = self.m.tul.W_prefix.to(hs.dtype)
         if M == 1:
             vals = torch.stack([torch.matmul(hs[:, 0], w[k]) for k in range(Kp)], dim=1)
         else:
@@ -833,29 +1197,55 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
                 oh = (self.arM.view(1, M) == pick.view(nb, 1)).to(hs.dtype)
                 hw = hs * oh.view(nb, M, 1, 1)
             vals = torch.stack([torch.matmul(hw[:, k], w[k]) for k in range(Kp)], dim=1)
-        # ── the coda of the Kp cells (each reads itself alone; no injection) ───────────
+        return vals
+
+    def _slot_coda(self, nb: int, vals: Tensor) -> None:
+        """The coda of the Kp cells (each reads itself alone; no injection), the emitted
+        cell's prediction, and (layers="engine") the loop history commit."""
+        Kp, d, d32 = self.Kp, self.d_slot, self.d_slot32
+        k, r = nb * Kp, d[_S_R, :nb]
+        q = nb * self.M
         rk, ck = d[_S_RK, :k], d[_S_CK, :k]
         self.kpos[rk, ck] = d32[6, :k, 0]
         cos, sin = self._rope(d[_S_PK, :k])
         x_off, meta = d32[4, :k], d32[5, :k]
-        x_hist = self.CX.unsqueeze(0).expand(nb * Kp, *self.CX.shape)
         xc = vals.contiguous()
         emit_cell = self.emit_source == "slot"
-        for i, L in enumerate(self.coda):
-            st = _Site(x_hist=x_hist, x_off=x_off, kc=self.Kcoda[i], vc=self.Vcoda[i],
-                       widx=ck, kv_row=rk, cos=cos, sin=sin, meta=meta, kpos=None,
-                       nout=self.CX, snout=C)   # self only: d1 = qidx1 - k (XSA drops it)
-            last_layer = i + 1 == self.nd
-            # Nothing reads the cells' output after the last layer unless they emit.
-            out = self._block(L, xc, st, None, front_only=last_layer and not emit_cell)
-            if not (last_layer and not emit_cell):
-                xc = out
+        # self only: d1 = qidx1 - k (XSA drops it); no injection on the coda cells
+        sites = [self._cell_site(nb * Kp, x_off, self.Kcoda[i], self.Vcoda[i], ck, rk, cos,
+                                 sin, meta) for i in range(self.nd)]
+        # Nothing reads the cells' output after the last layer unless they emit.
+        xc = self._group(self.coda, xc, sites, [None] * self.nd,
+                         front_only_last=not emit_cell)
         if emit_cell:
             lp = self._logp(self._readout(xc[:, Kp - 1]))
             self.logp_cell.index_copy_(0, r, lp)
             self.next_cell.index_copy_(0, r, lp.argmax(dim=-1))
         # ── the loop history: this slot's cells into each loop site's ring ─────────────
-        self._commit_loop_history(d[_S_DST, :q], q_stage)
+        if self.layers == "engine":
+            self._commit_loop_history(d[_S_DST, :q], self.q_stage_all[:q])
+        # (layers="fused": lat_post wrote each cell's latents into the ring already)
+
+    def _cell_site(self, rows: int, x_off, kc, vc, widx, kv_row, cos, sin, meta) -> _Site:
+        """A prelude-cell or coda-cell site of the slot step (a fresh conv segment)."""
+        if self.layers == "engine":
+            return _Site(x_hist=self.CX.unsqueeze(0).expand(rows, *self.CX.shape),
+                         x_off=x_off, kc=kc, vc=vc, widx=widx, kv_row=kv_row, cos=cos,
+                         sin=sin, meta=meta, kpos=None, nout=self.CX, snout=self.C)
+        return _Site(lat=self.LAT_none, x_off=x_off, kc=kc, vc=vc, widx=widx, kv_row=kv_row,
+                     cos=cos, sin=sin, meta=meta, kpos=None)
+
+    def _loop_site(self, si: int, rows: int, x_off, c, rm, cos, sin, meta) -> _Site:
+        """Loop site si = pass * n_core + layer of the slot step."""
+        if self.layers == "engine":
+            XLs = self.XL[si]
+            return _Site(x_hist=XLs.unsqueeze(0).expand(rows, *XLs.shape), x_off=x_off,
+                         kc=self.Kloop[si], vc=self.Vloop[si], widx=c, kv_row=rm, cos=cos,
+                         sin=sin, meta=meta, kpos=None, nout=XLs[self.L_stage:],
+                         snout=self.C)
+        return _Site(lat=self.LAT_loop[si], x_off=x_off, kc=self.Kloop[si],
+                     vc=self.Vloop[si], widx=c, kv_row=rm, cos=cos, sin=sin, meta=meta,
+                     kpos=None)
 
     def _commit_loop_history(self, dst: Tensor, src: Tensor) -> None:
         """Every loop site's staging rows ``src`` (this slot's M cells) into its history
@@ -880,6 +1270,10 @@ class LxFusedDecoder(contextlib.AbstractContextManager):
         B = self.B
         assert len(toks) == B == len(builders)
         tok = np.asarray(toks, dtype=np.int64)
+        # tok_entry reads row tok of the embedding / head table: an id outside [0, V) would
+        # read past it (Z3 precondition, 2026-10-10)
+        if (tok < 0).any() or (tok >= self.V).any():
+            raise ValueError(f"token id outside [0, {self.V}): {toks}")
         if (self.span_len >= self.P).any():
             raise RuntimeError(f"span longer than rule.span_cap={self.P}")
         if (self.n_tok >= self.max_tokens).any():
@@ -949,6 +1343,8 @@ def generate_lx_fused_batch(
     exact_weights: bool = True,
     attn: str = "kernel",
     kv_row: str = "kernel",
+    layers: str = "fused",
+    head: str = "auto",
 ):
     """``generate_tul_graphed`` for a batch of rows: per row the same tokens, the same
     builder and (``return_logits``) the same log-prob rows, up to the kernels' reduction
@@ -967,7 +1363,8 @@ def generate_lx_fused_batch(
     if own:
         steps = max(len(p) for p in prompts) + max_new_tokens
         decoder = LxFusedDecoder(model, spec, rule, B, emit_source, exact_weights,
-                                 max_tokens=steps, attn=attn, kv_row=kv_row)
+                                 max_tokens=steps, attn=attn, kv_row=kv_row, layers=layers,
+                                 head=head)
     dec = decoder
     if dec.m is not model or dec.spec != spec or dec.rule is not rule or dec.B != B \
             or dec.emit_source != emit_source:
