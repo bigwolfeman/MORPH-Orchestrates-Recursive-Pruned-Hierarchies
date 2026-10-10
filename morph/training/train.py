@@ -782,6 +782,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_renorm=bool(getattr(m, "slot_gain_renorm", False)),
         slot_gain_no_ckpt=bool(getattr(m, "slot_gain_no_ckpt", False)),
         slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
+        # MORPHConfig.slot_gain_pass_force: -1 = a fresh hinge pass per step (2026-10-10)
+        slot_gain_pass_force=int(getattr(m, "slot_gain_pass_force", -1)),
         # MORPHConfig.slot_depth_stratified / slot_compact (morph/model/slot_compact.py)
         slot_depth_stratified=bool(getattr(m, "slot_depth_stratified", False)),
         slot_compact=str(getattr(m, "slot_compact", "off")),
@@ -845,6 +847,11 @@ def save_checkpoint(
         "rng_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
     _mm = getattr(model, "_orig_mod", model)
+    _gpr = _mm.gain_pass_rng_state() if hasattr(_mm, "gain_pass_rng_state") else None
+    if _gpr is not None:
+        # The gain hinge's private pass generator (model.slot_gain_pass_force -1): its OWN
+        # stream, not in rng_cpu, so a resume continues the SAME pass sequence.
+        ckpt["gain_pass_rng"] = _gpr
     _ref = _mm.tul_code_ref_state() if hasattr(_mm, "tul_code_ref_state") else None
     if _ref is not None:
         # tul.code_target_ref (spec §17.1): the frozen VAE-stage twin every target and
@@ -1155,6 +1162,22 @@ def load_checkpoint(
             torch.cuda.set_rng_state_all([s.cpu().to(torch.uint8) for s in ckpt["rng_cuda"]])
         except Exception as e:  # device-count mismatch etc. — surface, don't pretend
             print(f"  Warning: could not restore CUDA RNG state ({e}); RNG continues fresh")
+    # The gain hinge's private pass generator (model.slot_gain_pass_force -1, 2026-10-10).
+    _mm = getattr(model, "_orig_mod", model)
+    _draws = _mm.gain_pass_rng_state() is not None if hasattr(_mm, "gain_pass_rng_state") \
+        else False
+    if ckpt.get("gain_pass_rng") is not None:
+        if _draws:
+            _mm.set_gain_pass_rng_state(ckpt["gain_pass_rng"])
+        else:
+            print("  [gain-pass] the checkpoint carries the hinge's pass-draw state but this "
+                  "run draws no pass (hinge off, all-iterations, or slot_gain_pass_force >= 0); "
+                  "the state is not used", flush=True)
+    elif _draws:
+        # A checkpoint from before the per-step draw (every such run read ONE pass for its
+        # whole length). The draw starts from this run's seed, as a fresh run's would.
+        print("  [gain-pass] the checkpoint predates the per-step hinge pass draw; the draw "
+              "starts from the run seed (training.seed)", flush=True)
 
     ckpt_step = int(ckpt.get("step", 0))
     if "next_step" in ckpt:
@@ -2115,7 +2138,18 @@ def warmup_compile_all_shapes(
         from morph.model.tul_layout import pack_tul_batch
         spec = tul_rt.data_cfg.spec_for(seq_len)
         rule = tul_rt.data_cfg.rule
-        print(f"  Warmup compile [{tag}] (TG path, {passes_per_size} packed TUL passes)...",
+        # The gain hinge's passes (model.slot_gain_pass_force): every pass the hinge can read
+        # must have its compiled frames NOW (a graph_step recording runs under
+        # fail_on_recompile, and an eager step would run an uncovered pass eager). Each
+        # warm-up forward is PINNED to one pass, so the hinge's private generator moves only
+        # in training steps. Passes beyond the usual `passes_per_size` forwards get a forward
+        # of their own, run with the global RNG streams and the model's buffers put back, so
+        # the run after the warm-up does not depend on how many passes it compiled.
+        _root = getattr(model, "_orig_mod", model)
+        _passes = _root.gain_pass_choices() if hasattr(_root, "gain_pass_choices") else ()
+        n_fwd = max(passes_per_size, len(_passes))
+        print(f"  Warmup compile [{tag}] (TG path, {n_fwd} packed TUL passes"
+              + (f", gain-hinge passes {list(_passes)}" if _passes else "") + ")...",
               flush=True)
         t0 = time.perf_counter()
         g = torch.Generator().manual_seed(0)
@@ -2123,21 +2157,47 @@ def warmup_compile_all_shapes(
         # so the EMA of the slot loop's attention input must not learn from them (the
         # first update would set every mu_l to a random-token mean). Frozen = recorded and
         # discarded; a no-op on every model without the key.
-        with model.loop_attn_center_frozen():
-            for _ in range(passes_per_size):
-                need = batch_size * (spec.l_total + 1)
-                buf = torch.randint(0, model.cfg.vocab_size, (need + 8,),
-                                    generator=g).tolist()
-                ids, labs, layout = pack_tul_batch(buf, rule, spec, batch_size)
-                ids, labs, layout = ids.to(device), labs.to(device), layout.to(device)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    out = model(ids, labels=labs, slot_layout=layout)
-                out["loss"].backward()
-                model.zero_grad(set_to_none=True)
-                del ids, labs, layout, out
+        try:
+            with model.loop_attn_center_frozen():
+                for i in range(n_fwd):
+                    extra = i >= passes_per_size
+                    need = batch_size * (spec.l_total + 1)
+                    buf = torch.randint(0, model.cfg.vocab_size, (need + 8,),
+                                        generator=g).tolist()
+                    # The packer refuses a row holding slot_id (spec §3.1). A uniform row of
+                    # ~7.7k tokens holds it about 1 time in 7: the first 4 rows of this seed
+                    # miss it, the 8 rows of a fresh-pass hinge do not (2026-10-10 gate
+                    # gn-fast-s1). Remap it to the next id; a row without it is unchanged.
+                    buf = [(t + 1) % model.cfg.vocab_size if t == spec.slot_id else t
+                           for t in buf]
+                    ids, labs, layout = pack_tul_batch(buf, rule, spec, batch_size)
+                    ids, labs, layout = ids.to(device), labs.to(device), layout.to(device)
+                    if _passes:
+                        _root.pin_gain_pass(_passes[i % len(_passes)])
+                    saved = ([(n, b, b.detach().clone()) for n, b in _root.named_buffers()]
+                             if extra else [])
+                    with (torch.random.fork_rng(devices=[device]) if extra
+                          else contextlib.nullcontext()):
+                        with torch.autocast("cuda", dtype=torch.bfloat16):
+                            out = model(ids, labels=labs, slot_layout=layout)
+                        out["loss"].backward()
+                    model.zero_grad(set_to_none=True)
+                    if saved:
+                        now = dict(_root.named_buffers())
+                        for n, b, c in saved:
+                            if now.get(n) is not b:
+                                raise RuntimeError(
+                                    f"warm-up: buffer {n} was rebound by a training forward; "
+                                    f"the extra gain-hinge pass forward cannot put it back")
+                            with torch.no_grad():
+                                b.copy_(c)
+                    del ids, labs, layout, out, saved
+        finally:
+            if _passes:
+                _root.pin_gain_pass(None)
         torch.cuda.synchronize()
         print(f"  Warmup compile [{tag}] done in {time.perf_counter()-t0:.1f}s "
-              f"({passes_per_size} TG passes)", flush=True)
+              f"({n_fwd} TG passes)", flush=True)
         return
 
     mx = int(model.cfg.max_depth)
@@ -3424,6 +3484,9 @@ def main(cfg: DictConfig) -> None:
         # switch rebuilds the loader and can change the layout and the bag size).
         _gs_first = max([start_step + 3] + [s for s in (schedule.tst_phase1_steps,
                                                        schedule.tul_step) if s > start_step])
+        # The gain hinge's pass is a VARIANT (graph_step.py module notes): one graph per
+        # (kind, pass), the pass drawn on the host each step by the model's own draw.
+        _gs_pass = _mdl0.gain_pass_choices()
         _gs = GraphStep(
             model, optimizer, grad_clip=grad_clip,
             forward=lambda _x, _y, _l: model(_x, labels=_y, bag_size=phase.bag_size,
@@ -3432,14 +3495,18 @@ def main(cfg: DictConfig) -> None:
             set_kind=lambda _k: setattr(_mdl0, "_train_instruments", _k),
             loss_terms=_spec_pen.penalty if _spec_pen is not None else None,
             after_step=_mdl0.tul_fan_after_step, first_capture=_gs_first,
-            keep_grads=(True,), compiled=use_compile)
+            keep_grads=(True,), compiled=use_compile,
+            **({} if not _gs_pass else
+               {"variants": _gs_pass, "draw_variant": _mdl0.draw_gain_pass,
+                "set_variant": _mdl0.pin_gain_pass}))
         # Eval and generation do not fit beside the graphs' pool on 32 GB: they run with the
         # graphs released, and the next step records them again (GraphStep.released).
         _gs_release = _gs.released
         print(f"  [graph-step] ON: eager steps until {_gs_first} and until an instrument step "
-              f"has run, then both step kinds (regular, instrument) are recorded and every "
-              f"later step is a replay; the body is the forward, backward, clip, found-inf "
-              f"flag, optimizer step and tul_fan_after_step", flush=True)
+              f"has run, then both step kinds (regular, instrument) are recorded "
+              f"{'once each' if not _gs_pass else f'per gain-hinge pass {list(_gs_pass)}'} "
+              f"and every later step is a replay; the body is the forward, backward, clip, "
+              f"found-inf flag, optimizer step and tul_fan_after_step", flush=True)
 
     # ── Training loop ─────────────────────────────────────────────────────
     _train_mode()
@@ -4165,6 +4232,13 @@ def main(cfg: DictConfig) -> None:
         # (calm optimizer, exploding loss). Registered lazily; run every step here for per-step norms.
         if _diag_fwd and _diag_optstate_path:
             diag_forward_norms(model, step, _diag_optstate_path)
+        # The gain hinge's pass this step (model.slot_gain_pass_force), EVERY step: a host int
+        # the draw recorded (eager forward or GraphStep), so logging it costs no device sync.
+        # Cleared here so a step whose forward drew nothing logs nothing.
+        _gp = _mdl0._gain_pass_last
+        if _gp is not None:
+            _mdl0._gain_pass_last = None
+            wandb.log({"loop/gain_pass": _gp}, step=step)
 
         # ── Timing ────────────────────────────────────────────────────────
         if _exact_trace is not None:

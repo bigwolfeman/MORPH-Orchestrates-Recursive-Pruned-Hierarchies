@@ -116,6 +116,14 @@ model:
   #   one sample missed the expansive one (arc E2 detonated at 2556). ~2x the penalty's
   #   extra core steps. false = the measured single-sample constraint.
   slot_gain_all_iters: false
+  # slot_gain_pass_force: -1 = the one-pass hinge reads a FRESH pass every step, uniform over
+  #   the step's grad passes, from the model's private generator (seeded from training.seed,
+  #   saved in the checkpoint; no other RNG stream moves). k >= 0 = always pass k (gates and
+  #   tests). Every run before 2026-10-10 read ONE pass for its whole length (the draw put
+  #   the global CPU stream back, so it repeated: pass 6 on seed 1, pass 3 on seed 2), so
+  #   the numbers above were measured on a fixed pass. `6` on seed 1 reproduces those runs.
+  #   Under training.graph_step one graph is recorded per pass (morph/training/graph_step.py).
+  slot_gain_pass_force: -1
   # slot_gain_tail_lambda: a second hinge on the PER-SLOT gain g_s of the same finite
   #   difference, lambda_tail * mean over valid slots of relu(g_s - slot_gain_tail_target)^2,
   #   added to the row hinge. The row hinge holds the typical gain; the tail bounds ONE

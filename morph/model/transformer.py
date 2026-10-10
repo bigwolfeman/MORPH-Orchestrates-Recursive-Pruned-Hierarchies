@@ -108,6 +108,10 @@ from morph.kernels.triton.tg_strict_attention import tg_strict_index
 # A module constant so the map is reproducible from the config alone: the buffer is not
 # persisted and an offline probe rebuilds it by calling `frozen_code_expansion` with this.
 _SONAR_LIFT_SEED = 0x50FA
+# Salt of the gain hinge's private pass generator (`MORPHTransformer._gain_pass_gen`): its
+# seed is torch.initial_seed() (the run seed) plus this, so the pass sequence depends on the
+# run seed without being a copy of the global CPU stream's first draws.
+_GAIN_PASS_SALT = 0x6A1D_5EED
 
 _PROFILE_REGIONS = os.environ.get("MORPH_PROFILE_REGIONS", "0") == "1"
 if _PROFILE_REGIONS:
@@ -805,6 +809,19 @@ class MORPHConfig:
     # at its input, so the hinge's gradient through f(h) also reaches earlier passes and
     # the prelude (the separate application detaches them). False = two applications.
     slot_gain_reuse_f0: bool = False
+    # slot_gain_pass_force — WHICH pass the one-pass gain hinge reads (not used under
+    # `slot_gain_all_iters`). -1 (default) = a FRESH pass every training step, uniform over
+    # that step's grad passes, drawn from the model's PRIVATE CPU generator
+    # (`_gain_pass_gen`, seeded at build from torch.initial_seed(), which the trainer sets to
+    # training.seed; its state rides the checkpoint as `gain_pass_rng`). The draw touches no
+    # other random stream. k >= 0 pins the hinge to absolute pass k on every step (a gate
+    # and test key; a step whose pass range does not hold k raises). Before 2026-10-10 the
+    # draw came from the GLOBAL CPU stream with the stream put back, so every step drew the
+    # same pass (54 of 54 draws: pass 6 on seed 1, pass 3 on seed 2); `slot_gain_pass_force:
+    # 6` on seed 1 is that run. Under training.graph_step the trainer draws the pass on the
+    # host and replays the graph recorded for that pass (morph/training/graph_step.py).
+    # Phase-2 tracker items A2/A3 (.agents/notes/proposed/process/2026-10-10-phase-2-tracker.md).
+    slot_gain_pass_force: int = -1
     # slot_depth_stratified — the slot loop's training depth draw is, per row, a SYSTEMATIC
     # sample of clamp(Poisson(mean), 1, max) randomly permuted over the slots: each slot's
     # marginal law is unchanged, the joint law is not (a row cannot draw many deep slots at
@@ -3803,6 +3820,41 @@ class MORPHTransformer(nn.Module):
                 "which exists only when both are on.")
         if cfg.slot_gain_lambda > 0.0 and cfg.scse_enabled and _why is None:
             raise NotImplementedError("model.slot_gain_lambda under SCSE is not defined (deviation carrier)")
+        # model.slot_gain_pass_force and the hinge's per-step pass draw (2026-10-10).
+        _force = int(cfg.slot_gain_pass_force)
+        _one_pass = cfg.slot_gain_lambda > 0.0 and not cfg.slot_gain_all_iters
+        if _force < -1:
+            raise ValueError(f"model.slot_gain_pass_force must be -1 (a fresh pass per step) "
+                             f"or a pass index >= 0, got {_force}")
+        if _force >= 0:
+            if not _one_pass:
+                # Inert otherwise: no hinge, or the all-iterations hinge, which reads every
+                # grad pass. A knob that does nothing raises.
+                raise ValueError(
+                    "model.slot_gain_pass_force >= 0 needs model.slot_gain_lambda > 0 and "
+                    "model.slot_gain_all_iters: false: it picks the ONE pass the hinge reads.")
+            _ceil = (int(cfg.tul.slot_depth_fixed) or int(cfg.tul.slot_max_depth or 0)
+                     or int(cfg.max_depth)) if cfg.tul is not None else int(cfg.max_depth)
+            if _force >= _ceil:
+                raise ValueError(f"model.slot_gain_pass_force={_force} is past the slot "
+                                 f"loop's last pass ({_ceil - 1})")
+        # The draw's PRIVATE generator: one uniform per training step, nothing else reads it,
+        # so the global CPU and CUDA streams (depth draws, dropout, the hinge's own direction)
+        # are exactly where they would be without it. Seeded from torch.initial_seed() — the
+        # trainer's torch.manual_seed(training.seed) runs before the model is built — plus a
+        # fixed salt, so the pass sequence is a function of the run seed and is not the global
+        # stream's own first draws. A resume restores its state (`gain_pass_rng_state`).
+        # None when the hinge reads one pass by force, reads every pass, or is off.
+        self._gain_pass_gen: torch.Generator | None = None
+        if _one_pass and _force < 0 and _why is None:
+            self._gain_pass_gen = torch.Generator(device="cpu").manual_seed(
+                (torch.initial_seed() + _GAIN_PASS_SALT) % (1 << 63))
+        # Set by GraphStep (one graph recorded per pass) and by the warm-up compile: the pass
+        # the NEXT forwards read, with no draw. None = draw (or force). See `_gain_pass_for_step`.
+        self._gain_pass_pin: int | None = None
+        # The pass the last draw (or the force key) chose, for the trainer's `loop/gain_pass`.
+        # Host-side, so logging it costs no device sync. The trainer clears it every step.
+        self._gain_pass_last: int | None = None
         if cfg.tul is not None and cfg.tul.slot_source_once and cfg.scse_enabled:
             raise NotImplementedError(
                 "tul.slot_source_once under SCSE: SCSE's core is already source-free "
@@ -6763,15 +6815,14 @@ class MORPHTransformer(nn.Module):
             # passes were cut. Kept out of `_loop_prog` because the trainer reduces every
             # entry of that dict to a float.
             self._loop_prog_k = _pk.detach()
-        # The regularised iteration: one grad iteration per step, drawn from the global
-        # stream and the stream put back, so the draw is free of side effects on the run.
+        # The regularised iteration: one grad pass per step, a FRESH uniform draw from the
+        # model's private generator (or the pin / `slot_gain_pass_force`), so the draw moves
+        # every step and leaves every other random stream where it was.
         _t_gain = -1
         _gain_all = bool(self.cfg.slot_gain_all_iters)
         _gain_reuse = _gain_on and bool(self.cfg.slot_gain_reuse_f0)
         if _gain_on and n_grad_iters > 0 and not _gain_all:
-            _rs = torch.get_rng_state()
-            _t_gain = n_nograd + int(torch.randint(n_grad_iters, (1,)).item())
-            torch.set_rng_state(_rs)
+            _t_gain = self._gain_pass_for_step(n_nograd, n_grad_iters)
         _gain_terms: list[dict] = []
         _ck = self.cfg.ckpt_grad_iters
         n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
@@ -8003,6 +8054,106 @@ class MORPHTransformer(nn.Module):
         else:
             h_out = torch.where(act.view(*act.shape, *([1] * (h_in.dim() - 2))), h_out, h_in)
         return h_out, None, xa
+
+    # ── The gain hinge's pass (model.slot_gain_pass_force; phase-2 tracker A2/A3) ────────
+    # One pass per training step, drawn fresh. The eager forward draws in `_tul_core`
+    # (`_gain_pass_for_step`); under training.graph_step the trainer's GraphStep draws on the
+    # host (`draw_gain_pass`), replays the graph it recorded for that pass, and the forward
+    # it recorded read a PIN, not a draw. Both consume ONE uniform per step from the same
+    # private generator through `_gain_pass_u`, so the two paths draw the same sequence
+    # (tests/test_gain_pass_draw.py; tests/test_graph_step.py replays against eager).
+
+    def _gain_pass_u(self) -> float:
+        """One uniform in [0, 1) from the hinge's private generator (float64, 53 bits): the
+        only draw the pass choice makes."""
+        if self._gain_pass_gen is None:
+            raise RuntimeError(
+                "the gain hinge's pass draw has no generator: it exists only for the "
+                "one-pass hinge (model.slot_gain_lambda > 0, slot_gain_all_iters false) with "
+                "slot_gain_pass_force -1 on a model whose slot loop runs")
+        return float(torch.rand((), generator=self._gain_pass_gen, dtype=torch.float64))
+
+    def _gain_pass_for_step(self, n_nograd: int, n_grad: int) -> int:
+        """The absolute pass the one-pass hinge reads on this forward: the pin when one is
+        set (GraphStep's recordings and drawn eager steps, the warm-up compile), else
+        `slot_gain_pass_force`, else n_nograd + floor(u * n_grad), uniform over this step's
+        grad passes. A drawn or forced pass is recorded in `_gain_pass_last`; a pinned
+        forward records nothing (whoever set the pin drew it). A pass outside this step's
+        grad range raises: a forced pass no slot reaches is not silently moved."""
+        pin, force = self._gain_pass_pin, int(self.cfg.slot_gain_pass_force)
+        if pin is not None:
+            t = int(pin)
+        elif force >= 0:
+            t = force
+            self._gain_pass_last = t
+        else:
+            if torch.cuda.is_initialized() and torch.cuda.is_current_stream_capturing():
+                # A host draw inside a CUDA graph recording would be frozen into the graph:
+                # every replay would read this one pass, the defect this draw replaced.
+                raise RuntimeError(
+                    "the gain hinge drew its pass inside a CUDA graph capture; under "
+                    "training.graph_step the pass is a GraphStep variant (drawn on the host, "
+                    "one graph per pass): pass gain_pass_choices / draw_gain_pass / "
+                    "pin_gain_pass to GraphStep")
+            t = n_nograd + int(self._gain_pass_u() * n_grad)
+            self._gain_pass_last = t
+        if not n_nograd <= t < n_nograd + n_grad:
+            raise ValueError(
+                f"the gain hinge's pass {t} ({'pin' if pin is not None else 'force'}) is "
+                f"not a grad pass of this step (passes {n_nograd}..{n_nograd + n_grad - 1})")
+        return t
+
+    def gain_pass_choices(self) -> tuple[int, ...]:
+        """Every absolute pass a ``model.graph_safe`` training step's one-pass hinge can
+        read, in the order `draw_gain_pass` indexes them. () when no step reads one drawn
+        pass (the hinge off, `slot_gain_all_iters`, no slot loop); (k,) under
+        `slot_gain_pass_force: k`; else every grad pass of graph_safe's FIXED pass count (the
+        config's ceiling), which is exactly `_tul_core`'s grad range on such a step.
+        GraphStep records one graph per entry."""
+        cfg = self.cfg
+        if not (cfg.slot_gain_lambda > 0.0 and not cfg.slot_gain_all_iters
+                and (self._gain_pass_gen is not None or int(cfg.slot_gain_pass_force) >= 0)):
+            return ()
+        if int(cfg.slot_gain_pass_force) >= 0:
+            return (int(cfg.slot_gain_pass_force),)
+        tc = cfg.tul
+        total = (int(tc.slot_depth_fixed) or int(tc.slot_max_depth or 0) or int(cfg.max_depth))
+        n_nograd = 0 if bool(tc.db_loop) else max(0, total - int(cfg.bptt_depth))
+        return tuple(range(n_nograd, total))
+
+    def draw_gain_pass(self) -> int | None:
+        """GraphStep's host draw, once per training step whether the step then runs eager or
+        as a replay: the uniform `_gain_pass_for_step` would draw, mapped onto
+        `gain_pass_choices()` (on a graph_safe step the forward's n_grad IS that count, so
+        this is the pass the eager forward would have drawn). Forced: the forced pass, no
+        draw. Recorded in `_gain_pass_last`. None when there is nothing to choose."""
+        ch = self.gain_pass_choices()
+        if not ch:
+            return None
+        t = ch[0] if len(ch) == 1 else ch[int(self._gain_pass_u() * len(ch))]
+        self._gain_pass_last = t
+        return t
+
+    def pin_gain_pass(self, t: int | None) -> None:
+        """Make the following forwards read pass ``t`` without drawing (GraphStep: every
+        recording, and the eager step of a drawn pass; the warm-up compile, which must build
+        every pass's hinge frames). None releases the pin."""
+        self._gain_pass_pin = None if t is None else int(t)
+
+    def gain_pass_rng_state(self) -> Tensor | None:
+        """The private generator's state for the checkpoint (`gain_pass_rng`); None when the
+        model draws nothing."""
+        return None if self._gain_pass_gen is None else self._gain_pass_gen.get_state()
+
+    def set_gain_pass_rng_state(self, state: Tensor) -> None:
+        """Restore the private generator from a checkpoint, so a resume continues the SAME
+        pass sequence. Raises on a model that draws nothing (a homeless state is a config
+        mismatch, not something to drop)."""
+        if self._gain_pass_gen is None:
+            raise RuntimeError(
+                "checkpoint carries the gain hinge's pass-draw state (gain_pass_rng) but this "
+                "model draws no pass (hinge off, all-iterations hinge, or a forced pass)")
+        self._gain_pass_gen.set_state(state.detach().cpu().to(torch.uint8))
 
     @staticmethod
     def _slot_gain_reduce(terms: list[dict]) -> dict:

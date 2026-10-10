@@ -67,7 +67,12 @@ not by reading the diff.
   `lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md`.
 - **Two extra `_core_step` calls at one iteration per training step** in `_tul_core`
   (`_slot_gain_penalty`): the finite-difference gain reading, at the detached operating point,
-  with the global RNG saved and restored around them. Not a duplicated forward; the loss and
+  with the global RNG saved and restored around them. WHICH iteration is a fresh uniform draw
+  per step from the model's private generator (`_gain_pass_for_step`; it rides the checkpoint
+  as `gain_pass_rng`); `model.slot_gain_pass_force: k` pins pass k. Until 2026-10-10 the draw
+  repeated one pass for a whole run. Under `training.graph_step` the pass is a GraphStep
+  VARIANT: one graph per pass, drawn on the host (`draw_gain_pass`), the recorded forward
+  PINNED (`pin_gain_pass`); a draw inside a capture raises. Not a duplicated forward; the loss and
   every later random draw are bit-identical to a run with the penalty off
   (`tests/test_slot_gain_reg.py`). The same difference also yields a PER-SLOT gain
   (`gain_slot_p50/_p90/_max/_frac_gt1`, logged whenever the hinge runs) and, at

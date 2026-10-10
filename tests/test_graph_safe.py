@@ -22,7 +22,8 @@ What each test pins:
     cell norm, fixed-point term, gain hinge, epivol): loss and every gradient match the off
     path within the bounds above; the op sequence and every shape are the same on three
     batches whose slot counts differ; nothing reads a tensor value on the host except the
-    gain hinge's CPU draw (which needs no device and is kept on purpose) and two reads
+    gain hinge's pass draw from its private CPU generator (no device involved; under
+    training.graph_step GraphStep makes it on the host before the replay) and two reads
     that exist on CPU tensors only (`_is_cpu_only_read`).
 
 CPU, fp32, the tests/test_tul_fan_lsel.py lead-arm fixture.
@@ -326,7 +327,8 @@ def _logged_step(graph_safe: bool, seed: int):
 
 
 def _is_hinge_draw(stack: list[str]) -> bool:
-    return any("torch.randint(n_grad_iters" in fr for fr in stack)
+    # MORPHTransformer._gain_pass_u: the hinge's pass, one float64 from a CPU generator.
+    return any("torch.rand((), generator=self._gain_pass_gen" in fr for fr in stack)
 
 
 def _is_cpu_only_read(stack: list[str]) -> bool:
