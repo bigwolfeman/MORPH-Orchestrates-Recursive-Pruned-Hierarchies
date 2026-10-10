@@ -163,8 +163,11 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
     are bit-equal at each pass entry). Arms `discotul_fast`, `lxtul_disco_fast`, control
     `tul_onecell_pointer_fast` (+ eager twins). One-cell arms cannot carry
     `tg_fused_attention` / `slot_compact`, so they run slower than LXTUL. 41 CPU tests, 10/10
-    sabotages, three 30-step graph_step smokes clean. Open: ms/step of the three arms (GPU
-    hold 2026-10-10 03:15), graph replay vs eager with disco on, soft / hard on GPU.
+    sabotages, three 30-step graph_step smokes clean. Bench 2026-10-10 (420 steps, graph_step,
+    `perf/r1007/bench.sh`, one run each): `lxtul_pointer_fast` 230.1 ms/step (26.7k tok/s);
+    LX-DiscoTUL 274.1 (22.4k, +19 %); one-cell pointer control 201.5 (30.5k); DiscoTUL 244.9
+    (25.1k, +22 % over its control). The disco term (top-128 read of the 49k table each pass)
+    costs about 44 ms/step on both. Open: graph replay vs eager with disco on, soft / hard on GPU.
   - [x] Four CPU tests failed at master 6a33958e (`test_tul_strict_geometry` sabotage_2, three
     per-slot-depth tests in `test_tul_forward`), plus 11 more in three sibling files. Cause:
     test doubles without the optional kwargs phase 1 added (`lookups`/`twin` on `_tul_front`,
