@@ -119,6 +119,16 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         against the references, sampling, B=16 vs plain, slot-step fusion (~55 us per layer).
         FINDING: the Triton `fused_cca_prologue` (training forward too) is ~3e-3 relative off fp64
         for q/k; `cca_prologue_reference` is 1e-7. Likely source of the eager-vs-cached logit gaps.
+        RESOLVED in the kernel (fix/cca-prologue-precision 2e434a60, not merged): the forward
+        rounded to bf16 after every op while the backward recomputed in fp32. Fixed to fp32 with
+        one rounding at the store (bf16 autocast q/k 3.9e-3 -> 1.66e-3 = the floor; time within
+        1 %). It was the whole decode gap: 4.1e-3 -> 2.4e-5. Training fwd+bwd moves the grad 1.5e-2
+        relative, so a paired check runs before the merge
+        (`lab/experiments/planned/2026-10-10-cca-prologue-rounds-once-paired.md`, from 13:02).
+        Side finding: on lxtul-pointer-rerun step_5000 (trained with the hinge fixed on pass 6),
+        pinning the hinge on passes 0-2 reads gain 1.8-2.0 (gain_reg_weighted 87-126, loss 95):
+        the passes the old hinge never read drifted expansive. Resuming a long fixed-pass
+        checkpoint under the fresh draw would start with a large hinge term.
   - [x] C1c Cached + graphed LXTUL decode: `perf/lxtul-decode` 46c2fa0d (not merged). On
         step_5000 row 0, 256 greedy tokens equal eager (row diff 4.1e-3, not explained. 2026-10-10:
         NOT TF32 (`--no_tf32` 4.15e-3) and NOT run noise (deterministic mode: eager repeat bit-equal,
