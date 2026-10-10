@@ -1,6 +1,6 @@
 # Fresh gain-hinge pass per step, paired against the fixed pass
 
-Status: planned
+Status: success
 
 ## Question
 
@@ -72,6 +72,47 @@ wandb (the chain does it). Chain script, ready and not launched:
 
 ## Results
 
+Run 2026-10-10 11:15-11:49, tree `git archive be624816` (e19234c2 + the warm-up slot_id remap;
+the draw is unchanged). Artifacts: `lab/experiments/results/2026-10-10-hinge-fresh-pass-paired/`
+(`chain.txt`: trainer, pass-histogram and readout lines; `passes_*.txt`: every logged pass).
+
+| Run | CE@6 | K1-K6 (ce_tokens, 480 rows) | trainer val | hinge active share | gain_est mean |
+|---|---|---|---|---|---|
+| fresh 1 | 4.0482 | +0.0117 [+0.0110, +0.0124] | 4.0942 | 0.347 | 0.8764 |
+| fresh 2 | 4.0480 | +0.0121 [+0.0114, +0.0128] | 4.0938 | 0.327 | 0.8769 |
+| fresh 3 | 4.0487 | +0.0124 [+0.0117, +0.0132] | 4.0941 | 0.388 | 0.8770 |
+| fresh mean | 4.04830 | +0.01207 | 4.0940 | 0.354 | 0.8768 |
+| fixed pass 6 (baseline mean) | 4.04733 | +0.01037 | 4.0920 | 0.333 | 0.867 |
+
+Pass draw: 999 logged steps per run (2501..3499), counts over passes 0..7 = 108, 119, 135, 129,
+131, 119, 130, 128, chi2 4.38 (7 dof), the same sequence in all three runs. 16 graphs recorded
+4 times per run, 15-16 s in total.
+
+Against the predictions:
+- CE@6 within 0.002 of 4.04733: +0.0009, +0.0007, +0.0014. Held (best guess 4.0474; the
+  fresh runs sit 0.001 above the baseline on all three, the same sign as the trainer val's
+  +0.002).
+- Mean K1-K6 in [+0.0077, +0.0131]: +0.01207. Held (best guess +0.0100). The shift from the
+  baseline mean is +0.0017, inside the fixed arm's own spread (0.0027) and just above the
+  paired noise (0.0012).
+- The draw moves: every pass 0-7 appears, chi2 4.38 < 24.32, the same sequence in the three
+  runs. Held, with one literal miss: the prediction said all 1000 steps log `loop/gain_pass`;
+  999 do (step 3500 does not log it; the cause is not checked, the draw itself is per step).
+- Secondary, share of log steps with `tul/gain_reg_weighted` > 0 in [0.15, 0.60]: 0.327-0.388.
+  Held (best guess 0.35).
+
 ## Verdict
 
+Success. A fresh pass per step keeps CE@6 and the loop's contribution where the fixed pass had
+them, at this test's resolution (CE@6 about 0.001-0.002, K1-K6 about 0.0015-0.0027). The fresh
+draw stays the default (`model.slot_gain_pass_force: -1`) and `lxtul_pointer_fast` trains with
+it once perf/hinge-draw merges. Cost: +2.0 % per training step (two 420-step benches per tree).
+
 ## Updated hypothesis
+
+The barrier picture holds: the hinge is active on about a third of the log steps whichever pass
+it reads. Reading all passes moves the mean `gain_est` from 0.867 to 0.877, because passes other
+than 6 carry a slightly higher gain; the map the loss trains does not move enough to change CE@6
+or K1-K6 at 1000 steps. Small consistent signs to watch at longer horizons: CE@6 +0.001 and
+trainer val +0.002 (all three runs), K1-K6 +0.0017. `model.core_gain_lambda` (`_core_region`)
+still reads a frozen pass; no decision covers it yet.

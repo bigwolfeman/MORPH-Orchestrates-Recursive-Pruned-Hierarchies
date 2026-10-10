@@ -1,0 +1,14 @@
+[10-10 11:15:57] tree = git archive be624816
+[10-10 11:15:57] train fresh-1 start
+[10-10 11:25:38] train fresh-1 exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) | [gain-pass] the checkpoint predates the per-step hinge pass draw | recordings=4 total 15 s | Final val_loss=4.0942
+[10-10 11:25:38] passes fresh-1: steps 2501..3499 n=999 counts(pass 0..7)=[108, 119, 135, 129, 131, 119, 130, 128] chi2=4.38 (dof 7) run=/home/wolfe/morph-scratch/hingedraw/paired/wandb/offline-run-20261010_111707-2801eg93
+[10-10 11:25:38] train fresh-2 start
+[10-10 11:34:41] train fresh-2 exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) | [gain-pass] the checkpoint predates the per-step hinge pass draw | recordings=4 total 15 s | Final val_loss=4.0938
+[10-10 11:34:41] passes fresh-2: steps 2501..3499 n=999 counts(pass 0..7)=[108, 119, 135, 129, 131, 119, 130, 128] chi2=4.38 (dof 7) run=/home/wolfe/morph-scratch/hingedraw/paired/wandb/offline-run-20261010_112608-88sfsp6m
+[10-10 11:34:41] train fresh-3 start
+[10-10 11:43:54] train fresh-3 exit=0 Resumed model+scaler+RNG from checkpoint step 2500; next_step=2501 (compact=False routed=False → optimizer_rebuild=False) | [gain-pass] the checkpoint predates the per-step hinge pass draw | recordings=4 total 16 s | Final val_loss=4.0941
+[10-10 11:43:55] passes fresh-3: steps 2501..3499 n=999 counts(pass 0..7)=[108, 119, 135, 129, 131, 119, 130, 128] chi2=4.38 (dof 7) run=/home/wolfe/morph-scratch/hingedraw/paired/wandb/offline-run-20261010_113511-cnnv5dhs
+[10-10 11:45:41] sweep fresh-1 exit=0 ckpt=step_3500.pt fresh1 depth=1 ce=4.0599 span_first=3.6694 spandec_ce=4.6832 fresh1 depth=6 ce=4.0482 span_first=3.6314 spandec_ce=4.6700 fresh1 ce_tokens K1-K6: +0.0117 [+0.0110, +0.0124] over 480 rows fresh1 spandec_ce K1-K6: +0.0133 [+0.0121, +0.0145] over 160 batches 
+[10-10 11:47:31] sweep fresh-2 exit=0 ckpt=step_3500.pt fresh2 depth=1 ce=4.0601 span_first=3.6784 spandec_ce=4.6840 fresh2 depth=6 ce=4.0480 span_first=3.6305 spandec_ce=4.6709 fresh2 ce_tokens K1-K6: +0.0121 [+0.0114, +0.0128] over 480 rows fresh2 spandec_ce K1-K6: +0.0131 [+0.0120, +0.0141] over 160 batches 
+[10-10 11:49:22] sweep fresh-3 exit=0 ckpt=step_3500.pt fresh3 depth=1 ce=4.0611 span_first=3.6823 spandec_ce=4.6837 fresh3 depth=6 ce=4.0487 span_first=3.6328 spandec_ce=4.6708 fresh3 ce_tokens K1-K6: +0.0124 [+0.0117, +0.0132] over 480 rows fresh3 spandec_ce K1-K6: +0.0129 [+0.0117, +0.0142] over 160 batches 
+[10-10 11:49:22] done
