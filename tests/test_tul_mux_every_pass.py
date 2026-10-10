@@ -73,7 +73,7 @@ def _fixed_depths(m: MORPHTransformer, per_slot):
     ``per_slot(layout)`` returns a ``[B, S]`` long tensor for the VALID slots; pads are
     forced to 1 exactly as ``_sample_slot_depths`` does, so they never inflate the loop.
     """
-    def draw(layout, device):
+    def draw(layout, device, cells=1):
         d = per_slot(layout).to(device)
         return torch.where(layout.slot_valid, d, torch.ones_like(d))
 

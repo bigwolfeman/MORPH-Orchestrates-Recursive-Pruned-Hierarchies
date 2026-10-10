@@ -331,12 +331,15 @@ def test_sabotage_2_prelude_compressed_branch_unmasked(monkeypatch):
     def patch(mp):
         real = MORPHTransformer._tul_front
 
-        def fake(self, input_ids, layout, attn_kwargs=None, ret_reset_mask=None):
+        # `**extra` forwards the keywords the real `_tul_front` gained after this test was
+        # written (`twin`, `lookups`), so the double tracks the signature and only
+        # `tg_comp_allow` is dropped.
+        def fake(self, input_ids, layout, attn_kwargs=None, ret_reset_mask=None, **extra):
             if attn_kwargs is not None:
                 attn_kwargs = dict(attn_kwargs)
                 attn_kwargs.pop("tg_comp_allow", None)
             return real(self, input_ids, layout, attn_kwargs=attn_kwargs,
-                        ret_reset_mask=ret_reset_mask)
+                        ret_reset_mask=ret_reset_mask, **extra)
         mp.setattr(MORPHTransformer, "_tul_front", fake)
     _assert_leak_test_fails(monkeypatch, patch)
 

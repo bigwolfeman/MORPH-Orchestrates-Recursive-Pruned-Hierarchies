@@ -160,7 +160,9 @@ def test_gather_scatter_round_trip_on_the_hc_carrier():
 
 
 def _force_depths(model, table):
-    model._sample_slot_depths = lambda layout, device: table.to(device)
+    # `cells` is the keyword `_tul_core` passes (the M-cell fan draws on the S*M axis); the
+    # table is the depth per slot either way, so the double ignores it.
+    model._sample_slot_depths = lambda layout, device, cells=1: table.to(device)
 
 
 def test_per_slot_depth_is_a_masked_update_not_a_gather():

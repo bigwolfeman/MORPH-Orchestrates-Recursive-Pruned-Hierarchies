@@ -148,9 +148,12 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
     `tg_fused_attention` / `slot_compact`, so they run slower than LXTUL. 41 CPU tests, 10/10
     sabotages, three 30-step graph_step smokes clean. Open: ms/step of the three arms (GPU
     hold 2026-10-10 03:15), graph replay vs eager with disco on, soft / hard on GPU.
-  - [ ] Four CPU tests fail at master 6a33958e (`test_tul_strict_geometry` sabotage_2, three
-    per-slot-depth tests in `test_tul_forward`); bisect and fix on
-    `fix/master-test-regressions`.
+  - [x] Four CPU tests failed at master 6a33958e (`test_tul_strict_geometry` sabotage_2, three
+    per-slot-depth tests in `test_tul_forward`), plus 11 more in three sibling files. Cause:
+    test doubles without the optional kwargs phase 1 added (`lookups`/`twin` on `_tul_front`,
+    4284c374; `cells` on `_sample_slot_depths`, f1ac1b9c). Stale doubles, not a code
+    regression; the phase-1 merge ran only the CUDA tests. Fixed in the tests (no assertion
+    weakened) and in `lab/divergence/bench_coda_k.py`'s depth pin.
   - [ ] D2b Prereg + runs, after A and C.
 
 ## Alternatives considered

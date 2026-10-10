@@ -94,7 +94,7 @@ def _feature_spy(m: MORPHTransformer) -> list[dict]:
 
 
 def _fixed_depths(m: MORPHTransformer, depth: int):
-    def draw(layout, device):
+    def draw(layout, device, cells=1):
         d = torch.full(layout.slot_valid.shape, depth, dtype=torch.long, device=device)
         return torch.where(layout.slot_valid, d, torch.ones_like(d))
 

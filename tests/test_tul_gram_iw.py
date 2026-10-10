@@ -319,8 +319,8 @@ def test_rollouts_share_depth_and_dropout_and_differ_in_noise():
         seen["keep"] = keep
         return xo, keep
 
-    def depth(lay, device):
-        d = real_depth(lay, device)
+    def depth(lay, device, **kw):
+        d = real_depth(lay, device, **kw)
         seen["depth_shape"] = tuple(d.shape)
         return d
     m.tul.apply_token_dropout = drop
@@ -349,8 +349,8 @@ def test_loop_depth_table_is_the_base_draw_tiled_rollout_major():
     seen = {}
     real_depth, real_core = m._sample_slot_depths, m._tul_core
 
-    def depth(lay, device):
-        d = real_depth(lay, device)
+    def depth(lay, device, **kw):
+        d = real_depth(lay, device, **kw)
         seen["base"] = d.clone()
         return d
 

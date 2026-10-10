@@ -89,7 +89,9 @@ def ablated(root, names):
 
 def pin_depths(root, depth: int) -> None:
     """Deterministic loop depth for every variant (recorded in the output)."""
-    def det_slot(layout, device):
+    # `cells` (the stratified draw's per-slot repeat, f1ac1b9c): the layout here is already
+    # the cell-level one, so a constant depth needs nothing from it.
+    def det_slot(layout, device, cells=1):
         shape = layout.slot_index.shape
         d = torch.full(shape, depth, device=device, dtype=torch.long)
         return torch.where(layout.slot_valid, d, torch.ones_like(d))
