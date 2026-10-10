@@ -165,6 +165,33 @@ def test_long_generation_passes_the_window(monkeypatch):
     assert _max_row_diff(er, cr) < TOL
 
 
+def _cnorm_model() -> MORPHTransformer:
+    """The one-cell K-rollout fixture with ``tul.slot_cell_pass_norm: rms`` and a live
+    gain (``g`` drawn away from its init 1.0, so the gain's broadcast is exercised too)."""
+    m = _model("boundary", slot_cell_pass_norm="rms")
+    assert m.tul_cell_norm is not None
+    with torch.no_grad():
+        g = torch.Generator().manual_seed(3)
+        m.tul_cell_norm.weight.copy_(torch.empty_like(m.tul_cell_norm.weight).uniform_(
+            0.5, 1.5, generator=g))
+    return m
+
+
+@pytest.mark.parametrize("emit", ["token", "slot"])
+def test_cell_norm_matches_eager(monkeypatch, emit):
+    """C1f (2026-10-10): a one-cell rollout model with the per-pass cell norm. The full
+    forward norms every carried cell after every pass (``_tul_core`` -> ``_slot_cell_norm``);
+    both cached decoders must do the same, not decode the un-normed loop silently."""
+    m = _cnorm_model()
+    for temp in (0.0, 1.0):
+        a, ba, er, b, bb, cr = _run_both(monkeypatch, m, PROMPT_CROSS, 48, emit, temp)
+        s, bs, sr = _run_static(monkeypatch, m, PROMPT_CROSS, 48, emit, temp)
+        assert ba.n_slots >= 3
+        assert a == b == s
+        assert _max_row_diff(er, cr) < TOL
+        assert _max_row_diff(er, sr) < TOL
+
+
 def test_refuses_a_model_it_does_not_reproduce():
     torch.manual_seed(0)
     tc = _tul(tg_geometry="restrict", spandec=False, spandec_parallel=True, code_enum_k=4,
@@ -249,8 +276,8 @@ def test_sabotage_dropping_the_code_term_is_caught(monkeypatch):
     orig = m.tul_code_enum.term
     real_init = cached_mod.TulCachedDecoder.__init__
 
-    def _init(self, model, spec):
-        real_init(self, model, spec)
+    def _init(self, model, spec, cells=None):
+        real_init(self, model, spec, cells)
         # Sabotage only the cached decoder's view: the eager forward keeps the real term.
         self.m = _Proxy(model, _zero_term)
 

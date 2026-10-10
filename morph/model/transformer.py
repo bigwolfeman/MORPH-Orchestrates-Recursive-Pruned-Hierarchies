@@ -13677,8 +13677,12 @@ class MORPHTransformer(nn.Module):
                      gram_mode: str | None = None,
                      gram_sample_seed: int | None = None,
                      code_policy_pick: str | None = None,
-                     lsel_follow: str | None = None) -> dict:
+                     lsel_follow: str | None = None,
+                     generate: bool = False) -> dict:
         """The TUL forward (.agents/specs/tul-spec.md §3). One shared position axis.
+
+        ``generate``: the generation forward (see :meth:`forward`). Every head it skips is
+        gated at its own call site with ``not generate``; the logits path is untouched.
 
         ``lsel_follow`` (``tul.fan_loop_select``, EVAL ONLY, labels required): ``"teacher"``
         makes the loop follow the latent teacher's pick on the slots with a target, as
@@ -13730,6 +13734,14 @@ class MORPHTransformer(nn.Module):
         self._code_policy_step = None
         # tul.fan_loop_select's exit stash (graph tensors): the same rule.
         self._lsel_out = None
+        if generate:
+            if labels is not None or self.training or plan_nats:
+                raise ValueError("generate=True is the eval-only, label-free generation "
+                                 "forward (labels None, model.eval(), no plan_nats).")
+            if not self.tul_generate_supported:
+                raise NotImplementedError(
+                    "generate=True gates the heads of the slot-loop forward only; the paid "
+                    "loop, loop_reads_tokens, TUL-Code and the FM planner run without it.")
         if self._latent_pre_mode != "off":
             # Stage-1 latent pretraining: its own forward (no coda, no token CE, train AND
             # eval). Every per-forward argument it does not define is refused by name.
@@ -14407,7 +14419,7 @@ class MORPHTransformer(nn.Module):
                     # the seed included, is still measured and reported as
                     # `fan/stream_cos_t{t}` under no_grad. Training only — at eval the
                     # cosines are instruments and there is no term.
-                    if db_traj is not None:
+                    if db_traj is not None and not generate:
                         _mode = str(tc.fan_repel_mode)
                         # LX-Fan: the epi term's ridge readout is a BATCH fit over the valid
                         # slots, and on the K-fold batch every seed (`traj[0]`, before any
@@ -14549,7 +14561,7 @@ class MORPHTransformer(nn.Module):
                     "_tul_core must have failed to turn on its collection.")
                 h_slots = self.tul_pass_gate(db_traj[1:])
             mux_stats: dict = {}
-            if tc.mux_beta <= 0.0:
+            if tc.mux_beta <= 0.0 or generate:
                 mux_loss = None
             elif tc.mux_stage_own_iters > 0:
                 # ── staged targets (arc E3; tul.mux_stage_all, arm slot-mnext-staged-all) ─
@@ -14676,7 +14688,7 @@ class MORPHTransformer(nn.Module):
             # `h_slots`: after the think-once stack, before the eval-only plan ablation.
             spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
                                                    stats=spandec_stats, cells=_reg_cells)
-                            if self.tul_spandec is not None else None)
+                            if self.tul_spandec is not None and not generate else None)
             # ── the parallel span head (tul.spandec_parallel, LXTUL-E) ─────────────
             # The SAME seam and the SAME target as the span decoder above, read with no
             # token input. Train and eval alike (the decoder's rule), so the val pass and
@@ -14689,7 +14701,8 @@ class MORPHTransformer(nn.Module):
             # Under `tul.fan_all_wta_grader: head` the head is the fan's GRADER and its
             # only term is the WTA term above; its own mixture term would read the MEAN
             # of the cells, which the coda never reads, so it is not run.
-            if self.tul_spandec_par is not None and not self._fan_head_grader:
+            if (self.tul_spandec_par is not None and not self._fan_head_grader
+                    and not generate):
                 par_loss = self._tul_spandec_par_loss(
                     h_slots, input_ids, layout, stats=par_stats,
                     **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
@@ -14697,7 +14710,7 @@ class MORPHTransformer(nn.Module):
             # The SAME seam as the parallel head: slot s's exit readout, stepped through
             # span s+1's tokens, predicts stop_grad of slot s+1's. Train and eval alike,
             # so the val pass reads the term and the draft instrument the trainer sees.
-            if self.tul_nextlat is not None:
+            if self.tul_nextlat is not None and not generate:
                 nextlat_loss = self._tul_nextlat_loss(
                     h_slots, input_ids, layout, stats=nextlat_stats,
                     **({"n_rollouts": _iw_k} if self._code_enum_k else {}))
@@ -14731,7 +14744,7 @@ class MORPHTransformer(nn.Module):
             rcon_stats: dict = {}
             rcon_loss = (self._tul_row_contrast_loss(h_slots, x, layout,
                                                      stats=rcon_stats)
-                         if self.tul_contrast is not None else None)
+                         if self.tul_contrast is not None and not generate else None)
             # ── the oracle-z per-pass teacher (tul.oracle_z) ──────────────────
             # Read on the SAME trajectory `mux_every_pass` and the staged target use, and
             # built here because it needs the realised per-slot depths beside it. Training
@@ -14761,7 +14774,7 @@ class MORPHTransformer(nn.Module):
             # because the `disc` critic's label is the coda's own CE over the next span.
             _egrad_src = h_slots
             sigreg_loss = (self._tul_sigreg_loss(h_slots, layout)
-                           if tc.sigreg_lambda > 0.0 else None)
+                           if tc.sigreg_lambda > 0.0 and not generate else None)
             if self.tul_gate is not None:
                 budget_ids = self._tul_budget_ids(layout, depths, g_traj)
                 h_slots = self.tul_gate.apply_budget(h_slots, budget_ids)
@@ -16754,6 +16767,15 @@ class MORPHTransformer(nn.Module):
 
     # ── Forward ───────────────────────────────────────────────────────
 
+    @property
+    def tul_generate_supported(self) -> bool:
+        """True iff ``forward(..., generate=True)`` is defined for this model: the slot-loop
+        TUL forward (not the paid loop, ``loop_reads_tokens``, TUL-Code or the FM planner).
+        The ONE predicate the forward's guard and the generators read."""
+        tc = self.cfg.tul
+        return not (tc is None or tc.tokens_through_core or tc.loop_reads_tokens or tc.code
+                    or self.fm_planner is not None)
+
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
                 bag_size: int = 0, seq_lens: Tensor | None = None,
                 slot_layout: SlotLayout | None = None,
@@ -16764,8 +16786,19 @@ class MORPHTransformer(nn.Module):
                 code_given: Tensor | None = None,
                 code_given_mask: Tensor | None = None,
                 gram_mode: str | None = None,
-                gram_sample_seed: int | None = None) -> dict:
-        """``slot_depths`` ``[B, max_slots]``: the EVAL-ONLY per-slot depth table, the
+                gram_sample_seed: int | None = None,
+                generate: bool = False) -> dict:
+        """``generate`` (eval only, ``labels=None``, a slot-loop TUL ``slot_layout``; the
+        other TUL forwards refuse it): the generation forward. It computes the logits
+        exactly as the label-free eval forward does and skips every loss head and
+        instrument that no logit reads (the span decoder, the parallel span head, NextLat,
+        the MUX, the fan's diversity terms and per-pass readings, SIGReg, the row
+        contrast). The val pass and offline instruments call the
+        forward WITHOUT it and keep reading those heads (lab/divergence/core_depth_sweep.py
+        reads the span decoder's K1-K6), which is why this is an explicit argument and not
+        a ``labels is None`` / ``self.training`` gate. ``False`` is the forward as before.
+
+        ``slot_depths`` ``[B, max_slots]``: the EVAL-ONLY per-slot depth table, the
         ``slot_layout`` pattern — ``None`` is bit-identical to before it existed. See
         :meth:`_slot_depth_override`.
 
@@ -16787,7 +16820,8 @@ class MORPHTransformer(nn.Module):
                                     _code_given=code_given,
                                     _code_given_mask=code_given_mask,
                                     _gram_mode=gram_mode,
-                                    _gram_sample_seed=gram_sample_seed)
+                                    _gram_sample_seed=gram_sample_seed,
+                                    _generate=generate)
 
     def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,
                                    slot_layout: SlotLayout) -> dict:
@@ -16830,7 +16864,8 @@ class MORPHTransformer(nn.Module):
                         _gram_mode: str | None = None,
                         _gram_sample_seed: int | None = None,
                         _code_policy_pick: str | None = None,
-                        _lsel_follow: str | None = None) -> dict:
+                        _lsel_follow: str | None = None,
+                        _generate: bool = False) -> dict:
         # model.ternary_step_cache: every forward enters here, so the bf16 ternary weights
         # are recomputed once per forward from the weights as they are now (after the last
         # optimizer step, load or EMA write), and every read inside it hits the cache
@@ -16862,8 +16897,12 @@ class MORPHTransformer(nn.Module):
                                      gram_mode=_gram_mode,
                                      gram_sample_seed=_gram_sample_seed,
                                      code_policy_pick=_code_policy_pick,
+                                     generate=_generate,
                                      **({"lsel_follow": _lsel_follow}
                                         if _lsel_follow is not None else {}))
+        if _generate:
+            raise ValueError("generate=True requires slot_layout: it is the TUL generation "
+                             "forward (the plain forward has no loss head to skip).")
         if _lsel_follow is not None:
             raise ValueError("lsel_follow requires slot_layout: the latent-selected loop "
                              "lives in the slot loop.")

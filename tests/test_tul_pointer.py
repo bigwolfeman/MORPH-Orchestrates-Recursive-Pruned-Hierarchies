@@ -14,7 +14,8 @@ What each test pins:
      path) equals the CE of the label-free eval logits at the same token positions.
   5. The eval logits are causal (future inputs never move an earlier token's log-probs) and
      normalised; a live training step reaches the head's weights.
-  6. Config refusals, Hydra path, manifest, the config's compose diff, the cached refusal.
+  6. Config refusals, Hydra path, manifest, the config's compose diff, the cached decoder's
+     refusal of the cell key and coverage (it reproduces the plain pointer).
 
 Sabotage checks, run and reverted (session report, not committed):
   (a) candidates j <= i in `attend` -> test 5 fails (causality: the head sees the target;
@@ -24,8 +25,6 @@ Sabotage checks, run and reverted (session report, not committed):
 CPU, fp32, the LXTUL fixtures (M = 4 cells, strict geometry).
 """
 from __future__ import annotations
-
-import pathlib
 
 import pytest
 import torch
@@ -294,6 +293,13 @@ def test_hydra_path_manifest_and_compose_diff(monkeypatch):
                     "wandb.name"}, sorted(diff)
 
 
-def test_cached_generator_refuses_the_pointer():
-    src = pathlib.Path("morph/inference/tul_generate_cached.py").read_text()
-    assert 'int(getattr(tc, "pointer_heads", 0)) == 0' in src
+def test_cached_generator_takes_the_pointer_and_refuses_its_variants():
+    """2026-10-10 (tracker C1c): the cached decoders reproduce the pointer (parity and
+    sabotage in tests/test_tul_generate_lxtul.py); the two variants that read more than a
+    token's own final state, the cell key and coverage, are refused by name."""
+    from morph.inference.tul_generate_cached import _check_supported
+    _check_supported(_lx(pointer_heads=2))
+    for kw, what in ((dict(pointer_cell_key=True), "cell key"),
+                     (dict(pointer_coverage_lambda=1.0), "coverage")):
+        with pytest.raises(NotImplementedError, match=what):
+            _check_supported(_lx(pointer_heads=2, **kw))

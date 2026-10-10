@@ -117,6 +117,14 @@ class TulRowBuilder:
         return ids, layout
 
 
+def _generation_kwargs(model) -> dict:
+    """``{"generate": True}`` where the model defines the generation forward (the slot
+    loop: it skips the loss heads no logit reads, e.g. the span decoder that otherwise runs
+    on every step), else ``{}`` (the paid loop and the other TUL forwards, unchanged; an
+    object without the predicate, e.g. a test stub, is called as before)."""
+    return {"generate": True} if getattr(model, "tul_generate_supported", False) else {}
+
+
 @torch.no_grad()
 def generate_tul(
     model,
@@ -214,7 +222,7 @@ def generate_tul(
                     code_cache_slot = s_open
             else:
                 res = (model.tul_forward_halt(ids, None, layout) if halt
-                       else model(ids, slot_layout=layout))
+                       else model(ids, slot_layout=layout, **_generation_kwargs(model)))
             # Row ends with the K slot positions exactly when the last append cut a
             # boundary; `emit_source="token"` then reads the last TOKEN position.
             back = (1 + spec.prefix_k
@@ -317,7 +325,7 @@ def generate_tul_batch(
             layout = SlotLayout(slot_mask=smask, bag_id=bag, slot_index=sidx,
                                 slot_valid=svalid, prefix_k=spec.prefix_k)
             res = (model.tul_forward_halt(ids, None, layout) if halt
-                   else model(ids, slot_layout=layout))
+                   else model(ids, slot_layout=layout, **_generation_kwargs(model)))
             # Same rule as the single-row generator, applied per row.
             if emit_source == "token":
                 back = torch.tensor(
