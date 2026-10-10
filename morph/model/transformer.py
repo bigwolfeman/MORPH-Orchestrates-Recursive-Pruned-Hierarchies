@@ -3085,6 +3085,13 @@ class MORPHTransformer(nn.Module):
         # without the hard-winner latent-selected loop).
         self._spandec_read_winner: bool = (cfg.tul is not None
                                            and str(cfg.tul.spandec_read) == "winner")
+        # `tul.fan_lsel_pick: random`: the latent-selected loop FOLLOWS a uniform random cell
+        # per slot per pass (train and eval) instead of the router's argmax. Build-time.
+        self._lsel_pick_random: bool = (cfg.tul is not None
+                                        and str(cfg.tul.fan_lsel_pick) == "random")
+        # `tul.coda_prelude_detach`: the coda's TOKEN-position input is `xn.detach()`.
+        self._coda_prelude_detach: bool = (cfg.tul is not None
+                                           and bool(cfg.tul.coda_prelude_detach))
         # `model.fan_target_online` is analysed for ONE case: the latent-selected loop with
         # the router driving the loop (`fan_lsel_train_follow: router`). There the teacher
         # pick only trains the router and the exit loss, so the forward the model's CE reads
@@ -10698,6 +10705,11 @@ class MORPHTransformer(nn.Module):
         scores = self.tul_fan_lsel_router.scores(cr, st["ctx"])            # grad: router
         rpick = self.tul_fan_lsel_router.select(scores)[0]
         follow = rpick
+        if self._lsel_pick_random:
+            # `tul.fan_lsel_pick: random`: follow a uniform random cell per slot, drawn on
+            # the device from the default CUDA generator (capture-safe). The router is
+            # still scored and trained below; `final_router` keeps ITS pick.
+            follow = torch.randint(0, m, rpick.shape, device=rpick.device)
         tpick = None
         if st["z"] is not None:
             with torch.no_grad():
@@ -15085,7 +15097,9 @@ class MORPHTransformer(nn.Module):
                 base = x0.unsqueeze(2).expand_as(xn) if self._is_hc else x0
                 base = self.input_norm(base)
             else:
-                base = xn
+                # `tul.coda_prelude_detach`: same values, no backward into the prelude
+                # through the coda's token path (the slot/prefix `values` keep their grad).
+                base = xn.detach() if self._coda_prelude_detach else xn
             _critic_base = base
             x_coda = scatter_positions(base, pos, values)
 
