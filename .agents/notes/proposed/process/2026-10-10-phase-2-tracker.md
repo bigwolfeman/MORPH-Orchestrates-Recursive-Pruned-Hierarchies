@@ -109,6 +109,16 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         GPU-bound); the LXTUL graphed decoder is generic PyTorch (835 kernels for 8 token-path
         layer passes, about 240 us each) and holds one row. Open: an LXTUL decode on the fused
         engine kernels with real batching; Parcae arm.
+        2026-10-10 later: `LxFusedDecoder` on perf/lxtul-fused-decode d8921dfd (design f3b32a63,
+        kernels lx_attn + decode_front kv_row f1441571, Z3 bounds proofs). Same invocation as
+        plain graphed exact: 951.2 / 2684.5 tok/s at B=1 / B=8 = 3.10x / 2.34x (bf16 copies 3.46x
+        / 2.18x). Greedy decode loops with no boundary, so few slots: teacher-forced real val
+        text gives 2.96x / 2.44x per step. Token step 0.589 ms / 191 kernels, slot step 2.40 ms /
+        687 kernels (bucket 1). Tokens equal graphed and eager for 256 tokens on prompts 0 and 1;
+        B = 4/8/16 rows equal B=1. TARGET MET at B=1 and B=8 (B=8 margin thin). Open: prompts 2-7
+        against the references, sampling, B=16 vs plain, slot-step fusion (~55 us per layer).
+        FINDING: the Triton `fused_cca_prologue` (training forward too) is ~3e-3 relative off fp64
+        for q/k; `cca_prologue_reference` is 1e-7. Likely source of the eager-vs-cached logit gaps.
   - [x] C1c Cached + graphed LXTUL decode: `perf/lxtul-decode` 46c2fa0d (not merged). On
         step_5000 row 0, 256 greedy tokens equal eager (row diff 4.1e-3, not explained. 2026-10-10:
         NOT TF32 (`--no_tf32` 4.15e-3) and NOT run noise (deterministic mode: eager repeat bit-equal,
