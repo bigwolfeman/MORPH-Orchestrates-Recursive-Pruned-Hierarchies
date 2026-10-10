@@ -56,6 +56,14 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       (queued in go_queue.sh). Prereg `lab/experiments/planned/2026-10-10-hinge-fresh-pass-paired.md`
       is in the commit; the paired chain runs after the gates pass. Open: `model.core_gain_lambda`
       (`_core_region`) has the same frozen draw; no decision covers it.
+      GPU gates 2026-10-10 on be624816 (e19234c2 + warm-up slot_id remap: the 8 random warm-up
+      rows hit slot_id, 4 never had): forced pass 6 byte-identical to 6a33958e on fast AND eager
+      (45 steps, loss/grad-norm/7 gain terms in hex, FINAL_SHA256 equal); fresh draw moves (50
+      steps, all passes 0-7, seed 2 a different sequence, eager seed 1 = fast seed 1); CUDA
+      graph-step tests 36 passed; sabotage (replay pass 0's graph) fails 4/4. 16 graphs record
+      in 5.1 s. Bench 420 steps: 233.9 / 235.6 ms/step vs base 230.0 / 230.1 (+2.0 %; likely the
+      hinge now reads earlier passes, which carry more rows under slot_compact). Paired chain
+      (prereg) running on be624816 from 11:15.
 - [ ] A4 Interaction with C4 (skipping the inactive hinge): decide A first.
 
 ### B. Variable cell count (owner note: [`2026-10-05-lxtul-variable-cell-count.md`](../architecture/2026-10-05-lxtul-variable-cell-count.md))
