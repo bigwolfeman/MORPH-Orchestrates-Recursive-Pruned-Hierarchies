@@ -1,0 +1,11 @@
+# lxtul_pointer_fast with the span decoder reading the router's WINNER cell (the one cell
+# the coda reads) instead of the mean of the M exit cells (tul.spandec_read, 2026-10-10).
+defaults:
+  - lxtul_pointer_fast
+  - _self_
+
+tul:
+  spandec_read: winner
+
+wandb:
+  name: lxtul-pointer-fast-spdwin

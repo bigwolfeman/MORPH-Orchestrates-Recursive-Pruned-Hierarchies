@@ -3080,6 +3080,11 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_lsel_head: FanLatentHead | None = None
         self.tul_fan_lsel_router: FanRouter | None = None
         self._lsel_out: dict | None = None
+        # `tul.spandec_read: winner`: the span decoder grades the winner cell the coda
+        # reads, not the mean of the M cells (a build-time constant; TULConfig refuses it
+        # without the hard-winner latent-selected loop).
+        self._spandec_read_winner: bool = (cfg.tul is not None
+                                           and str(cfg.tul.spandec_read) == "winner")
         # `model.fan_target_online` is analysed for ONE case: the latent-selected loop with
         # the router driving the loop (`fan_lsel_train_follow: router`). There the teacher
         # pick only trains the router and the exit loss, so the forward the model's CE reads
@@ -10626,6 +10631,15 @@ class MORPHTransformer(nn.Module):
             oh = oh * route["scale"].to(cells.dtype)
         return cells * oh.view(*oh.shape, *([1] * (cells.dim() - 3)))
 
+    @staticmethod
+    def _fan_winner_cell(cells: Tensor, route: dict) -> Tensor:
+        """``[B, S, M, (n,) C]`` cells -> ``[B, S, (n,) C]``: the ROUTED winner cell, by the
+        same index :meth:`_fan_route_cells` keeps. A gather, so no host sync and the
+        backward writes into the winner's slice alone (``tul.spandec_read: winner``)."""
+        idx = route["winner"].view(*route["winner"].shape, 1, *([1] * (cells.dim() - 3)))
+        idx = idx.expand(*cells.shape[:2], 1, *cells.shape[3:])
+        return cells.gather(2, idx).squeeze(2)
+
     # ── the latent-selected loop (tul.fan_loop_select, 2026-09-30) ───────────────────
 
     def _lsel_begin(self, xn: Tensor, layout: SlotLayout, depths: Tensor, m: int,
@@ -14848,7 +14862,13 @@ class MORPHTransformer(nn.Module):
             # in so `tul.spandec_reads_cells` can cross-attend to exactly what
             # `prefix_project` below writes into the coda. Read at the same seam as
             # `h_slots`: after the think-once stack, before the eval-only plan ablation.
-            spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
+            # `tul.spandec_read: winner`: the decoder's z is the winner cell's readout, the
+            # one cell `_fan_route_cells` leaves for the coda (a gather on the same
+            # `_fan_route["winner"]` index, so grad reaches the winner cell only).
+            _sd_h = h_slots
+            if self._spandec_read_winner and self.tul_spandec is not None and not generate:
+                _sd_h = self._fan_winner_cell(_reg_cells, _fan_route)
+            spandec_loss = (self._tul_spandec_loss(_sd_h, input_ids, layout,
                                                    stats=spandec_stats, cells=_reg_cells)
                             if self.tul_spandec is not None and not generate else None)
             # ── the parallel span head (tul.spandec_parallel, LXTUL-E) ─────────────
