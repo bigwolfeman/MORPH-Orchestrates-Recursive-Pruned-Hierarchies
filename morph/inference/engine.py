@@ -129,6 +129,74 @@ class _Site:
         self.iter_idx = iter_idx
 
 
+def hc_apply(mod, h: Tensor, fn, hcw: Tensor, hcb: Tensor, hcb_zero: Tensor | None,
+             term: Tensor | None = None, norm_w: Tensor | None = None,
+             norm_eps: float = 1e-6, norm_out: Tensor | None = None,
+             norm_stride: int = 0) -> Tensor:
+    """Inline HyperConnectionResidual.forward (cayley fused path) with a single-launch
+    GEMV for the mapping projection (cuBLAS used a dot+reduce+splitK triple at M=1).
+    Same premap/post Triton kernels, same math; forward-only (inference engine).
+
+    Wide carriers (C > 2048, the 30B): the single-CTA premap/post + 48-CTA
+    serial-K proj GEMV are pure latency (~21 µs/call at d=8192) — dispatch to
+    the multi-CTA hc_premap_wide/hc_post_wide suite instead (same math, fp
+    reduction-tree order only; tolerance-gated). 276M path byte-identical.
+
+    hcw / hcb: the mapping projection's weight copy (bf16, or fp32 in a parity mode) and
+    its fp32 bias; hcb_zero: a zero bias for the wide kernels when the module has none
+    (read only then: ``None`` is legal for a module with a bias).
+    One home for both decoders: StaticDecodeEngine._hc and the LXTUL fused decoder
+    (morph/inference/lx_fused_decode.py)."""
+    h = h.contiguous()
+    B, S, N, C = h.shape
+    if C > 2048:
+        hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
+        hpostrow = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
+        hprecm = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
+        xbar = hc_premap_wide(
+            h, hcw,
+            mod.proj.bias if mod.proj.bias is not None else hcb_zero,
+            mod.tau, mod.cayley_alpha, mod.cayley_iters, mod.eps,
+            hres, hpostrow, hprecm,
+            norm_w=norm_w, norm_eps=norm_eps,
+            norm_out=norm_out, norm_stride=norm_stride)
+        y = fn(xbar).contiguous()
+        return hc_post_wide(hres, hpostrow, h, y, term)
+    # mapping projection: row-parallel triton GEMV (cuBLAS gemv2T = 10.8 µs at [48,3072]).
+    # Bias-free: the kernel adds the bias OUTSIDE the /rms divide, h_map = (x·Wᵀ)/rms + b,
+    # as training's _FusedHCPreMap does (the 2026-07-02 bias-under-rms fix; this call
+    # site kept the pre-fix signature and launched without pb_ptr).
+    raw = small_gemv(h.view(B * S, N * C), hcw).view(B, S, 3 * N * N)
+    xbar = torch.empty(B, S, C, device=h.device, dtype=h.dtype)
+    hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
+    hpostrow = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
+    hprecm = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
+    rms = torch.empty(B, S, 1, device=h.device, dtype=torch.float32)
+    has_nout = norm_out is not None
+    # w1/w8 measured-best at C=768 (276M launch unchanged).
+    _hc_premap_fwd_kernel[(B * S,)](
+        h, raw, hcb, xbar, hres, hpostrow, hprecm, rms,
+        norm_out if has_nout else xbar, norm_w if has_nout else xbar,
+        TAU=float(mod.tau), ALPHA=float(mod.cayley_alpha),
+        ITERS=int(mod.cayley_iters), EPS=float(mod.eps),
+        N=N, C=C, BLOCK_C=_next_pow2(C),
+        HAS_NOUT=has_nout, neps=norm_eps, snout=norm_stride,
+        num_stages=1, num_warps=1,
+    )
+    y = fn(xbar)
+    # direct POST kernel launch (same kernel the training wrapper uses; w1 — these
+    # single-token kernels are latency-bound and cross-warp sync only hurts).
+    out = torch.empty(B, S, N, C, device=h.device, dtype=h.dtype)
+    y = y.contiguous()
+    _hc_post_fwd_kernel[(B * S,)](
+        hres, hpostrow, h, y.view(B, S, C), out,
+        term if term is not None else y,
+        N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=term is not None,
+        num_stages=1, num_warps=8,
+    )
+    return out
+
+
 class StaticDecodeEngine:
     """Fixed-shape O(1)-per-token MORPH decoder with optional CUDA-graph replay."""
 
@@ -1084,62 +1152,14 @@ class StaticDecodeEngine:
     def _hc(self, mod, h: Tensor, fn, term: Tensor | None = None,
             norm_w: Tensor | None = None, norm_eps: float = 1e-6,
             norm_out: Tensor | None = None, norm_stride: int = 0) -> Tensor:
-        """Inline HyperConnectionResidual.forward (cayley fused path) with a single-launch
-        GEMV for the mapping projection (cuBLAS used a dot+reduce+splitK triple at M=1).
-        Same premap/post Triton kernels, same math; forward-only (inference engine).
-
-        Wide carriers (C > 2048, the 30B): the single-CTA premap/post + 48-CTA
-        serial-K proj GEMV are pure latency (~21 µs/call at d=8192) — dispatch to
-        the multi-CTA hc_premap_wide/hc_post_wide suite instead (same math, fp
-        reduction-tree order only; tolerance-gated). 276M path byte-identical."""
-        h = h.contiguous()
-        B, S, N, C = h.shape
-        if C > 2048:
-            hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
-            hpostrow = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
-            hprecm = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
-            xbar = hc_premap_wide(
-                h, self._hcw[id(mod)],
-                mod.proj.bias if mod.proj.bias is not None else self._hcb_zero,
-                mod.tau, mod.cayley_alpha, mod.cayley_iters, mod.eps,
-                hres, hpostrow, hprecm,
-                norm_w=norm_w, norm_eps=norm_eps,
-                norm_out=norm_out, norm_stride=norm_stride)
-            y = fn(xbar).contiguous()
-            return hc_post_wide(hres, hpostrow, h, y, term)
-        # mapping projection: row-parallel triton GEMV (cuBLAS gemv2T = 10.8 µs at [48,3072]).
-        # Bias-free: the kernel adds the bias OUTSIDE the /rms divide, h_map = (x·Wᵀ)/rms + b,
-        # as training's _FusedHCPreMap does (the 2026-07-02 bias-under-rms fix; this call
-        # site kept the pre-fix signature and launched without pb_ptr).
-        raw = small_gemv(h.view(B * S, N * C), self._hcw[id(mod)]).view(B, S, 3 * N * N)
-        xbar = torch.empty(B, S, C, device=h.device, dtype=h.dtype)
-        hres = torch.empty(B, S, N, N, device=h.device, dtype=torch.float32)
-        hpostrow = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
-        hprecm = torch.empty(B, S, N, device=h.device, dtype=torch.float32)
-        rms = torch.empty(B, S, 1, device=h.device, dtype=torch.float32)
-        has_nout = norm_out is not None
-        # w1/w8 measured-best at C=768 (276M launch unchanged).
-        _hc_premap_fwd_kernel[(B * S,)](
-            h, raw, self._hcb[id(mod)], xbar, hres, hpostrow, hprecm, rms,
-            norm_out if has_nout else xbar, norm_w if has_nout else xbar,
-            TAU=float(mod.tau), ALPHA=float(mod.cayley_alpha),
-            ITERS=int(mod.cayley_iters), EPS=float(mod.eps),
-            N=N, C=C, BLOCK_C=_next_pow2(C),
-            HAS_NOUT=has_nout, neps=norm_eps, snout=norm_stride,
-            num_stages=1, num_warps=1,
-        )
-        y = fn(xbar)
-        # direct POST kernel launch (same kernel the training wrapper uses; w1 — these
-        # single-token kernels are latency-bound and cross-warp sync only hurts).
-        out = torch.empty(B, S, N, C, device=h.device, dtype=h.dtype)
-        y = y.contiguous()
-        _hc_post_fwd_kernel[(B * S,)](
-            hres, hpostrow, h, y.view(B, S, C), out,
-            term if term is not None else y,
-            N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=term is not None,
-            num_stages=1, num_warps=8,
-        )
-        return out
+        """One Hyper-Connection residual step on the engine's weight copies
+        (:func:`hc_apply`)."""
+        # _hcb_zero is read only for a bias-free module (as before the move: the HC test
+        # builds a bare engine with _hcw/_hcb alone)
+        zero = self._hcb_zero if mod.proj.bias is None else None
+        return hc_apply(mod, h, fn, self._hcw[id(mod)], self._hcb[id(mod)], zero,
+                        term=term, norm_w=norm_w, norm_eps=norm_eps, norm_out=norm_out,
+                        norm_stride=norm_stride)
 
     @torch.no_grad()
     def _step(self, emit_csa: bool, emit_hca: bool, mixed: bool = False) -> None:

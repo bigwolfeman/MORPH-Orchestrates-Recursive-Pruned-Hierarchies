@@ -8,6 +8,15 @@ Arms (each on real validation prompts read the trainer's way, greedy, ``--new`` 
   lx_eager         generate_tul_batch with the generation forward (C1e), same budget
   lx_cached        generate_tul_cached, one row at a time (the decoder holds one row)
   lx_graphed       generate_tul_graphed, one row at a time, graphs captured once per run
+  lx_fused         morph/inference/lx_fused_decode.py: every block on the plain engine's
+                   kernels, the strict attention through lx_attn, real batching (one token
+                   graph over all B rows, slot graphs per bucket of cutting rows); one
+                   decoder per batch size built and captured once outside the timing;
+                   fp32 weight copies (exact). ``--check_fused`` gates its tokens and rows
+                   against lx_graphed and the eager generate_tul (prompts 0 and 1) and
+                   every batch row against its B=1 run. ``--fused_attn`` /
+                   ``--fused_kv_row`` pick the K1 / K2 kernels or their PyTorch stand-ins.
+  lx_fused_bf16    the same with bf16 weight copies (the plain engine's default)
   plain_eager      generate_plain_batch (recompute per step, the gen eval's plain arm)
   plain_cached     morph/inference/kv_cache.py prefill + decode_step, batched
   plain_graphed    morph/inference/engine.py StaticDecodeEngine, one engine per batch size
@@ -53,6 +62,7 @@ import morph.inference.tul_generate_cached as cached_mod  # noqa: E402
 import morph.inference.tul_generate_graphed as graphed_mod  # noqa: E402
 from gen_diversity_eval import read_val_rows  # noqa: E402
 from morph.inference.kv_cache import MORPHKVCache, decode_step  # noqa: E402
+from morph.inference.lx_fused_decode import LxFusedDecoder, generate_lx_fused_batch  # noqa: E402
 from morph.inference.plain_generate import generate_plain_batch  # noqa: E402
 from morph.inference.tul_generate import generate_tul_batch, generate_tul  # noqa: E402
 from morph.inference.tul_generate_cached import generate_tul_cached  # noqa: E402
@@ -235,6 +245,10 @@ def run_arm(arm: str, model, prompts, new: int, ctx: dict) -> list[list[int]]:
         return [generate_tul_graphed(model, p, rule, spec_tight, max_new_tokens=new,
                                      temperature=0.0, device="cuda", emit_source="token",
                                      decoder=dec)[0] for p in prompts]
+    if arm in ("lx_fused", "lx_fused_bf16"):
+        dec = ctx["fused_decs"][(arm, len(prompts))]
+        return generate_lx_fused_batch(model, prompts, rule, spec_tight, max_new_tokens=new,
+                                       emit_source="token", decoder=dec)[0]
     if arm == "plain_eager":
         return generate_plain_batch(model, prompts, max_new_tokens=new, temperature=0.0,
                                     device="cuda")
@@ -373,6 +387,122 @@ def step_profile(model, ctx, reps: int = 50) -> dict:
     return res
 
 
+def _fused_setup(model, prompts, new, batches, arms, ctx, payload, attn, kv_row) -> None:
+    """One LxFusedDecoder per (arm, batch size), built and captured outside the timing."""
+    _sync()
+    t0 = time.perf_counter()
+    ctx["fused_decs"] = {}
+    steps = max(len(p) for p in prompts) + new
+    for arm in arms:
+        for B in sorted(set(batches) | {1}):
+            ctx["fused_decs"][(arm, B)] = LxFusedDecoder(
+                model, ctx["spec_tight"], ctx["rule"], B, "token",
+                exact_weights=(arm == "lx_fused"), max_tokens=steps, attn=attn,
+                kv_row=kv_row)
+    _sync()
+    payload["fused_capture_s"] = time.perf_counter() - t0
+    payload["fused_attn"], payload["fused_kv_row"] = attn, kv_row
+    print(f"fused decoders build+capture {payload['fused_capture_s']:.1f}s", flush=True)
+
+
+@torch.no_grad()
+def check_fused(model, prompts, new, ctx, arm, nbs) -> dict:
+    """lx_fused against lx_graphed and the eager generate_tul on prompts 0 and 1 (tokens,
+    first differing step, worst row difference up to and including it), and, for every
+    batch size in ``nbs`` above 1, every row of the batch against its own B=1 run
+    (tokens, worst row difference)."""
+    rule, spec_eval, spec_tight = ctx["rule"], ctx["spec_eval"], ctx["spec_tight"]
+    res = {}
+    single = {}
+    for pi in range(min(2, len(prompts))):
+        p = prompts[pi]
+        out, _b, rows = generate_lx_fused_batch(model, [p], rule, spec_tight, new,
+                                                emit_source="token", return_logits=True,
+                                                decoder=ctx["fused_decs"][(arm, 1)])
+        f_tok, f_rows = out[0], [r.float().cpu() for r in rows[0]]
+        single[pi] = (f_tok, f_rows)
+        gr, undo = _rows_spy(graphed_mod)
+        g_tok = generate_tul_graphed(model, p, rule, spec_tight, max_new_tokens=new,
+                                     temperature=0.0, device="cuda", emit_source="token",
+                                     decoder=ctx["graph_dec"])[0]
+        undo()
+        er, undo = _rows_spy(eager_mod)
+        e_tok, _ = generate_tul(model, p, rule, spec_eval, max_new_tokens=new,
+                                temperature=0.0, device="cuda", emit_source="token")
+        undo()
+        for name, rt, rr in (("graphed", g_tok, gr), ("eager", e_tok, er)):
+            n = _first_diff(rt, f_tok)
+            upto = len(f_tok) if n < 0 else n + 1
+            row = {"tokens_equal": rt == f_tok, "first_diff": n,
+                   "worst_row_diff_until_first_diff": _worst(rr[:upto], f_rows[:upto])}
+            if n >= 0:
+                top = torch.log_softmax(rr[n].double(), -1).topk(2).values
+                row["ref_top2_margin_at_flip"] = float(top[0] - top[1])
+            res[f"p{pi}_vs_{name}"] = row
+    for nb in sorted(x for x in set(nbs) if x > 1):
+        ps = prompts[:nb]
+        out, _b, rows = generate_lx_fused_batch(model, ps, rule, spec_tight, new,
+                                                emit_source="token", return_logits=True,
+                                                decoder=ctx["fused_decs"][(arm, nb)])
+        per = []
+        for b, p in enumerate(ps):
+            if b in single:
+                s_tok, s_rows = single[b]
+            else:
+                o1, _b1, r1 = generate_lx_fused_batch(
+                    model, [p], rule, spec_tight, new, emit_source="token",
+                    return_logits=True, decoder=ctx["fused_decs"][(arm, 1)])
+                s_tok, s_rows = o1[0], [r.float().cpu() for r in r1[0]]
+                single[b] = (s_tok, s_rows)
+            n = _first_diff(s_tok, out[b])
+            upto = len(out[b]) if n < 0 else n + 1
+            per.append({"tokens_equal": s_tok == out[b], "first_diff": n,
+                        "worst_row_diff_until_first_diff": _worst(
+                            s_rows[:upto], [r.float().cpu() for r in rows[b][:upto]])})
+        res[f"batch{nb}_vs_b1"] = per
+    return res
+
+
+@torch.no_grad()
+def fused_step_profile(model, ctx, arm, reps: int = 50) -> dict:
+    """Per-event cost of the fused decoder at each batch size it was built for: replay
+    time of the token graph and of every slot bucket graph (CUDA events), and the kernel
+    count and device time of ONE eager execution of each step function."""
+    from torch.profiler import ProfilerActivity, profile
+    res = {}
+    for (a, B), dec in ctx["fused_decs"].items():
+        if a != arm:
+            continue
+        dec.reset()
+        dec._fill_warmup_inputs()
+        events = [("token", dec.g_tok, dec._token_step)] + [
+            (f"slot{nb}", dec.g_slot[nb], (lambda nb=nb: dec._slot_step(nb)))
+            for nb in dec.buckets]
+        per = {}
+        for name, g, fn in events:
+            t0, t1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            g.replay()
+            t0.record()
+            for _ in range(reps):
+                g.replay()
+            t1.record()
+            _sync()
+            with profile(activities=[ProfilerActivity.CUDA]) as prof:
+                fn()
+                _sync()
+            ev = [e for e in prof.key_averages()
+                  if e.device_type == torch.autograd.DeviceType.CUDA]
+            top = sorted(ev, key=lambda e: -e.self_device_time_total)[:10]
+            per[name] = {"replay_ms": t0.elapsed_time(t1) / reps,
+                         "kernels": int(sum(e.count for e in ev)),
+                         "eager_kernel_ms": sum(e.self_device_time_total for e in ev) / 1e3,
+                         "top": [(e.key[:60], e.count, round(e.self_device_time_total / 1e3, 3))
+                                 for e in top]}
+        res[f"B{B}"] = per
+        dec.reset()
+    return res
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--lx_cfg", default="lxtul_pointer")
@@ -394,15 +524,27 @@ def main() -> None:
                     help="plain_graphed engines keep fp32 weight copies "
                          "(StaticDecodeEngine(exact_weights=True))")
     ap.add_argument("--step_profile", action="store_true")
+    ap.add_argument("--check_fused", action="store_true",
+                    help="gate lx_fused against lx_graphed / eager (prompts 0, 1) and the "
+                         "max batch's rows against their B=1 runs; needs an lx_fused arm")
+    ap.add_argument("--fused_attn", default="kernel", choices=("kernel", "reference"))
+    ap.add_argument("--fused_kv_row", default="kernel", choices=("kernel", "reference"))
     ap.add_argument("--no_tf32", action="store_true",
                     help="cuDNN TF32 off (it is ON by default and runs the CCA conv1d in fp32 "
                          "models at TF32 precision)")
+    ap.add_argument("--ref_fp32_conv", action="store_true",
+                    help="the references' loop conv without the fused Triton q||k conv "
+                         "(fused_cca_conv runs tl.dot at TF32); with --no_tf32 the "
+                         "references are fp32 throughout, like lx_fused")
     ap.add_argument("--deterministic", action="store_true",
                     help="torch.use_deterministic_algorithms (needs CUBLAS_WORKSPACE_CONFIG)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     if a.deterministic:
         torch.use_deterministic_algorithms(True, warn_only=True)
+    if a.ref_fp32_conv:
+        import morph.model.attention as attn_mod
+        attn_mod.set_fused_attn_proj(qkconv=False)
     if a.no_tf32:
         torch.backends.cudnn.allow_tf32 = False
         torch.backends.cuda.matmul.allow_tf32 = False
@@ -443,7 +585,7 @@ def main() -> None:
                    "spec_eval": dataclasses.replace(spec, max_slots=spec.max_slots + a.new),
                    "spec_tight": dataclasses.replace(
                        spec, max_slots=(a.prompt_len + a.new) // rule.min_span + 1)}
-            if "lx_graphed" in g_arms or a.check or a.step_profile:
+            if "lx_graphed" in g_arms or a.check or a.step_profile or a.check_fused:
                 _sync()
                 t0 = time.perf_counter()
                 ctx["graph_dec"] = TulGraphDecoder(model, ctx["spec_tight"], rule, "token")
@@ -458,6 +600,24 @@ def main() -> None:
                 payload["check"] = check(model, prompts[0], a.new, ctx)
                 print("CHECK", json.dumps(payload["check"]), flush=True)
                 flush()
+            fused_arms = [x for x in g_arms if x.startswith("lx_fused")]
+            if fused_arms:
+                _fused_setup(model, prompts, a.new, batches, fused_arms, ctx, payload,
+                             a.fused_attn, a.fused_kv_row)
+                flush()
+                if a.check_fused:
+                    payload["check_fused"] = check_fused(model, prompts, a.new, ctx,
+                                                         fused_arms[0], batches)
+                    print("CHECK_FUSED", json.dumps(payload["check_fused"]), flush=True)
+                    flush()
+                if a.step_profile:
+                    payload["fused_step_profile"] = fused_step_profile(model, ctx,
+                                                                       fused_arms[0])
+                    print("FUSED_STEP_PROFILE", json.dumps(payload["fused_step_profile"]),
+                          flush=True)
+                    flush()
+            elif a.check_fused:
+                raise SystemExit("--check_fused needs an lx_fused arm")
         if a.check_plain and group == "plain" and "plain_graphed" not in g_arms:
             raise SystemExit("--check_plain needs the plain_graphed arm")
         for arm in g_arms:
@@ -471,6 +631,10 @@ def main() -> None:
                 try:
                     run_arm(arm, model, ps[:1], 4, ctx)              # warm-up (compile, alloc)
                     out, wall = timed(arm, model, ps, a.new, ctx)
+                    fdec = ctx.get("fused_decs", {}).get((arm, B))
+                    events = None if fdec is None else {      # the timed run's, before
+                        "token_steps": fdec.token_steps,       # gpu_busy reruns it
+                        "slot_steps_per_bucket": dict(fdec.slot_events)}
                     kern, wall_s = gpu_busy(arm, model, ps, a.prof_new, ctx)
                     peak = torch.cuda.max_memory_allocated() / 2**30
                     tok = B * a.new
@@ -481,6 +645,8 @@ def main() -> None:
                            "gpu_busy_ms_per_tok": 1e3 * kern / (B * a.prof_new),
                            "busy_frac": kern / wall_s, "peak_gib": peak,
                            "ckpt_step": step, "row0": out[0]}
+                    if events is not None:
+                        row["fused_events"] = events
                 except torch.cuda.OutOfMemoryError as e:
                     row = {"arm": arm, "batch": B, "error": f"OOM: {str(e)[:200]}"}
                     torch.cuda.empty_cache()
@@ -489,6 +655,8 @@ def main() -> None:
                 print(json.dumps(row), flush=True)
                 flush()
                 torch.cuda.reset_peak_memory_stats()
+        for fdec in ctx.get("fused_decs", {}).values():   # release graphs + QAT cache
+            fdec.__exit__(None, None, None)
         del model, ctx
         torch.cuda.empty_cache()
     flush()
