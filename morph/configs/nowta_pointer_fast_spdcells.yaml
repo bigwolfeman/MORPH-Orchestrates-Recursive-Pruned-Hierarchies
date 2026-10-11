@@ -1,0 +1,13 @@
+# The ungraded fan (nowta_pointer_fast) with the span decoder cross-attending to the 4 cells as
+# a memory (tul.spandec_reads_cells), the way the coda reads them, beside the mean conditioning.
+# Question (2026-10-11): does a decoder that reads the cells as a set keep them distinct, where
+# the each-cell (cos +0.81) and best-cell (+0.61) grades did not?
+defaults:
+  - nowta_pointer_fast
+  - _self_
+
+tul:
+  spandec_reads_cells: true
+
+wandb:
+  name: nowta-pointer-fast-spdcells
