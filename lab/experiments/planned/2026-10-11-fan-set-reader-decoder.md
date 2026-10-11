@@ -36,3 +36,8 @@ CPU in tree-h: 306.7M params. Run in `/home/wolfe/morph-scratch/abq/tree-h` (tre
 best-cell diff; the reference arms' code), row cap as the recipe sets it (on; this option does
 not use the best-cell path, so the missing helper is not reached), 5000 steps, seed 1, the A/B
 runner and its 480-row sweep.
+
+Method amendment 2026-10-11 (after run 1, before run 2 is queued): run 1 landed in the
+decision rule's "candidate" box, which owes a second run. Run 2 (`nowta-spdcells-r2`, same
+config, tree and seed) is queued now; the file is filed on both runs, against the same
+Predictions, judged on the two-run mean.
