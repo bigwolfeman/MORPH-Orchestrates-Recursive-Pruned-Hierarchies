@@ -39,3 +39,8 @@ latent-selected-loop requirement). Tests `tests/test_spandec_read_each.py` 9 pas
 and per-cell gradient tests now also run on the ungraded fan; the old guard raises on both).
 Run in `/home/wolfe/morph-scratch/abq/tree-f` (round 3's tree, with the narrowed guard copied
 in), 5000 steps, seed 1, the A/B runner and its 480-row sweep.
+
+Method amendment 2026-10-11 03:31: run 1 landed in the "supports the mean read account" box of
+the decision rule (numbers withheld here until filing), which owes a second run. Run 2
+(`nowta-spdeach-r2`, same config, tree and seed) is queued now; the file is filed on both runs,
+against the same Predictions, judged on the two-run mean.
