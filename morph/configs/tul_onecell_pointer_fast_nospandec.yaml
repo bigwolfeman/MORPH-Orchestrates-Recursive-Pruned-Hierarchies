@@ -1,0 +1,15 @@
+# tul_onecell_pointer_fast with the span decoder OFF (phase-2 tracker C1d twin of
+# lxtul_pointer_fast_nospandec.yaml, 2026-10-10). `spandec_ce_row_cap` acts only on the
+# decoder, so it is cleared here rather than left inert.
+defaults:
+  - tul_onecell_pointer_fast
+  - _self_
+
+model:
+  spandec_ce_row_cap: false
+
+tul:
+  spandec: false
+
+wandb:
+  name: tul-onecell-pointer-fast-nospandec
