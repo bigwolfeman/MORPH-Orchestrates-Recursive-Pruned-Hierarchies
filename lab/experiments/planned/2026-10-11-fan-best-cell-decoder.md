@@ -41,7 +41,7 @@ snapshot of the commit adding this file (`/home/wolfe/morph-scratch/abq/tree-g`)
 1, the A/B runner and its 480-row sweep. This tree includes the 2026-10-11 byte-identical speed
 levers (C3, E, Q, C4; C2 off), so its tok/s is not comparable 1:1 to tree-f arms; CE is.
 
-Method amendment 2026-10-11 04:23 (committed before the rerun was queued): the first launch (tree-g, master + this change) ran out of
+Method amendment 2026-10-11 04:24 (committed before the rerun was queued): the first launch (tree-g, master + this change) ran out of
 GPU memory at the first validation, step 200 (22 GB in CUDA-graph private pools; the
 2026-10-11 speed levers, likely C4's second recorded body, leave less headroom than the tree the
 references trained on). No numbers were read. Rerun as `nowta-spdbest-h` in
