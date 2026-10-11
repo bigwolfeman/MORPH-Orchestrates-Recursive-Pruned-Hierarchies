@@ -169,10 +169,22 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         multi-rollout model with the cell norm would decode a different function silently.
         Refuse or implement first.
 - [ ] C2 LM-head slot rows (Lemma 3: needs `pointer_cell_key: false`; the coda keeps K/V at slot
-      rows). About 0.34 TF per step.
+      rows). About 0.34 TF per step. 2026-10-10, branch perf/train-speed-free, committed:
+      `model.lmhead_row_cap` (OFF in lxtul_pointer_fast until a 5k quality check). Not bit-exact (reduction order):
+      step 0 loss identical, grad norm 6.7e-8 relative, then the 45-step trajectories
+      decorrelate (max 0.055 nats). About -0.8 ms per step. Note
+      `.agents/notes/proposed/architecture/2026-10-10-exact-training-step-levers.md`.
 - [ ] C3 Drop the logits recompute GEMM in the token head (keep bf16 logits, about +0.76 GB).
+      2026-10-10, same branch, committed: byte-identical gate, -4.1 ms per step. Same
+      note; also E (one int-N quantisation and one tied head per forward, -4.0 ms) and Q
+      (one-pass Triton quantiser, -6.3 ms), both byte-identical. All levers: 245.6 -> 233.5
+      ms per step in the bench window.
 - [ ] C4 Skip the hinge backward on inactive steps (71 % of steps; needs a CUDA conditional node
-      under `graph_step`). After A.
+      under `graph_step`). After A. 2026-10-10, same branch, committed: built
+      (graph_cond.py), byte-identical gate; -8.2 ms on an inactive step, +0.9 ms on an
+      active one. Note
+      `.agents/notes/proposed/architecture/2026-10-10-hinge-branch-conditional-node.md`.
+      The A4 decision is still open.
 - [ ] C5 The 4-stream HC carrier: 1 stream was worth 60 ms per step at FAST. An architecture
       change, so it needs a quality arm, not only a speed bench.
 

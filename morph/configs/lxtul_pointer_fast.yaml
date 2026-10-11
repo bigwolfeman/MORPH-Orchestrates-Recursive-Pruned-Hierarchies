@@ -7,6 +7,9 @@
 #   rounding only (fp64 parity + fixed-weight readout): tg_fused_attention, hc_fused_grad,
 #     ternary_step_cache, fan_twin_compile, fan_div_fast, fan_lsel_pick_bf16, ce_softmax_kernel,
 #     spandec_ce_row_cap, hc_region_fused, cca_prologue_tiled, inject_fold (forward bit-identical)
+#   2026-10-10 (phase-2 tracker C2, sum order only, 45-step gate deviation in the tracker):
+#     lmhead_row_cap (the token head on the rows a loss reads, a proven fixed cap), built, OFF here
+#     until a 5k quality check; it saves only ~0.8 ms/step
 #   training-function changes, paired continuations (lab/experiments/mixed|successes/2026-10-08-*):
 #     fan_target_online (package check, mixed), slot_depth_stratified + slot_compact (success;
 #     possible ~0.001 nat CE cost)
@@ -27,6 +30,7 @@ model:
   slot_depth_stratified: true
   slot_compact: gather
   spandec_ce_row_cap: true
+  lmhead_row_cap: false   # C2: not exact, -0.8 ms, no 5k quality check yet; off until one
   hc_region_fused: true
   cca_prologue_tiled: true
   inject_fold: true

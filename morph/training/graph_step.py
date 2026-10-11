@@ -56,7 +56,11 @@ What a replay relies on, and where each is kept:
     ``eager_on_recompile`` stance would), and the dynamo graph count must not move.
   * Python state: a replay runs no Python, so a module attribute that a step changes (a
     counter, a schedule flag) would freeze. Every scalar attribute of every module is
-    compared across each recording; a change raises.
+    compared across each recording; a change raises. A TENSOR attribute the step sets to a
+    new object (``_loop_cot_ref``, set by the cotangent-clip hook in the backward) is the
+    recording's object, which the replay writes: each replay binds the attributes its
+    recording set again (``_Captured.rebind``, 2026-10-10), so a reader sees that replay's
+    values and not those of the last recording or eager step.
 
 Order: every step runs eager, on the capture side stream (the PyTorch recipe's warm-up),
 until ``first_capture`` and until every kind has run once. On the next step every (kind,
@@ -64,6 +68,44 @@ variant) is recorded on that step's batch, then that step's (kind, variant) is R
 recording executes no kernel). From there on every step is a replay. Every variant's compiled
 frames must exist before the recording (``fail_on_recompile``): the trainer's warm-up compile
 runs one forward per hinge pass (train.py ``warmup_compile_all_shapes``).
+
+THE HINGE BRANCH (2026-10-10, phase-2 tracker C4). The gain hinge
+(``model.slot_gain_lambda``) adds two core applications at the drawn pass, and their backward
+is about 11 ms of the lxtul_pointer_fast step. On most steps no row's gain is over the target,
+the hinge is exactly 0 and so is its gradient: that backward adds exact zeros. When the
+forward reports the hinge (``out["gain_pen"]``, the penalty as it enters the loss, and
+``out["gain_active"]``, the device flag "some charged term is not 0"), a recording is FOUR
+torch graphs in the pool, run as three launches:
+
+    pre   = zero_grad, forward, loss terms, ``loss / 1``           (torch replay)
+    IF gain_active:  A = the backward, exactly the eager one        (one CondBranch launch,
+    ELSE:            B = the backward without the penalty's edge     morph/training/graph_cond.py)
+    post  = clip, found-inf flag, optimizer step, after_step, keep copy  (torch replay)
+
+B is a backward from the loss chain's OTHER addends (``_cut_roots``: the pass-through adds and
+the ``/ 1`` from the loss down to the penalty's add, each other edge a root with the gradient
+1 it receives there), so the hinge's nodes are never reached. Why B equals the eager step: the
+autograd engine runs the reachable nodes in descending creation order (a node's consumers are
+all newer, so by induction the newest unexecuted node is always ready when its turn comes);
+leaving the hinge's nodes out keeps every other node's order and every input buffer's
+summation order, and drops addends that are exact zeros. Two things can differ: the sign of a
+zero gradient element (+0 + -0), and a step on which a hinge-side activation is inf (its zero
+gradient times inf is NaN in A, which the found-inf flag would catch; B never computes it).
+A is recorded first, with ``retain_graph`` (B walks the same saved tensors), so A allocates
+every gradient; B zeroes those buffers in place and accumulates into them, so ``post`` reads
+one set either way (``p.grad`` after B is the same tensor objects A left: checked). A module
+attribute a backward hook sets (``_loop_cot_ref``, the instrument kind's ``_loop_cot*``) is
+the object B set when the recording ends; B ends by copying its values into A's objects and
+rebinding A's (``_TensorAttrs``), so a reader sees the step's values whichever body ran. Both
+bodies must draw no random numbers (graph_cond.py): the generator cannot be read during a
+capture, so the eager steps before the recording measure the backward's draws
+(``_eager_bwd_draws``), and a backward that drew (or no eager step) makes the recording raise.
+The eager step (warm-up, ``run_eager``) is the plain body. A recording whose forward reports
+no hinge is two graphs, pre and the rest, replayed in turn (the same kernels as one graph).
+The hinge branch costs a zero fill of every gradient on a B step and a second backward's
+recording; A keeps the forward's saved tensors to its end (``retain_graph``), so its
+recording cannot reuse their memory for its temporaries (the pool can grow; measured in the
+tracker's C4 entry).
 
 Eval and generation do not fit beside the pool either (measured: eval's pointer mixture OOM
 at step 25 with the 15.4 GiB pool held, also when it borrowed the pool's free blocks). The
@@ -85,6 +127,7 @@ import torch
 import torch.nn as nn
 
 from morph.model.tul_layout import SlotLayout
+from morph.training.graph_cond import CondBranch
 
 __all__ = ["GraphStep", "StaticBatch", "graph_step_refusals"]
 
@@ -206,11 +249,112 @@ class StaticBatch:
             self._copy(getattr(self.layout, k), getattr(layout, k), f"layout.{k}")
 
 
+_PASS_THROUGH = ("AddBackward0", "DivBackward0", "DivBackward1")
+
+
+def _cut_roots(loss: torch.Tensor, cut: torch.Tensor) -> list:
+    """The backward roots of ``loss`` with ``cut``'s edge left out (module notes, THE HINGE
+    BRANCH): walk the loss chain's pass-through nodes (an add with alpha 1, a division by 1:
+    each hands its incoming gradient unchanged to every input) down to the add that takes
+    ``cut``; every OTHER input edge met on the way is a root, which receives the gradient 1
+    the chain would hand it. A pass-through node with no ``cut`` below stays one root. Raises
+    if ``cut`` is not an addend of the chain (or sits under any other node): the cut would
+    then change more than the hinge."""
+    from torch.autograd.graph import GradientEdge
+    want = (cut.grad_fn, cut.output_nr)
+
+    def through(node) -> bool:
+        name = node.name()
+        if name == "AddBackward0":
+            return float(node._saved_alpha) == 1.0
+        if name in ("DivBackward0", "DivBackward1"):
+            o = node._saved_other
+            return float(o) == 1.0 if not torch.is_tensor(o) or o.numel() == 1 else False
+        return False
+
+    def expand(node, nr) -> tuple[list, bool]:
+        if node is None:
+            return [], False
+        if node is want[0] and nr == want[1]:
+            return [], True
+        if through(node):
+            parts = [expand(n, k) for n, k in node.next_functions]
+            if any(f for _r, f in parts):
+                return [r for rs, _f in parts for r in rs], True
+        return [GradientEdge(node, nr)], False
+
+    roots, found = expand(loss.grad_fn, loss.output_nr)
+    if not found:
+        raise RuntimeError("graph_step: out['gain_pen'] is not an addend of the loss chain "
+                           "(pass-through adds and '/ 1' only); the hinge branch cannot cut it")
+    return roots
+
+
+def _attr_objs(mods) -> dict:
+    """``{(id(module), name): (module, name, object)}`` for every tensor attribute and every
+    non-empty dict-of-tensors attribute of ``mods`` (``_TensorAttrs._copyable``; a dict is
+    copied, so a later in-place edit of the module's dict does not change the snapshot)."""
+    return {(id(m), k): (m, k, c) for m in mods for k, v in vars(m).items()
+            if k not in _TensorAttrs._SKIP and (c := _TensorAttrs._copyable(v)) is not None}
+
+
+def _same_obj(a, b) -> bool:
+    if torch.is_tensor(a) or torch.is_tensor(b):
+        return a is b
+    return a.keys() == b.keys() and all(a[i] is b[i] for i in a)
+
+
+class _TensorAttrs:
+    """The tensor attributes (and dicts of tensors) of some modules, as one backward left
+    them; ``restore()``, inside the next body's recording, copies the values that body left
+    into these objects and binds them again (module notes, THE HINGE BRANCH)."""
+
+    _SKIP = ("_parameters", "_buffers", "_modules")
+
+    def __init__(self, mods):
+        self.mods = mods
+        self.snap = [(m, k, self._copyable(v)) for m in mods for k, v in vars(m).items()
+                     if k not in self._SKIP and self._copyable(v) is not None]
+
+    @staticmethod
+    def _copyable(v):
+        if torch.is_tensor(v):
+            return v
+        if isinstance(v, dict) and v and all(torch.is_tensor(t) for t in v.values()):
+            return dict(v)
+        return None
+
+    def restore(self) -> None:
+        for m, k, old in self.snap:
+            new = vars(m).get(k)
+            if new is old or (isinstance(old, dict) and isinstance(new, dict)
+                              and all(new.get(i) is t for i, t in old.items())
+                              and new.keys() == old.keys()):
+                continue
+            pairs = ([(old, new)] if torch.is_tensor(old)
+                     else [(t, new[i]) for i, t in old.items()]
+                     if isinstance(new, dict) and new.keys() == old.keys() else None)
+            if pairs is None or any(not torch.is_tensor(b) or a.shape != b.shape
+                                    or a.dtype != b.dtype for a, b in pairs):
+                raise RuntimeError(f"graph_step: {type(m).__name__}.{k} is set differently by "
+                                   f"the hinge branch's two bodies; a replay could not read it")
+            for a, b in pairs:
+                if a is not b:
+                    a.copy_(b)
+            setattr(m, k, old if torch.is_tensor(old) else type(new)(old))
+
+
 @dataclass
 class _Captured:
     """One (kind, variant)'s graph and the tensors it writes."""
 
-    graph: torch.cuda.CUDAGraph
+    graph: torch.cuda.CUDAGraph       # `pre`: zero_grad, forward, loss (module notes)
+    rest: Optional[torch.cuda.CUDAGraph]   # backward + post, when there is no hinge branch
+    branch: Optional[CondBranch]      # IF gain_active: A ELSE: B (the hinge branch)
+    post: Optional[torch.cuda.CUDAGraph]   # clip .. keep copy, after the branch
+    bodies: tuple                     # A and B (kept alive: the branch runs their clones)
+    rebind: list                      # (module, name, object): the tensor attributes the
+                                      # recording set; a replay binds them again
     out: dict
     loss: torch.Tensor
     gnorm: torch.Tensor
@@ -306,6 +450,9 @@ class GraphStep:
         # The kept kinds' gradients, ONE set for every graph (module notes, Gradients).
         # Allocated outside the pool before a recording, freed with the graphs.
         self._grad_bufs: Optional[list] = None
+        # Whether an eager step's backward moved the CUDA generator (None: no eager step
+        # yet). The hinge branch needs False (module notes, THE HINGE BRANCH).
+        self._eager_bwd_draws: Optional[bool] = None
 
     # ── the variant (module notes, VARIANTS) ────────────────────────────────────────────
     def _next_variant(self):
@@ -327,6 +474,20 @@ class GraphStep:
     def _body(self, x, y, layout, keep: bool = False):
         """The step. ``keep`` (a kept kind's RECORDING only): end by copying every gradient
         into the shared ``_grad_bufs``, bits unchanged, so the replay can bind them."""
+        out, loss = self._forward_loss(x, y, layout)
+        # The CUDA generator's offset across the backward (eager, so it is readable): a
+        # backward that draws cannot be a hinge-branch body (module notes).
+        gen = torch.cuda.default_generators[torch.cuda.current_device()]
+        off0 = gen.get_offset()
+        # `/ 1`: the trainer's `scaler.scale(loss / _ga)` at grad_accum 1 with the disabled
+        # scaler, kept so the backward starts from the same node.
+        (loss / 1).backward()
+        self._eager_bwd_draws = bool(self._eager_bwd_draws) or gen.get_offset() != off0
+        gnorm = self._post(keep)
+        return out, loss, gnorm
+
+    def _forward_loss(self, x, y, layout):
+        """The body up to the loss: zero_grad, the forward under autocast, the loss terms."""
         self.optimizer.zero_grad(set_to_none=True)
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out = self.forward(x, y, layout)
@@ -335,9 +496,11 @@ class GraphStep:
                 extra = self.loss_terms()
                 if extra is not None:
                     loss = loss + extra.to(loss.dtype)
-        # `/ 1`: the trainer's `scaler.scale(loss / _ga)` at grad_accum 1 with the disabled
-        # scaler, kept so the backward starts from the same node.
-        (loss / 1).backward()
+        return out, loss
+
+    def _post(self, keep: bool):
+        """The body after the backward: clip, found-inf flag, optimizer step, after_step and
+        (``keep``) the copy of every gradient into ``_grad_bufs``."""
         gnorm = nn.utils.clip_grad_norm_(self.params, self.grad_clip)
         self.optimizer.mark_found_inf(gnorm)
         self.optimizer.step()
@@ -348,7 +511,7 @@ class GraphStep:
                     if p.grad is not None]
             if have:
                 torch._foreach_copy_([b for b, _ in have], [g for _, g in have])
-        return out, loss, gnorm
+        return gnorm
 
     @staticmethod
     def _detached(out: dict) -> dict:
@@ -418,6 +581,9 @@ class GraphStep:
         # The last replay may still be running: its graph and pool must outlive it (freeing
         # them under it was an illegal memory access, measured on the winner at step 25).
         torch.cuda.synchronize()
+        for cap in self.graphs.values():
+            if cap.branch is not None:
+                cap.branch.close()
         self.graphs = {}
         self.static = None
         self._addresses = None
@@ -485,11 +651,8 @@ class GraphStep:
                     if self.set_variant is not None:
                         self.set_variant(var)
                     py_before = self._python_state()
-                    g = torch.cuda.CUDAGraph()
                     with set_stance("fail_on_recompile"):
-                        with torch.cuda.graph(g, pool=self.mempool.id, stream=self.stream,
-                                              capture_error_mode="thread_local"):
-                            c_out, c_loss, c_gnorm = self._body(sx, sy, sl, keep=keep)
+                        rec = self._record(sx, sy, sl, keep)
                     py_after = self._python_state()
                     changed = sorted(n for n in py_before.keys() | py_after.keys()
                                      if py_before.get(n) != py_after.get(n))
@@ -506,10 +669,11 @@ class GraphStep:
                     # next recording may reuse them.
                     present = [p.grad is not None for p in self.params] if keep else None
                     self.optimizer.zero_grad(set_to_none=True)
+                    c_out, c_loss, c_gnorm = rec.pop("out"), rec.pop("loss"), rec.pop("gnorm")
                     self.graphs[(k, var)] = _Captured(
-                        graph=g, out=self._detached(c_out), loss=c_loss.detach(),
+                        **rec, out=self._detached(c_out), loss=c_loss.detach(),
                         gnorm=c_gnorm.detach(), present=present, context=context)
-                    del c_out, c_loss, c_gnorm
+                    del c_out, c_loss, c_gnorm, rec
                     self.stats.captures += 1
         finally:
             self.set_kind(kind)
@@ -520,9 +684,90 @@ class GraphStep:
                                f"new graph(s) while recording")
         self._addresses = self._persistent()
         self._dirty = False
+        n_br = sum(c.branch is not None for c in self.graphs.values())
         print(f"  [graph-step] recorded {len(self.graphs)} graph(s) (kinds {list(self.kinds)} x "
-              f"{len(self.variants)} variant(s)) in {time.perf_counter() - t0:.1f} s; "
+              f"{len(self.variants)} variant(s); {n_br} with the hinge branch) in "
+              f"{time.perf_counter() - t0:.1f} s; "
               f"{torch.cuda.memory_reserved() / 2**30:.2f} GiB reserved", flush=True)
+
+    def _graph(self, keep_graph: bool = False):
+        """A recording context on the capture stream, in the graphs' pool."""
+        g = torch.cuda.CUDAGraph(keep_graph=keep_graph)
+        return g, torch.cuda.graph(g, pool=self.mempool.id, stream=self.stream,
+                                   capture_error_mode="thread_local")
+
+    def _record(self, sx, sy, sl, keep: bool) -> dict:
+        """Record one (kind, variant): ``pre`` and either ``rest`` or the hinge branch and
+        ``post`` (module notes, THE HINGE BRANCH). Returns the ``_Captured`` fields.
+
+        ``rebind``: every tensor attribute (or dict of tensors) of the model that the step
+        set to a new object while recording, e.g. ``_loop_cot_ref`` (the cotangent-clip
+        hook). The replay writes into these objects, so a replay binds them again: a reader
+        after the step then sees this replay's values, not those of whichever step (another
+        variant's recording, an eager step) set the attribute last."""
+        owners = self._attr_owners()
+        before = _attr_objs(owners)
+        rec = self._record_graphs(sx, sy, sl, keep)
+        after = _attr_objs(owners)
+        rec["rebind"] = [(m, k, v) for key, (m, k, v) in after.items()
+                         if key not in before or not _same_obj(before[key][2], v)]
+        return rec
+
+    def _record_graphs(self, sx, sy, sl, keep: bool) -> dict:
+        g_pre, ctx = self._graph()
+        with ctx:
+            out, loss = self._forward_loss(sx, sy, sl)
+            l1 = loss / 1
+        pen, flag = out.get("gain_pen"), out.get("gain_active")
+        if pen is None or flag is None or not pen.requires_grad:
+            g_rest, ctx = self._graph()
+            with ctx:
+                l1.backward()
+                gnorm = self._post(keep)
+            return dict(graph=g_pre, rest=g_rest, branch=None, post=None, bodies=(),
+                        out=out, loss=loss, gnorm=gnorm)
+        roots = _cut_roots(l1, pen)
+        # A body launched by the branch does not run torch's replay prologue (which sets a
+        # graph's philox offsets), so it must draw nothing. The generator cannot be read
+        # during a capture; the eager steps before the recording measured the backward.
+        if self._eager_bwd_draws is not False:
+            raise RuntimeError("graph_step: the hinge branch needs an eager step's backward "
+                               "that draws no random numbers before the recording "
+                               f"(measured: {self._eager_bwd_draws}); its bodies would reuse "
+                               "the forward graph's philox offsets (graph_cond.py)")
+        g_a, ctx = self._graph(keep_graph=True)
+        with ctx:
+            l1.backward(retain_graph=True)
+        grads = [p.grad for p in self.params]
+        attrs = _TensorAttrs(self._attr_owners())
+        g_b, ctx = self._graph(keep_graph=True)
+        with ctx:
+            live = [g for g in grads if g is not None]
+            if live:
+                torch._foreach_zero_(live)
+            torch.autograd.backward([e for e in roots],
+                                    grad_tensors=[torch.ones((), dtype=l1.dtype,
+                                                             device=l1.device)] * len(roots))
+            attrs.restore()
+        moved = [i for i, (p, g) in enumerate(zip(self.params, grads)) if p.grad is not g]
+        if moved:
+            raise RuntimeError(f"graph_step: the hinge branch's second body rebound "
+                               f"{len(moved)} gradient(s) (first: parameter {moved[0]}); "
+                               f"the optimizer would read the first body's buffers only")
+        del l1
+        branch = CondBranch(flag, g_a, g_b)
+        g_post, ctx = self._graph()
+        try:
+            with ctx:
+                gnorm = self._post(keep)
+        except Exception:
+            branch.close()
+            raise
+        return dict(graph=g_pre, rest=None, branch=branch, post=g_post, bodies=(g_a, g_b),
+                    out=out, loss=loss, gnorm=gnorm)
+
+    def _attr_owners(self) -> list:
+        return [self.root] + [m for _n, m in self._hidden_modules()]
 
     def _replay(self, cap: _Captured, kind, variant, x, y, layout, context):
         if context != cap.context:
@@ -532,12 +777,24 @@ class GraphStep:
             self._check_addresses()
         self.static.load(x, y, layout)
         cap.graph.replay()
+        if cap.branch is None:
+            cap.rest.replay()
+        else:
+            cap.branch.launch(self._launch_stream())
+            cap.post.replay()
+        for m, k, v in cap.rebind:
+            setattr(m, k, v if torch.is_tensor(v) else dict(v))
         cap.replays += 1
         self.stats.replayed += 1
         if cap.present is not None:
             for p, b, has in zip(self.params, self._grad_bufs, cap.present):
                 p.grad = b if has else None
         return cap.out, cap.loss, cap.gnorm
+
+    @staticmethod
+    def _launch_stream():
+        """The stream a torch replay launches on (the caller's current stream)."""
+        return torch.cuda.current_stream()
 
     def _side(self, x, y, layout):
         """The body, eager, on the capture stream. EVERY eager step runs there, not on the

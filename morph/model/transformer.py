@@ -33,6 +33,7 @@ from .fused_ce import (
     fused_linear_cross_entropy_logit_l2,
     fused_linear_cross_entropy_mce,
     fused_linear_label_logprob,
+    label_logprob_static_rows,
     multi_hot_cross_entropy_reference,
 )
 from .iter_cond import CoreStageConditioning, DB1Sampler, iter_stage_value
@@ -414,6 +415,14 @@ class MORPHConfig:
     # half the decoder's rows are past their span's end. Not bit-identical (the loss and
     # grad sums run over different chunks). False = every row (the tree before the key).
     spandec_ce_row_cap: bool = False
+    # The token head's per-row log-prob (`_tul_group_losses`, the pointer / DITTO route) on
+    # the rows any loss reads only (labelled TOKEN rows, plus slot rows with a nonzero emit
+    # weight), packed on the device into a FIXED row count proven from the shapes
+    # (`MORPHTransformer._lmhead_row_cap`: 1140 of 1280 rows per row at the lxtul shapes);
+    # the slot rows' log-probs are read by no loss (phase-2 tracker C2, 2026-10-10). No host
+    # sync, CUDA-graph safe; a batch over the bound gives a NaN loss. Not bit-identical (the
+    # vocab GEMMs run on other row chunks and grad_w sums in another order). False = every row.
+    lmhead_row_cap: bool = False
     # Run the chunked CE on the labelled rows only (ignored and zero-weight rows are
     # dropped before the vocab GEMMs; their gradient is exactly zero either way). One host
     # sync per CE call for the row count. Not bit-identical (the loss and grad_w sums run
@@ -5094,6 +5103,12 @@ class MORPHTransformer(nn.Module):
         if "gain_raw" in gain_reg:
             # `slot_gain_renorm`: `gain_est` is R(f)'s gain; this is f's, same difference.
             groups["gain_est_raw"] = gain_reg["gain_raw"]
+        # graph_step's hinge branch (tracker C4): the penalty as it enters the loss (its
+        # autograd edge is what a step whose hinge is inactive leaves out of the backward) and
+        # the device flag that says whether its gradient is nonzero (`_slot_gain_penalty`).
+        groups["gain_pen"] = gain_reg["penalty"]
+        if "active" in gain_reg:
+            groups["gain_active"] = gain_reg["active"]
         groups["loss"] = groups["loss"] + gain_reg["penalty"]
         return groups
 
@@ -8333,6 +8348,7 @@ class MORPHTransformer(nn.Module):
             "gain_slot_frac_gt1": (gs > 1.0).sum().float() / ok.sum().float(),
             "gain_tail_pen": torch.stack([g["tail_pen"] for g in terms]).sum(),
             "gain_floor_pen": torch.stack([g["floor_pen"] for g in terms]).sum(),
+            "active": torch.stack([g["active"] for g in terms]).any(),
             # `slot_gain_renorm` only: f's gain from the same differences, mean over rows
             # and iterations like `gain` (every term carries it or none does).
             **({"gain_raw": torch.stack([g["gain_raw"] for g in terms]).mean()}
@@ -8506,9 +8522,19 @@ class MORPHTransformer(nn.Module):
         else:
             floor = gain.new_zeros(())
         g_det = g_slot.detach()
+        # `active` (graph_step's hinge branch, tracker C4): False exactly when every term the
+        # penalty charges is 0, so its gradient is exactly 0 and the step's backward may
+        # leave the two applications out. `~(x <= 0)` reads a NaN as active: a NaN hinge
+        # makes NaN gradients, which the step must see (found-inf), not skip.
+        act = ((~(hinge.detach() <= 0)).any() if lam != 0.0
+               else hinge.new_zeros((), dtype=torch.bool))
+        if tail_lam > 0.0:
+            act = act | (~((th.detach() * valid) <= 0)).any()
+        if floor_lam > 0.0:
+            act = act | (~(fl.detach() <= 0)).any()
         out = {"gain": gain.detach().mean(), "gain_max": gain.detach().max(), "penalty": pen,
                "g_slot": torch.where(valid, g_det, torch.full_like(g_det, float("nan"))),
-               "tail_pen": tail.detach(), "floor_pen": floor.detach()}
+               "tail_pen": tail.detach(), "floor_pen": floor.detach(), "active": act}
         if gain_raw is not None:
             out["gain_raw"] = gain_raw
         return out
@@ -12015,6 +12041,36 @@ class MORPHTransformer(nn.Module):
             per_row += max(min(L - K * n, J * max(n - h, 0)) for n in range(S + 1))
         return B * min(per_row, S * J * int(dec.horizon))
 
+    @staticmethod
+    def _lmhead_rows(lab: Tensor, slot_mask: Tensor, row_w: Tensor) -> Tensor:
+        """``[B*L]`` bool: the token head's rows a loss reads (``model.lmhead_row_cap``).
+        A labelled TOKEN row (the weighted CE, the pointer mixture, DITTO's positions and the
+        positions one copy back), or a labelled slot row whose weight is not 0 (the emitting
+        position under a nonzero ``tul.emit_weight``). ``_lmhead_row_cap`` bounds its count."""
+        return (lab != -100) & ((~slot_mask).reshape(-1) | (row_w != 0))
+
+    @staticmethod
+    def _lmhead_row_cap(B: int, L: int, layout: SlotLayout, span_cap: int,
+                        emit_rows: bool) -> int:
+        """An upper bound, from SHAPES alone, on the token head's rows that any loss reads
+        (``model.lmhead_row_cap``): the fixed row count its vocab GEMMs run at.
+
+        The proof, per row. Let ``n`` be the row's valid slots. (1) Each valid slot holds
+        ``K = prefix_k`` positions, so token positions <= ``L - K n``. (2) Every span holds
+        at most ``J = span_cap`` tokens (the boundary rule cuts a span at the cap), and a
+        row's tokens are its ``n`` closed spans plus the open tail after the last slot,
+        itself shorter than a span (its cut would be a slot), so tokens <= ``J (n + 1)``.
+        (3) With a nonzero ``emit_weight`` the ``n`` emitting slot positions carry loss too
+        (``emit_rows``). The row's loss rows are at most
+        ``max_n min(L - K n, J (n + 1)) + [emit_rows] n``. At the lxtul shapes (L 1280, K 4,
+        J 32, S 64, emit weight 0) that is 1140 of 1280 per row (89 %; measured mean 86.7 %
+        labelled rows, slot rows included). A batch that beat it would mean the proof is
+        wrong, and `label_logprob_static_rows` turns that batch's loss into NaN."""
+        K, S, J = int(layout.prefix_k), int(layout.max_slots), int(span_cap)
+        per_row = max(min(L - K * n, J * (n + 1)) + (n if emit_rows else 0)
+                      for n in range(S + 1))
+        return B * min(per_row, L)
+
     def _tul_spandec_loss(self, h_slots: Tensor, input_ids: Tensor,
                           layout: SlotLayout, stats: dict | None = None,
                           cells: Tensor | None = None) -> Tensor:
@@ -13385,9 +13441,22 @@ class MORPHTransformer(nn.Module):
             if logit_l2 != 0.0:
                 raise NotImplementedError("tul.pointer_heads / tul.ditto_rows with "
                                           "tul.coda_logit_l2")
-            lp_model = fused_linear_label_logprob(
-                flat, w_head, lab, ignore_index=-100, chunk_size=chunk, mask_token_id=mask_id,
-                softmax_kernel=self._ce_kw["softmax_kernel"])
+            # keep_logits: the forward's logits tiles serve the backward (no recompute GEMM;
+            # bit-identical; +B*L*V'*2 bytes, 0.76 GB at batch 6 x 1280; tracker C3)
+            _lp_kw = dict(ignore_index=-100, chunk_size=chunk, mask_token_id=mask_id,
+                          softmax_kernel=self._ce_kw["softmax_kernel"], keep_logits=True)
+            if self.cfg.lmhead_row_cap:
+                # model.lmhead_row_cap: only the rows a loss reads (labelled TOKEN rows: the
+                # weighted CE, the pointer mixture and DITTO; plus emitting slot rows when
+                # their weight is not 0), at a fixed proven row count. lp is 0 elsewhere;
+                # nothing reads it there (the weighted CE gives those rows weight 0).
+                lp_model = label_logprob_static_rows(
+                    flat, w_head, lab, self._lmhead_rows(lab, layout.slot_mask, row_w),
+                    self._lmhead_row_cap(B, L, layout, int(self.cfg.tul.bound_span_cap),
+                                         float(self.cfg.tul.emit_weight) != 0.0),
+                    **_lp_kw)
+            else:
+                lp_model = fused_linear_label_logprob(flat, w_head, lab, **_lp_kw)
             if self.tul_pointer is not None:
                 lp, _ptr_cov = self.tul_pointer.target_logprob(x, lp_model.view(B, L), labels,
                                                                layout.slot_mask, layout)
@@ -17053,21 +17122,24 @@ class MORPHTransformer(nn.Module):
                     "TST switch (spec §5), and val/gen always run TUL on with bag_size 0 "
                     "(invariant 6)."
                 )
-            return self._forward_tul(input_ids, labels, slot_layout, _plan_nats,
-                                     halt=_halt, plan_mode=_plan_mode,
-                                     tul_step_mode=tul_step_mode,
-                                     slot_depths=_slot_depths,
-                                     code_mode=_code_mode, code_steps=_code_steps,
-                                     code_seed=_code_seed,
-                                     code_given=_code_given,
-                                     code_given_mask=_code_given_mask,
-                                     coda_state_only=_coda_state_only,
-                                     gram_mode=_gram_mode,
-                                     gram_sample_seed=_gram_sample_seed,
-                                     code_policy_pick=_code_policy_pick,
-                                     generate=_generate,
-                                     **({"lsel_follow": _lsel_follow}
-                                        if _lsel_follow is not None else {}))
+            # MORPHEmbedding.forward_cache: the quantised tables and the tied head are built
+            # once per forward and shared by every reader (exact; embeddings.py)
+            with self.embed.forward_cache():
+                return self._forward_tul(input_ids, labels, slot_layout, _plan_nats,
+                                         halt=_halt, plan_mode=_plan_mode,
+                                         tul_step_mode=tul_step_mode,
+                                         slot_depths=_slot_depths,
+                                         code_mode=_code_mode, code_steps=_code_steps,
+                                         code_seed=_code_seed,
+                                         code_given=_code_given,
+                                         code_given_mask=_code_given_mask,
+                                         coda_state_only=_coda_state_only,
+                                         gram_mode=_gram_mode,
+                                         gram_sample_seed=_gram_sample_seed,
+                                         code_policy_pick=_code_policy_pick,
+                                         generate=_generate,
+                                         **({"lsel_follow": _lsel_follow}
+                                            if _lsel_follow is not None else {}))
         if _generate:
             raise ValueError("generate=True requires slot_layout: it is the TUL generation "
                              "forward (the plain forward has no loss head to skip).")

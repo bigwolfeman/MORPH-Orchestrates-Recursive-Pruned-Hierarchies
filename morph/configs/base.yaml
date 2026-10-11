@@ -247,6 +247,12 @@ model:
   #   (ce_compact_rows is not). A batch over the bound gives a NaN loss, never a silent drop.
   #   NOT bit-identical (sum order). false = every row.
   spandec_ce_row_cap: false
+  # lmhead_row_cap: the token head's per-row log-prob (the pointer / DITTO route) runs on the
+  #   rows a loss reads only (labelled token rows; slot rows read no loss at emit_weight 0),
+  #   packed on the device into a FIXED row count proven from the shapes (1140 of 1280 per row
+  #   at the lxtul shapes; MORPHTransformer._lmhead_row_cap). No host sync (graph_step legal).
+  #   A batch over the bound gives a NaN loss. NOT bit-identical (sum order). false = every row.
+  lmhead_row_cap: false
   # ce_compact_rows: run the CE's vocab GEMMs on the labelled rows only (about half the span
   #   decoder's rows are pads). One host sync per CE call; NOT bit-identical (sum order),
   #   pinned against fp64 in tests/test_ce_softmax_grad.py. false = every row.
