@@ -45,3 +45,7 @@ frozen tree of the commit that adds this file, seed 1, WANDB offline, run one af
 `training.steps`, so both arms carry the same 20k horizon. Readout: trainer val at every eval step
 (same val batches per step in both runs), and `core_depth_sweep.py --depths 1,6 --rows 480 --batch
 3` on each final checkpoint.
+
+Amended 2026-10-10: not queued. Wolfe asked first for an extrapolation of the 5k curves
+(`lab/experiments/results/2026-10-10-lxtul-credit-panel/extrapolate_val_gap.py`). The run waits
+for his word.

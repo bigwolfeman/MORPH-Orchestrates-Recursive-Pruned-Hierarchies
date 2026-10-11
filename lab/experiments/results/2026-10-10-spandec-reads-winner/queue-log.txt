@@ -1,0 +1,5 @@
+[10-10 17:36:35] spdwin-r1 sweeponly start
+[10-10 18:11:26] spdwin-r1 sweep exit=0 spdwin-r1 depth=1 ce=3.9139 span_first=3.5131 spandec_ce=4.5210 spdwin-r1 depth=6 ce=3.9093 span_first=3.5048 spandec_ce=4.5022 spdwin-r1 ce_tokens K1-K6: +0.0046 [+0.0042, +0.0050] over 480 rows spdwin-r1 spandec_ce K1-K6: +0.0188 [+0.0178, +0.0197] over 160 batches 
+[10-10 21:20:23] spdwin-r2 train start cfg=lxtul_pointer_fast_spdwin ov=[] gpu: 17538, 278 MiB 
+[10-10 21:57:24] spdwin-r2 train exit=0 Final val_loss=3.9215 rate: tok/s=27328 tok/s=22580 tok/s=23957 
+[10-10 22:01:51] spdwin-r2 sweep exit=0 spdwin-r2 depth=1 ce=3.9414 span_first=3.5849 spandec_ce=4.5575 spdwin-r2 depth=6 ce=3.9290 span_first=3.5517 spandec_ce=4.5302 spdwin-r2 ce_tokens K1-K6: +0.0124 [+0.0118, +0.0131] over 480 rows spdwin-r2 spandec_ce K1-K6: +0.0273 [+0.0262, +0.0285] over 160 batches 
