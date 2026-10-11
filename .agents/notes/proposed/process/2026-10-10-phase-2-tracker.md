@@ -190,6 +190,11 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       CUDA-graph private pools, 596 MiB free). The same-size each-cell arm passed on the
       pre-lever tree. Not yet measured: which lever takes the headroom (C4's second body is the
       suspect), and whether the plain fast recipe still has validation headroom on a full desktop.
+      RESOLVED 2026-10-11 (branch fix/eval-mem): not a lever's size. `GraphStep.released()` left a
+      loop variable bound to the last `_Captured` across its `yield`, which kept that capture's
+      graphs and the whole 18.5 GiB private pool alive through eval. Branch closing now runs in a
+      helper. Byte gate identical (45 steps); test_graph_step 20 passed; 260-step runs of
+      nowta_pointer_fast_spdcells / _spdbest / lxtul_pointer_fast pass validation (~24.9 GiB free).
 - [ ] C5 The 4-stream HC carrier: 1 stream was worth 60 ms per step at FAST. An architecture
       change, so it needs a quality arm, not only a speed bench.
 

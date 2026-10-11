@@ -400,6 +400,28 @@ def _variants(m) -> dict:
             "set_variant": m.pin_gain_pass}
 
 
+def _private_pool_bytes() -> int:
+    """Bytes the caching allocator holds in segments of private (graph) pools."""
+    return sum(sg["total_size"] for sg in torch.cuda.memory_snapshot()
+               if tuple(sg["segment_pool_id"]) != (0, 0))
+
+
+@cuda
+def test_released_frees_every_graph_and_the_pool_for_eval(monkeypatch):
+    """Eval runs inside ``released()``: no CUDAGraph may outlive the release (a loop variable
+    left bound to the last recording kept its graphs, and so the whole pool, alive across
+    the yield: 18.5 GiB of free segments, eval out of memory, 2026-10-11)."""
+    import gc
+    m, opt, gs, batches = _captured(monkeypatch)
+    before = _private_pool_bytes()
+    assert before > 0 and gs.graphs
+    with gs.released():
+        assert gs.graphs == {}
+        live = [o for o in gc.get_objects() if isinstance(o, torch.cuda.CUDAGraph)]
+        assert live == [], f"{len(live)} CUDAGraph(s) outlive released()"
+        assert _private_pool_bytes() < before / 2, (_private_pool_bytes(), before)
+
+
 @cuda
 def test_a_replay_runs_the_graph_of_the_drawn_pass(monkeypatch):
     """A scripted draw (the trainer's draw is the model's generator; here the sequence is

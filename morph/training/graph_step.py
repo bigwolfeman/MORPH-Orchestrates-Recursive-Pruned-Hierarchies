@@ -364,6 +364,14 @@ class _Captured:
     replays: int = 0
 
 
+def _close_branches(graphs: dict) -> None:
+    """Close every recorded hinge branch. A function so its loop variable dies on return
+    (see `GraphStep.released`)."""
+    for cap in graphs.values():
+        if cap.branch is not None:
+            cap.branch.close()
+
+
 @dataclass
 class GraphStepStats:
     eager: int = 0                    # steps run eager (warm-up, or run_eager between replays)
@@ -581,9 +589,11 @@ class GraphStep:
         # The last replay may still be running: its graph and pool must outlive it (freeing
         # them under it was an illegal memory access, measured on the winner at step 25).
         torch.cuda.synchronize()
-        for cap in self.graphs.values():
-            if cap.branch is not None:
-                cap.branch.close()
+        # In a helper, never inline: a generator's locals live until it ends, and a loop
+        # variable left bound to the last `_Captured` keeps its graphs, and so the whole pool,
+        # alive across the yield (measured 2026-10-11: 18.5 GiB of free private-pool segments
+        # that `empty_cache` could not return, and the eval's pointer mixture ran out of memory).
+        _close_branches(self.graphs)
         self.graphs = {}
         self.static = None
         self._addresses = None
