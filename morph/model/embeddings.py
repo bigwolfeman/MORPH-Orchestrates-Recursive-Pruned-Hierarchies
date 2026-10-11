@@ -10,7 +10,9 @@ No runtime if-statements. All features always active.
 bf16 compatible. torch.compile friendly.
 """
 
+import contextlib
 import math
+from contextlib import contextmanager
 
 import torch
 import torch.nn as nn
@@ -151,6 +153,12 @@ class HybridEmbedding(nn.Module):
         nn.init.normal_(self.euc_embed.weight, std=1.0 / math.sqrt(self.euclidean_dim))
 
         self.lor_embed = LorentzEmbedding(vocab_size, self.lorentz_dim)
+        # `MORPHEmbedding.forward_cache` (one forward's tied head, built once): the depth of
+        # open cache scopes and the head built inside them. Both are back to 0 / None when
+        # the forward returns (a CUDA graph recording compares a module's scalar attributes
+        # before and after a step).
+        self._cache_depth = 0
+        self._lm_w = None
 
     def forward(self, input_ids: Tensor) -> Tensor:
         """Return [euclidean || lorentz] embedding, shape [..., d_model]."""
@@ -167,12 +175,21 @@ class HybridEmbedding(nn.Module):
         :meth:`attend` (full logits) and the fused chunked cross-entropy build
         their projection from this — gradient flows back through the cat and the
         lorentz log-map to the underlying embedding parameters.
+
+        Inside :meth:`MORPHEmbedding.forward_cache` the matrix is built ONCE and every
+        later call in the scope returns that same tensor (one autograd node; the LM head
+        and the span decoder read it in one training forward).
         """
+        if self._cache_depth and self._lm_w is not None:
+            return self._lm_w
         euc_w = self.euc_embed.weight                                       # [V, euc_dim]
         lor_w = _log_map_origin(
             _project_to_hyperboloid(self.lor_embed.space_embed.weight)     # [V, lor_dim]
         )
-        return torch.cat([euc_w, lor_w], dim=-1)                            # [V, d_model]
+        w = torch.cat([euc_w, lor_w], dim=-1)                               # [V, d_model]
+        if self._cache_depth:
+            self._lm_w = w
+        return w
 
     def attend(self, x: Tensor, detach_table: bool = False) -> Tensor:
         """Weight-tied LM head logits, shape [..., vocab_size].
@@ -348,6 +365,41 @@ class MORPHEmbedding(nn.Module):
     def lm_weight(self) -> Tensor:
         """Weight-tied LM-head matrix [vocab_size, d_model] (see HybridEmbedding)."""
         return self.hybrid.lm_weight()
+
+    @contextmanager
+    def forward_cache(self):
+        """One forward's table reads, built once (2026-10-10, training-speed pass).
+
+        Inside the scope (``MORPHTransformer._forward_single`` opens it around the TUL
+        forward):
+          * every int-N table quantiser under this module (``embed_quant``: ``IntNRowSTE``
+            on ``hybrid.euc_embed`` and ``bigram.embed``, morph/model/embed_quant.py)
+            quantises its table once (``IntNRowSTE.scope``): the token lookups and the tied
+            head read the same tensor;
+          * the tied head :meth:`lm_weight` (the cat of the euclidean table and the Lorentz
+            log-map of the space table) is built once: the token CE and the span decoder
+            read the same tensor (the span decoder through ``.detach()``).
+        Only these: a global ``torch.nn.utils.parametrize.cached()`` would also cache the
+        ternary weights, whose per-use gradients are bf16 and would then be summed in bf16
+        before their cast back to fp32 (measured 2026-10-10: the 45-step gate moved at
+        step 4). Exact: the values are the same ops on the same weights, and each table's
+        gradient is the same two fp32 addends (lookup, head), summed once. Before this, the
+        lxtul_pointer_fast step quantised the euclidean table three times and built the head
+        twice (2026-10-10 profile: about 1.4 ms per quantisation). The caches die when the
+        scope closes; nested scopes share the outer one's."""
+        from .embed_quant import IntNRowSTE
+        h = self.hybrid
+        quant = [m for m in self.modules() if isinstance(m, IntNRowSTE)]
+        h._cache_depth += 1
+        with contextlib.ExitStack() as stack:
+            for q in quant:
+                stack.enter_context(q.scope())
+            try:
+                yield
+            finally:
+                h._cache_depth -= 1
+                if h._cache_depth == 0:
+                    h._lm_w = None
 
     def attend(self, x: Tensor, detach_table: bool = False) -> Tensor:
         """Weight-tied LM head: hidden state → vocab logits.

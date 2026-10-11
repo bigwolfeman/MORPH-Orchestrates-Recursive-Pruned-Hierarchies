@@ -34,6 +34,8 @@ Int8: symmetric signed → [-127, 127] × s_row.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import torch
 import torch.nn as nn
 import torch.nn.utils.parametrize as parametrize
@@ -69,9 +71,47 @@ class IntNRowSTE(nn.Module):
         self.bits = bits
         self.lo: int = lo
         self.hi: int = hi
+        # `scope()` (one forward's quantised table, built once): the depth of open scopes
+        # and (shadow, its version, the output). Both back to 0 / None when the scope
+        # closes (a CUDA graph recording compares a module's scalar attributes).
+        self._scope_depth = 0
+        self._scope_out = None
+
+    @contextmanager
+    def scope(self):
+        """While open, every access of the parametrized weight returns ONE quantised tensor
+        (one autograd node), recomputed only if the shadow changed in place or the cached
+        one was built without grad and this access needs it.
+        ``MORPHEmbedding.forward_cache`` opens it around the TUL forward."""
+        self._scope_depth += 1
+        try:
+            yield
+        finally:
+            self._scope_depth -= 1
+            if self._scope_depth == 0:
+                self._scope_out = None
 
     def forward(self, w: Tensor) -> Tensor:
-        """Return the per-row quantized weight.  Backward is identity STE."""
+        """Return the per-row quantized weight.  Backward is identity STE.
+
+        A CUDA fp32 table runs :func:`morph.kernels.triton.int_row_quant.int_row_quant`, the
+        same operations in one pass (bit for bit; 2026-10-10, training-speed pass); any other
+        table runs :meth:`eager`, the definition."""
+        c = self._scope_out
+        if (c is not None and c[0] is w and c[1] == w._version
+                and (c[2].requires_grad or not (w.requires_grad and torch.is_grad_enabled()))):
+            return c[2]
+        if w.is_cuda and w.dtype == torch.float32 and w.dim() == 2:
+            from morph.kernels.triton.int_row_quant import IntRowQuantSTE
+            out = IntRowQuantSTE.apply(w, self.lo, self.hi)
+        else:
+            out = self.eager(w)
+        if self._scope_depth:
+            self._scope_out = (w, w._version, out)
+        return out
+
+    def eager(self, w: Tensor) -> Tensor:
+        """The quantiser as torch ops (the definition the fused kernel reproduces)."""
         # w: [V, d] fp32 (shadow stored as fp32 by parametrize)
         # Per-row scale: max(|w_row|) / hi, detached → constant for STE.
         # Shape: [V, 1] so broadcasting works.
@@ -135,7 +175,6 @@ def apply_embed_quant(
         }
 
     bits = int(embed_quant[3:])  # "int8" → 8, "int6" → 6
-    ste = IntNRowSTE(bits=bits)
 
     # The two target modules, identified by path fragments.
     # We walk named_modules and match by path to be explicit — no fuzzy isinstance

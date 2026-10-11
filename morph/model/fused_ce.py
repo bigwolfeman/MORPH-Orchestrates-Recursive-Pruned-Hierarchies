@@ -57,6 +57,92 @@ def _pad_vocab(w_cast: Tensor) -> tuple[Tensor, int, int]:
     return F.pad(w_cast, (0, 0, 0, V_pad - V)), V, V_pad
 
 
+def static_row_pack(keep: Tensor, cap: int) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Pack the ``keep`` rows of an ``[N]`` row set, in order, to the front of a FIXED
+    ``[cap]`` buffer, with no host sync (a CUDA-graph-captured step needs one shape for every
+    batch). Returns ``(src, used, back, over)``:
+
+      * ``src`` ``[cap]`` int64: the source row of each buffer slot (0 for an unused slot);
+      * ``used`` ``[cap]`` bool: the slot holds a kept row;
+      * ``back`` ``[N]`` int64: each row's slot, ``cap`` for a row that is not kept (the
+        caller appends one zero row to read there);
+      * ``over`` 0-dim bool: more than ``cap`` rows were kept, so some kept rows did not
+        land. The caller must make that LOUD (the CE paths turn the loss into NaN on the
+        device): a silent drop would train on part of the batch.
+
+    The packing is a prefix sum and a scatter whose every index is unique (a row that does
+    not land goes to its own slot past the buffer), so it is deterministic. One home: the
+    span decoder's CE (`row_cap`, model.spandec_ce_row_cap) and the token head's rows
+    (model.lmhead_row_cap, `MORPHTransformer._tul_group_losses`)."""
+    N = keep.shape[0]
+    pos = keep.cumsum(0) - 1
+    land = keep & (pos < cap)
+    over = keep.sum() > cap
+    ar = torch.arange(N, device=keep.device)
+    src = torch.full((cap + N,), N, device=keep.device, dtype=torch.long)
+    src.scatter_(0, torch.where(land, pos, ar + cap), ar)
+    src = src[:cap]
+    used = src < N
+    src = torch.where(used, src, torch.zeros_like(src))
+    back = torch.where(land, pos, torch.full_like(pos, cap))
+    return src, used, back, over
+
+
+class _RowsToStatic(torch.autograd.Function):
+    """``x[src]`` (``[N, ...] -> [cap, ...]``) whose backward is a GATHER, not a scatter-add:
+    each kept row has exactly one slot, and an unused slot (which reads row 0) must carry a
+    zero gradient, which the caller guarantees (its label is ignored). So
+    ``grad_x = cat(grad_y, 0)[back]``: deterministic, no atomics."""
+
+    @staticmethod
+    def forward(ctx, x: Tensor, src: Tensor, back: Tensor) -> Tensor:
+        ctx.save_for_backward(back)
+        return x.index_select(0, src)
+
+    @staticmethod
+    def backward(ctx, g: Tensor):
+        (back,) = ctx.saved_tensors
+        return torch.cat([g, g.new_zeros((1,) + tuple(g.shape[1:]))]).index_select(0, back), \
+            None, None
+
+
+class _RowsFromStatic(torch.autograd.Function):
+    """The inverse read: ``cat(y, 0)[back]`` (``[cap, ...] -> [N, ...]``, 0 at a row that was
+    not kept), whose backward is the gather ``grad_y = grad_z[src]`` zeroed at the unused
+    slots (no scatter-add over the many rows that read the appended zero row)."""
+
+    @staticmethod
+    def forward(ctx, y: Tensor, src: Tensor, used: Tensor, back: Tensor) -> Tensor:
+        ctx.save_for_backward(src, used)
+        return torch.cat([y, y.new_zeros((1,) + tuple(y.shape[1:]))]).index_select(0, back)
+
+    @staticmethod
+    def backward(ctx, g: Tensor):
+        src, used = ctx.saved_tensors
+        gy = g.index_select(0, src)
+        m = used.view((-1,) + (1,) * (g.dim() - 1))
+        return torch.where(m, gy, torch.zeros_like(gy)), None, None, None
+
+
+def label_logprob_static_rows(x: Tensor, w: Tensor, labels: Tensor, keep: Tensor, cap: int,
+                              ignore_index: int = -100, **kw) -> Tensor:
+    """:func:`fused_linear_label_logprob` over the ``keep`` rows only, at the FIXED row count
+    ``cap`` (``model.lmhead_row_cap``; a CUDA-graph-captured step). Returns ``[N]`` fp32: the
+    per-row log p(label) at a kept row, exactly 0 at every other row (whose label the caller
+    must not read), and NaN EVERYWHERE when more than ``cap`` rows were kept (loud, no sync;
+    the caller proves the cap). The gradient reaches ``x`` and ``w`` from the kept rows only.
+
+    Equal to the all-rows call up to summation order: a row's logits are the same dot
+    products, but the vocab GEMMs run on other row chunks (cuBLAS picks its kernel by shape)
+    and ``grad_w`` sums the rows in another order."""
+    src, used, back, over = static_row_pack(keep, cap)
+    xs = _RowsToStatic.apply(x, src, back)
+    lab = torch.where(used, labels.index_select(0, src), torch.full_like(src, ignore_index))
+    lp = fused_linear_label_logprob(xs, w, lab, ignore_index=ignore_index, **kw)
+    out = _RowsFromStatic.apply(lp, src, used, back)
+    return torch.where(over, torch.full_like(out, float("nan")), out)
+
+
 def _scale_inv(t: Tensor, inv: Tensor) -> None:
     """``t`` in place times the 0-dim fp32 DEVICE scalar ``inv``, bit-identical to the
     old ``t.div_(n)`` by a Python number. A Python ``inv`` (the CPU path) is the old
@@ -153,17 +239,7 @@ class _FusedLinearCE(torch.autograd.Function):
         cap_back = over_cap = None
         if 0 < row_cap < N and not compact_rows:
             keep = valid if row_w is None else row_w != 0
-            pos = keep.cumsum(0) - 1
-            land = keep & (pos < row_cap)
-            over_cap = keep.sum() > row_cap
-            ar = torch.arange(N, device=x.device)
-            # every index unique (a row that does not land goes to its own slot past the
-            # buffer), so the scatter is deterministic
-            src = torch.full((row_cap + N,), N, device=x.device, dtype=torch.long)
-            src.scatter_(0, torch.where(land, pos, ar + row_cap), ar)
-            src = src[:row_cap]
-            used = src < N
-            src = torch.where(used, src, torch.zeros_like(src))
+            src, used, cap_back, over_cap = static_row_pack(keep, row_cap)
             x = x.index_select(0, src)
             labels = torch.where(used, labels.index_select(0, src),
                                  torch.full_like(src, ignore_index))
@@ -171,9 +247,8 @@ class _FusedLinearCE(torch.autograd.Function):
             if row_w is not None:
                 row_w = torch.where(used, row_w.index_select(0, src), torch.zeros_like(src,
                                     dtype=row_w.dtype))
-            # grad_x back to the full rows by a GATHER (deterministic; a dropped row reads
-            # the appended zero row)
-            cap_back = torch.where(land, pos, torch.full_like(pos, row_cap))
+            # grad_x back to the full rows by a GATHER through `cap_back` (deterministic; a
+            # dropped row reads the appended zero row)
             N = row_cap
 
         # Cast the weight to compute dtype ONCE, in its natural [V, d] layout, and reuse
@@ -501,6 +576,14 @@ def fused_linear_cross_entropy_logit_l2(
 # logits GEMM in the forward and three in the backward (recompute + grad_x + grad_w),
 # against three in `_FusedLinearCE`'s forward.
 #
+# `keep_logits` (2026-10-10, tracker C3): the caller trades the recompute for memory. The
+# forward writes each chunk's tile into one [N, V'] buffer (the token head at batch 6:
+# 7680 x 49280 bf16 = 0.76 GB) and the backward reads it, so the backward runs two vocab
+# GEMMs, not three (3.9 ms of the lxtul_pointer_fast step, 2026-10-10 profile). The tile is
+# the same GEMM on the same operands and shape, so the result is bit-identical. Only the
+# token head of `_tul_group_losses` asks for it; the multi-rollout callers
+# (`gram_objective: iw`, `code_enum_k`) keep the recompute, where N is K times larger.
+#
 # Precision. The forward runs whatever matmul precision the caller's autocast gives it
 # (the `_FusedLinearCE` rule: "match eager autocast matmul precision"), and the backward
 # RE-ENTERS the same autocast state before it recomputes the tile, so the recomputed
@@ -532,7 +615,8 @@ def _kernel_ok(x: Tensor, softmax_kernel: bool) -> bool:
 class _FusedLinearLabelLogProb(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor, ignore_index: int,
-                chunk_size: int, mask_token_id: int, softmax_kernel: bool = False) -> Tensor:
+                chunk_size: int, mask_token_id: int, softmax_kernel: bool = False,
+                keep_logits: bool = False) -> Tensor:
         N, _d = x.shape
         dev = x.device.type
         ctx.ac_enabled = torch.is_autocast_enabled(dev)
@@ -540,18 +624,35 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
         ctx.use_kernel = _kernel_ok(x, softmax_kernel)
         ctx.ignore_index, ctx.chunk_size = ignore_index, chunk_size
         ctx.mask_token_id = mask_token_id
+        # `keep_logits` (the call site's choice, block comment above `fused_linear_label_
+        # logprob`): every chunk's logits tile is written into ONE [N, V'] buffer that the
+        # backward reads instead of recomputing it. Only when a backward can run: the wrapper
+        # clears it under no_grad (grad mode is always off inside `forward`, and
+        # `needs_input_grad` does not see it), and here with neither input requiring grad.
+        keep = bool(keep_logits) and (
+            bool(ctx.needs_input_grad[0]) or bool(ctx.needs_input_grad[1]))
+        ctx.kept = keep
+        ctx.kept_used = False
         if ctx.use_kernel:
             from morph.kernels.triton.ce_softmax_grad import ce_row_lse
-            x_g, w_g, V, _V_pad = _gemm_operands(x, w)
+            x_g, w_g, V, V_pad = _gemm_operands(x, w)
             valid = labels != ignore_index
             lab_safe = labels.clamp(min=0)
             out = torch.empty(N, device=x.device, dtype=torch.float32)
             lse = torch.empty(N, device=x.device, dtype=torch.float32)
+            tiles = (torch.empty((N, V_pad), device=x.device, dtype=x_g.dtype) if keep
+                     else None)
             for s in range(0, N, chunk_size):
                 e = min(s + chunk_size, N)
-                out[s:e], lse[s:e] = ce_row_lse(x_g[s:e] @ w_g.t(), lab_safe[s:e],
-                                                valid[s:e], V, mask_token_id)
-            ctx.save_for_backward(x, w, labels, lse)
+                if keep:
+                    # the same GEMM on the same operands and shape as the line below, written
+                    # into the kept buffer's rows s..e (a contiguous row block)
+                    tile = torch.mm(x_g[s:e], w_g.t(), out=tiles[s:e])
+                else:
+                    tile = x_g[s:e] @ w_g.t()
+                out[s:e], lse[s:e] = ce_row_lse(tile, lab_safe[s:e], valid[s:e], V,
+                                                mask_token_id)
+            ctx.save_for_backward(x, w, labels, lse, tiles)
             return out
         w_cast, V, V_pad = _pad_vocab(w.to(x.dtype))
         neg_inf = torch.finfo(torch.float32).min
@@ -559,9 +660,13 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
         lab_safe = labels.clamp(min=0)
         out = torch.empty(N, device=x.device, dtype=torch.float32)
         lse = torch.empty(N, device=x.device, dtype=torch.float32)
+        raw = []                                 # the GEMM's own tiles, before `.float()`
         for s in range(0, N, chunk_size):
             e = min(s + chunk_size, N)
-            logits = (x[s:e] @ w_cast.t()).float()
+            mm = x[s:e] @ w_cast.t()
+            if keep:
+                raw.append(mm)
+            logits = mm.float()
             if V_pad != V:
                 logits[:, V:] = neg_inf
             if mask_token_id >= 0:
@@ -570,16 +675,29 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
             tgt = logits.gather(-1, lab_safe[s:e].unsqueeze(-1)).squeeze(-1)
             out[s:e] = torch.where(valid[s:e], tgt - lse_c, torch.zeros_like(lse_c))
             lse[s:e] = lse_c
-            del logits
-        ctx.save_for_backward(x, w, labels, lse)
+            del logits, mm
+        ctx.save_for_backward(x, w, labels, lse, torch.cat(raw) if keep else None)
         return out
 
     @staticmethod
     def backward(ctx, grad_out: Tensor):
-        x, w, labels, lse = ctx.saved_tensors
+        x, w, labels, lse, tiles = ctx.saved_tensors
         need_x, need_w = ctx.needs_input_grad[0], ctx.needs_input_grad[1]
         if not (need_x or need_w):
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None
+        if ctx.kept:
+            # The kernel path overwrites the kept tiles with the gradient in place, so the
+            # buffer serves ONE backward. A second backward through a retained graph would
+            # read gradients as logits: refuse it rather than compute garbage.
+            # Under CUDA graph capture nothing executes: a second backward recorded there is
+            # the OTHER body of graph_step's hinge branch (morph/training/graph_step.py), and
+            # a replay runs one body, so the tiles are read once per step.
+            if ctx.kept_used and not (x.is_cuda and torch.cuda.is_current_stream_capturing()):
+                raise RuntimeError(
+                    "fused_linear_label_logprob(keep_logits=True): a second backward through "
+                    "the same forward (retain_graph). The kept logits tiles were consumed by "
+                    "the first one; call with keep_logits=False to recompute them instead.")
+            ctx.kept_used = True
         dev = x.device.type
         chunk = ctx.chunk_size
         N, d = x.shape
@@ -597,16 +715,17 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
             for s in range(0, N, chunk):
                 e = min(s + chunk, N)
                 x_c = x_g[s:e]
-                dl = ce_logprob_grad_(x_c @ w_g.t(), lab_safe[s:e], g[s:e], lse[s:e], V,
+                tile = tiles[s:e] if tiles is not None else x_c @ w_g.t()
+                dl = ce_logprob_grad_(tile, lab_safe[s:e], g[s:e], lse[s:e], V,
                                       ctx.mask_token_id)          # tile := g (onehot - p)
                 if need_x:
                     grad_x[s:e] = dl @ w_g
                 if need_w:
                     _acc_grad_w_(grad_w, dl, x_c)
-                del dl
+                del dl, tile
             if need_w:
                 grad_w = (grad_w[:V] if V_pad != V else grad_w).to(w.dtype)
-            return grad_x, grad_w, None, None, None, None, None
+            return grad_x, grad_w, None, None, None, None, None, None
         with torch.autocast(device_type=dev, dtype=ctx.ac_dtype or torch.bfloat16,
                             enabled=ctx.ac_enabled):
             w_cast, V, V_pad = _pad_vocab(w.to(x.dtype))
@@ -620,7 +739,10 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
             for s in range(0, N, chunk):
                 e = min(s + chunk, N)
                 x_c = x[s:e]
-                logits = (x_c @ w_cast.t()).float()
+                # a kept tile is COPIED to fp32 (`.float()` of an fp32 tile would alias it and
+                # the masked writes below would edit the saved buffer)
+                logits = (tiles[s:e].to(torch.float32, copy=True) if tiles is not None
+                          else (x_c @ w_cast.t()).float())
                 if V_pad != V:
                     logits[:, V:] = neg_inf
                 if ctx.mask_token_id >= 0:
@@ -640,12 +762,13 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
                 del dl_c
         if need_w:
             grad_w = (grad_w[:V] if V_pad != V else grad_w).to(w.dtype)
-        return grad_x, grad_w, None, None, None, None, None
+        return grad_x, grad_w, None, None, None, None, None, None
 
 
 def fused_linear_label_logprob(
     x: Tensor, w: Tensor, labels: Tensor, ignore_index: int = -100,
     chunk_size: int = 1024, mask_token_id: int = -1, softmax_kernel: bool = False,
+    keep_logits: bool = False,
 ) -> Tensor:
     """``[N]`` fp32 ``log softmax(x @ w.T)[label]`` per row, 0 on ``ignore_index`` rows, with
     an exact gradient to ``x`` and ``w`` for ANY upstream ``[N]`` gradient. Never
@@ -655,9 +778,17 @@ def fused_linear_label_logprob(
 
     ``softmax_kernel`` (default False = the eager bodies, unchanged): the forward's
     log-sum-exp and the backward's softmax gradient as one Triton pass each over the bf16
-    tile (CUDA bf16/fp16 GEMMs only; see the block comment above)."""
+    tile (CUDA bf16/fp16 GEMMs only; see the block comment above).
+
+    ``keep_logits`` (default False = the backward recomputes each logits tile): the forward
+    keeps every chunk's logits tile in one ``[N, V']`` buffer (the GEMM's dtype: bf16 under
+    autocast, ``N * V' * 2`` bytes) and the backward reads it, so the backward runs two vocab
+    GEMMs instead of three. Bit-identical: the kept tile is the output of the same GEMM on the
+    same operands and shape that the backward would run. The buffer serves one backward; a
+    second backward through a retained graph raises. Kept only when a backward can run."""
     return _FusedLinearLabelLogProb.apply(x, w, labels, ignore_index, chunk_size,
-                                          mask_token_id, bool(softmax_kernel))
+                                          mask_token_id, bool(softmax_kernel),
+                                          bool(keep_logits) and torch.is_grad_enabled())
 
 
 # ── Multi-hot cross-entropy (MCE) for Token-Superposition Training ──────────

@@ -18,7 +18,11 @@ What each test pins:
      twin included), the optimizer state and the step counters are equal bit for bit. The
      gain hinge's pass is a VARIANT (one graph per (kind, pass), 2026-10-10): the eager
      reference draws it in the forward, GraphStep on the host before each step, and both
-     read the same pass every step (several distinct passes are replayed).
+     read the same pass every step (several distinct passes are replayed). The hinge
+     branch (2026-10-10): every recording takes it; with the hinge always active (body A)
+     and never active (body B, the backward without the penalty's edge) the replay is still
+     the eager step bit for bit, the hook-set `_loop_cot_ref` included, and B is a smaller
+     graph than A.
   2. The hinge's pass: a replay runs the graph of the pass the step drew (a scripted draw
      sequence, per-graph replay counts); a drawn pass with no graph raises; a recording
      whose forward DRAWS the pass (GraphStep given no variants) raises instead of freezing
@@ -163,6 +167,10 @@ def _snap(m, opt, out, loss, gn, grads):
         "state": [{k: v.clone() for k, v in opt.state[p].items() if torch.is_tensor(v)}
                   for p in m.parameters()],
         "steps": [int(cb["step"].item()) for cb in opt._cap],
+        # set by a backward hook (slot_cot_clip): a reader after the step must see this
+        # step's value whichever hinge-branch body ran (graph_step `_TensorAttrs`)
+        "cot_ref": (None if m.__dict__.get("_loop_cot_ref") is None
+                    else m.__dict__["_loop_cot_ref"].detach().clone()),
     }
 
 
@@ -204,6 +212,8 @@ def _same(a, b, where):
         for k in u:
             assert _eq(u[k], v[k]), (where, "state", i, k)
     assert a["steps"] == b["steps"], (where, "step counters", a["steps"], b["steps"])
+    assert (a["cot_ref"] is None) == (b["cot_ref"] is None), (where, "cot_ref presence")
+    assert a["cot_ref"] is None or _eq(a["cot_ref"], b["cot_ref"]), (where, "cot_ref")
 
 
 def _poison(m, buf):
@@ -259,9 +269,17 @@ _BLOCKFUSE = ("model.hc_region_fused=true", "model.cca_prologue_tiled=true",
               "model.inject_fold=true")
 
 
+# The hinge branch (graph_step.py module notes, THE HINGE BRANCH; 2026-10-10): a target of 0
+# makes every step's hinge active (body A, the eager backward), a target of 100 none (body B,
+# the backward without the penalty's edge); both must replay the eager step bit for bit.
+_HINGE_ON = ("model.slot_gain_target=0.0",)
+_HINGE_OFF = ("model.slot_gain_target=100.0",)
+
+
 @cuda
-@pytest.mark.parametrize("extra", [(), _CORELOOP, _COMPACT, _BLOCKFUSE],
-                         ids=["winner", "coreloop_keys", "slot_compact", "blockfuse_keys"])
+@pytest.mark.parametrize("extra", [(), _CORELOOP, _COMPACT, _BLOCKFUSE, _HINGE_ON, _HINGE_OFF],
+                         ids=["winner", "coreloop_keys", "slot_compact", "blockfuse_keys",
+                              "hinge_active", "hinge_inactive"])
 def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra):
     from morph.training.graph_step import GraphStep
     cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *extra)
@@ -289,6 +307,11 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
             ref_eval = _eval_forward(ma, x, y, lay)
     assert not torch.isfinite(ref[_INF_STEP]["gnorm"])
     assert ref[_INF_STEP]["steps"] == ref[_INF_STEP - 1]["steps"]       # skipped
+    active = {bool(r["out"]["gain_active"]) for r in ref}
+    if extra == _HINGE_ON:
+        assert active == {True}
+    if extra == _HINGE_OFF:
+        assert active == {False}
     del ma, oa
 
     # ── GraphStep ──────────────────────────────────────────────────────────────────
@@ -329,6 +352,14 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
                 ev = _eval_forward(mb, x, y, lay)
             assert _eq(ev, ref_eval)
     assert gs.stats.replayed == 8 and gs.stats.captures == 4 * n_var and gs.stats.eager == 4
+    # every recording took the hinge branch (the forward reports the hinge), and its B body
+    # (no penalty edge) is a smaller graph than A: the hinge's backward is not in it
+    from morph.training.graph_cond import graph_node_count
+    assert all(c.branch is not None and c.rest is None for c in gs.graphs.values())
+    for c in gs.graphs.values():
+        n_a, n_b = (graph_node_count(g) for g in c.bodies)
+        assert n_b < n_a, (n_a, n_b)
+    assert ref[0]["cot_ref"] is not None                      # the hook ran (slot_cot_clip)
     assert gs.stats.releases == 1
     # the replays since the re-recording, per (kind, pass): exactly the steps' own draws
     after = [(k, ref[s]["pass"]) for s, (k, how) in enumerate(_PLAN)

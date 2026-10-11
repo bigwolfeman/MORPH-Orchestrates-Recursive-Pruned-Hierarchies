@@ -727,6 +727,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
         # MORPHConfig.spandec_ce_row_cap: the span decoder's CE on a fixed, proven row cap.
         spandec_ce_row_cap=bool(getattr(m, "spandec_ce_row_cap", False)),
+        # MORPHConfig.lmhead_row_cap: the token head's rows a loss reads, on a fixed proven cap.
+        lmhead_row_cap=bool(getattr(m, "lmhead_row_cap", False)),
         # MORPHConfig.graph_safe: a training forward with no host sync and fixed shapes.
         graph_safe=bool(getattr(m, "graph_safe", False)),
         # MORPHConfig.graph_safe_parts: which pieces graph_safe turns on (default: all).
@@ -4120,7 +4122,10 @@ def main(cfg: DictConfig) -> None:
                 _probe_lk: list[str] = []
                 for _lk in ("ce_main", "mux_local", "spandec_ce", "spandec_weighted", "gain_est", "gain_est_max", "gain_est_raw", "gain_reg_weighted", "gain_n_iters",
                             "gain_slot_p50", "gain_slot_p90", "gain_slot_max", "gain_slot_frac_gt1",
-                            "gain_tail_pen", "gain_floor_pen", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted",
+                            "gain_tail_pen", "gain_floor_pen",
+                            # 1.0 when the gain hinge's gradient is not 0 this step (graph_step
+                            # runs the full backward); its mean is the hinge's active share
+                            "gain_active", "mtp_weighted", "fixed_point", "fp_weighted", "core_gain_est", "core_gain_max", "core_gain_weighted",
                             "egrad", "egrad_weighted", "egrad_train", "egrad_auc", "egrad_pos_frac",
                             "pass_residual", "pass_res_weighted",
                             "oracle_z", "oracle_z_weighted",
