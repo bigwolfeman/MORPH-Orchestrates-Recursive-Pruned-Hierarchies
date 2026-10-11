@@ -1,6 +1,6 @@
 # Ungraded fan with the span decoder grading the best cell per span
 
-Status: planned
+Status: failure
 
 ## Question
 
@@ -50,3 +50,49 @@ with `model.spandec_ce_row_cap=false`, because tree-f has no `label_logprob_stat
 row cap changes only the decoder CE's sum order. In tree-h `tests/test_spandec_read_best.py`
 gives 9 passed, and 1 failed: the cap-on test, by NameError for that missing helper.
 Predictions unchanged; the tok/s prediction now compares tree-f to tree-f.
+
+## Results
+
+Run 2026-10-11 in tree-h, one run, 480 rows. Artifacts: `../results/2026-10-11-fan-best-cell-decoder/`.
+The runner's own sweep failed (it does not pass the run's override, so the model built with the
+row cap on and hit the NameError the amendment names). The sweep was rerun by hand with
+`model.spandec_ce_row_cap=false` on the same checkpoint. The win shares were never logged by the
+trainer (a gap in the build, fixed in the same change as this filing); they were read offline
+from the step-5000 checkpoint on 40 val batches (`best_wins.py`).
+
+| Fan arm | CE@1 | CE@6 | K1-K6 [95% CI] | write worth | cell cos | trainer tok/s |
+|---|---|---|---|---|---|---|
+| best-cell decoder (1 run) | 3.9129 | 3.9066 | +0.0063 [+0.0058, +0.0069] | 0.187 | +0.61 | 15,994 |
+| each-cell decoder (2 runs) | | 3.9032 | +0.0062 | 0.19 | +0.81 | 18,550 |
+| no decoder (2 runs) | | 3.8993 | +0.0025 | 0.19 | -0.28 | 28,230 |
+| mean-read decoder (2 runs) | | 3.9212 | +0.0042 | 0.18 | -0.10 | 24,665 |
+
+Win shares (val): 0.253, 0.245, 0.239, 0.263. Span-decoder CE K1-K6 +0.0610.
+
+Predictions:
+- Cell cos below +0.3: +0.61. Failed.
+- CE@6 in [3.893, 3.915]: 3.9066. Held.
+- K1-K6 at least +0.003: +0.0063. Held.
+- Largest win share in [0.35, 0.90], smallest above 0.02: largest 0.263. Failed (no cell took
+  over; the shares are near uniform).
+- Rate within 5 % of the each-cell decoder: 14 % below. Failed. Confound: this run had the
+  decoder's row cap off, the each-cell runs had it on.
+
+Decision rule: cos at or above +0.3, so the fan without the decoder stays the proposal.
+
+## Verdict
+
+Failure. The set grade does not keep the cells distinct. The cells share the spans almost evenly,
+and they still move from -0.28 (no decoder) to +0.61. That is less than the each-cell grade
+(+0.81) but far from the no-decoder fan. CE@6 is 0.007 worse than no decoder (one run; inside
+noise of the each-cell arm). The rich-get-richer risk did not happen.
+
+## Updated hypothesis
+
+Any span-decoder target that asks a cell to decode the next span pulls the cells toward the
+same content, even when each span trains only one cell: four cells that each win a quarter of
+the spans still learn one shared code (cos +0.61). The fan's cells stay distinct only when
+nothing but the coda trains them, and the coda uses them as distinct parts (cell 0 copies). So
+the fan's depth signal cannot come from a next-span decoder without paying in diversity. Wolfe
+wants the diversity kept: the fan without the decoder stays the proposal. Not tested: a decoder
+that reads the cells the way the coda does (all four as a set, `spandec_reads_cells`).

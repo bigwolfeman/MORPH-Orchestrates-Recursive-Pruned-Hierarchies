@@ -1,0 +1,5 @@
+[10-11 04:20:33] nowta-spdbest train start cfg=nowta_pointer_fast_spdbest ov=[] gpu: 17538, 361 MiB 
+[10-11 04:22:35] nowta-spdbest train exit=1  rate: tok/s=5353 tok/s=25161 
+[10-11 04:24:06] nowta-spdbest-h train start cfg=nowta_pointer_fast_spdbest ov=[model.spandec_ce_row_cap=false] gpu: 17538, 361 MiB 
+[10-11 05:11:56] nowta-spdbest-h train exit=0 Final val_loss=3.8983 rate: tok/s=17377 tok/s=15251 tok/s=15994 
+[10-11 05:12:05] nowta-spdbest-h sweep exit=1 

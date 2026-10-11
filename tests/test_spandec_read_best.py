@@ -159,3 +159,19 @@ def test_refusals():
         _lsel("joint", spandec_reads_cells=True, spandec_read="best")
     with pytest.raises(ValueError, match="'mean', 'winner', 'each' or 'best'"):
         _lsel("joint", spandec_read="worst")
+
+
+def test_win_shares_reach_evaluate():
+    """The per-cell win shares are logged under `val/` by train.py's `evaluate` (before
+    2026-10-11 they reached the forward's output and were never logged)."""
+    from morph.training.train import evaluate
+    from test_tul_fan import _batch as _b
+
+    m = _model("off", spandec_read="best").eval()
+    _ids0, inp, lab, layout = _b(M)
+    extra: dict = {}
+    evaluate(m, torch.device("cpu"), iter([(inp, lab, layout)]), n_batches=1, tul=True,
+             extra=extra)
+    keys = sorted(k for k in extra if k.startswith("val/spandec_best_win_c"))
+    assert keys == [f"val/spandec_best_win_c{i}" for i in range(M)], keys
+    assert abs(sum(extra[k] for k in keys) - 1.0) < 1e-5

@@ -305,6 +305,10 @@ def evaluate(
                 # the sampler, not the flow term. Read train/code_fm_rel and tul/code_fm_*.)
                 if _mk in out:
                     acc.setdefault(f"val/{_mk}", []).append(float(out[_mk]))
+            # tul.spandec_read: best — the share of spans each cell won (one key per cell, so
+            # a scan; before 2026-10-11 these reached `out` and were never logged).
+            for _bk in [k for k in out if str(k).startswith("spandec_best_win_c")]:
+                acc.setdefault(f"val/{_bk}", []).append(float(out[_bk]))
             # tul.spandec_parallel (LXTUL-E): `par` (the term), `par_ce` (the mixture CE
             # per span token), `par_n_tokens`, `par_k` and at K > 1 the code-usage stats.
             # A variable number of keys (one `par_code_win_{k}` per code), so a scan.
