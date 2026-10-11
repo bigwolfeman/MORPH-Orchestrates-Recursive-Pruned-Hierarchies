@@ -1,0 +1,39 @@
+# The ungraded write-all fan + the output-only pointer head, on the fast training recipe
+# (2026-10-10). It is lxtul_pointer_fast with the LATENT-SELECTED LOOP taken out and nothing
+# else changed: 4 cells, each its own lineage, all 4 written 1:1 into their prefix cells, the
+# coda's own attention picks per token. No z, no EMA twin, no router, no teacher, no reset to a
+# winner, no WTA term (tul.fan_all_wta_lambda stays 0). Kept from lxtul_pointer_fast: the cell
+# pass norm (tul.slot_cell_pass_norm: rms), the fixed-point term 0.1, the epivol diversity
+# term, the span decoder (reads the mean of the cells, fan_mix all), pointer_heads 4, the depth
+# draw, steps 5000, the graph step and every speed key that still applies.
+#
+# Keys that differ from lxtul_pointer_fast, and why:
+#   tul.fan_loop_select          joint -> off     the point of the arm: no latent-selected loop
+#   tul.fan_lsel_train_follow    router -> teacher (TULConfig default) refused when the loop
+#   tul.fan_lsel_lambda          1.0 -> 10.0       select is off ("a silent no-op"), so each
+#   tul.fan_lsel_head_input      detached -> live  fan_lsel_* key returns to its class default
+#   model.fan_twin_compile       true -> false     there is no EMA twin to compile (build raises)
+#   model.fan_lsel_pick_bf16     true -> false     needs the latent-selected loop (build raises)
+#   model.fan_target_online      true -> false     needs the latent-selected loop (build raises)
+# Kept although they look fan-related: model.fan_div_fast (acts on the epivol term, which this
+# arm keeps), model.tg_fused_attention and model.slot_compact (REGISTER core, tul.slot_cells >
+# 1, which the 4-cell fan has).
+# Not a key but a consequence: without the loop select the cells are not reset to a winner each
+# pass, so each cell keeps its own lineage and the fan_target / twin cost is gone.
+defaults:
+  - lxtul_pointer_fast
+  - _self_
+
+model:
+  fan_twin_compile: false
+  fan_lsel_pick_bf16: false
+  fan_target_online: false
+
+tul:
+  fan_loop_select: "off"
+  fan_lsel_train_follow: teacher
+  fan_lsel_lambda: 10.0
+  fan_lsel_head_input: live
+
+wandb:
+  name: nowta-pointer-fast

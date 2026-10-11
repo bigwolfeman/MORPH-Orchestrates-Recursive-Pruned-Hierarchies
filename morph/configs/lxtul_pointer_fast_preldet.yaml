@@ -1,0 +1,12 @@
+# lxtul_pointer_fast with the coda's token positions reading the prelude DETACHED
+# (tul.coda_prelude_detach, 2026-10-10): forward identical, the token CE no longer trains the
+# prelude through the coda's token path.
+defaults:
+  - lxtul_pointer_fast
+  - _self_
+
+tul:
+  coda_prelude_detach: true
+
+wandb:
+  name: lxtul-pointer-fast-preldet

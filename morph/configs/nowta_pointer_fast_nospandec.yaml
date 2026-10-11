@@ -1,0 +1,16 @@
+# The ungraded fan + pointer (nowta_pointer_fast.yaml) with the span decoder OFF (2026-10-10).
+# On the one-cell loop the decoder bought nothing at 5k (CE@6 3.8996 without it, 3.8997 with
+# it) at 26 % of the step's FLOPs. `spandec_ce_row_cap` acts only on the decoder, so it is
+# cleared here rather than left inert (the lxtul_pointer_fast_nospandec.yaml pattern).
+defaults:
+  - nowta_pointer_fast
+  - _self_
+
+model:
+  spandec_ce_row_cap: false
+
+tul:
+  spandec: false
+
+wandb:
+  name: nowta-pointer-fast-nospandec

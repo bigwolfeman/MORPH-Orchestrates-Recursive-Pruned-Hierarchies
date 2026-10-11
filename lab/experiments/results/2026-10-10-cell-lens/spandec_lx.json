@@ -1,0 +1,582 @@
+{
+ "lx": {
+  "spec": "lx=lxtul_pointer_fast_spdwin=/home/wolfe/morph-scratch/spdwin/tree/checkpoints/morph/ab-spdwin-r2/step_5000.pt",
+  "step": 5000,
+  "depth": 6,
+  "spandec_read": "winner",
+  "n_slots": 4000,
+  "variants": {
+   "cell0": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.30375000834465027,
+      "tf_ce": 4.351438045501709,
+      "tf_top1": 0.30375000834465027
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.19455644488334656,
+      "tf_ce": 4.290202617645264,
+      "tf_top1": 0.3119959533214569
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.034291476011276245,
+      "tf_ce": 4.897933006286621,
+      "tf_top1": 0.22062531113624573
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.013629480265080929,
+      "tf_ce": 4.775918006896973,
+      "tf_top1": 0.23801110684871674
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.008709422312676907,
+      "tf_ce": 4.760680198669434,
+      "tf_top1": 0.23779360949993134
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.013915415853261948,
+      "tf_ce": 4.723339080810547,
+      "tf_top1": 0.2381991744041443
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.016060862690210342,
+      "tf_ce": 4.753713607788086,
+      "tf_top1": 0.24006763100624084
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.011775095947086811,
+      "tf_ce": 4.841820240020752,
+      "tf_top1": 0.22696496546268463
+     }
+    },
+    "exact_match": 0.0010000000474974513,
+    "free_acc_all": 0.035817570984363556,
+    "tf_ce_all": 4.68934440612793,
+    "tf_top1_all": 0.24490153789520264
+   },
+   "cell1": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.3149999976158142,
+      "tf_ce": 4.191953659057617,
+      "tf_top1": 0.3149999976158142
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.1963205635547638,
+      "tf_ce": 4.238921642303467,
+      "tf_top1": 0.3188003897666931
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.03630862385034561,
+      "tf_ce": 4.873968124389648,
+      "tf_top1": 0.22566817700862885
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.014639071188867092,
+      "tf_ce": 4.762355327606201,
+      "tf_top1": 0.24028268456459045
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.0076537346467375755,
+      "tf_ce": 4.750540733337402,
+      "tf_top1": 0.2406967580318451
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.0120054567232728,
+      "tf_ce": 4.71185302734375,
+      "tf_top1": 0.24038198590278625
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.011834319680929184,
+      "tf_ce": 4.742607593536377,
+      "tf_top1": 0.2403493970632553
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.009714453481137753,
+      "tf_ce": 4.831328868865967,
+      "tf_top1": 0.22725935280323029
+     }
+    },
+    "exact_match": 0.000750000006519258,
+    "free_acc_all": 0.036493610590696335,
+    "tf_ce_all": 4.671933650970459,
+    "tf_top1_all": 0.24699224531650543
+   },
+   "cell2": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.3177500069141388,
+      "tf_ce": 4.166512966156006,
+      "tf_top1": 0.31725001335144043
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.19934475421905518,
+      "tf_ce": 4.2263898849487305,
+      "tf_top1": 0.32006049156188965
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.03883005678653717,
+      "tf_ce": 4.868027687072754,
+      "tf_top1": 0.2286939024925232
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.012872287072241306,
+      "tf_ce": 4.761106967926025,
+      "tf_top1": 0.23977789282798767
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.008709422312676907,
+      "tf_ce": 4.749866962432861,
+      "tf_top1": 0.24016891419887543
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.011732605285942554,
+      "tf_ce": 4.7104172706604,
+      "tf_top1": 0.24092769622802734
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.014088476076722145,
+      "tf_ce": 4.738535404205322,
+      "tf_top1": 0.24147647619247437
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.010303208604454994,
+      "tf_ce": 4.826465129852295,
+      "tf_top1": 0.22961436212062836
+     }
+    },
+    "exact_match": 0.000750000006519258,
+    "free_acc_all": 0.03680659085512161,
+    "tf_ce_all": 4.668175220489502,
+    "tf_top1_all": 0.24773088097572327
+   },
+   "cell3": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.3165000081062317,
+      "tf_ce": 4.187751293182373,
+      "tf_top1": 0.3165000081062317
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.2011088728904724,
+      "tf_ce": 4.236473560333252,
+      "tf_top1": 0.3193044364452362
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.03782148286700249,
+      "tf_ce": 4.873015880584717,
+      "tf_top1": 0.2289460450410843
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.014386673457920551,
+      "tf_ce": 4.762692928314209,
+      "tf_top1": 0.23952549695968628
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.007389812730252743,
+      "tf_ce": 4.750325679779053,
+      "tf_top1": 0.2391132265329361
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.010095497593283653,
+      "tf_ce": 4.712854862213135,
+      "tf_top1": 0.24092769622802734
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.012961397878825665,
+      "tf_ce": 4.741672992706299,
+      "tf_top1": 0.24260355532169342
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.011480717919766903,
+      "tf_ce": 4.829500675201416,
+      "tf_top1": 0.23020312190055847
+     }
+    },
+    "exact_match": 0.000750000006519258,
+    "free_acc_all": 0.036819107830524445,
+    "tf_ce_all": 4.671330451965332,
+    "tf_top1_all": 0.24745546281337738
+   },
+   "mean": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.31700000166893005,
+      "tf_ce": 4.186810493469238,
+      "tf_top1": 0.31700000166893005
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.20060484111309052,
+      "tf_ce": 4.23690128326416,
+      "tf_top1": 0.3182963728904724
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.03782148286700249,
+      "tf_ce": 4.8720855712890625,
+      "tf_top1": 0.22642460465431213
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.013124684803187847,
+      "tf_ce": 4.761077880859375,
+      "tf_top1": 0.24028268456459045
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.00712589081376791,
+      "tf_ce": 4.749519348144531,
+      "tf_top1": 0.24043282866477966
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.0120054567232728,
+      "tf_ce": 4.711181163787842,
+      "tf_top1": 0.2412005513906479
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.011834319680929184,
+      "tf_ce": 4.7410888671875,
+      "tf_top1": 0.24260355532169342
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.011480717919766903,
+      "tf_ce": 4.829453945159912,
+      "tf_top1": 0.2293199896812439
+     }
+    },
+    "exact_match": 0.000750000006519258,
+    "free_acc_all": 0.03678155317902565,
+    "tf_ce_all": 4.67072057723999,
+    "tf_top1_all": 0.24731774628162384
+   },
+   "trained": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.3174999952316284,
+      "tf_ce": 4.167457103729248,
+      "tf_top1": 0.31700000166893005
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.19959677755832672,
+      "tf_ce": 4.227407455444336,
+      "tf_top1": 0.32006049156188965
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.038577910512685776,
+      "tf_ce": 4.86826229095459,
+      "tf_top1": 0.2284417599439621
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.013124684803187847,
+      "tf_ce": 4.761412620544434,
+      "tf_top1": 0.24053508043289185
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.008445500396192074,
+      "tf_ce": 4.750049591064453,
+      "tf_top1": 0.23937714099884033
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.011732605285942554,
+      "tf_ce": 4.711111545562744,
+      "tf_top1": 0.24092769622802734
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.013806706294417381,
+      "tf_ce": 4.7384934425354,
+      "tf_top1": 0.2420400083065033
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.01000883150845766,
+      "tf_ce": 4.826849937438965,
+      "tf_top1": 0.229908749461174
+     }
+    },
+    "exact_match": 0.000750000006519258,
+    "free_acc_all": 0.036844149231910706,
+    "tf_ce_all": 4.668407917022705,
+    "tf_top1_all": 0.24765576422214508
+   },
+   "noise": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.06224999949336052,
+      "tf_ce": 8.345351219177246,
+      "tf_top1": 0.06224999949336052
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.04939516261219978,
+      "tf_ce": 6.336033821105957,
+      "tf_top1": 0.20640121400356293
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.01109430193901062,
+      "tf_ce": 6.1239118576049805,
+      "tf_top1": 0.13817448914051056
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.012872287072241306,
+      "tf_ce": 5.898584365844727,
+      "tf_top1": 0.14512872695922852
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.006861968897283077,
+      "tf_ce": 5.871303081512451,
+      "tf_top1": 0.1464766412973404
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.00927694421261549,
+      "tf_ce": 5.918801307678223,
+      "tf_top1": 0.13287858664989471
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.010707241483032703,
+      "tf_ce": 5.914519309997559,
+      "tf_top1": 0.14257536828517914
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.008536944165825844,
+      "tf_ce": 5.984923362731934,
+      "tf_top1": 0.14483368396759033
+     }
+    },
+    "exact_match": 0.0002500000118743628,
+    "free_acc_all": 0.013771173544228077,
+    "tf_ce_all": 5.54818058013916,
+    "tf_top1_all": 0.18246804177761078
+   },
+   "shuffled": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.15625,
+      "tf_ce": 8.591500282287598,
+      "tf_top1": 0.15649999678134918
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.09375,
+      "tf_ce": 6.415024280548096,
+      "tf_top1": 0.22227822244167328
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.012102873995900154,
+      "tf_ce": 5.465063571929932,
+      "tf_top1": 0.18154311180114746
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.005552751012146473,
+      "tf_ce": 5.262942790985107,
+      "tf_top1": 0.2001514434814453
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.005278437398374081,
+      "tf_ce": 5.1797332763671875,
+      "tf_top1": 0.20321984589099884
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.005457025952637196,
+      "tf_ce": 5.102560043334961,
+      "tf_top1": 0.2068212777376175
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.007326007355004549,
+      "tf_ce": 5.104138374328613,
+      "tf_top1": 0.20738236606121063
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.00500441575422883,
+      "tf_ce": 5.1407790184021,
+      "tf_top1": 0.20341478288173676
+     }
+    },
+    "exact_match": 0.0,
+    "free_acc_all": 0.019166968762874603,
+    "tf_ce_all": 5.2572784423828125,
+    "tf_top1_all": 0.2136785238981247
+   }
+  },
+  "examples": [
+   {
+    "slot": 3612,
+    "row": 216,
+    "true": " (Often the word \"decide\" is used;",
+    "decodes": {
+     "cell0": "\n\nThe reason why the new system is that it's not",
+     "cell1": "\n\nThe reason why the data is that the system is not",
+     "cell2": "\n\nThe reason why the data is that the system is not",
+     "cell3": "\n\nThe reason why the data is that the system is not",
+     "mean": "\n\nThe reason why the data is that the system is not",
+     "trained": "\n\nThe reason why the data is that the system is not",
+     "noise": ".com.\n\n\n\nThe Hague is a big",
+     "shuffled": "\n\nThe 2012-10-1"
+    }
+   },
+   {
+    "slot": 2600,
+    "row": 155,
+    "true": "ed enough to pay that $9.",
+    "decodes": {
+     "cell0": ".\n\nThe new users are looking",
+     "cell1": ".\n\nThe game is a good",
+     "cell2": ".\n\nThe newspaper is",
+     "cell3": ".\n\nThe newspaper is",
+     "mean": ".\n\nThe new users are looking",
+     "trained": ".\n\nThe newspaper is",
+     "noise": " , iT , 10 ,",
+     "shuffled": "\n\nThe 2012"
+    }
+   },
+   {
+    "slot": 2362,
+    "row": 139,
+    "true": " to believe a number of pervasive untruths.",
+    "decodes": {
+     "cell0": " to the government\u2019s decision to get the government\u2019s",
+     "cell1": " to be a \u201cgood\u201d to the public.\n\n",
+     "cell2": " to be a \u201cgood\u201d to the public.\n\n",
+     "cell3": " to be a \u201cgood\u201d to the public.\n\n",
+     "mean": " to be a \u201cgood\u201d to the public.\n\n",
+     "trained": " to be a \u201cgood\u201d to the public.\n\n",
+     "noise": " 19 19 19 19",
+     "shuffled": "\n\nThe first time the NBA was a \u201ca"
+    }
+   },
+   {
+    "slot": 2138,
+    "row": 126,
+    "true": " around with his military career because his daughters finally called somewhere home.",
+    "decodes": {
+     "cell0": ".\n\n\"I think it's a good thing to do with the people",
+     "cell1": ".\n\n\"I think it was a very good thing to do with the",
+     "cell2": ".\n\n\"I think it was a very good thing to do with the",
+     "cell3": ".\n\n\"I think it was a very good thing to do with the",
+     "mean": ".\n\n\"I think it was a very good thing to do with the",
+     "trained": ".\n\n\"I think it was a very good thing to do with the",
+     "noise": " will.S.C. officials and will be the first to get the",
+     "shuffled": "\n\nThe first step in the world is to be a good idea.\n"
+    }
+   },
+   {
+    "slot": 327,
+    "row": 19,
+    "true": " It sounds like Pokemon will not be limited to just special sites but will be found in normal locations people can visit regularly.",
+    "decodes": {
+     "cell0": "\n\nThe first step in the world is to be a good idea.\n\n\n\nThe Wisconsin C",
+     "cell1": "\n\nThe newspaper is a great deal of the game, and it's not just a good time to get the",
+     "cell2": "\n\nThe newspaper is a great deal of the game, and it's a good time to get a lot of",
+     "cell3": "\n\nThe newspaper is a great deal of the game, and it's not just a good time to get the",
+     "mean": "\n\nThe newspaper is a great deal of the game, and it's not just a good thing.\n\n",
+     "trained": "\n\nThe newspaper is a great deal of the game, and it's a good time to get a lot of",
+     "noise": ", Liverpool,,,,,,, Lyn, Laden, CEO, CEO, CEO",
+     "shuffled": "The new version of the new version is the first time in the 2012-10 season.\n\n"
+    }
+   },
+   {
+    "slot": 2960,
+    "row": 177,
+    "true": "And now Fox Sports looks to be picking up another major tournament \u2013",
+    "decodes": {
+     "cell0": "The 2016-1999-199",
+     "cell1": "The 2012-10-15-19",
+     "cell2": "The 2016-1999-199",
+     "cell3": "The 2016-1999-199",
+     "mean": "The 2016-1999-199",
+     "trained": "The 2016-1999-199",
+     "noise": ".com/a.com/a/a/a/a/",
+     "shuffled": ".\n\nThe only thing I have to do is to be a good"
+    }
+   },
+   {
+    "slot": 560,
+    "row": 32,
+    "true": " It is almost as if a new strain of Tourette\u2019s syndrome were spreading through the population;",
+    "decodes": {
+     "cell0": "\n\nI\u2019m not a fan of the world, but I\u2019m not a good thing.\n\n\nI",
+     "cell1": "\n\nI\u2019m not a fan of the world, but I\u2019m not a good thing.\n\n\nI",
+     "cell2": "\n\nI\u2019m not sure if I\u2019m not a member of the American people, but I\u2019m not sure",
+     "cell3": "\n\nI\u2019m not sure if I\u2019m not a member of the American people, but I\u2019m not sure",
+     "mean": "\n\nI\u2019m not sure if I\u2019m not a member of the American people, but I\u2019m not a",
+     "trained": "\n\nI\u2019m not sure if I\u2019m not a member of the American people, but I\u2019m not sure",
+     "noise": ". 1999.\n\n\n\n\u201cI think it\u2019s a good thing,\u201d he said.\n",
+     "shuffled": " I have to be a good guy.\n\n\n\nI think it\u2019s a good thing to do.\n"
+    }
+   },
+   {
+    "slot": 2134,
+    "row": 126,
+    "true": " He recommended Your Grateful Nation.",
+    "decodes": {
+     "cell0": "\n\n\"I think it's a good",
+     "cell1": "\n\n\"I think it was a very",
+     "cell2": " I was a very good thing.\n\n",
+     "cell3": "\n\n\"I think it was a very",
+     "mean": "\n\n\"I think it was a very",
+     "trained": " I was a very good thing.\n\n",
+     "noise": "\"Oh, 'Oh, '\" and",
+     "shuffled": "\nThe \"Mormon\" is a"
+    }
+   }
+  ],
+  "val_skip_docs": 50000
+ }
+}

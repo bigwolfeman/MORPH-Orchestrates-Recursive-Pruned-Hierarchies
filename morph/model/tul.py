@@ -1277,6 +1277,42 @@ class TULConfig:
     # mean does not already give) and with `spandec: false` (no decoder is built).
     # Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
     spandec_reads_cells: bool = False
+    # ── WHICH STATE THE SPAN DECODER GRADES (arm "spdwin", 2026-10-10) ────────────
+    # spandec_read: "mean" (default; today's forward, bit-identical) | "winner" | "each".
+    # "each" (2026-10-10): the decoder grades EACH of the M exit cells alone (cell axis folded
+    # into the batch axis, one pass over B*M rows) and the loss is the mean of the M per-cell
+    # losses, so every cell gets the gradient of its own decodability. Same refusals as "winner".
+    #
+    # WHY. On the latent-selected loop the coda reads ONLY the router's final winner cell
+    # (`_fan_route_cells` writes every loser as exact zero), but the span decoder reads
+    # `h_slots`, the MEAN of the M exit cells. So it grades a readout the deployed model
+    # never uses. "winner" hands the decoder the winner cell instead, gathered per slot
+    # from the same cells and by the same `_lsel_out["winner"]` index the coda's write
+    # uses (train and eval), so the decoder grades what the coda reads. The span CE then
+    # sends gradient to the winner cell alone (a loser is trained by the router score and
+    # the loop's other terms, not by the decoder).
+    #
+    # Refused unless `spandec` is on, `fan_loop_select != "off"` with
+    # `fan_lsel_read == "winner"` (the hard winner write; under "all" there is no winner),
+    # and `spandec_reads_cells` is off (that knob hands the decoder ALL cells).
+    spandec_read: str = "mean"
+    # ── WHICH CELL THE LATENT-SELECTED LOOP FOLLOWS (arm "randpick", 2026-10-10) ────
+    # fan_lsel_pick: "router" (default; today's forward, bit-identical) | "random".
+    # "random": after each pass the loop resets its cells to a UNIFORM RANDOM cell per
+    # slot (device draw, train AND eval, so deploy follows what training followed), and
+    # that final pick is the winner the coda reads. The router is still scored and trained
+    # by its CE onto the teacher's pick, so its agreement instruments still read;
+    # `final_router` keeps the router's own pick. Only what is FOLLOWED changes. Asks
+    # whether the z-trained selection matters versus random with the same reset structure.
+    # Refused with fan_loop_select='off' and with fan_lsel_train_follow='teacher'.
+    fan_lsel_pick: str = "router"
+    # ── tul.coda_prelude_detach (arm "preldet", 2026-10-10) ─────────────────────────
+    # True: the coda's TOKEN positions read `xn.detach()` (the prelude's output). Forward
+    # identical; the token CE no longer trains the prelude through the coda's token path,
+    # so the prelude learns only through the loop (slot seed, register), the span decoder
+    # and the latent floor. Slot / prefix values scattered in are NOT detached.
+    # Refused with tokens_through_core and with coda_token_input != 'prelude'.
+    coda_prelude_detach: bool = False
     # ── THE PARALLEL SPAN HEAD (LXTUL-E Stage 0, 2026-09-23) ───────────────────────
     # spandec_parallel: a COMMITTED product reader of the SAME target the span decoder
     # grades — every token of span s + spandec_target_offset predicted AT ONCE from z plus
@@ -2821,6 +2857,9 @@ class TULConfig:
         self._check_fan_loop_select()
         # ── the trace-free pseudo-token carrier (tul.pseudo_k, 2026-10-05) ───────
         self._check_pseudo_snap()
+        # ── which state the span decoder grades (tul.spandec_read, 2026-10-10) ───
+        self._check_spandec_read()
+        self._check_credit_arms()
 
         # ── the loop carry (tul.loop_carry; morph/model/tul_carry.py) ─────────
         if self.loop_carry not in LOOP_CARRY_MODES:
@@ -4633,6 +4672,58 @@ class TULConfig:
                 f"tul.pseudo_k={self.pseudo_k} > tul.fan_k - 1 = {self.fan_k - 1}: the "
                 f"winner keeps its own prefix position, so at most fan_k - 1 loser "
                 f"positions exist to fill.")
+
+    def _check_credit_arms(self) -> None:
+        """``tul.fan_lsel_pick`` and ``tul.coda_prelude_detach`` (2026-10-10)."""
+        if self.fan_lsel_pick not in ("router", "random"):
+            raise ValueError(
+                f"tul.fan_lsel_pick must be 'router' or 'random', got {self.fan_lsel_pick!r}")
+        if self.fan_lsel_pick == "random":
+            if self.fan_loop_select == "off":
+                raise ValueError(
+                    "tul.fan_lsel_pick='random' needs tul.fan_loop_select != 'off': there "
+                    "is no latent-selected loop to pick for (a silent no-op).")
+            if self.fan_lsel_train_follow == "teacher":
+                raise ValueError(
+                    "tul.fan_lsel_pick='random' with tul.fan_lsel_train_follow='teacher': "
+                    "the teacher would drive the loop and the random draw would be "
+                    "overridden. Set fan_lsel_train_follow: router.")
+        if self.coda_prelude_detach:
+            if self.tokens_through_core:
+                raise ValueError(
+                    "tul.coda_prelude_detach needs the slot loop (tokens_through_core: "
+                    "false): the paid loop has no separate coda token input.")
+            if self.coda_token_input != "prelude":
+                raise ValueError(
+                    f"tul.coda_prelude_detach needs tul.coda_token_input='prelude' (got "
+                    f"{self.coda_token_input!r}): 'embed' does not read the prelude.")
+
+    def _check_spandec_read(self) -> None:
+        """``tul.spandec_read`` — ``"mean"`` (default, no-op) or ``"winner"``: the span
+        decoder grades the latent-selected loop's hard winner cell, the one cell the coda
+        reads, instead of the mean of the M exit cells."""
+        if self.spandec_read not in ("mean", "winner", "each"):
+            raise ValueError(
+                f"tul.spandec_read must be 'mean', 'winner' or 'each', got "
+                f"{self.spandec_read!r}")
+        if self.spandec_read == "mean":
+            return
+        if not self.spandec:
+            raise ValueError(
+                f"tul.spandec_read={self.spandec_read!r} needs tul.spandec: true (no decoder "
+                f"is built, so the knob would be silently ignored).")
+        if not (self.fan_loop_select != "off" and self.fan_lsel_read == "winner"):
+            raise ValueError(
+                f"tul.spandec_read={self.spandec_read!r} needs tul.fan_loop_select != 'off' with "
+                f"tul.fan_lsel_read == 'winner' (got fan_loop_select="
+                f"{self.fan_loop_select!r}, fan_lsel_read={self.fan_lsel_read!r}): the "
+                f"winner is the latent-selected loop's hard pick, which the coda reads "
+                f"alone; without it there is no single cell to grade.")
+        if self.spandec_reads_cells:
+            raise ValueError(
+                f"tul.spandec_read={self.spandec_read!r} with tul.spandec_reads_cells: true: "
+                f"the second hands the decoder ALL M cells as a memory, the first reads the "
+                f"winner / each cell alone. They are different readers; pick one.")
 
     def _check_spandec_parallel(self) -> None:
         """``tul.spandec_parallel`` — LXTUL-E's committed product reader

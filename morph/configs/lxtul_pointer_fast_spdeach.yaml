@@ -1,0 +1,11 @@
+# lxtul_pointer_fast with the span decoder grading EACH of the M exit cells alone and
+# averaging the M losses (tul.spandec_read, 2026-10-10).
+defaults:
+  - lxtul_pointer_fast
+  - _self_
+
+tul:
+  spandec_read: each
+
+wandb:
+  name: lxtul-pointer-fast-spdeach

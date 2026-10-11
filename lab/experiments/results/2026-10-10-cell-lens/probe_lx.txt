@@ -1,0 +1,107 @@
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+    [fan-target] EMA prelude twin resume
+[probe] lx: step 5000; features train (19678, 5, 4, 1024) val (12401, 5, 4, 1024) (6s)
+[probe] step     0/3000 mean CE 11.0084 (0s)
+[probe] step   300/3000 mean CE 5.9581 (15s)
+[probe] step   600/3000 mean CE 5.7207 (30s)
+[probe] step   900/3000 mean CE 5.2540 (45s)
+[probe] step  1200/3000 mean CE 5.2343 (60s)
+[probe] step  1500/3000 mean CE 5.0687 (76s)
+[probe] step  1800/3000 mean CE 4.9918 (91s)
+[probe] step  2100/3000 mean CE 4.6336 (106s)
+[probe] step  2400/3000 mean CE 4.6035 (121s)
+[probe] step  2700/3000 mean CE 4.4702 (136s)
+[probe] step  2999/3000 mean CE 4.3209 (151s)
+### lx: Future-Lens probe, val CE | top1 | top5 (same-row frac of shuffled control 0.000)
+
+**offset 1** (n=12401); unigram 6.717 | 0.257 | 0.330
+
+| pass | cell0 | cell1 | cell2 | cell3 | mean | shuffled |
+|---|---|---|---|---|---|---|
+| 0 | 6.538/0.259/0.388 | 6.234/0.282/0.401 | 6.266/0.281/0.405 | 6.106/0.276/0.404 | 6.670/0.286/0.408 | 12.423/0.128/0.180 |
+| 1 | 5.485/0.261/0.394 | 5.302/0.268/0.402 | 5.264/0.278/0.410 | 5.222/0.271/0.406 | 41.883/0.303/0.442 | 9.560/0.125/0.193 |
+| 2 | 5.217/0.278/0.412 | 5.162/0.285/0.420 | 5.134/0.282/0.416 | 5.273/0.275/0.410 | 35.372/0.306/0.448 | 9.573/0.130/0.196 |
+| 3 | 6.019/0.272/0.397 | 6.131/0.278/0.399 | 6.227/0.278/0.402 | 6.057/0.280/0.404 | 6.226/0.286/0.410 | 12.232/0.117/0.176 |
+| 6 | 6.184/0.268/0.394 | 6.244/0.276/0.400 | 6.321/0.278/0.402 | 6.195/0.274/0.403 | 6.306/0.283/0.406 | 12.544/0.115/0.175 |
+
+**offset 2** (n=12294); unigram 7.679 | 0.164 | 0.245
+
+| pass | cell0 | cell1 | cell2 | cell3 | mean | shuffled |
+|---|---|---|---|---|---|---|
+| 0 | 8.485/0.164/0.243 | 7.955/0.182/0.251 | 8.084/0.183/0.252 | 7.899/0.181/0.253 | 8.597/0.184/0.256 | 10.748/0.078/0.117 |
+| 1 | 7.362/0.162/0.240 | 7.174/0.175/0.254 | 7.146/0.174/0.256 | 7.036/0.173/0.256 | 59.685/0.199/0.289 | 9.205/0.079/0.132 |
+| 2 | 6.930/0.177/0.262 | 6.863/0.185/0.271 | 6.863/0.179/0.270 | 6.993/0.182/0.267 | 50.048/0.202/0.299 | 9.038/0.084/0.141 |
+| 3 | 7.909/0.176/0.252 | 7.996/0.174/0.254 | 8.125/0.175/0.252 | 7.924/0.178/0.256 | 8.116/0.183/0.263 | 10.803/0.070/0.114 |
+| 6 | 8.099/0.175/0.251 | 8.133/0.175/0.252 | 8.255/0.174/0.251 | 8.100/0.175/0.254 | 8.217/0.182/0.261 | 11.030/0.069/0.112 |
+
+**offset 3** (n=12289); unigram 8.480 | 0.025 | 0.100
+
+| pass | cell0 | cell1 | cell2 | cell3 | mean | shuffled |
+|---|---|---|---|---|---|---|
+| 0 | 9.892/0.018/0.065 | 9.264/0.022/0.080 | 9.442/0.023/0.079 | 9.250/0.025/0.078 | 9.939/0.024/0.083 | 10.649/0.008/0.035 |
+| 1 | 9.334/0.017/0.063 | 8.921/0.022/0.073 | 8.820/0.023/0.074 | 8.815/0.025/0.074 | 65.820/0.038/0.116 | 9.951/0.008/0.034 |
+| 2 | 8.429/0.030/0.089 | 8.358/0.029/0.091 | 8.348/0.029/0.088 | 8.563/0.028/0.084 | 53.270/0.042/0.124 | 9.554/0.011/0.041 |
+| 3 | 9.222/0.028/0.084 | 9.302/0.028/0.088 | 9.444/0.028/0.088 | 9.249/0.029/0.088 | 9.422/0.032/0.096 | 10.764/0.008/0.035 |
+| 6 | 9.438/0.025/0.081 | 9.464/0.028/0.085 | 9.604/0.027/0.085 | 9.446/0.028/0.086 | 9.553/0.030/0.092 | 11.002/0.007/0.034 |
+
+**offset 4** (n=12281); unigram 8.412 | 0.029 | 0.111
+
+| pass | cell0 | cell1 | cell2 | cell3 | mean | shuffled |
+|---|---|---|---|---|---|---|
+| 0 | 9.929/0.017/0.061 | 9.325/0.020/0.073 | 9.504/0.020/0.069 | 9.341/0.019/0.070 | 9.991/0.022/0.075 | 10.187/0.009/0.042 |
+| 1 | 9.355/0.015/0.056 | 8.983/0.018/0.065 | 8.901/0.019/0.069 | 8.878/0.020/0.068 | 67.047/0.033/0.114 | 9.624/0.010/0.045 |
+| 2 | 8.444/0.022/0.080 | 8.344/0.025/0.087 | 8.381/0.028/0.089 | 8.559/0.022/0.085 | 54.013/0.038/0.122 | 9.160/0.013/0.056 |
+| 3 | 9.255/0.020/0.078 | 9.348/0.020/0.078 | 9.479/0.020/0.077 | 9.287/0.022/0.080 | 9.458/0.024/0.086 | 10.263/0.008/0.043 |
+| 6 | 9.477/0.019/0.073 | 9.511/0.020/0.075 | 9.650/0.019/0.072 | 9.493/0.021/0.075 | 9.595/0.023/0.083 | 10.487/0.007/0.040 |
+
+### lx: examples (final pass 6; top-5 tokens per cell)
+
+TRUE: ' I’ll update once I do.'
+  cell0  off1 ['\n', ' The', 'S', '“', ' It']   off2 ['\n', '’', ',', ' the', ' G']
+  cell1  off1 ['\n', ' The', ' If', ' We', '“']   off2 ['\n', '’', ',', ' G', ' it']
+  cell2  off1 ['\n', ' The', ' We', 'S', ' Unfortunately']   off2 ['\n', '’', ',', ' it', ' G']
+  cell3  off1 ['\n', ' The', ' J', 'S', ' It']   off2 ['\n', '’', ' the', ',', ' happening']
+
+TRUE: ' "is still far lower than what it was in the 1990s and early 2000'
+  cell0  off1 [' of', ',', ' was', ' number', ' and']   off2 [' ', ',', ' includes', ' the', ' gas']
+  cell1  off1 [' of', ',', ' [', ' and', ' generation']   off2 [' ', ' year', ' includes', ' b', ',']
+  cell2  off1 [',', ' [', ' of', ' was', ' neg']   off2 [' includes', ' ', ',', ' cap', ' was']
+  cell3  off1 [' of', ',', ' was', ' [', ' in']   off2 [' ', ' includes', ',', ' year', ' b']
+
+TRUE: ' Westernized peoples may have lost important microbes, we may have to repopulate ourselves with microbes derived'
+  cell0  off1 [' therefore', ' he', ' of', ' “', ' causing']   off2 [' these', ' the', ' whole', 'ice', ' his']
+  cell1  off1 [' he', ' causing', ' therefore', ' there', ' Jo']   off2 [' these', 'oc', ' works', ' the', ' lives']
+  cell2  off1 [' he', ' therefore', ' there', ' causing', ' his']   off2 [' these', 'oc', ' works', ' the', ' se']
+  cell3  off1 [' he', ' therefore', ' there', ' his', ' the']   off2 [' these', 'oc', ' the', ' works', ' is']
+
+TRUE: ''
+  cell0  off1 ['\n', ' Add', '', ' Thank', ' And']   off2 ['\n', ' can', ' is', ' food', ' to']
+  cell1  off1 ['\n', ' V', ' Z', ' And', ' Add']   off2 ['\n', ' can', ' is', ' to', '.']
+  cell2  off1 ['\n', ' Add', ' Thank', ' V', ' Z']   off2 ['\n', ' can', ' is', '.', ' food']
+  cell3  off1 ['\n', ' Thank', ' Add', ' V', ' And']   off2 ['\n', ' can', ' is', '.', ',']
+
+TRUE: '\n(56:48) Psychedelics and cultural stability\n'
+  cell0  off1 ['\n', ' The', ' ', ' O', ' As']   off2 ['“', 'The', 'R', 'When', 'They']
+  cell1  off1 ['\n', ' The', ' He', ' S', ' As']   off2 ['R', '“', 'The', 'They', 'Th']
+  cell2  off1 ['\n', ' The', ' But', ' He', ' However']   off2 ['R', 'The', '“', 'Am', 'Th']
+  cell3  off1 ['\n', ' The', ' He', ' (', ' After']   off2 ['The', 'R', 'In', 'I', 'Am']
+
+TRUE: ' Seeing this, he went to Ven.'
+  cell0  off1 ['\n', ' M', ' Z', ' She', '']   off2 ['\n', 'in', "'", 'arg', "'s"]
+  cell1  off1 ['\n', ' M', ' Z', '', ' (']   off2 ['\n', 'ail', "'s", 'in', "'"]
+  cell2  off1 ['\n', ' M', ' Z', ' (', ' Your']   off2 ['\n', 'in', 'ail', "'", "'s"]
+  cell3  off1 [' M', '\n', ' (', ' Some', '']   off2 ['\n', "'s", 'arg', 'ail', ' it']
+
+TRUE: ' Now a popular destination for photographers and ghost hunters, Hashima Island serves as a grim reminder of'
+  cell0  off1 ['\n', ' In', ' The', ' They', ' For']   off2 ['\n', 'ment', ' In', ',', '’']
+  cell1  off1 ['\n', ' The', ' In', ' For', ' This']   off2 ['\n', 'ment', ' example', '’', ' Long']
+  cell2  off1 [' The', '\n', ' In', ' But', ' For']   off2 ['\n', ' Long', 'perts', ' of', ' many']
+  cell3  off1 ['\n', ' In', ' The', ' They', ' But']   off2 ['\n', ' Long', ' of', ' many', ' addition']
+
+TRUE: ' In fact, we were repeatedly compelled to attend the cul patu and proffered freshly slain car'
+  cell0  off1 ['\n', ' When', ' The', ' A', ' H']   off2 ['\n', 'ually', 'ab', ',', ' they']
+  cell1  off1 ['\n', ' They', ' In', ' When', ' This']   off2 ['ually', 'ab', '\n', ' first', ' the']
+  cell2  off1 [' In', '\n', ' The', ' A', ' They']   off2 ['ually', '\n', 'ab', ' the', ' printed']
+  cell3  off1 ['1', ' The', '\n', ' In', ' A']   off2 ['ually', '\n', ' di', ' the', 'ab']
+
+[probe] wrote /home/wolfe/morph-scratch/abq/lens/probe_lx.json

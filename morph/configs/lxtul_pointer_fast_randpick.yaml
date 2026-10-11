@@ -1,0 +1,12 @@
+# lxtul_pointer_fast where the latent-selected loop FOLLOWS a uniform random cell per slot per
+# pass (tul.fan_lsel_pick, 2026-10-10), in train and eval. The router and teacher still run and
+# train. Asks whether the z-trained selection matters versus random with the same reset structure.
+defaults:
+  - lxtul_pointer_fast
+  - _self_
+
+tul:
+  fan_lsel_pick: random
+
+wandb:
+  name: lxtul-pointer-fast-randpick

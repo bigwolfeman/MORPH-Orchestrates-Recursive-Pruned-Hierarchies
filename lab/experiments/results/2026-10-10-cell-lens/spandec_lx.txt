@@ -1,0 +1,119 @@
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+    [fan-target] EMA prelude twin resume
+[spandec] lx: step 5000, depth 6, 12401 slots with a next span, read mode winner (3s)
+[spandec] cell0: 2s
+[spandec] cell1: 2s
+[spandec] cell2: 2s
+[spandec] cell3: 2s
+[spandec] mean: 2s
+[spandec] trained: 2s
+[spandec] noise: 2s
+[spandec] shuffled: 2s
+### lx: free-running span decoder (greedy), 4000 val slots
+
+token accuracy at position p of the true next span (free-running; spans at least p long)
+
+| input | p1 | p2 | p3 | p4 | p5 | p6 | p7 | p8 | all | exact match | TF CE | TF top1 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| cell0 | 0.304 | 0.195 | 0.034 | 0.014 | 0.009 | 0.014 | 0.016 | 0.012 | 0.036 | 0.0010 | 4.689 | 0.245 |
+| cell1 | 0.315 | 0.196 | 0.036 | 0.015 | 0.008 | 0.012 | 0.012 | 0.010 | 0.036 | 0.0008 | 4.672 | 0.247 |
+| cell2 | 0.318 | 0.199 | 0.039 | 0.013 | 0.009 | 0.012 | 0.014 | 0.010 | 0.037 | 0.0008 | 4.668 | 0.248 |
+| cell3 | 0.317 | 0.201 | 0.038 | 0.014 | 0.007 | 0.010 | 0.013 | 0.011 | 0.037 | 0.0008 | 4.671 | 0.247 |
+| mean | 0.317 | 0.201 | 0.038 | 0.013 | 0.007 | 0.012 | 0.012 | 0.011 | 0.037 | 0.0008 | 4.671 | 0.247 |
+| trained | 0.317 | 0.200 | 0.039 | 0.013 | 0.008 | 0.012 | 0.014 | 0.010 | 0.037 | 0.0008 | 4.668 | 0.248 |
+| noise | 0.062 | 0.049 | 0.011 | 0.013 | 0.007 | 0.009 | 0.011 | 0.009 | 0.014 | 0.0003 | 5.548 | 0.182 |
+| shuffled | 0.156 | 0.094 | 0.012 | 0.006 | 0.005 | 0.005 | 0.007 | 0.005 | 0.019 | 0.0000 | 5.257 | 0.214 |
+
+teacher-forced CE per position (nats), same inputs
+
+| input | p1 | p2 | p3 | p4 | p5 | p6 | p7 | p8 |
+|---|---|---|---|---|---|---|---|---|
+| cell0 | 4.35 | 4.29 | 4.90 | 4.78 | 4.76 | 4.72 | 4.75 | 4.84 |
+| cell1 | 4.19 | 4.24 | 4.87 | 4.76 | 4.75 | 4.71 | 4.74 | 4.83 |
+| cell2 | 4.17 | 4.23 | 4.87 | 4.76 | 4.75 | 4.71 | 4.74 | 4.83 |
+| cell3 | 4.19 | 4.24 | 4.87 | 4.76 | 4.75 | 4.71 | 4.74 | 4.83 |
+| mean | 4.19 | 4.24 | 4.87 | 4.76 | 4.75 | 4.71 | 4.74 | 4.83 |
+| trained | 4.17 | 4.23 | 4.87 | 4.76 | 4.75 | 4.71 | 4.74 | 4.83 |
+| noise | 8.35 | 6.34 | 6.12 | 5.90 | 5.87 | 5.92 | 5.91 | 5.98 |
+| shuffled | 8.59 | 6.42 | 5.47 | 5.26 | 5.18 | 5.10 | 5.10 | 5.14 |
+TRUE: ' (Often the word "decide" is used;'
+  cell0   : "\n\nThe reason why the new system is that it's not"
+  cell1   : '\n\nThe reason why the data is that the system is not'
+  cell2   : '\n\nThe reason why the data is that the system is not'
+  cell3   : '\n\nThe reason why the data is that the system is not'
+  mean    : '\n\nThe reason why the data is that the system is not'
+  trained : '\n\nThe reason why the data is that the system is not'
+  noise   : '.com.\n\n\n\nThe Hague is a big'
+  shuffled: '\n\nThe 2012-10-1'
+
+TRUE: 'ed enough to pay that $9.'
+  cell0   : '.\n\nThe new users are looking'
+  cell1   : '.\n\nThe game is a good'
+  cell2   : '.\n\nThe newspaper is'
+  cell3   : '.\n\nThe newspaper is'
+  mean    : '.\n\nThe new users are looking'
+  trained : '.\n\nThe newspaper is'
+  noise   : ' , iT , 10 ,'
+  shuffled: '\n\nThe 2012'
+
+TRUE: ' to believe a number of pervasive untruths.'
+  cell0   : ' to the government’s decision to get the government’s'
+  cell1   : ' to be a “good” to the public.\n\n'
+  cell2   : ' to be a “good” to the public.\n\n'
+  cell3   : ' to be a “good” to the public.\n\n'
+  mean    : ' to be a “good” to the public.\n\n'
+  trained : ' to be a “good” to the public.\n\n'
+  noise   : ' 19 19 19 19'
+  shuffled: '\n\nThe first time the NBA was a “a'
+
+TRUE: ' around with his military career because his daughters finally called somewhere home.'
+  cell0   : '.\n\n"I think it\'s a good thing to do with the people'
+  cell1   : '.\n\n"I think it was a very good thing to do with the'
+  cell2   : '.\n\n"I think it was a very good thing to do with the'
+  cell3   : '.\n\n"I think it was a very good thing to do with the'
+  mean    : '.\n\n"I think it was a very good thing to do with the'
+  trained : '.\n\n"I think it was a very good thing to do with the'
+  noise   : ' will.S.C. officials and will be the first to get the'
+  shuffled: '\n\nThe first step in the world is to be a good idea.\n'
+
+TRUE: ' It sounds like Pokemon will not be limited to just special sites but will be found in normal locations people can visit regularly.'
+  cell0   : '\n\nThe first step in the world is to be a good idea.\n\n\n\nThe Wisconsin C'
+  cell1   : "\n\nThe newspaper is a great deal of the game, and it's not just a good time to get the"
+  cell2   : "\n\nThe newspaper is a great deal of the game, and it's a good time to get a lot of"
+  cell3   : "\n\nThe newspaper is a great deal of the game, and it's not just a good time to get the"
+  mean    : "\n\nThe newspaper is a great deal of the game, and it's not just a good thing.\n\n"
+  trained : "\n\nThe newspaper is a great deal of the game, and it's a good time to get a lot of"
+  noise   : ', Liverpool,,,,,,, Lyn, Laden, CEO, CEO, CEO'
+  shuffled: 'The new version of the new version is the first time in the 2012-10 season.\n\n'
+
+TRUE: 'And now Fox Sports looks to be picking up another major tournament –'
+  cell0   : 'The 2016-1999-199'
+  cell1   : 'The 2012-10-15-19'
+  cell2   : 'The 2016-1999-199'
+  cell3   : 'The 2016-1999-199'
+  mean    : 'The 2016-1999-199'
+  trained : 'The 2016-1999-199'
+  noise   : '.com/a.com/a/a/a/a/'
+  shuffled: '.\n\nThe only thing I have to do is to be a good'
+
+TRUE: ' It is almost as if a new strain of Tourette’s syndrome were spreading through the population;'
+  cell0   : '\n\nI’m not a fan of the world, but I’m not a good thing.\n\n\nI'
+  cell1   : '\n\nI’m not a fan of the world, but I’m not a good thing.\n\n\nI'
+  cell2   : '\n\nI’m not sure if I’m not a member of the American people, but I’m not sure'
+  cell3   : '\n\nI’m not sure if I’m not a member of the American people, but I’m not sure'
+  mean    : '\n\nI’m not sure if I’m not a member of the American people, but I’m not a'
+  trained : '\n\nI’m not sure if I’m not a member of the American people, but I’m not sure'
+  noise   : '. 1999.\n\n\n\n“I think it’s a good thing,” he said.\n'
+  shuffled: ' I have to be a good guy.\n\n\n\nI think it’s a good thing to do.\n'
+
+TRUE: ' He recommended Your Grateful Nation.'
+  cell0   : '\n\n"I think it\'s a good'
+  cell1   : '\n\n"I think it was a very'
+  cell2   : ' I was a very good thing.\n\n'
+  cell3   : '\n\n"I think it was a very'
+  mean    : '\n\n"I think it was a very'
+  trained : ' I was a very good thing.\n\n'
+  noise   : '"Oh, \'Oh, \'" and'
+  shuffled: '\nThe "Mormon" is a'
+
+[spandec] wrote /home/wolfe/morph-scratch/abq/lens/spandec_lx.json

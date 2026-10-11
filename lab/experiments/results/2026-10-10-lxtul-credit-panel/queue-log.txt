@@ -1,0 +1,6 @@
+[10-10 17:36:35] spdwin-r1 sweeponly start
+[10-10 18:11:26] spdwin-r1 sweep exit=0 spdwin-r1 depth=1 ce=3.9139 span_first=3.5131 spandec_ce=4.5210 spdwin-r1 depth=6 ce=3.9093 span_first=3.5048 spandec_ce=4.5022 spdwin-r1 ce_tokens K1-K6: +0.0046 [+0.0042, +0.0050] over 480 rows spdwin-r1 spandec_ce K1-K6: +0.0188 [+0.0178, +0.0197] over 160 batches 
+[10-10 18:11:26] onecell train start cfg=tul_onecell_pointer_fast ov=[] gpu: 17538, 277 MiB 
+[10-10 18:42:49] onecell train exit=0 Final val_loss=3.8953 rate: tok/s=29445 tok/s=24055 tok/s=25931 
+[10-10 18:45:51] onecell sweep exit=0 onecell depth=1 ce=3.9019 span_first=3.4840 spandec_ce=4.4891 onecell depth=6 ce=3.8997 span_first=3.4792 spandec_ce=4.4826 onecell ce_tokens K1-K6: +0.0022 [+0.0019, +0.0026] over 480 rows onecell spandec_ce K1-K6: +0.0065 [+0.0059, +0.0072] over 160 batches 
+[10-10 18:45:51] randpick train start cfg=lxtul_pointer_fast_randpick ov=[] gpu: 16513, 723 MiB 17538, 277 MiB 

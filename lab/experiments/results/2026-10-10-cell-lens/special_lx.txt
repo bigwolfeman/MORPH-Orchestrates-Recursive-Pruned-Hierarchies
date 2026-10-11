@@ -1,0 +1,39 @@
+### lx: winning cell x span property, depth 6 (12401 spans; winner shares 0.225 0.226 0.340 0.208)
+
+**length**: NMI 0.0088, permutation null mean 0.0003, p95 0.0004, p 0.005
+
+| winner | [-inf,11) | [11,20) | [20,32) | [32,+inf) |
+|---|---|---|---|---|
+| cell0 | 980 | 682 | 603 | 527 |
+| cell1 | 569 | 681 | 678 | 875 |
+| cell2 | 839 | 1028 | 1078 | 1276 |
+| cell3 | 594 | 676 | 580 | 735 |
+
+**copy_ratio**: NMI 0.0014, permutation null mean 0.0003, p95 0.0005, p 0.005
+
+| winner | [-inf,0.406) | [0.406,0.556) | [0.556,0.688) | [0.688,+inf) |
+|---|---|---|---|---|
+| cell0 | 688 | 724 | 624 | 756 |
+| cell1 | 656 | 719 | 716 | 712 |
+| cell2 | 886 | 1128 | 1111 | 1096 |
+| cell3 | 700 | 672 | 605 | 608 |
+
+**difficulty**: NMI 0.0080, permutation null mean 0.0003, p95 0.0005, p 0.005
+
+| winner | [-inf,3.81) | [3.81,4.44) | [4.44,5.1) | [5.1,+inf) |
+|---|---|---|---|---|
+| cell0 | 586 | 509 | 695 | 1002 |
+| cell1 | 682 | 757 | 715 | 649 |
+| cell2 | 1159 | 1175 | 1034 | 853 |
+| cell3 | 673 | 659 | 656 | 597 |
+
+**first_token_class**: NMI 0.0016, permutation null mean 0.0004, p95 0.0008, p 0.005
+
+| winner | punctuation | whitespace | digit | capitalised | lowercase | other |
+|---|---|---|---|---|---|---|
+| cell0 | 150 | 798 | 71 | 1039 | 689 | 45 |
+| cell1 | 163 | 733 | 85 | 1082 | 711 | 29 |
+| cell2 | 250 | 1064 | 112 | 1510 | 1234 | 51 |
+| cell3 | 127 | 716 | 111 | 932 | 667 | 32 |
+
+[special] wrote /home/wolfe/morph-scratch/abq/lens/special_lx.json

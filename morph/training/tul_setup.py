@@ -127,7 +127,8 @@ KNOWN_TUL_KEYS = frozenset({
     "slot_depth_fixed", "slot_max_depth", "slot_mean_depth", "slot_seed", "slot_token",
     "spandec", "spandec_heads", "spandec_horizon", "spandec_layers", "spandec_max_tokens",
     "spandec_pass_horizon_max", "spandec_pass_tokens", "spandec_pass_weight",
-    "spandec_per_pass", "spandec_reads_cells", "spandec_target_offset",
+    "spandec_per_pass", "spandec_read", "spandec_reads_cells", "spandec_target_offset",
+    "fan_lsel_pick", "coda_prelude_detach",
     "spandec_weight",
     # LXTUL-E (tul.spandec_parallel, 2026-09-23): the committed product reader
     "spandec_parallel", "spandec_parallel_k", "spandec_parallel_weight",
@@ -372,6 +373,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         spandec_horizon=int(tc.get("spandec_horizon", 1)),
         spandec_target_offset=int(tc.get("spandec_target_offset", 1)),
         spandec_reads_cells=bool(tc.get("spandec_reads_cells", False)),
+        spandec_read=str(tc.get("spandec_read", "mean")),
+        fan_lsel_pick=str(tc.get("fan_lsel_pick", "router")),
+        coda_prelude_detach=bool(tc.get("coda_prelude_detach", False)),
         spandec_per_pass=bool(tc.get("spandec_per_pass", False)),
         spandec_pass_horizon_max=int(tc.get("spandec_pass_horizon_max", 6)),
         spandec_pass_weight=float(tc.get("spandec_pass_weight", 1.0)),
@@ -707,6 +711,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "spandec_horizon": model_cfg.spandec_horizon,
         "spandec_target_offset": model_cfg.spandec_target_offset,
         "spandec_reads_cells": model_cfg.spandec_reads_cells,
+        "spandec_read": model_cfg.spandec_read,
+        "fan_lsel_pick": model_cfg.fan_lsel_pick,
+        "coda_prelude_detach": model_cfg.coda_prelude_detach,
         "spandec_per_pass": model_cfg.spandec_per_pass,
         "spandec_pass_horizon_max": model_cfg.spandec_pass_horizon_max,
         "spandec_pass_weight": model_cfg.spandec_pass_weight,
@@ -1099,7 +1106,9 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                  "Cell i is written 1:1 into prefix "
                  "cell i (prefix_k == slot_cells), ")
               + "the coda is unchanged, and the span "
-              "decoder grades the MEAN of the M cells. Built against the measured rank "
+              "decoder grades " + ("the router's WINNER cell (tul.spandec_read=winner)"
+                                  if getattr(model_cfg, "spandec_read", "mean") == "winner"
+                                  else "the MEAN of the M cells") + ". Built against the measured rank "
               "collapse (slot_eff_rank 5.7-7.3 in 1024 dims, pairwise cos 0.72-0.77). "
               "Read `val/slot_cell_eff_rank` - the rank WITHIN a slot - beside "
               "`val/slot_eff_rank` "

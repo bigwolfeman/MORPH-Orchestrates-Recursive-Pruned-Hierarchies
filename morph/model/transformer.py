@@ -3080,6 +3080,22 @@ class MORPHTransformer(nn.Module):
         self.tul_fan_lsel_head: FanLatentHead | None = None
         self.tul_fan_lsel_router: FanRouter | None = None
         self._lsel_out: dict | None = None
+        # `tul.spandec_read: winner`: the span decoder grades the winner cell the coda
+        # reads, not the mean of the M cells (a build-time constant; TULConfig refuses it
+        # without the hard-winner latent-selected loop).
+        self._spandec_read_winner: bool = (cfg.tul is not None
+                                           and str(cfg.tul.spandec_read) == "winner")
+        # `tul.spandec_read: each`: the decoder grades every one of the M cells ALONE (the
+        # cell axis folded into the batch axis, one decoder pass over B*M rows).
+        self._spandec_read_each: bool = (cfg.tul is not None
+                                         and str(cfg.tul.spandec_read) == "each")
+        # `tul.fan_lsel_pick: random`: the latent-selected loop FOLLOWS a uniform random cell
+        # per slot per pass (train and eval) instead of the router's argmax. Build-time.
+        self._lsel_pick_random: bool = (cfg.tul is not None
+                                        and str(cfg.tul.fan_lsel_pick) == "random")
+        # `tul.coda_prelude_detach`: the coda's TOKEN-position input is `xn.detach()`.
+        self._coda_prelude_detach: bool = (cfg.tul is not None
+                                           and bool(cfg.tul.coda_prelude_detach))
         # `model.fan_target_online` is analysed for ONE case: the latent-selected loop with
         # the router driving the loop (`fan_lsel_train_follow: router`). There the teacher
         # pick only trains the router and the exit loss, so the forward the model's CE reads
@@ -10626,6 +10642,15 @@ class MORPHTransformer(nn.Module):
             oh = oh * route["scale"].to(cells.dtype)
         return cells * oh.view(*oh.shape, *([1] * (cells.dim() - 3)))
 
+    @staticmethod
+    def _fan_winner_cell(cells: Tensor, route: dict) -> Tensor:
+        """``[B, S, M, (n,) C]`` cells -> ``[B, S, (n,) C]``: the ROUTED winner cell, by the
+        same index :meth:`_fan_route_cells` keeps. A gather, so no host sync and the
+        backward writes into the winner's slice alone (``tul.spandec_read: winner``)."""
+        idx = route["winner"].view(*route["winner"].shape, 1, *([1] * (cells.dim() - 3)))
+        idx = idx.expand(*cells.shape[:2], 1, *cells.shape[3:])
+        return cells.gather(2, idx).squeeze(2)
+
     # ── the latent-selected loop (tul.fan_loop_select, 2026-09-30) ───────────────────
 
     def _lsel_begin(self, xn: Tensor, layout: SlotLayout, depths: Tensor, m: int,
@@ -10684,6 +10709,11 @@ class MORPHTransformer(nn.Module):
         scores = self.tul_fan_lsel_router.scores(cr, st["ctx"])            # grad: router
         rpick = self.tul_fan_lsel_router.select(scores)[0]
         follow = rpick
+        if self._lsel_pick_random:
+            # `tul.fan_lsel_pick: random`: follow a uniform random cell per slot, drawn on
+            # the device from the default CUDA generator (capture-safe). The router is
+            # still scored and trained below; `final_router` keeps ITS pick.
+            follow = torch.randint(0, m, rpick.shape, device=rpick.device)
         tpick = None
         if st["z"] is not None:
             with torch.no_grad():
@@ -12017,7 +12047,7 @@ class MORPHTransformer(nn.Module):
 
     def _tul_spandec_loss(self, h_slots: Tensor, input_ids: Tensor,
                           layout: SlotLayout, stats: dict | None = None,
-                          cells: Tensor | None = None) -> Tensor:
+                          cells: Tensor | None = None, fold_cells: bool = False) -> Tensor:
         """Span-decoder local loss: decode the WHOLE next span from the slot's exit state.
 
         The MUX head (:meth:`_tul_mux_loss`) scores ``z`` against an ORDER-FREE geometric
@@ -12063,7 +12093,17 @@ class MORPHTransformer(nn.Module):
         tc = self.cfg.tul
         dec = self.tul_spandec
         assert dec is not None
-        z = self._readout(h_slots)                                    # [B, S, C]
+        B0 = input_ids.shape[0]
+        if fold_cells:
+            # `tul.spandec_read: each` (2026-10-10): `h_slots` IS the cells `[B, S, M, (n,) C]`.
+            # The cell axis moves in front of the batch axis (cell-major rows, `[M*B, S, ..]`),
+            # so the decoder grades each cell ALONE in one pass; ids / valid are repeated per
+            # cell below. Every cell has the same valid-token count, so the token-mean over
+            # the M*B rows equals the mean of the M per-cell means: the scale of `mean` /
+            # `winner`, and `spandec_weight` keeps its meaning.
+            M_f = h_slots.shape[2]
+            h_slots = h_slots.movedim(2, 0).flatten(0, 1)
+        z = self._readout(h_slots)                                    # [B(*M), S, C]
         mem = None
         if dec.reads_cells:
             if cells is None:
@@ -12081,6 +12121,9 @@ class MORPHTransformer(nn.Module):
         w_head = w_tied.detach() if tc.mux_detach_head else w_tied
         ids, valid = horizon_span_slots(input_ids, layout, dec.per_span_tokens,
                                         dec.horizon, start=dec.target_offset)
+        if fold_cells:
+            ids = ids.repeat(M_f, 1, 1)
+            valid = valid.repeat(M_f, 1, 1)
         # THE ASYMMETRY, and it is deliberate. The OUTPUT head follows `mux_detach_head`,
         # because that knob's whole subject is "may an auxiliary head train the tied
         # table" and the answer must not depend on which auxiliary is asking. The INPUT
@@ -12105,7 +12148,7 @@ class MORPHTransformer(nn.Module):
         loss = fused_linear_cross_entropy(
             st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
             chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
-            row_cap=(self._spandec_row_cap(input_ids.shape[0], input_ids.shape[1], layout,
+            row_cap=(self._spandec_row_cap(z.shape[0], input_ids.shape[1], layout,
                                            dec) if self.cfg.spandec_ce_row_cap else 0),
             **self._ce_kw)
         if stats is not None:
@@ -14848,8 +14891,20 @@ class MORPHTransformer(nn.Module):
             # in so `tul.spandec_reads_cells` can cross-attend to exactly what
             # `prefix_project` below writes into the coda. Read at the same seam as
             # `h_slots`: after the think-once stack, before the eval-only plan ablation.
-            spandec_loss = (self._tul_spandec_loss(h_slots, input_ids, layout,
-                                                   stats=spandec_stats, cells=_reg_cells)
+            # `tul.spandec_read: winner`: the decoder's z is the winner cell's readout, the
+            # one cell `_fan_route_cells` leaves for the coda (a gather on the same
+            # `_fan_route["winner"]` index, so grad reaches the winner cell only).
+            _sd_h = h_slots
+            if self._spandec_read_winner and self.tul_spandec is not None and not generate:
+                _sd_h = self._fan_winner_cell(_reg_cells, _fan_route)
+            if self._spandec_read_each and self.tul_spandec is not None and not generate:
+                _sd_h = _reg_cells
+            # `fold_cells` is passed ONLY under `each`, so every other forward calls the method
+            # with the arguments it always had (instruments that wrap it keep working).
+            spandec_loss = (self._tul_spandec_loss(_sd_h, input_ids, layout,
+                                                   stats=spandec_stats, cells=_reg_cells,
+                                                   **({"fold_cells": True}
+                                                      if self._spandec_read_each else {}))
                             if self.tul_spandec is not None and not generate else None)
             # ── the parallel span head (tul.spandec_parallel, LXTUL-E) ─────────────
             # The SAME seam and the SAME target as the span decoder above, read with no
@@ -15065,7 +15120,9 @@ class MORPHTransformer(nn.Module):
                 base = x0.unsqueeze(2).expand_as(xn) if self._is_hc else x0
                 base = self.input_norm(base)
             else:
-                base = xn
+                # `tul.coda_prelude_detach`: same values, no backward into the prelude
+                # through the coda's token path (the slot/prefix `values` keep their grad).
+                base = xn.detach() if self._coda_prelude_detach else xn
             _critic_base = base
             x_coda = scatter_positions(base, pos, values)
 

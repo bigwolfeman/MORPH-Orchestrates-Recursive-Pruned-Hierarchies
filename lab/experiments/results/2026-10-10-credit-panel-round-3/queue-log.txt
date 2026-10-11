@@ -1,0 +1,9 @@
+[10-10 23:33:14] nowta-nospan train start cfg=nowta_pointer_fast_nospandec ov=[] gpu: 17538, 277 MiB 1887655, 19196 MiB 
+[10-11 00:05:07] nowta-nospan train exit=0 Final val_loss=3.8949 rate: tok/s=32662 tok/s=26174 tok/s=28157 
+[10-11 00:11:00] nowta-nospan sweep exit=0 nowta-nospan depth=1 ce=3.9018 span_first=3.5084 nowta-nospan depth=6 ce=3.8994 span_first=3.5015 nowta-nospan ce_tokens K1-K6: +0.0024 [+0.0020, +0.0027] over 480 rows 
+[10-11 00:11:00] nowta-ptr-r2 train start cfg=nowta_pointer_fast ov=[] gpu: 17538, 277 MiB 
+[10-11 00:45:45] nowta-ptr-r2 train exit=0 Final val_loss=3.9133 rate: tok/s=27984 tok/s=23198 tok/s=24668 
+[10-11 00:47:54] nowta-ptr-r2 sweep exit=0 nowta-ptr-r2 depth=1 ce=3.9266 span_first=3.5280 spandec_ce=4.5400 nowta-ptr-r2 depth=6 ce=3.9227 span_first=3.5173 spandec_ce=4.5199 nowta-ptr-r2 ce_tokens K1-K6: +0.0039 [+0.0035, +0.0043] over 480 rows nowta-ptr-r2 spandec_ce K1-K6: +0.0201 [+0.0191, +0.0210] over 160 batches 
+[10-11 00:47:54] onecell-r2 train start cfg=tul_onecell_pointer_fast ov=[] gpu: 17538, 360 MiB 
+[10-11 01:18:11] onecell-r2 train exit=0 Final val_loss=3.8966 rate: tok/s=32081 tok/s=26232 tok/s=28235 
+[10-11 01:22:01] onecell-r2 sweep exit=0 onecell-r2 depth=1 ce=3.9048 span_first=3.4907 spandec_ce=4.4925 onecell-r2 depth=6 ce=3.9029 span_first=3.4880 spandec_ce=4.4870 onecell-r2 ce_tokens K1-K6: +0.0019 [+0.0016, +0.0022] over 480 rows onecell-r2 spandec_ce K1-K6: +0.0055 [+0.0048, +0.0060] over 160 batches 
