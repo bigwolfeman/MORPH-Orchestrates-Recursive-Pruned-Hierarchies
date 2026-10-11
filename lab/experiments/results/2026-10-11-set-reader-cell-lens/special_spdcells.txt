@@ -1,0 +1,39 @@
+### fan: winning cell x span property, depth 6 (12401 spans; winner shares 0.577 0.298 0.059 0.065)
+
+**length**: NMI 0.0115, permutation null mean 0.0003, p95 0.0006, p 0.005
+
+| winner | [-inf,11) | [11,20) | [20,32) | [32,+inf) |
+|---|---|---|---|---|
+| cell0 | 1618 | 1894 | 1773 | 1873 |
+| cell1 | 741 | 826 | 878 | 1251 |
+| cell2 | 254 | 177 | 143 | 163 |
+| cell3 | 369 | 170 | 145 | 126 |
+
+**copy_ratio**: NMI 0.0057, permutation null mean 0.0003, p95 0.0006, p 0.005
+
+| winner | [-inf,0.406) | [0.406,0.556) | [0.556,0.688) | [0.688,+inf) |
+|---|---|---|---|---|
+| cell0 | 1527 | 1835 | 1863 | 1933 |
+| cell1 | 842 | 1026 | 907 | 921 |
+| cell2 | 251 | 185 | 144 | 157 |
+| cell3 | 310 | 197 | 142 | 161 |
+
+**difficulty**: NMI 0.0023, permutation null mean 0.0003, p95 0.0005, p 0.005
+
+| winner | [-inf,3.76) | [3.76,4.4) | [4.4,5.07) | [5.07,+inf) |
+|---|---|---|---|---|
+| cell0 | 1915 | 1847 | 1747 | 1649 |
+| cell1 | 845 | 904 | 974 | 973 |
+| cell2 | 151 | 168 | 193 | 225 |
+| cell3 | 189 | 181 | 186 | 254 |
+
+**first_token_class**: NMI 0.0406, permutation null mean 0.0005, p95 0.0009, p 0.005
+
+| winner | punctuation | whitespace | digit | capitalised | lowercase | other |
+|---|---|---|---|---|---|---|
+| cell0 | 423 | 1211 | 288 | 3022 | 2155 | 59 |
+| cell1 | 183 | 1717 | 69 | 918 | 782 | 27 |
+| cell2 | 45 | 155 | 12 | 317 | 175 | 33 |
+| cell3 | 39 | 228 | 10 | 306 | 189 | 38 |
+
+[special] wrote /home/wolfe/morph-scratch/abq/lens/special_spdcells.json
