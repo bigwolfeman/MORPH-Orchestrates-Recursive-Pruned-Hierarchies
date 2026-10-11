@@ -1,6 +1,6 @@
 # Ungraded fan with the span decoder grading each cell
 
-Status: planned
+Status: failure
 
 ## Question
 
@@ -44,3 +44,44 @@ Method amendment 2026-10-11 03:31: run 1 landed in the "supports the mean read a
 the decision rule (numbers withheld here until filing), which owes a second run. Run 2
 (`nowta-spdeach-r2`, same config, tree and seed) is queued now; the file is filed on both runs,
 against the same Predictions, judged on the two-run mean.
+
+## Results
+
+Run 2026-10-11, two runs, 480 rows. Artifacts: `../results/2026-10-11-fan-each-cell-decoder/`.
+
+| Fan arm | CE@1 | CE@6 | K1-K6 [95% CI] | write worth | cell cos | trainer tok/s |
+|---|---|---|---|---|---|---|
+| each-cell decoder, run 1 | 3.9092 | 3.9034 | +0.0059 [+0.0054, +0.0063] | 0.186 | +0.81 | 18,551 |
+| each-cell decoder, run 2 | 3.9093 | 3.9029 | +0.0064 [+0.0059, +0.0069] | 0.188 | +0.82 | 18,549 |
+| mean-read decoder (2 runs) | | 3.9212 | +0.0042 | 0.18 | -0.09 / -0.11 | 24,665 |
+| no decoder (2 runs) | | 3.8993 | +0.0025 | 0.19 | -0.28 / -0.27 | 28,230 |
+
+Two-run mean: CE@6 3.9032, K1-K6 +0.0062, span-decoder CE K1-K6 +0.0465.
+
+Predictions:
+- CE@6 in [3.895, 3.925], best guess 3.910: 3.9032. Held.
+- K1-K6 at least +0.003, best guess +0.006: +0.0062. Held.
+- Cell cos below 0: +0.81 / +0.82. Failed.
+- Rate 15-25 % below the mean-read decoder: 24.8 % below. Held.
+
+Decision rule: the two-run mean (3.9032, +0.0062) lands in "supports the mean read account".
+
+## Verdict
+
+Failure, on the hypothesis's own mechanism. The each-cell grade removes the mean-read cost on CE
+(0.018 better than the mean-read decoder, two runs each side), but it does NOT keep the cells
+distinct: they move from cos -0.1 to +0.81. Graded alone on the same next span, the four cells
+learn the same job. The two-run spreads are 0.0005 CE@6 here and 0.0003 without the decoder, so
+the 0.004 CE@6 gap to the fan without the decoder is likely real at this recipe.
+
+Trade at 5k, against the fan without the decoder: +0.004 CE@6 and 34 % slower, for 2.5x the
+K1-K6 (+0.0062 against +0.0025) and cells that are near copies.
+
+## Updated hypothesis
+
+The decoder's cost to the fan comes from the target it grades, not from its gradient as such:
+a mean target costs 0.022 CE@6 and keeps the cells apart; a per-cell target costs 0.004 and
+collapses them. Any decoder that grades every cell on the SAME span pulls them together. A decoder
+that keeps diversity would have to grade the cells as a set (for example the best cell per span,
+or the combination the coda reads), not each cell alone. Wolfe wants the diversity kept, so the
+fan without the decoder stays the proposal.
