@@ -42,8 +42,8 @@ CE@6 3.8951, K1-K6 +0.0056, cell cos -0.28, 23.9k tok/s on tree-h (the pre-lever
 ## Risks
 
 - 5k only; the decoder's share may change with training length.
-- Memory: the validation OOM on master was a pinned graph pool, fixed in e651c95b; a full 5k
-  run of this arm on master is not yet done.
+- Memory: the validation OOM on master was a pinned graph pool, fixed in e651c95b. A full 5k run
+  on master passed (3.8954 CE@6, 29.2k tok/s, `successes/2026-10-11-fan-set-reader-on-master.md`).
 - Decode cost: the decoder is training-only, so it does not touch inference.
 - Related: [2026-10-04-lxtul-primary-candidate.md](../../implemented/architecture/2026-10-04-lxtul-primary-candidate.md)
   is the current locked base; this note does not supersede it until Wolfe adopts the fan.
