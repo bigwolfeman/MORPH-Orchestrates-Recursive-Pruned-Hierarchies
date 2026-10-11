@@ -1,0 +1,582 @@
+{
+ "fan": {
+  "spec": "fan=nowta_pointer_fast=/home/wolfe/morph-scratch/abq/tree-e/checkpoints/morph/ab-nowta-ptr/step_5000.pt",
+  "step": 5000,
+  "depth": 6,
+  "spandec_read": "mean",
+  "n_slots": 4000,
+  "variants": {
+   "cell0": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.2877500057220459,
+      "tf_ce": 4.757000923156738,
+      "tf_top1": 0.2877500057220459
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.16885080933570862,
+      "tf_ce": 4.37284517288208,
+      "tf_top1": 0.3082157373428345
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.03353504836559296,
+      "tf_ce": 4.9745965003967285,
+      "tf_top1": 0.21759960055351257
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.01564866304397583,
+      "tf_ce": 4.830338478088379,
+      "tf_top1": 0.23548713326454163
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.012140406295657158,
+      "tf_ce": 4.790607929229736,
+      "tf_top1": 0.23462654650211334
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.013915415853261948,
+      "tf_ce": 4.750634670257568,
+      "tf_top1": 0.23137789964675903
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.01155254989862442,
+      "tf_ce": 4.7847394943237305,
+      "tf_top1": 0.23274162411689758
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.011480717919766903,
+      "tf_ce": 4.836727142333984,
+      "tf_top1": 0.2307918816804886
+     }
+    },
+    "exact_match": 0.000750000006519258,
+    "free_acc_all": 0.03470335528254509,
+    "tf_ce_all": 4.7289814949035645,
+    "tf_top1_all": 0.2426731139421463
+   },
+   "cell1": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.2160000056028366,
+      "tf_ce": 6.685446739196777,
+      "tf_top1": 0.2160000056028366
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.12298387289047241,
+      "tf_ce": 4.892733097076416,
+      "tf_top1": 0.27167338132858276
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.021936459466814995,
+      "tf_ce": 5.384688854217529,
+      "tf_top1": 0.1916288435459137
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.007319535594433546,
+      "tf_ce": 5.093014717102051,
+      "tf_top1": 0.21100454032421112
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.0076537346467375755,
+      "tf_ce": 5.00032377243042,
+      "tf_top1": 0.21694378554821014
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.009822647087275982,
+      "tf_ce": 4.957271099090576,
+      "tf_top1": 0.2223738133907318
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.009580163285136223,
+      "tf_ce": 4.942171096801758,
+      "tf_top1": 0.21724429726600647
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.010891963727772236,
+      "tf_ce": 4.98779821395874,
+      "tf_top1": 0.22196055948734283
+     }
+    },
+    "exact_match": 0.0,
+    "free_acc_all": 0.02610263228416443,
+    "tf_ce_all": 4.948080539703369,
+    "tf_top1_all": 0.22997859120368958
+   },
+   "cell2": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.28850001096725464,
+      "tf_ce": 4.592774391174316,
+      "tf_top1": 0.28824999928474426
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.18472781777381897,
+      "tf_ce": 4.5741190910339355,
+      "tf_top1": 0.30493950843811035
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.03454362228512764,
+      "tf_ce": 5.068446159362793,
+      "tf_top1": 0.20902672410011292
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.013377082534134388,
+      "tf_ce": 4.903873920440674,
+      "tf_top1": 0.2311963587999344
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.010292952880263329,
+      "tf_ce": 4.855397701263428,
+      "tf_top1": 0.22802850604057312
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.013096862472593784,
+      "tf_ce": 4.819727420806885,
+      "tf_top1": 0.2270122766494751
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.011834319680929184,
+      "tf_ce": 4.823012351989746,
+      "tf_top1": 0.2310509979724884
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.008831322193145752,
+      "tf_ce": 4.86965799331665,
+      "tf_top1": 0.22873122990131378
+     }
+    },
+    "exact_match": 0.0005000000237487257,
+    "free_acc_all": 0.035241685807704926,
+    "tf_ce_all": 4.755649566650391,
+    "tf_top1_all": 0.24093294143676758
+   },
+   "cell3": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.148499995470047,
+      "tf_ce": 6.874993801116943,
+      "tf_top1": 0.14875000715255737
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.08266129344701767,
+      "tf_ce": 6.532299518585205,
+      "tf_top1": 0.22379031777381897
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.016389308497309685,
+      "tf_ce": 5.3754191398620605,
+      "tf_top1": 0.19238527119159698
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.011357899755239487,
+      "tf_ce": 5.143906116485596,
+      "tf_top1": 0.21327611804008484
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.010292952880263329,
+      "tf_ce": 5.061707019805908,
+      "tf_top1": 0.20981790125370026
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.008458389900624752,
+      "tf_ce": 5.0173444747924805,
+      "tf_top1": 0.21145975589752197
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.01014370284974575,
+      "tf_ce": 4.980655193328857,
+      "tf_top1": 0.2209073007106781
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.009714453481137753,
+      "tf_ce": 4.993978023529053,
+      "tf_top1": 0.2207830399274826
+     }
+    },
+    "exact_match": 0.0,
+    "free_acc_all": 0.020581644028425217,
+    "tf_ce_all": 5.071444034576416,
+    "tf_top1_all": 0.2222166508436203
+   },
+   "mean": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.320250004529953,
+      "tf_ce": 4.123077869415283,
+      "tf_top1": 0.3199999928474426
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.2011088728904724,
+      "tf_ce": 4.208281517028809,
+      "tf_top1": 0.32535281777381897
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.03908219933509827,
+      "tf_ce": 4.880216121673584,
+      "tf_top1": 0.22415532171726227
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.016405856236815453,
+      "tf_ce": 4.760952472686768,
+      "tf_top1": 0.24078747630119324
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.00897334422916174,
+      "tf_ce": 4.722618579864502,
+      "tf_top1": 0.24333597719669342
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.01582537591457367,
+      "tf_ce": 4.710216522216797,
+      "tf_top1": 0.23738062381744385
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.010989011265337467,
+      "tf_ce": 4.745521545410156,
+      "tf_top1": 0.23865877091884613
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.009125699289143085,
+      "tf_ce": 4.802146911621094,
+      "tf_top1": 0.2363850474357605
+     }
+    },
+    "exact_match": 0.0010000000474974513,
+    "free_acc_all": 0.03770797699689865,
+    "tf_ce_all": 4.660536289215088,
+    "tf_top1_all": 0.24839439988136292
+   },
+   "trained": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.320250004529953,
+      "tf_ce": 4.123077869415283,
+      "tf_top1": 0.3199999928474426
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.2011088728904724,
+      "tf_ce": 4.208281517028809,
+      "tf_top1": 0.32535281777381897
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.03908219933509827,
+      "tf_ce": 4.880216121673584,
+      "tf_top1": 0.22415532171726227
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.016405856236815453,
+      "tf_ce": 4.760952472686768,
+      "tf_top1": 0.24078747630119324
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.00897334422916174,
+      "tf_ce": 4.722618579864502,
+      "tf_top1": 0.24333597719669342
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.01582537591457367,
+      "tf_ce": 4.710216522216797,
+      "tf_top1": 0.23738062381744385
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.010989011265337467,
+      "tf_ce": 4.745521545410156,
+      "tf_top1": 0.23865877091884613
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.009125699289143085,
+      "tf_ce": 4.802146911621094,
+      "tf_top1": 0.2363850474357605
+     }
+    },
+    "exact_match": 0.0010000000474974513,
+    "free_acc_all": 0.03770797699689865,
+    "tf_ce_all": 4.660536289215088,
+    "tf_top1_all": 0.24839439988136292
+   },
+   "noise": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.04500000178813934,
+      "tf_ce": 8.500443458557129,
+      "tf_top1": 0.045499999076128006
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.03654233738780022,
+      "tf_ce": 6.483603000640869,
+      "tf_top1": 0.21698588132858276
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.010337871499359608,
+      "tf_ce": 7.104193210601807,
+      "tf_top1": 0.13061018288135529
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.010600706562399864,
+      "tf_ce": 6.07802152633667,
+      "tf_top1": 0.1428571492433548
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.012140406295657158,
+      "tf_ce": 6.085177898406982,
+      "tf_top1": 0.13433623313903809
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.008185538463294506,
+      "tf_ce": 6.203824043273926,
+      "tf_top1": 0.11923601478338242
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.0126796280965209,
+      "tf_ce": 6.162304401397705,
+      "tf_top1": 0.12792335450649261
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.010597585700452328,
+      "tf_ce": 6.209542751312256,
+      "tf_top1": 0.1274654120206833
+     }
+    },
+    "exact_match": 0.0,
+    "free_acc_all": 0.01283222995698452,
+    "tf_ce_all": 5.695745468139648,
+    "tf_top1_all": 0.17664659023284912
+   },
+   "shuffled": {
+    "positions": {
+     "1": {
+      "n": 4000,
+      "free_acc": 0.12600000202655792,
+      "tf_ce": 8.430150985717773,
+      "tf_top1": 0.12600000202655792
+     },
+     "2": {
+      "n": 3968,
+      "free_acc": 0.07384072244167328,
+      "tf_ce": 6.261128902435303,
+      "tf_top1": 0.2250504046678543
+     },
+     "3": {
+      "n": 3966,
+      "free_acc": 0.01109430193901062,
+      "tf_ce": 5.721029281616211,
+      "tf_top1": 0.17776097357273102
+     },
+     "4": {
+      "n": 3962,
+      "free_acc": 0.007319535594433546,
+      "tf_ce": 5.325271129608154,
+      "tf_top1": 0.20242302119731903
+     },
+     "5": {
+      "n": 3789,
+      "free_acc": 0.005278437398374081,
+      "tf_ce": 5.219420433044434,
+      "tf_top1": 0.20031671226024628
+     },
+     "6": {
+      "n": 3665,
+      "free_acc": 0.008731241337954998,
+      "tf_ce": 5.138813495635986,
+      "tf_top1": 0.20381991565227509
+     },
+     "7": {
+      "n": 3549,
+      "free_acc": 0.006762468256056309,
+      "tf_ce": 5.1362624168396,
+      "tf_top1": 0.2059735208749771
+     },
+     "8": {
+      "n": 3397,
+      "free_acc": 0.007359434850513935,
+      "tf_ce": 5.130481719970703,
+      "tf_top1": 0.20429791510105133
+     }
+    },
+    "exact_match": 0.0,
+    "free_acc_all": 0.017664659768342972,
+    "tf_ce_all": 5.245635509490967,
+    "tf_top1_all": 0.2130776047706604
+   }
+  },
+  "examples": [
+   {
+    "slot": 3612,
+    "row": 216,
+    "true": " (Often the word \"decide\" is used;",
+    "decodes": {
+     "cell0": "\n\nThe reason why we have the same idea that we have",
+     "cell1": "\n\nThe first thing I was in the comments section of the",
+     "cell2": "\n\nThe first step in the case of the newspaper",
+     "cell3": "100000.0.0.0.",
+     "mean": "\n\nThe first thing I've been doing is that.\n",
+     "trained": "\n\nThe first thing I've been doing is that.\n",
+     "noise": ". 1m\n\n\n\n\n\n\n\n\n",
+     "shuffled": "\n\nThe 2012-19-1"
+    }
+   },
+   {
+    "slot": 2600,
+    "row": 155,
+    "true": "ed enough to pay that $9.",
+    "decodes": {
+     "cell0": " to the game, and the game is",
+     "cell1": "19.1.1.1",
+     "cell2": "ate.\n\n\n\u201cWe have",
+     "cell3": "ated the Grand River.\n",
+     "mean": "ing.\n\n\nThe new game",
+     "trained": "ing.\n\n\nThe new game",
+     "noise": " of the market, and, and,",
+     "shuffled": "\n\n\"I'm not a member"
+    }
+   },
+   {
+    "slot": 2362,
+    "row": 139,
+    "true": " to believe a number of pervasive untruths.",
+    "decodes": {
+     "cell0": " to \u201cthe economic impact of the economy.\u201d\n",
+     "cell1": "\n19\n\n\n\n(1999",
+     "cell2": " to be in the same way.\n\n\n\n\n",
+     "cell3": " to be a major step forward.\n\n\n\n\n",
+     "mean": " to be a \u201cdisappointed\u201d for the first",
+     "trained": " to be a \u201cdisappointed\u201d for the first",
+     "noise": "\n\n\n\n\n\n\n\n\n\n\n\n",
+     "shuffled": "\n\nThe first step in the 1990"
+    }
+   },
+   {
+    "slot": 2138,
+    "row": 126,
+    "true": " around with his military career because his daughters finally called somewhere home.",
+    "decodes": {
+     "cell0": " the league.\"\n\n\n\n\"I think it's a good thing",
+     "cell1": " I am a Republican president, who is a member of the United States",
+     "cell2": ".\n\n\"I think it's a good thing to do with the people",
+     "cell3": ".\n\nThe 2015-19-199",
+     "mean": ".\n\n\"I think it's a good thing to do.\n\n",
+     "trained": ".\n\n\"I think it's a good thing to do.\n\n",
+     "noise": " rate of the economy-based economy, and the economy is the",
+     "shuffled": "\n\nThe first step in the video is to be a member of the N"
+    }
+   },
+   {
+    "slot": 327,
+    "row": 19,
+    "true": " It sounds like Pokemon will not be limited to just special sites but will be found in normal locations people can visit regularly.",
+    "decodes": {
+     "cell0": "\n\n\u201cWe have a lot of work to do with the game and the game is going to be a good player.",
+     "cell1": "\n\nThe first time I was in the 1990s, I was a member of the 20",
+     "cell2": "\n\nThe new version of the game is a new version of the game.\n\n\n\n\nThe latest version of",
+     "cell3": "com/a-in-in-the-nine-year-olds-and-a-year-old",
+     "mean": "\n\nThe new video is a new game, and it\u2019s a great deal of the game.\n\n\n\n",
+     "trained": "\n\nThe new video is a new game, and it\u2019s a great deal of the game.\n\n\n\n",
+     "noise": "on, and CEO, D. J. D. J. L. L. L. L. Louis",
+     "shuffled": ", and the world.\n\n\n\n\n\n\n\n\n\n\n\n\n\nThe New York Times reported that"
+    }
+   },
+   {
+    "slot": 2960,
+    "row": 177,
+    "true": "And now Fox Sports looks to be picking up another major tournament \u2013",
+    "decodes": {
+     "cell0": "The BBC\u2019s newspaper, the first of the 2",
+     "cell1": "\nThe NBA has been awarded the 2016-",
+     "cell2": "The 2012 season, 2017, ",
+     "cell3": " . . . . . .\n\n\n\n\n\nThe FBI",
+     "mean": "The 2016-199-1999",
+     "trained": "The 2016-199-1999",
+     "noise": ".com/1/1/1/10/10/",
+     "shuffled": ".\n\nThe first time I was in the 1990"
+    }
+   },
+   {
+    "slot": 560,
+    "row": 32,
+    "true": " It is almost as if a new strain of Tourette\u2019s syndrome were spreading through the population;",
+    "decodes": {
+     "cell0": "\n\nI\u2019m not sure if I\u2019m not a member of the Jewish people, but I\u2019m",
+     "cell1": "\n\nThe first time I was in the 1990s, I was a member of the 19",
+     "cell2": "\n\nThe first thing I\u2019ve been in the past, I\u2019ve been working on the same day.\n\n",
+     "cell3": "111111, 1998, 1997, 1997,",
+     "mean": "\n\nThe first thing I\u2019ve been in the past, and I\u2019m not sure if I\u2019m not going",
+     "trained": "\n\nThe first thing I\u2019ve been in the past, and I\u2019m not sure if I\u2019m not going",
+     "noise": ". 10. 10.0.0\n\n\n\n\n\n1.\n\n\n\n\n",
+     "shuffled": " I was a member of the NBA. I was a member of the NBA.\n\n\n\n\n\u201cI"
+    }
+   },
+   {
+    "slot": 2134,
+    "row": 126,
+    "true": " He recommended Your Grateful Nation.",
+    "decodes": {
+     "cell0": " I was a very good person. I was",
+     "cell1": " I was a member of the NBA,",
+     "cell2": "\n\n\"I was a member of the",
+     "cell3": " 10000\n\n\n",
+     "mean": " I was a very good person. I was",
+     "trained": " I was a very good person. I was",
+     "noise": "--N-N 2,-",
+     "shuffled": "\nThe 1999-1"
+    }
+   }
+  ],
+  "val_skip_docs": 50000
+ }
+}

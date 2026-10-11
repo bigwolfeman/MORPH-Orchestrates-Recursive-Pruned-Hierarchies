@@ -1,0 +1,106 @@
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[probe] fan: step 5000; features train (19678, 5, 4, 1024) val (12401, 5, 4, 1024) (6s)
+[probe] step     0/3000 mean CE 11.3816 (0s)
+[probe] step   300/3000 mean CE 6.1177 (15s)
+[probe] step   600/3000 mean CE 5.9261 (30s)
+[probe] step   900/3000 mean CE 5.4598 (45s)
+[probe] step  1200/3000 mean CE 5.4707 (60s)
+[probe] step  1500/3000 mean CE 5.4151 (76s)
+[probe] step  1800/3000 mean CE 5.3449 (91s)
+[probe] step  2100/3000 mean CE 5.0364 (106s)
+[probe] step  2400/3000 mean CE 5.1329 (121s)
+[probe] step  2700/3000 mean CE 4.9451 (136s)
+[probe] step  2999/3000 mean CE 4.7456 (151s)
+### fan: Future-Lens probe, val CE | top1 | top5 (same-row frac of shuffled control 0.000)
+
+**offset 1** (n=12401); unigram 6.717 | 0.257 | 0.330
+
+| pass | cell0 | cell1 | cell2 | cell3 | mean | shuffled |
+|---|---|---|---|---|---|---|
+| 0 | 5.501/0.290/0.415 | 5.668/0.291/0.411 | 5.555/0.291/0.414 | 5.504/0.289/0.420 | 6.719/0.298/0.430 | 10.945/0.147/0.189 |
+| 1 | 5.498/0.271/0.404 | 5.063/0.290/0.422 | 4.943/0.293/0.431 | 5.052/0.288/0.422 | 32.503/0.308/0.451 | 9.847/0.133/0.190 |
+| 2 | 6.148/0.263/0.392 | 5.313/0.286/0.417 | 5.249/0.288/0.416 | 5.276/0.289/0.414 | 27.215/0.308/0.447 | 11.223/0.126/0.181 |
+| 3 | 6.416/0.267/0.388 | 5.389/0.284/0.417 | 5.380/0.290/0.417 | 5.193/0.294/0.422 | 16.278/0.305/0.444 | 11.628/0.127/0.182 |
+| 6 | 6.416/0.265/0.387 | 5.270/0.291/0.423 | 5.391/0.290/0.419 | 5.072/0.300/0.432 | 11.539/0.304/0.443 | 11.435/0.126/0.182 |
+
+**offset 2** (n=12294); unigram 7.679 | 0.164 | 0.245
+
+| pass | cell0 | cell1 | cell2 | cell3 | mean | shuffled |
+|---|---|---|---|---|---|---|
+| 0 | 7.244/0.188/0.262 | 7.400/0.190/0.260 | 7.348/0.191/0.265 | 7.204/0.188/0.268 | 8.921/0.195/0.278 | 9.454/0.089/0.130 |
+| 1 | 7.165/0.175/0.260 | 6.754/0.188/0.275 | 6.633/0.194/0.282 | 6.781/0.186/0.275 | 46.712/0.201/0.302 | 8.926/0.085/0.137 |
+| 2 | 8.000/0.164/0.242 | 7.142/0.183/0.265 | 7.010/0.187/0.271 | 7.096/0.185/0.264 | 38.206/0.200/0.294 | 9.823/0.079/0.125 |
+| 3 | 8.277/0.164/0.243 | 7.146/0.186/0.268 | 7.168/0.189/0.270 | 6.942/0.190/0.269 | 22.104/0.199/0.291 | 10.013/0.078/0.126 |
+| 6 | 8.208/0.166/0.244 | 6.932/0.192/0.274 | 7.175/0.186/0.271 | 6.763/0.193/0.281 | 15.377/0.200/0.291 | 9.803/0.079/0.131 |
+
+**offset 3** (n=12289); unigram 8.480 | 0.025 | 0.100
+
+| pass | cell0 | cell1 | cell2 | cell3 | mean | shuffled |
+|---|---|---|---|---|---|---|
+| 0 | 8.433/0.029/0.094 | 8.557/0.027/0.090 | 8.552/0.029/0.092 | 8.354/0.029/0.099 | 9.738/0.035/0.109 | 9.538/0.010/0.043 |
+| 1 | 8.777/0.027/0.087 | 8.226/0.032/0.103 | 8.050/0.038/0.109 | 8.174/0.034/0.104 | 49.835/0.048/0.133 | 9.436/0.010/0.045 |
+| 2 | 9.600/0.027/0.077 | 8.578/0.031/0.092 | 8.422/0.034/0.100 | 8.452/0.030/0.094 | 41.182/0.044/0.125 | 10.108/0.010/0.039 |
+| 3 | 9.647/0.027/0.083 | 8.428/0.034/0.101 | 8.433/0.037/0.105 | 8.208/0.033/0.105 | 23.606/0.043/0.123 | 10.059/0.010/0.041 |
+| 6 | 9.465/0.028/0.088 | 8.155/0.040/0.113 | 8.371/0.037/0.111 | 7.959/0.041/0.116 | 16.498/0.047/0.129 | 9.829/0.011/0.044 |
+
+**offset 4** (n=12281); unigram 8.412 | 0.029 | 0.111
+
+| pass | cell0 | cell1 | cell2 | cell3 | mean | shuffled |
+|---|---|---|---|---|---|---|
+| 0 | 8.469/0.026/0.091 | 8.577/0.023/0.088 | 8.580/0.023/0.088 | 8.380/0.027/0.097 | 9.765/0.030/0.106 | 9.102/0.014/0.061 |
+| 1 | 8.758/0.024/0.083 | 8.251/0.029/0.098 | 8.084/0.028/0.101 | 8.199/0.027/0.097 | 50.178/0.038/0.125 | 9.045/0.015/0.061 |
+| 2 | 9.628/0.019/0.074 | 8.614/0.026/0.087 | 8.462/0.027/0.094 | 8.524/0.024/0.088 | 41.327/0.036/0.119 | 9.682/0.012/0.052 |
+| 3 | 9.607/0.021/0.075 | 8.449/0.028/0.097 | 8.472/0.026/0.098 | 8.223/0.028/0.101 | 23.484/0.035/0.116 | 9.581/0.013/0.056 |
+| 6 | 9.429/0.023/0.077 | 8.158/0.032/0.110 | 8.406/0.030/0.102 | 7.954/0.033/0.111 | 16.378/0.035/0.120 | 9.356/0.016/0.061 |
+
+### fan: examples (final pass 6; top-5 tokens per cell)
+
+TRUE: ' I’ll update once I do.'
+  cell0  off1 ['\n', ' We', ' The', ' Paul', ' It']   off2 ['\n', '’', ' see', ' W', ' a']
+  cell1  off1 ['\n', ' The', ' It', ' N', ' We']   off2 ['\n', '’', ' we', ',', ' the']
+  cell2  off1 ['\n', ' The', ' It', ' We', ' This']   off2 ['\n', '’', 'We', ' we', ' upstream']
+  cell3  off1 ['\n', ' He', ' The', ' It', ' I']   off2 ['\n', '’', ' we', ' the', ' am']
+
+TRUE: ' "is still far lower than what it was in the 1990s and early 2000'
+  cell0  off1 [' was', ' and', ',', ' (', ' of']   off2 [' could', ' year', ' was', ' the', ' long']
+  cell1  off1 [' of', ',', ' was', ' in', ' to']   off2 [' the', ' ', '\n', ' gas', ' in']
+  cell2  off1 [' of', ',', ' in', ' and', ' the']   off2 ['\n', ',', ' the', ' ', '.']
+  cell3  off1 [' of', ',', ' to', ' in', ' and']   off2 [' the', '\n', ' ', ' year', ',']
+
+TRUE: ' Westernized peoples may have lost important microbes, we may have to repopulate ourselves with microbes derived'
+  cell0  off1 [' she', ' he', ' doesn', ' his', ' you']   off2 ['’', ' while', "'s", ' appears', ' these']
+  cell1  off1 [' he', ' that', ' you', ' of', ' she']   off2 [',', ' the', ' like', 'ual', ' c']
+  cell2  off1 [' she', ' of', ' the', ' he', ',']   off2 [' the', ',', ' a', '\n', ' she']
+  cell3  off1 [' there', ' of', ' it', ' the', ',']   off2 [' the', ' a', '\n', ' ', ' in']
+
+TRUE: ''
+  cell0  off1 [' You', '\n', '', ' Rel', ' “']   off2 [' can', '\n', ' your', ' our', ' many']
+  cell1  off1 [' You', '\n', ' This', ' The', ' If']   off2 ['\n', '/', ' can', ' is', '’']
+  cell2  off1 [' You', 'j', '\n', 'qi', ' The']   off2 ['\n', ' can', '/', '.', '1']
+  cell3  off1 ['\n', ' You', ' The', ' This', '0']   off2 ['\n', ' your', ',', ' can', '.']
+
+TRUE: '\n(56:48) Psychedelics and cultural stability\n'
+  cell0  off1 ['\n', ' history', ' –', ' “', ' The']   off2 ['“', 'Other', 'T', 'R', '‘']
+  cell1  off1 ['\n', 'or', 'Per', ' percentage', 'ever']   off2 ['“', 'The', 'T', '‘', 'Pro']
+  cell2  off1 ['\n', ' Model', ' daily', ' Cas', ' The']   off2 ['Other', '‘', '(', 'W', '“']
+  cell3  off1 ['\n', ' B', 'D', ' According', ' The']   off2 ['T', '“', 'The', 'Other', 'R']
+
+TRUE: ' Seeing this, he went to Ven.'
+  cell0  off1 ['\n', ' Z', ' M', ' It', ' [']   off2 ['ail', '\n', 'in', ' She', ' Spr']
+  cell1  off1 ['\n', ' But', ' He', ' She', ' (']   off2 ['\n', '.', ' She', ' her', ' it']
+  cell2  off1 ['\n', ' Z', ' But', ' Everything', ' Don']   off2 ['\n', ' he', ' man', '.', ' it']
+  cell3  off1 ['\n', ' He', ' The', ' (', ' She']   off2 ['\n', ' the', ' her', ' was', ' he']
+
+TRUE: ' Now a popular destination for photographers and ghost hunters, Hashima Island serves as a grim reminder of'
+  cell0  off1 [' “', ' The', ' It', ' But', '\n']   off2 ['\n', ',', ' then', ' is', ' they']
+  cell1  off1 ['\n', ' The', ' In', ' For', ' It']   off2 ['\n', ',', ' is', '’', ' of']
+  cell2  off1 ['\n', ' The', ' For', ' “', ' In']   off2 ['\n', ',', ' city', ' of', ' is']
+  cell3  off1 ['\n', ' The', '', ' In', ' But']   off2 ['\n', ',', ' is', '’', ' the']
+
+TRUE: ' In fact, we were repeatedly compelled to attend the cul patu and proffered freshly slain car'
+  cell0  off1 ['\n', ' These', ' In', ' “', ' H']   off2 ['\n', ' Norm', ' first', ' theory', ' the']
+  cell1  off1 [' In', '\n', ' H', ' The', ' B']   off2 ['\n', ' first', ' the', ' is', 'it']
+  cell2  off1 [' In', '\n', ' H', ' But', ' Des']   off2 ['\n', ' the', ' these', ' re', ' all']
+  cell3  off1 ['\n', ' The', ' In', ' But', ' As']   off2 ['\n', ' the', 'ually', ' m', ' is']
+
+[probe] wrote /home/wolfe/morph-scratch/abq/lens/probe_fan.json

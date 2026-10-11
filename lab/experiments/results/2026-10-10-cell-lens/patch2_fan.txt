@@ -1,0 +1,36 @@
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+[patch] fan: step 5000, 40 val batches, 240 rows
+[patch] depth 1: 40 batches, 12413 spans (14s)
+[patch] depth 2: 40 batches, 12413 spans (14s)
+[patch] depth 3: 40 batches, 12413 spans (15s)
+[patch] depth 6: 40 batches, 12413 spans (17s)
+### fan: CE (nats/token, coda only, no pointer head) with ONE cell written
+
+| depth | cell0 | cell1 | cell2 | cell3 | all | best-of-cells | zero | win0 | win1 | win2 | win3 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 4.6342 | 4.6750 | 4.6666 | 4.6832 | 4.5531 | 4.5649 | 4.6947 | 0.60 | 0.15 | 0.15 | 0.10 |
+| 2 | 4.6310 | 4.6737 | 4.6664 | 4.6820 | 4.5494 | 4.5617 | 4.6947 | 0.59 | 0.16 | 0.15 | 0.10 |
+| 3 | 4.6300 | 4.6720 | 4.6665 | 4.6801 | 4.5476 | 4.5596 | 4.6947 | 0.59 | 0.16 | 0.16 | 0.10 |
+| 6 | 4.6305 | 4.6704 | 4.6685 | 4.6787 | 4.5467 | 4.5587 | 4.6947 | 0.59 | 0.16 | 0.15 | 0.10 |
+
+### fan: the same CE split by copied / novel target tokens (copied = id seen earlier in the row, before the next span)
+
+**copied**
+
+| depth | frac copied | cell0 | cell1 | cell2 | cell3 | all | best-of-cells | zero |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 0.5376 | 3.6744 | 3.7697 | 3.7442 | 3.7903 | 3.6334 | 3.6415 | 3.7937 |
+| 2 | 0.5376 | 3.6700 | 3.7688 | 3.7411 | 3.7887 | 3.6284 | 3.6373 | 3.7937 |
+| 3 | 0.5376 | 3.6680 | 3.7670 | 3.7387 | 3.7865 | 3.6255 | 3.6346 | 3.7937 |
+| 6 | 0.5376 | 3.6678 | 3.7652 | 3.7390 | 3.7849 | 3.6237 | 3.6332 | 3.7937 |
+
+**novel**
+
+| depth | frac copied | cell0 | cell1 | cell2 | cell3 | all | best-of-cells | zero |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 0.5376 | 5.7500 | 5.7272 | 5.7388 | 5.7212 | 5.6221 | 5.6383 | 5.7421 |
+| 2 | 0.5376 | 5.7481 | 5.7257 | 5.7420 | 5.7204 | 5.6200 | 5.6363 | 5.7421 |
+| 3 | 0.5376 | 5.7482 | 5.7241 | 5.7449 | 5.7189 | 5.6194 | 5.6349 | 5.7421 |
+| 6 | 0.5376 | 5.7497 | 5.7226 | 5.7489 | 5.7176 | 5.6195 | 5.6344 | 5.7421 |
+
+[patch] wrote /home/wolfe/morph-scratch/abq/lens/patch2_fan.json

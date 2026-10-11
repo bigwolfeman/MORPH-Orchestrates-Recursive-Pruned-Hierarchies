@@ -1,0 +1,39 @@
+### fan: winning cell x span property, depth 6 (12401 spans; winner shares 0.588 0.160 0.151 0.102)
+
+**length**: NMI 0.0103, permutation null mean 0.0003, p95 0.0005, p 0.005
+
+| winner | [-inf,11) | [11,20) | [20,32) | [32,+inf) |
+|---|---|---|---|---|
+| cell0 | 1578 | 1872 | 1794 | 2044 |
+| cell1 | 391 | 399 | 499 | 694 |
+| cell2 | 690 | 509 | 341 | 328 |
+| cell3 | 323 | 287 | 305 | 347 |
+
+**copy_ratio**: NMI 0.0069, permutation null mean 0.0003, p95 0.0005, p 0.005
+
+| winner | [-inf,0.406) | [0.406,0.556) | [0.556,0.688) | [0.688,+inf) |
+|---|---|---|---|---|
+| cell0 | 1472 | 1897 | 1951 | 1968 |
+| cell1 | 498 | 543 | 474 | 468 |
+| cell2 | 503 | 473 | 374 | 518 |
+| cell3 | 457 | 330 | 257 | 218 |
+
+**difficulty**: NMI 0.0024, permutation null mean 0.0003, p95 0.0005, p 0.005
+
+| winner | [-inf,3.78) | [3.78,4.42) | [4.42,5.09) | [5.09,+inf) |
+|---|---|---|---|---|
+| cell0 | 1921 | 1856 | 1775 | 1736 |
+| cell1 | 365 | 512 | 551 | 555 |
+| cell2 | 502 | 440 | 436 | 490 |
+| cell3 | 312 | 292 | 338 | 320 |
+
+**first_token_class**: NMI 0.0511, permutation null mean 0.0005, p95 0.0008, p 0.005
+
+| winner | punctuation | whitespace | digit | capitalised | lowercase | other |
+|---|---|---|---|---|---|---|
+| cell0 | 459 | 1339 | 277 | 2835 | 2312 | 66 |
+| cell1 | 52 | 1218 | 9 | 510 | 176 | 18 |
+| cell2 | 100 | 379 | 58 | 702 | 591 | 38 |
+| cell3 | 79 | 375 | 35 | 516 | 222 | 35 |
+
+[special] wrote /home/wolfe/morph-scratch/abq/lens/special_fan.json

@@ -1,0 +1,41 @@
+    load ok: step 5000, 0 unexpected, 0 rope/cache-missing
+    [fan-target] EMA prelude twin resume
+[patch] lx: step 5000, 40 val batches, 240 rows
+[patch] depth 1: 40 batches, 12413 spans (15s)
+[patch] depth 2: 40 batches, 12413 spans (15s)
+[patch] depth 3: 40 batches, 12413 spans (15s)
+[patch] depth 6: 40 batches, 12413 spans (17s)
+### lx: CE (nats/token, coda only, no pointer head) with ONE cell written
+
+| depth | cell0 | cell1 | cell2 | cell3 | all | best-of-cells | zero | win0 | win1 | win2 | win3 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 4.6406 | 4.5982 | 4.8769 | 4.5762 | 4.5753 | 4.5536 | 4.6924 | 0.18 | 0.25 | 0.05 | 0.52 |
+| 2 | 4.6523 | 4.5956 | 4.8624 | 4.5734 | 4.5715 | 4.5512 | 4.6924 | 0.15 | 0.26 | 0.06 | 0.54 |
+| 3 | 4.6025 | 4.5672 | 4.5594 | 4.5689 | 4.5596 | 4.5359 | 4.6924 | 0.22 | 0.23 | 0.35 | 0.21 |
+| 6 | 4.5971 | 4.5670 | 4.5594 | 4.5685 | 4.5597 | 4.5356 | 4.6924 | 0.23 | 0.23 | 0.34 | 0.21 |
+
+### lx: the same CE split by copied / novel target tokens (copied = id seen earlier in the row, before the next span)
+
+**copied**
+
+| depth | frac copied | cell0 | cell1 | cell2 | cell3 | all | best-of-cells | zero |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 0.5376 | 3.7301 | 3.6818 | 3.9644 | 3.6641 | 3.6620 | 3.6400 | 3.7881 |
+| 2 | 0.5376 | 3.7397 | 3.6779 | 3.9474 | 3.6596 | 3.6565 | 3.6368 | 3.7881 |
+| 3 | 0.5376 | 3.6820 | 3.6447 | 3.6377 | 3.6535 | 3.6380 | 3.6163 | 3.7881 |
+| 6 | 0.5376 | 3.6766 | 3.6449 | 3.6380 | 3.6533 | 3.6384 | 3.6162 | 3.7881 |
+
+**novel**
+
+| depth | frac copied | cell0 | cell1 | cell2 | cell3 | all | best-of-cells | zero |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 0.5376 | 5.6989 | 5.6635 | 5.9377 | 5.6365 | 5.6369 | 5.6156 | 5.7436 |
+| 2 | 0.5376 | 5.7131 | 5.6623 | 5.9261 | 5.6356 | 5.6351 | 5.6141 | 5.7436 |
+| 3 | 0.5376 | 5.6725 | 5.6395 | 5.6308 | 5.6330 | 5.6309 | 5.6048 | 5.7436 |
+| 6 | 0.5376 | 5.6672 | 5.6389 | 5.6305 | 5.6323 | 5.6307 | 5.6044 | 5.7436 |
+
+depth 1 router/pick readings: router_coda_agree=0.5041, router_pick_regret=0.0234, rand_pick_regret=0.1194, teacher_coda_agree=0.4498
+depth 2 router/pick readings: router_coda_agree=0.5341, router_pick_regret=0.0225, rand_pick_regret=0.1197, teacher_coda_agree=0.4857
+depth 3 router/pick readings: router_coda_agree=0.3384, router_pick_regret=0.0242, rand_pick_regret=0.0386, teacher_coda_agree=0.3016
+depth 6 router/pick readings: router_coda_agree=0.3293, router_pick_regret=0.0245, rand_pick_regret=0.0374, teacher_coda_agree=0.2945
+[patch] wrote /home/wolfe/morph-scratch/abq/lens/patch2_lx.json
