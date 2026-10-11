@@ -1278,10 +1278,15 @@ class TULConfig:
     # Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
     spandec_reads_cells: bool = False
     # ── WHICH STATE THE SPAN DECODER GRADES (arm "spdwin", 2026-10-10) ────────────
-    # spandec_read: "mean" (default; today's forward, bit-identical) | "winner" | "each".
+    # spandec_read: "mean" (default; today's forward, bit-identical) | "winner" | "each" | "best".
     # "each" (2026-10-10): the decoder grades EACH of the M exit cells alone (cell axis folded
     # into the batch axis, one pass over B*M rows) and the loss is the mean of the M per-cell
     # losses, so every cell gets the gradient of its own decodability. Same refusals as "winner".
+    # "best" (2026-10-11): the same fold, but each SPAN is graded on its best cell alone: the
+    # per-span token-mean CE of every cell, the minimum over the M cells per (row, slot), the
+    # token-weighted mean of that minimum (same scale as mean / each). Hard winner-take-all:
+    # the gradient of a span reaches its argmin cell only (ties: lowest index), so a cell is
+    # pushed only on the spans it already decodes best. Refusals as "each".
     #
     # WHY. On the latent-selected loop the coda reads ONLY the router's final winner cell
     # (`_fan_route_cells` writes every loser as exact zero), but the span decoder reads
@@ -4702,10 +4707,11 @@ class TULConfig:
         """``tul.spandec_read`` — ``"mean"`` (default, no-op), ``"winner"``: the span
         decoder grades the latent-selected loop's hard winner cell, the one cell the coda
         reads, instead of the mean of the M exit cells; ``"each"``: it grades every cell
-        alone and averages the M losses (any register with M > 1)."""
-        if self.spandec_read not in ("mean", "winner", "each"):
+        alone and averages the M losses (any register with M > 1); ``"best"``: it grades
+        every cell alone and keeps, per span, only the cell with the lowest span CE."""
+        if self.spandec_read not in ("mean", "winner", "each", "best"):
             raise ValueError(
-                f"tul.spandec_read must be 'mean', 'winner' or 'each', got "
+                f"tul.spandec_read must be 'mean', 'winner', 'each' or 'best', got "
                 f"{self.spandec_read!r}")
         if self.spandec_read == "mean":
             return
@@ -4713,11 +4719,12 @@ class TULConfig:
             raise ValueError(
                 f"tul.spandec_read={self.spandec_read!r} needs tul.spandec: true (no decoder "
                 f"is built, so the knob would be silently ignored).")
-        if self.spandec_read == "each" and self.slot_cells <= 1:
+        if self.spandec_read in ("each", "best") and self.slot_cells <= 1:
             raise ValueError(
-                f"tul.spandec_read='each' needs tul.slot_cells > 1 (got {self.slot_cells}): "
-                f"with one cell, each IS mean, so the knob would change nothing.")
-        # `each` reads the register's cells only (never the router's pick), so it runs on any
+                f"tul.spandec_read={self.spandec_read!r} needs tul.slot_cells > 1 (got "
+                f"{self.slot_cells}): with one cell, {self.spandec_read} IS mean, so the knob "
+                f"would change nothing.")
+        # `each` / `best` read the register's cells only (never the router's pick), so it runs on any
         # multi-cell register, the ungraded fan included. `winner` needs the hard pick.
         if self.spandec_read == "winner" and not (self.fan_loop_select != "off"
                                                   and self.fan_lsel_read == "winner"):

@@ -3098,6 +3098,10 @@ class MORPHTransformer(nn.Module):
         # cell axis folded into the batch axis, one decoder pass over B*M rows).
         self._spandec_read_each: bool = (cfg.tul is not None
                                          and str(cfg.tul.spandec_read) == "each")
+        # `tul.spandec_read: best`: the same fold, but each span is graded on its lowest-CE
+        # cell alone (hard winner-take-all over the M cells; `_tul_spandec_loss(select_best=)`).
+        self._spandec_read_best: bool = (cfg.tul is not None
+                                         and str(cfg.tul.spandec_read) == "best")
         # `tul.fan_lsel_pick: random`: the latent-selected loop FOLLOWS a uniform random cell
         # per slot per pass (train and eval) instead of the router's argmax. Build-time.
         self._lsel_pick_random: bool = (cfg.tul is not None
@@ -12103,7 +12107,8 @@ class MORPHTransformer(nn.Module):
 
     def _tul_spandec_loss(self, h_slots: Tensor, input_ids: Tensor,
                           layout: SlotLayout, stats: dict | None = None,
-                          cells: Tensor | None = None, fold_cells: bool = False) -> Tensor:
+                          cells: Tensor | None = None, fold_cells: bool = False,
+                          select_best: bool = False) -> Tensor:
         """Span-decoder local loss: decode the WHOLE next span from the slot's exit state.
 
         The MUX head (:meth:`_tul_mux_loss`) scores ``z`` against an ORDER-FREE geometric
@@ -12201,12 +12206,17 @@ class MORPHTransformer(nn.Module):
             st = dec.decode(z, ids, valid, w_tied.detach(), mem=mem)   # [B, S, J, C]
         C = st.shape[-1]
         lab = torch.where(valid, ids, torch.full_like(ids, -100))
-        loss = fused_linear_cross_entropy(
-            st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
-            chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
-            row_cap=(self._spandec_row_cap(z.shape[0], input_ids.shape[1], layout,
-                                           dec) if self.cfg.spandec_ce_row_cap else 0),
-            **self._ce_kw)
+        _row_cap = (self._spandec_row_cap(z.shape[0], input_ids.shape[1], layout, dec)
+                    if self.cfg.spandec_ce_row_cap else 0)
+        if select_best:
+            if not fold_cells:
+                raise RuntimeError("select_best grades the folded cells: pass fold_cells=True")
+            loss = self._spandec_best_of_cells(st, w_head, lab, valid, M_f, _row_cap, stats)
+        else:
+            loss = fused_linear_cross_entropy(
+                st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
+                chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
+                row_cap=_row_cap, **self._ce_kw)
         if stats is not None:
             # THE DECODE-CHEAP READOUT. `spandec_ce` is a per-TOKEN conditional CE over the
             # next span, so it is directly comparable with the model's own token CE — which
@@ -12241,6 +12251,44 @@ class MORPHTransformer(nn.Module):
                     chunk_size=self.cfg.ce_chunk_size,
                     mask_token_id=tc.slot_id, **self._ce_kw).detach())
                 stats["spandec_n_tokens_h1"] = float(valid[:, :, :dec.per_span_tokens].sum())
+        return loss
+
+    def _spandec_best_of_cells(self, st: Tensor, w_head: Tensor, lab: Tensor, valid: Tensor,
+                               M: int, row_cap: int, stats: dict | None) -> Tensor:
+        """``tul.spandec_read: best``: the span decoder's loss with each span graded on its
+        best cell. ``st`` ``[M*B, S, J, C]`` and ``lab`` / ``valid`` ``[M*B, S, J]`` are the
+        cell-major folded rows of :meth:`_tul_spandec_loss`.
+
+        Per (cell, row, slot): the token-mean CE of that slot's next span. Per (row, slot):
+        the minimum over the M cells (``argmin``, ties to the lowest index, then ``gather``,
+        so the other cells' gradient for that span is exactly zero). The result is the
+        token-weighted mean over valid spans, ``sum_span n_span min_c CE_c / sum_span n_span``:
+        the same scale as ``mean`` / ``each`` (each is this with every cell kept). Pad and
+        invalid slots have ``n_span == 0`` and weigh nothing. ``stats`` gets the fraction of
+        valid spans each cell won, ``spandec_best_win_c{i}`` (detached 0-dim tensors)."""
+        tc = self.cfg.tul
+        C = st.shape[-1]
+        x, labf = st.reshape(-1, C), lab.reshape(-1)
+        kw = dict(ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
+                  mask_token_id=tc.slot_id, softmax_kernel=self._ce_kw["softmax_kernel"])
+        if row_cap > 0:
+            lp = label_logprob_static_rows(x, w_head, labf, labf != -100, row_cap, **kw)
+        else:
+            lp = fused_linear_label_logprob(x, w_head, labf, **kw)
+        ce = (-lp).reshape(M, -1, *lab.shape[1:])                    # [M, B, S, J], 0 at pads
+        n = valid.reshape(M, -1, *lab.shape[1:]).sum(-1)             # [M, B, S]
+        n_span = n[0]                                                # same for every cell
+        span_ce = ce.sum(-1) / n_span.clamp(min=1).to(ce.dtype)      # [M, B, S]
+        win = span_ce.argmin(dim=0)                                  # [B, S], first minimum
+        best = span_ce.gather(0, win.unsqueeze(0)).squeeze(0)        # [B, S]
+        w = n_span.to(best.dtype)
+        loss = (best * w).sum() / w.sum().clamp(min=1)
+        if stats is not None:
+            live = (n_span > 0).to(best.dtype)
+            frac = (F.one_hot(win, M).to(best.dtype) * live.unsqueeze(-1)).sum((0, 1)) \
+                / live.sum().clamp(min=1)                            # [M]
+            for i in range(M):
+                stats[f"spandec_best_win_c{i}"] = frac[i].detach()
         return loss
 
     def _tul_recon_loss(self, winner_state: Tensor, input_ids: Tensor,
@@ -14966,14 +15014,19 @@ class MORPHTransformer(nn.Module):
             _sd_h = h_slots
             if self._spandec_read_winner and self.tul_spandec is not None and not generate:
                 _sd_h = self._fan_winner_cell(_reg_cells, _fan_route)
-            if self._spandec_read_each and self.tul_spandec is not None and not generate:
+            if ((self._spandec_read_each or self._spandec_read_best)
+                    and self.tul_spandec is not None and not generate):
                 _sd_h = _reg_cells
-            # `fold_cells` is passed ONLY under `each`, so every other forward calls the method
-            # with the arguments it always had (instruments that wrap it keep working).
+            # `fold_cells` is passed ONLY under `each` / `best` (`select_best` only under `best`),
+            # so every other forward calls the method with the arguments it always had
+            # (instruments that wrap it keep working).
             spandec_loss = (self._tul_spandec_loss(_sd_h, input_ids, layout,
                                                    stats=spandec_stats, cells=_reg_cells,
                                                    **({"fold_cells": True}
-                                                      if self._spandec_read_each else {}))
+                                                      if (self._spandec_read_each
+                                                          or self._spandec_read_best) else {}),
+                                                   **({"select_best": True}
+                                                      if self._spandec_read_best else {}))
                             if self.tul_spandec is not None and not generate else None)
             # ── the parallel span head (tul.spandec_parallel, LXTUL-E) ─────────────
             # The SAME seam and the SAME target as the span decoder above, read with no

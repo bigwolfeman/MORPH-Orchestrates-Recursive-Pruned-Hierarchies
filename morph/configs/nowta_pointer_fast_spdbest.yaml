@@ -1,0 +1,19 @@
+# The ungraded fan (nowta_pointer_fast) with the span decoder grading each SPAN on its BEST cell
+# (tul.spandec_read: best), instead of grading the mean of the cells or every cell on every span.
+# The decoder decodes the next span from each of the 4 cells alone, takes the lowest per-span CE
+# over the cells and keeps the gradient on that argmin cell only (hard winner-take-all, ties to
+# the lowest index), so a cell is pushed only on the spans it already decodes best.
+# Question (2026-10-11): the each-cell decoder (nowta_pointer_fast_spdeach) removed the mean-read
+# cost (CE 3.9032) but the cells collapsed to pairwise cos 0.81 because every cell was graded on
+# every span. Does grading the cells as a set let them specialise? Read the per-cell win
+# fractions (spandec_best_win_c0..c3) beside the cell cosine.
+# Controls: nowta_pointer_fast (mean read), nowta_pointer_fast_spdeach (each cell on every span).
+defaults:
+  - nowta_pointer_fast
+  - _self_
+
+tul:
+  spandec_read: best
+
+wandb:
+  name: nowta-pointer-fast-spdbest
