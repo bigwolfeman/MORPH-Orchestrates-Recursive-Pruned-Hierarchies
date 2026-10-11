@@ -185,6 +185,11 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       active one. Note
       `.agents/notes/proposed/architecture/2026-10-10-hinge-branch-conditional-node.md`.
       The A4 decision is still open.
+      2026-10-11 RISK, measured: with all levers merged, `nowta_pointer_fast_spdbest` (a span
+      decoder over all 4 cells) ran out of memory at the FIRST validation (step 200; 22 GB in
+      CUDA-graph private pools, 596 MiB free). The same-size each-cell arm passed on the
+      pre-lever tree. Not yet measured: which lever takes the headroom (C4's second body is the
+      suspect), and whether the plain fast recipe still has validation headroom on a full desktop.
 - [ ] C5 The 4-stream HC carrier: 1 stream was worth 60 ms per step at FAST. An architecture
       change, so it needs a quality arm, not only a speed bench.
 

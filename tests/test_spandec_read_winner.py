@@ -159,8 +159,8 @@ def test_mean_reader_trains_every_cell(monkeypatch):
 
 
 def test_refusals():
-    with pytest.raises(ValueError, match="'mean', 'winner' or 'each'"):
-        _lsel("joint", spandec_read="best")
+    with pytest.raises(ValueError, match="'mean', 'winner', 'each' or 'best'"):
+        _lsel("joint", spandec_read="worst")
     with pytest.raises(ValueError, match="spandec: true"):
         _lsel("joint", spandec=False, spandec_read="winner")
     with pytest.raises(ValueError, match="fan_loop_select != 'off'"):
