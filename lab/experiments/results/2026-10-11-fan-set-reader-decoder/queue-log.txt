@@ -1,0 +1,6 @@
+[10-11 05:18:05] nowta-spdcells train start cfg=nowta_pointer_fast_spdcells ov=[] gpu: 17538, 361 MiB 
+[10-11 05:50:37] nowta-spdcells train exit=0 Final val_loss=3.8873 rate: tok/s=27109 tok/s=22609 tok/s=23962 
+[10-11 05:51:52] nowta-spdcells sweep exit=0 nowta-spdcells depth=1 ce=3.9001 span_first=3.4897 spandec_ce=4.4943 nowta-spdcells depth=6 ce=3.8949 span_first=3.4774 spandec_ce=4.4616 nowta-spdcells ce_tokens K1-K6: +0.0052 [+0.0047, +0.0056] over 480 rows nowta-spdcells spandec_ce K1-K6: +0.0327 [+0.0312, +0.0340] over 160 batches 
+[10-11 05:52:22] nowta-spdcells-r2 train start cfg=nowta_pointer_fast_spdcells ov=[] gpu: 17538, 361 MiB 
+[10-11 06:24:57] nowta-spdcells-r2 train exit=0 Final val_loss=3.8915 rate: tok/s=27129 tok/s=22573 tok/s=23933 
+[10-11 06:26:11] nowta-spdcells-r2 sweep exit=0 nowta-spdcells-r2 depth=1 ce=3.9013 span_first=3.4973 spandec_ce=4.4953 nowta-spdcells-r2 depth=6 ce=3.8953 span_first=3.4815 spandec_ce=4.4624 nowta-spdcells-r2 ce_tokens K1-K6: +0.0060 [+0.0055, +0.0065] over 480 rows nowta-spdcells-r2 spandec_ce K1-K6: +0.0328 [+0.0315, +0.0342] over 160 batches 
