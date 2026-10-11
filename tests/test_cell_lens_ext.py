@@ -234,6 +234,22 @@ def test_run_special_contingency_adds_up_to_the_span_table():
     assert "NMI" in cl.special_markdown("t", 2, out)
 
 
+def test_run_special_drops_only_the_full_row_tail_span():
+    """The patch scores the tail after the last slot of a full row; that span has no
+    next-slot properties and is dropped, counted. A missing span anywhere else raises."""
+    props = [{"n": np.array([[5, 6, 7, 0]]), "cr": np.array([[0.2, 0.5, 0.0, 0.0]]),
+              "first": np.array([[1, 2, 3, -100]])}]
+    spans = {"batch": [0, 0, 0, 0], "b": [0, 0, 0, 0], "slot": [0, 1, 2, 3],
+             "win": [0, 1, 0, 1], "all": [5.0, 6.0, 7.0, 8.0], "n_tok": [5, 6, 7, 8]}
+    out = cl.run_special(spans, props, lambda ids: "a", 2, n_perm=5, seed=0)
+    assert out["n_spans"] == 3 and out["n_dropped_tail"] == 1
+    for r in out["properties"].values():
+        assert np.array(r["contingency"]).sum() == 3
+    props[0]["n"] = np.array([[5, 0, 7, 0]])
+    with pytest.raises(RuntimeError, match="does not match"):
+        cl.run_special(spans, props, lambda ids: "a", 2, n_perm=5, seed=0)
+
+
 # ── spandec ──────────────────────────────────────────────────────────────────────────────
 def _greedy_reference(dec, z, steps, emb, slot_id):
     """One slot at a time, the FULL window every step, argmax of the tied head."""

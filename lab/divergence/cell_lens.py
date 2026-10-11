@@ -993,11 +993,17 @@ def run_special(spans: dict, props: list[dict], decode: Callable[[list[int]], st
     for bi in np.unique(bidx):
         m = bidx == bi
         n[m], cr[m], first[m] = (props[bi][k][b[m], sl[m]] for k in ("n", "cr", "first"))
-    if (n <= 0).any():
+    # The patch scores the row's tail after the LAST slot of a full row (bin S, slot S - 1);
+    # `next_span_positions` needs slot s + 1 to exist, so that one span has no properties.
+    # Drop it, counted. Any other missing span means the files do not match: raise.
+    tail = (n <= 0) & (sl == int(props[0]["n"].shape[1]) - 1)
+    if ((n <= 0) & ~tail).any():
         raise RuntimeError("a patched span has no next-span length in the batches file: the "
                            "file does not match the patch JSON")
-    win = np.asarray(spans["win"])
-    diff = np.asarray(spans["all"]) / np.asarray(spans["n_tok"])
+    keep = ~tail
+    bidx, b, sl, n, cr, first = (v[keep] for v in (bidx, b, sl, n, cr, first))
+    win = np.asarray(spans["win"])[keep]
+    diff = (np.asarray(spans["all"]) / np.asarray(spans["n_tok"]))[keep]
     cls_of = {int(t): first_token_class(decode([int(t)])) for t in np.unique(first)}
     cls = np.array([FIRST_CLASSES.index(cls_of[int(t)]) for t in first])
     used = sorted(set(cls.tolist()))
@@ -1005,7 +1011,7 @@ def run_special(spans: dict, props: list[dict], decode: Callable[[list[int]], st
     props_out = {"length": quartile_bins(n), "copy_ratio": quartile_bins(cr),
                  "difficulty": quartile_bins(diff),
                  "first_token_class": (cls_bin, [FIRST_CLASSES[c] for c in used])}
-    res = {"n_spans": int(len(win)), "n_cells": n_cells,
+    res = {"n_spans": int(len(win)), "n_dropped_tail": int(tail.sum()), "n_cells": n_cells,
            "win_frac": [float((win == i).mean()) for i in range(n_cells)], "properties": {}}
     for name, (bins, names) in props_out.items():
         cont = _joint(win, bins, n_cells, len(names)).astype(int)
