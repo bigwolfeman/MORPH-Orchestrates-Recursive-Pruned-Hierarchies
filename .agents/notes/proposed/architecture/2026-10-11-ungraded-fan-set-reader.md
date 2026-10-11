@@ -36,14 +36,14 @@ CE@6 3.8951, K1-K6 +0.0056, cell cos -0.28, 23.9k tok/s on tree-h (the pre-lever
   run at 5k (two runs here).
 - The cell lens on this checkpoint (`lab/divergence/cell_lens.py`) shows the cells still split
   the work (copy cell, combination value on novel tokens).
-- The master tree (with the 2026-10-11 speed levers) runs it through validation without running
-  out of memory; tree-h (pre-lever) is the only tree measured.
+- MET 2026-10-11: master (with the speed levers and the e651c95b pool fix) runs it through
+  validation, 260 steps, exit 0, 34.0k tok/s in training (tree-h: about 24k at 5k steps).
 
 ## Risks
 
 - 5k only; the decoder's share may change with training length.
-- Memory: the bigger-decoder arms ran out of memory at validation on master (tracker C4 risk).
-  This arm is unmeasured there.
+- Memory: the validation OOM on master was a pinned graph pool, fixed in e651c95b; a full 5k
+  run of this arm on master is not yet done.
 - Decode cost: the decoder is training-only, so it does not touch inference.
 - Related: [2026-10-04-lxtul-primary-candidate.md](../../implemented/architecture/2026-10-04-lxtul-primary-candidate.md)
   is the current locked base; this note does not supersede it until Wolfe adopts the fan.
