@@ -40,3 +40,13 @@ cells instead of min) fails 4. Config `nowta_pointer_fast_spdbest.yaml`. Run fro
 snapshot of the commit adding this file (`/home/wolfe/morph-scratch/abq/tree-g`), 5000 steps, seed
 1, the A/B runner and its 480-row sweep. This tree includes the 2026-10-11 byte-identical speed
 levers (C3, E, Q, C4; C2 off), so its tok/s is not comparable 1:1 to tree-f arms; CE is.
+
+Method amendment 2026-10-11 04:30: the first launch (tree-g, master + this change) ran out of
+GPU memory at the first validation, step 200 (22 GB in CUDA-graph private pools; the
+2026-10-11 speed levers, likely C4's second recorded body, leave less headroom than the tree the
+references trained on). No numbers were read. Rerun as `nowta-spdbest-h` in
+`/home/wolfe/morph-scratch/abq/tree-h` = tree-f (the references' tree) + this change's diff,
+with `model.spandec_ce_row_cap=false`, because tree-f has no `label_logprob_static_rows`. The
+row cap changes only the decoder CE's sum order. In tree-h `tests/test_spandec_read_best.py`
+gives 9 passed, and 1 failed: the cap-on test, by NameError for that missing helper.
+Predictions unchanged; the tok/s prediction now compares tree-f to tree-f.
