@@ -24,10 +24,17 @@ import pytest
 import torch
 
 from test_tul_fan import _batch
-from test_tul_fan_lsel import _lsel
+from test_tul_fan_lsel import _build, _lsel, _nowta_kw
 from test_tul_lx_credit import M
 
 M = int(M)
+
+
+def _model(sel: str, **kw):
+    """``sel="off"`` is the ungraded fan (no latent-selected loop, so no selection target)."""
+    if sel == "off":
+        return _build(**_nowta_kw(fan_loop_select="off", **kw))
+    return _lsel(sel, **kw)
 
 
 def _capture(m) -> dict:
@@ -65,8 +72,9 @@ def test_each_flag_is_set_only_by_each():
     assert not _lsel("joint")._spandec_read_each
 
 
-def test_loss_is_the_mean_of_the_per_cell_losses():
-    m = _lsel("joint", spandec_read="each")
+@pytest.mark.parametrize("sel", ["joint", "off"])     # off = the ungraded fan
+def test_loss_is_the_mean_of_the_per_cell_losses(sel):
+    m = _model(sel, spandec_read="each")
     cap = _capture(m)
     _fwd(m)
     assert cap["kw"]["fold_cells"] is True
@@ -81,8 +89,9 @@ def test_loss_is_the_mean_of_the_per_cell_losses():
     assert not torch.allclose(cap["loss"].detach(), mean_loss.detach(), rtol=1e-6, atol=0)
 
 
-def test_every_cell_gets_one_over_m_of_its_own_gradient():
-    m = _lsel("joint", spandec_read="each")
+@pytest.mark.parametrize("sel", ["joint", "off"])
+def test_every_cell_gets_one_over_m_of_its_own_gradient(sel):
+    m = _model(sel, spandec_read="each")
     cap = _capture(m)
     _fwd(m)
     cells = cap["cells"]
@@ -124,17 +133,21 @@ def test_row_cap_matches_uncapped():
 
 
 def test_config_composes():
-    p = pathlib.Path(__file__).resolve().parents[1] / "morph/configs/lxtul_pointer_fast_spdeach.yaml"
-    txt = p.read_text()
+    d = pathlib.Path(__file__).resolve().parents[1] / "morph/configs"
+    txt = (d / "lxtul_pointer_fast_spdeach.yaml").read_text()
     assert "spandec_read: each" in txt and "- lxtul_pointer_fast" in txt
+    txt = (d / "nowta_pointer_fast_spdeach.yaml").read_text()
+    assert "spandec_read: each" in txt and "- nowta_pointer_fast" in txt
 
 
 def test_refusals():
     with pytest.raises(ValueError, match="spandec: true"):
         _lsel("joint", spandec=False, spandec_read="each")
+    # `each` reads the cells only, so the ungraded fan (selection off) and an `all` read build
+    assert _model("off", spandec_read="each")._spandec_read_each
+    assert _lsel("joint", fan_lsel_read="all", spandec_read="each")._spandec_read_each
+    # `winner` still needs the hard pick
     with pytest.raises(ValueError, match="fan_loop_select != 'off'"):
-        _lsel("off", spandec_read="each")
-    with pytest.raises(ValueError, match="fan_lsel_read == 'winner'"):
-        _lsel("joint", fan_lsel_read="all", spandec_read="each")
+        _model("off", spandec_read="winner")
     with pytest.raises(ValueError, match="spandec_reads_cells"):
         _lsel("joint", spandec_reads_cells=True, spandec_read="each")

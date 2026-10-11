@@ -1,0 +1,13 @@
+# The ungraded fan (nowta_pointer_fast) with the span decoder grading EACH of the 4 cells alone
+# and averaging the 4 losses (tul.spandec_read: each), instead of grading their mean.
+# Question (2026-10-11): does the decoder cost the fan CE because it grades the MEAN of cells
+# the coda reads one by one? Controls: nowta_pointer_fast (mean read), _nospandec (no decoder).
+defaults:
+  - nowta_pointer_fast
+  - _self_
+
+tul:
+  spandec_read: each
+
+wandb:
+  name: nowta-pointer-fast-spdeach

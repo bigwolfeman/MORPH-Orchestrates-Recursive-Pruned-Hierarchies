@@ -4699,9 +4699,10 @@ class TULConfig:
                     f"{self.coda_token_input!r}): 'embed' does not read the prelude.")
 
     def _check_spandec_read(self) -> None:
-        """``tul.spandec_read`` — ``"mean"`` (default, no-op) or ``"winner"``: the span
+        """``tul.spandec_read`` — ``"mean"`` (default, no-op), ``"winner"``: the span
         decoder grades the latent-selected loop's hard winner cell, the one cell the coda
-        reads, instead of the mean of the M exit cells."""
+        reads, instead of the mean of the M exit cells; ``"each"``: it grades every cell
+        alone and averages the M losses (any register with M > 1)."""
         if self.spandec_read not in ("mean", "winner", "each"):
             raise ValueError(
                 f"tul.spandec_read must be 'mean', 'winner' or 'each', got "
@@ -4712,7 +4713,14 @@ class TULConfig:
             raise ValueError(
                 f"tul.spandec_read={self.spandec_read!r} needs tul.spandec: true (no decoder "
                 f"is built, so the knob would be silently ignored).")
-        if not (self.fan_loop_select != "off" and self.fan_lsel_read == "winner"):
+        if self.spandec_read == "each" and self.slot_cells <= 1:
+            raise ValueError(
+                f"tul.spandec_read='each' needs tul.slot_cells > 1 (got {self.slot_cells}): "
+                f"with one cell, each IS mean, so the knob would change nothing.")
+        # `each` reads the register's cells only (never the router's pick), so it runs on any
+        # multi-cell register, the ungraded fan included. `winner` needs the hard pick.
+        if self.spandec_read == "winner" and not (self.fan_loop_select != "off"
+                                                  and self.fan_lsel_read == "winner"):
             raise ValueError(
                 f"tul.spandec_read={self.spandec_read!r} needs tul.fan_loop_select != 'off' with "
                 f"tul.fan_lsel_read == 'winner' (got fan_loop_select="
