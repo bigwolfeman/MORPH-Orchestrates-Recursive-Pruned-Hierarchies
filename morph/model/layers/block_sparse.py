@@ -179,6 +179,35 @@ class _FP8DenseMatmul(torch.autograd.Function):
         return grad_input, grad_weight, None, None, grad_bias
 
 
+class _TernaryFP8Fwd(torch.autograd.Function):
+    """``model.fp8_ternary_fwd``: y = x @ w.T on the FP8 tensor cores, backward UNCHANGED.
+
+    ``w`` is the ternary STE's bf16 weight (``scale * codes``, from the step cache); ``w8`` its
+    codes as e4m3 (exact: -1, 0, +1) and ``ws`` its per-output-row scale as fp32 [1, N]. Only
+    the activations are quantised: per-row (per token) amax, e4m3. The backward is the
+    ``F.linear`` backward on the saved bf16 ``x`` and ``w`` (STE dgrad and wgrad stay bf16);
+    the gradient of ``w`` flows to the step-cache node and on to the fp32 shadow weight.
+    """
+
+    @staticmethod
+    def forward(ctx, x, w, w8, ws):
+        # x: [M, K] bf16.
+        amax = x.abs().amax(dim=1, keepdim=True).float().clamp_min(1e-12)
+        xs = amax * (1.0 / _E4M3_MAX)
+        xq = (x.float() / xs).clamp(-_E4M3_MAX, _E4M3_MAX).to(torch.float8_e4m3fn)
+        out = torch._scaled_mm(xq, w8.t(), scale_a=xs, scale_b=ws, out_dtype=torch.bfloat16)
+        ctx.save_for_backward(x, w)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        x, w = ctx.saved_tensors
+        go = grad_out.contiguous()
+        grad_x = go.mm(w) if ctx.needs_input_grad[0] else None
+        grad_w = go.t().mm(x) if ctx.needs_input_grad[1] else None
+        return grad_x, grad_w, None, None
+
+
 class CMSBlockLinear(nn.Module):
     """Dual-mode linear layer: dense pre-carve, MORTAR 128×128 BCSR post-carve.
 
@@ -290,6 +319,8 @@ class CMSBlockLinear(nn.Module):
         # Per-optimizer-step FP8 weight cache (keyed on self.weight._version):
         self._fp8_weight_cache = None     # (w_fp8 e4m3, dequant_scale fp32 [1,1])
         self._fp8_weight_version = -1     # last weight._version we cast for
+        # model.fp8_ternary_fwd: the forward GEMM on e4m3 ternary codes (enable_fp8_ternary_fwd).
+        self._fp8_tfwd = False
 
         # Dense weight parameter — same as nn.Linear
         self.weight = nn.Parameter(
@@ -365,6 +396,47 @@ class CMSBlockLinear(nn.Module):
         # weight version.
         self._fp8_weight_cache = None
         self._fp8_weight_version = -1
+
+    def enable_fp8_ternary_fwd(self) -> None:
+        """``model.fp8_ternary_fwd``: run the forward GEMM of this ternary layer on FP8 tensor
+        cores. The weight is the STE's e4m3 codes (exact) with its scale folded into the GEMM
+        scale; the activations are quantised per row. The backward does not change.
+
+        Needs a dense layer whose ``weight`` is a lone ``TernarySTE`` parametrization bound to
+        a step cache with FP8 buffers (``bind_ternary_step_cache(..., fp8_fwd=True)`` calls this
+        and binds them). Refused on a carved (MORTAR BCSR) layer, on a layer with a bias, and
+        on dimensions that are not multiples of 16 (``torch._scaled_mm``).
+        """
+        import torch.nn.utils.parametrize as parametrize
+
+        if not self._dense_mode or self._mortar:
+            raise ValueError("model.fp8_ternary_fwd: the layer is carved (MORTAR BCSR); the "
+                             "FP8 forward covers the dense ternary layer only")
+        if self.bias is not None:
+            raise ValueError("model.fp8_ternary_fwd: the layer has a bias; none is implemented")
+        if self.in_features % 16 or self.out_features % 16:
+            raise ValueError(f"model.fp8_ternary_fwd: torch._scaled_mm needs dims divisible by "
+                             f"16, got {self.out_features}x{self.in_features}")
+        if self._fp8_mode:
+            raise ValueError("model.fp8_ternary_fwd: the layer already runs enable_fp8 "
+                             "(torchao-style dense FP8); the two are exclusive")
+        if not parametrize.is_parametrized(self, "weight"):
+            raise ValueError("model.fp8_ternary_fwd: the layer is not ternary (its weight has "
+                             "no TernarySTE parametrization)")
+        self._fp8_tfwd = True
+
+    def _forward_fp8_ternary(self, x: Tensor, w: Tensor) -> Tensor:
+        """The FP8 forward over the STE weight ``w`` (``_TernaryFP8Fwd``). ``w`` is bf16 only
+        where the step cache served it (bf16 autocast); an fp32 read (saliency scoring,
+        diagnostics) and an unbound deep copy (the fan target's EMA twin: its STEs hold no
+        cache) take the ``F.linear`` path they always took."""
+        ste = self.parametrizations.weight[0]
+        w8 = getattr(ste, "_wq8", None)
+        if w8 is None or w.dtype != torch.bfloat16:
+            return F.linear(x, w, self.bias)
+        y = _TernaryFP8Fwd.apply(x.reshape(-1, self.in_features).to(torch.bfloat16),
+                                 w, w8, ste._ws)
+        return y.reshape(*x.shape[:-1], self.out_features)
 
     def _get_cached_fp8_weight(self) -> Tuple[Tensor, Tensor]:
         """Return (w_fp8 E4M3, dequant_scale) for the current weight, recasting
@@ -458,6 +530,8 @@ class CMSBlockLinear(nn.Module):
                 x, self.weight, w_fp8, w_dequant, self.bias
             )
         w = self._ternary_ste(self.weight) if self._ternary_mode else self.weight
+        if self._fp8_tfwd:
+            return self._forward_fp8_ternary(x, w)
         return F.linear(x, w, self.bias)
 
     def accumulate_scores(self) -> None:
@@ -843,6 +917,9 @@ class CMSBlockLinear(nn.Module):
         """
         assert self._dense_mode, "carve() requires dense mode (pre-carve)"
         assert not self._mortar, "carve() already applied"
+        if self._fp8_tfwd:
+            raise ValueError("carve: model.fp8_ternary_fwd is on; the FP8 forward covers the "
+                             "dense ternary layer only")
         if self.out_features % blocking or self.in_features % blocking:
             raise ValueError(
                 f"carve: [{self.out_features},{self.in_features}] not divisible by "

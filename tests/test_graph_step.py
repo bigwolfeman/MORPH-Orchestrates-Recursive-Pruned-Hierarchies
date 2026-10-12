@@ -277,9 +277,10 @@ _HINGE_OFF = ("model.slot_gain_target=100.0",)
 
 
 @cuda
-@pytest.mark.parametrize("extra", [(), _CORELOOP, _COMPACT, _BLOCKFUSE, _HINGE_ON, _HINGE_OFF],
+@pytest.mark.parametrize("extra", [(), _CORELOOP, _COMPACT, _BLOCKFUSE, _HINGE_ON, _HINGE_OFF,
+                                   _COMPACT + ("model.slot_gain_rows=1",)],
                          ids=["winner", "coreloop_keys", "slot_compact", "blockfuse_keys",
-                              "hinge_active", "hinge_inactive"])
+                              "hinge_active", "hinge_inactive", "gain_rows"])
 def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra):
     from morph.training.graph_step import GraphStep
     cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *extra)

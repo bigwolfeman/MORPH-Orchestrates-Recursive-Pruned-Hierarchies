@@ -109,6 +109,28 @@ def evaluate(
     extra: dict | None = None,
     halt: bool = False,
 ) -> tuple[float, float]:
+    """``_evaluate`` (below), run under bf16 autocast when ``model.hc_carrier_bf16`` is on.
+
+    The bf16 carrier needs the HC region kernels, which need autocast; ``_evaluate``'s
+    main forward runs under it, but its ablation and instrument forwards
+    (``tul_forward_ablated`` and the rest) do not, and with the key on they would raise.
+    Key off: no autocast is added, so those forwards run as before."""
+    _cfg = getattr(getattr(model, "_orig_mod", model), "cfg", None)
+    if _cfg is not None and getattr(_cfg, "hc_carrier_bf16", False):
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            return _evaluate(model, device, loader, n_batches, tul, extra, halt)
+    return _evaluate(model, device, loader, n_batches, tul, extra, halt)
+
+
+def _evaluate(
+    model: nn.Module,
+    device: torch.device,
+    loader,
+    n_batches: int = 20,
+    tul: bool = False,
+    extra: dict | None = None,
+    halt: bool = False,
+) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps.
 
     ``tul=True``: the val loader yields the 3-tuple (input_ids, labels, slot_layout) and
@@ -745,6 +767,9 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         # MORPHConfig.ternary_step_cache: bf16 ternary weights once per forward (bound below,
         # after torch.compile).
         ternary_step_cache=bool(getattr(m, "ternary_step_cache", False)),
+        # MORPHConfig.fp8_ternary_fwd: the ternary MLP forward GEMMs on e4m3 codes (bound with
+        # the step cache).
+        fp8_ternary_fwd=bool(getattr(m, "fp8_ternary_fwd", False)),
         # MORPHConfig.fan_twin_compile: the fan's EMA twin prelude blocks compiled (below).
         fan_twin_compile=bool(getattr(m, "fan_twin_compile", False)),
         # MORPHConfig.fan_div_fast: the fan's epi / vol terms batched in fp32.
@@ -769,6 +794,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         hc_region_fused=bool(getattr(m, "hc_region_fused", False)),
         cca_prologue_tiled=bool(getattr(m, "cca_prologue_tiled", False)),
         inject_fold=bool(getattr(m, "inject_fold", False)),      # model.inject_fold
+        hc_carrier_bf16=bool(getattr(m, "hc_carrier_bf16", False)),  # model.hc_carrier_bf16
         l2_persist=bool(getattr(m, "l2_persist", False)),
         retention=bool(getattr(m, "retention", True)),
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),
@@ -800,6 +826,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
         # MORPHConfig.slot_gain_pass_force: -1 = a fresh hinge pass per step (2026-10-10)
         slot_gain_pass_force=int(getattr(m, "slot_gain_pass_force", -1)),
+        slot_gain_rows=int(getattr(m, "slot_gain_rows", 0)),
         # MORPHConfig.slot_depth_stratified / slot_compact (morph/model/slot_compact.py)
         slot_depth_stratified=bool(getattr(m, "slot_depth_stratified", False)),
         slot_compact=str(getattr(m, "slot_compact", "off")),
@@ -2358,6 +2385,7 @@ def main(cfg: DictConfig) -> None:
     seq_len = int(data_cfg.seq_len)
     grad_clip = float(getattr(tr, "grad_clip", 1.0))
     eval_every = int(getattr(tr, "eval_every", 500))
+    step_time_print = bool(getattr(tr, "step_time_print", False))
     ckpt_every = int(getattr(tr, "ckpt_every", 2500))
     # Retention for the periodic `step_*.pt` checkpoints. 0 = keep every one, which is
     # UNBOUNDED: a 100k-step run at ckpt_every=2500 writes 40 files of ~2.3 GB = 90 GB,
@@ -2662,13 +2690,16 @@ def main(cfg: DictConfig) -> None:
     # eager_on_recompile stance (the fill compiles here, in the thread-free window).
     def _bind_ternary_step_cache(mode: str | None) -> None:
         if not bool(model.cfg.ternary_step_cache):
+            if bool(model.cfg.fp8_ternary_fwd):
+                raise ValueError("model.fp8_ternary_fwd needs model.ternary_step_cache=true: "
+                                 "the e4m3 codes ride the step cache")
             return
         _cs = int(getattr(tr, "compact_step", 10**9))
         if _cs < total_steps:
             raise ValueError(f"model.ternary_step_cache is refused: training.compact_step={_cs} "
                              f"< steps={total_steps}; the carve removes the STEs it caches")
         from morph.model.ternary_qat import bind_ternary_step_cache
-        _tsc = bind_ternary_step_cache(model, mode)
+        _tsc = bind_ternary_step_cache(model, mode, fp8_fwd=bool(model.cfg.fp8_ternary_fwd))
         print(f"  [ternary-step-cache] ON: {_tsc.summary()}, refreshed once per forward",
               flush=True)
 
@@ -3528,6 +3559,17 @@ def main(cfg: DictConfig) -> None:
     _train_mode()
     step_times: list[float] = []
     t_start = time.perf_counter()
+    # Wall-clock rate (perf/tokens_per_sec). A step is asynchronous: the host queues it and
+    # runs ahead, and the GPU backlog drains at the next sync. `step_times` times the HOST
+    # (it excludes the post-step block where that drain lands), so on a GPU-bound step it
+    # read ~1.5x the true rate (fan recipe: 139 ms host vs 214 ms wall, 2026-10-12). The wall
+    # rate runs from one synced logging step to the next, minus the eval / generation /
+    # checkpoint blocks, each timed from a sync so the training backlog stays in the window.
+    _wall_sync = torch.cuda.synchronize if device.type == "cuda" else (lambda: None)
+    _wall_sync()
+    _wall_anchor = time.perf_counter()
+    _wall_excl = 0.0
+    _wall_steps = 0
     # In-process divergence guard: counts consecutive eval-cadence points with train ppl
     # over a hard ceiling (after step 2000); aborts after K consecutive strikes so finite
     # prune-bounces (ppl≲70) don't trip it but a real divergence (ppl→1e5) does. Env-tunable.
@@ -4275,13 +4317,27 @@ def main(cfg: DictConfig) -> None:
         # steps_per_sec a pure training-throughput metric regardless of eval cadence.
         if len(step_times) > 100:
             step_times = step_times[-100:]
+        _wall_steps += 1
+        if step_time_print:
+            # lab/perf/bench_step.py reads these. The wall clock at the END of the step, not
+            # a per-step duration: the step is asynchronous (the host runs ahead of the GPU by
+            # a few steps) and only the logging steps sync, so one step's duration is noise.
+            # The difference of two stamps taken at the same phase (20 steps apart, one sync
+            # inside) is exact. The logged sps is a rolling 100-step mean that still holds the
+            # compile warm-up, so it cannot give a steady-state rate.
+            print(f"[steptime] step={step} t={t_now:.6f} tokens={batch_size * seq_len * (phase.bag_size or 1)}",
+                  flush=True)
         if _dbg_step:
             _flag = "  <<< SLOW" if _dt > 3.0 else ""
             print(f"  [dbg] step {step}: {_dt:.2f}s depths={_dbg['depths']}{_flag}", flush=True)
 
         # ── Logging (every 20 steps) ──────────────────────────────────────
         if step % 20 == 0:
-            sps = 1.0 / (sum(step_times) / max(len(step_times), 1))
+            host_sps = 1.0 / (sum(step_times) / max(len(step_times), 1))
+            _wall_sync()
+            _t_sync = time.perf_counter()
+            sps = _wall_steps / max(_t_sync - _wall_anchor - _wall_excl, 1e-9)
+            _wall_anchor, _wall_excl, _wall_steps = _t_sync, 0.0, 0
             # Memory: allocated = peak live tensors; reserved = what the caching
             # allocator grabbed from the driver (alloc overhead/fragmentation).
             # The eager-vs-kernel gap in BOTH is the real "alloc overhead" delta.
@@ -4421,6 +4477,9 @@ def main(cfg: DictConfig) -> None:
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,
                 "perf/steps_per_sec": sps,
+                # The host's dispatch rate (the pre-2026-10-12 perf/steps_per_sec): above the
+                # wall rate whenever the GPU is the bottleneck.
+                "perf/host_steps_per_sec": host_sps,
                 # TST superposition ingests s× raw tokens per step (same FLOPs); count them.
                 "perf/tokens_per_sec": sps * batch_size * seq_len * (phase.bag_size or 1),
                 "perf/peak_mem_alloc_mib": peak_alloc,
@@ -4801,6 +4860,14 @@ def main(cfg: DictConfig) -> None:
                     flush=True,
                 )
 
+        _t_excl0 = None
+        if ((step % eval_every == 0 and step > 0)
+                or (gen_every > 0 and step % gen_every == 0 and step > 0)
+                or (ckpt_every > 0 and step % ckpt_every == 0 and step > 0)
+                or (_roll_every > 0 and step % _roll_every == 0 and step > 0)):
+            _wall_sync()
+            _t_excl0 = time.perf_counter()
+
         # ── Validation (every eval_every steps) ──────────────────────────
         if step % eval_every == 0 and step > 0:
             _val_extra: dict = {}
@@ -4954,6 +5021,8 @@ def main(cfg: DictConfig) -> None:
         # Anchor the next step's _dt here, AFTER logging/eval/gen/ckpt, so those
         # non-training blocks don't inflate steps_per_sec (see Timing block above).
         t_start = time.perf_counter()
+        if _t_excl0 is not None:
+            _wall_excl += t_start - _t_excl0
 
     if _gs is not None:
         _st = _gs.stats

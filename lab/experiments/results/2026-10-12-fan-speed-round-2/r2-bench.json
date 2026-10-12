@@ -1,0 +1,50 @@
+{
+ "arms": {
+  "speed": {
+   "median_ms": 214.58612499991432,
+   "p10_ms": 192.5240600007237,
+   "p90_ms": 222.10671499968157,
+   "tokens_per_step": 6144,
+   "tok_s": 28631.860517554214,
+   "repeat_median_ms": [
+    214.69280000019353,
+    213.96905000001425
+   ],
+   "repeat_tok_s": [
+    28617.6341265029,
+    28714.43323228098
+   ],
+   "n_blocks": 18
+  },
+  "speed2": {
+   "median_ms": 186.91547499984154,
+   "p10_ms": 168.94585999951232,
+   "p90_ms": 194.56388500024332,
+   "tokens_per_step": 6144,
+   "tok_s": 32870.472602684225,
+   "repeat_median_ms": [
+    186.92374999955064,
+    186.90720000013243
+   ],
+   "repeat_tok_s": [
+    32869.01744703265,
+    32871.9278871849
+   ],
+   "n_blocks": 18
+  }
+ },
+ "ratio_of_medians": {
+  "num": "speed",
+  "den": "speed2",
+  "value": 1.14803830448012
+ },
+ "config": {
+  "arms": [
+   "speed=nowta_pointer_fast_spdcells_speed",
+   "speed2=nowta_pointer_fast_spdcells_speed2"
+  ],
+  "steps": 300,
+  "skip": 100,
+  "repeats": 2
+ }
+}

@@ -124,6 +124,13 @@ model:
   #   the numbers above were measured on a fixed pass. `6` on seed 1 reproduces those runs.
   #   Under training.graph_step one graph is recorded per pass (morph/training/graph_step.py).
   slot_gain_pass_force: -1
+  # slot_gain_rows: the hinge's two core applications run on k of the step's B batch rows (0 =
+  #   all rows, today). Rows never attend across a batch row, so the kept rows are exact; the
+  #   gain is their mean. The kept rows rotate each step from a device-side counter (so a
+  #   graph_step replay moves them): step n reads rows n*k .. n*k+k-1 mod B. Needs
+  #   slot_gain_lambda > 0 and slot_compact != off; 0 < k < B or the first hinge raises.
+  #   CHANGES THE TRAINING FUNCTION (a noisier gain estimate for ~k/B of the hinge's cost).
+  slot_gain_rows: 0
   # slot_gain_tail_lambda: a second hinge on the PER-SLOT gain g_s of the same finite
   #   difference, lambda_tail * mean over valid slots of relu(g_s - slot_gain_tail_target)^2,
   #   added to the row hinge. The row hinge holds the typical gain; the tail bounds ONE
@@ -292,6 +299,15 @@ model:
   #   (morph/model/ternary_qat.py TernaryStepCache; tests/test_ternary_step_cache.py).
   #   Refused with an in-run carve. false = every read re-quantises and re-casts.
   ternary_step_cache: false
+  # fp8_ternary_fwd: the forward GEMM of every dense ternary MLP linear (prelude, core and coda
+  #   MortarLinear) runs on the 5090's FP8 tensor cores. The STE's {-1,0,+1} codes are exact in
+  #   e4m3 (cached beside the bf16 weight, refilled once per forward), the weight scale rides
+  #   the GEMM scale, and the activations are quantised per row (per token) to e4m3. The
+  #   backward is unchanged: STE dgrad and wgrad stay bf16 on the saved bf16 input. NOT
+  #   bit-identical (the activation rounding, ~2.6 % relative on a layer's output). Needs
+  #   ternary_step_cache; refused with an in-run carve (the layers must stay dense). Plain
+  #   nn.Linear and attention projections are untouched. false = every GEMM bf16.
+  fp8_ternary_fwd: false
   # fan_twin_compile: the fan's EMA target twin (tul.fan_opf / fan_route latent /
   #   fan_loop_select) runs its prelude blocks through training.compile_blocks' block compile,
   #   as the live prelude does (FanTargetFront.compile_blocks_; state_dict names unchanged).
@@ -412,6 +428,16 @@ model:
                            # stream expand): one carrier read + write less per block. Forward
                            # bit-identical; the term's grad is summed in the exit kernel. Needs
                            # hc_region_fused. tests/test_hc_region_fused.py. blockfuse 2026-10-08.
+  hc_carrier_bf16: false   # true ⇒ the HC carrier [B,S,4,C] is stored in bf16 between sublayers
+                           # (prelude, slot loop, coda, stream expand, exit mix): half the bytes
+                           # for the bandwidth-bound HC kernels. Loads widen to fp32, mixing math
+                           # and Hres/Hpost_row/projection stay fp32, only the store rounds. The
+                           # slot-loop gain hinge runs its two applications on an fp32 carrier (its
+                           # 0.02 finite difference reads bf16 storage rounding as gain). Carrier
+                           # grads are bf16 too (autograd matches the tensor's dtype). Needs
+                           # hc_use_kernel, hc_region_fused, CUDA and bf16 autocast (raises
+                           # otherwise). Rounding change, NOT bit-identical; off = byte-identical.
+                           # .agents/notes/proposed/architecture/2026-10-12-hc-carrier-bf16.md
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
@@ -763,6 +789,9 @@ training:
 
   # Evaluation / logging
   eval_every: 500
+  # true = print one `[steptime] step= t= tokens=` line per step (the wall clock at the step's
+  # end). Read by lab/perf/bench_step.py, the one speed number. false = no extra line.
+  step_time_print: false
   n_eval_batches: 20
   ckpt_every: 2500
   # How many periodic `step_*.pt` files to keep. The oldest is deleted once this many

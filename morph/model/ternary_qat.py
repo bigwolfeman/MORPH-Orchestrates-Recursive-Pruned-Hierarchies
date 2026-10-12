@@ -535,14 +535,27 @@ class TernarySTE(nn.Module):
         raise ValueError(f"model.ternary_step_cache: scale_mode {self.mode!r} has learnable "
                          f"scales; only {EXPORTABLE_SCALE_MODES} can be cached")
 
-    def bind_step_cache(self, original: Tensor) -> None:
+    def bind_step_cache(self, original: Tensor, fp8_fwd: bool = False) -> None:
         """Allocate the bf16 cache for ``original`` (the shadow weight) and route the
-        forward through it. Non-persistent: the checkpoint format does not change."""
+        forward through it. Non-persistent: the checkpoint format does not change.
+
+        ``fp8_fwd`` (``model.fp8_ternary_fwd``) also allocates the cache's FP8 form, filled
+        by ``TernaryStepCache.refresh`` from the bf16 cache: ``_wq8`` the codes as e4m3 and
+        ``_ws`` the per-output-row scale, fp32 ``[1, out]`` (the layout ``torch._scaled_mm``
+        wants for a row-wise operand)."""
         self.quantise_spec()                    # raises for ttq / dual
         if "_wq" in self._buffers:
             raise RuntimeError("TernarySTE.bind_step_cache: already bound")
         self.register_buffer("_wq", torch.empty(original.shape, dtype=torch.bfloat16,
                                                 device=original.device), persistent=False)
+        if fp8_fwd:
+            if original.dim() != 2:
+                raise ValueError(f"model.fp8_ternary_fwd: a 2-D weight is required, got "
+                                 f"{tuple(original.shape)}")
+            self.register_buffer("_wq8", torch.empty(original.shape, dtype=torch.float8_e4m3fn,
+                                                     device=original.device), persistent=False)
+            self.register_buffer("_ws", torch.empty(1, original.shape[0], dtype=torch.float32,
+                                                    device=original.device), persistent=False)
         self._forward_live = self._forward_fn
         self._forward_fn = self._forward_step_cached
 
@@ -566,7 +579,7 @@ class TernarySTE(nn.Module):
         state = {}
         for k, v in self.__dict__.items():
             if k == "_buffers":
-                v = {n: b for n, b in v.items() if n != "_wq"}
+                v = {n: b for n, b in v.items() if n not in _STEP_CACHE_BUFFERS}
             if k != "_forward_live":
                 state[k] = copy.deepcopy(v, memo)
         if "_forward_live" in self.__dict__:
@@ -805,6 +818,21 @@ def update_scale_emas(pairs: list[tuple["TernarySTE", nn.Module]]) -> None:
         ste.update_scale_ema(module.parametrizations.weight.original)
 
 
+# The buffers a bound STE derives from its shadow weight (never persisted, mirrored or copied).
+_STEP_CACHE_BUFFERS = ("_wq", "_wq8", "_ws")
+
+
+def _fill_fp8_codes(wq: Tensor, w8: Tensor, ws: Tensor) -> None:
+    """``model.fp8_ternary_fwd``: the e4m3 codes and the row scales of a bf16 ternary cache.
+
+    ``wq`` is ``bf16(scale * code)`` with a code in {-1, 0, +1}, so ``sign(wq)`` IS the code
+    and the largest magnitude of a row IS its scale (rows of one scale group share it; an
+    all-zero row gets scale 0 and contributes 0). Read from ``wq``, the FP8 forward and the
+    bf16 backward use the same numbers by construction."""
+    ws.copy_(wq.abs().amax(dim=1).float().unsqueeze(0))
+    w8.copy_(torch.sign(wq))
+
+
 def _fill_step_cache(fn: Callable[..., Tensor], buf: Tensor, w: Tensor, args: tuple) -> None:
     """``buf <- bf16(fn(w, *args))``: the per-access value and autocast's cast of it."""
     buf.copy_(fn(w, *args).to(buf.dtype))
@@ -826,20 +854,26 @@ class TernaryStepCache:
     """
 
     def __init__(self, entries: list[tuple[bool, Callable, Tensor, Tensor, tuple, str]],
-                 compiled_fill: Callable | None):
+                 compiled_fill: Callable | None,
+                 fp8_entries: list[tuple[Tensor, Tensor, Tensor]] | None = None):
         self.entries = entries
         self._compiled_fill = compiled_fill
+        # (bf16 cache, e4m3 codes, row scales) per FP8-forward weight (model.fp8_ternary_fwd)
+        self.fp8_entries = fp8_entries or []
 
     @torch.no_grad()
     def refresh(self) -> None:
         for compiled, fn, buf, w, args, _name in self.entries:
             (self._compiled_fill if compiled else _fill_step_cache)(fn, buf, w, args)
+        for wq, w8, ws in self.fp8_entries:
+            _fill_fp8_codes(wq, w8, ws)
 
     def summary(self) -> str:
         n_c = sum(1 for e in self.entries if e[0])
         nbytes = sum(e[2].numel() * e[2].element_size() for e in self.entries)
         return (f"{len(self.entries)} weights ({n_c} filled compiled, "
-                f"{len(self.entries) - n_c} eager), {nbytes / 2**20:.1f} MiB bf16")
+                f"{len(self.entries) - n_c} eager), {nbytes / 2**20:.1f} MiB bf16"
+                + (f", {len(self.fp8_entries)} with an FP8 forward" if self.fp8_entries else ""))
 
     def __deepcopy__(self, memo: dict) -> None:
         return None
@@ -849,10 +883,11 @@ def is_step_cache_buffer(root: nn.Module, name: str) -> bool:
     """True iff ``root``'s buffer ``name`` is a bound STE's step cache: derived state (a
     function of the shadow weight, refilled every forward), never mirrored or averaged."""
     owner, _, leaf = name.rpartition(".")
-    return leaf == "_wq" and isinstance(root.get_submodule(owner), TernarySTE)
+    return leaf in _STEP_CACHE_BUFFERS and isinstance(root.get_submodule(owner), TernarySTE)
 
 
-def bind_ternary_step_cache(model: nn.Module, compile_mode: str | None) -> TernaryStepCache:
+def bind_ternary_step_cache(model: nn.Module, compile_mode: str | None,
+                            fp8_fwd: bool = False) -> TernaryStepCache:
     """Bind every registered ``TernarySTE`` of ``model`` to a step cache and attach it as
     ``model._ternary_step_cache`` (read by ``MORPHTransformer._forward_single``).
 
@@ -861,10 +896,18 @@ def bind_ternary_step_cache(model: nn.Module, compile_mode: str | None) -> Terna
     ``eager_on_recompile`` (the compiled fill is compiled here, by one refresh, in the
     thread-free warmup window; compiled later it would silently run eager). Unregistered
     copies (the fan's EMA twin) are not walked and stay per-access. ``compile_mode`` None:
-    nothing is compiled, and a compiled wrapper in the tree raises."""
+    nothing is compiled, and a compiled wrapper in the tree raises.
+
+    ``fp8_fwd`` (``model.fp8_ternary_fwd``): every bound weight that lives in a dense
+    ``CMSBlockLinear`` (the MLPs of prelude, core and coda) also gets an e4m3 form of its
+    codes, refreshed with the bf16 cache, and its layer runs the forward GEMM on FP8 tensor
+    cores. Other bound weights (plain ``nn.Linear``) keep the bf16 cache only. Raises when
+    no layer qualifies, so the key can never be a silent no-op."""
     if model.__dict__.get("_ternary_step_cache") is not None:
         raise RuntimeError("bind_ternary_step_cache: the model is already bound")
+    from morph.model.layers.block_sparse import CMSBlockLinear
     entries = []
+    fp8_entries = []
     for name, module in model.named_modules():
         if not parametrize.is_parametrized(module, "weight"):
             continue
@@ -882,11 +925,19 @@ def bind_ternary_step_cache(model: nn.Module, compile_mode: str | None) -> Terna
                              f"but no compile_mode was given")
         ste = stes[0]
         fn, args = ste.quantise_spec()
-        ste.bind_step_cache(plist.original)
+        fp8 = fp8_fwd and isinstance(module, CMSBlockLinear)
+        if fp8:
+            module.enable_fp8_ternary_fwd()
+        ste.bind_step_cache(plist.original, fp8_fwd=fp8)
         entries.append((compiled, fn, ste._wq, plist.original, args, name))
+        if fp8:
+            fp8_entries.append((ste._wq, ste._wq8, ste._ws))
+    if fp8_fwd and not fp8_entries:
+        raise ValueError("model.fp8_ternary_fwd: no dense ternary CMSBlockLinear (MortarLinear) "
+                         "in the model; nothing would run on FP8")
     compiled_fill = (torch.compile(_fill_step_cache, mode=compile_mode, dynamic=False)
                      if any(e[0] for e in entries) else None)
-    cache = TernaryStepCache(entries, compiled_fill)
+    cache = TernaryStepCache(entries, compiled_fill, fp8_entries)
     cache.refresh()
     model._ternary_step_cache = cache
     return cache

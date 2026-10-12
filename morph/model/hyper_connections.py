@@ -128,6 +128,10 @@ class HyperConnectionResidual(nn.Module):
                        once, the backward writes the carrier grad once. Needs ``use_kernel``,
                        n=4, cayley_iters=3; replaces ``fused_grad``; not with ``fused_norm``.
                        Rounding-only change (summation orders), not bit-identical.
+        carrier_bf16:  model.hc_carrier_bf16. The carrier ``h`` may arrive and leave in bf16:
+                       the region kernels widen their loads to fp32, do all mixing math in
+                       fp32 and round only at the store. Hres / Hpost_row stay fp32. Needs
+                       ``region_fused``; refused at call time without CUDA and bf16 autocast.
     """
 
     def __init__(
@@ -142,6 +146,7 @@ class HyperConnectionResidual(nn.Module):
         fused_norm: bool = False,
         fused_grad: bool = False,
         region_fused: bool = False,
+        carrier_bf16: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -201,6 +206,10 @@ class HyperConnectionResidual(nn.Module):
                 hc_region_entry, hc_region_exit)
             self._hc_region_entry = hc_region_entry
             self._hc_region_exit = hc_region_exit
+        self._carrier_bf16 = bool(carrier_bf16)
+        if carrier_bf16 and not region_fused:
+            raise ValueError("model.hc_carrier_bf16 needs model.hc_region_fused=true (and so "
+                             "hc_use_kernel=true, hc_streams=4, hc_cayley_iters=3)")
 
     def _mappings(self, X: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Compute (Hpre, Hpost, Hres) per token from the n-stream carrier X [B,S,n,C]."""
@@ -253,9 +262,11 @@ class HyperConnectionResidual(nn.Module):
             x_bar, Hres, Hpost_row, h_link = self._hc_region_entry(
                 h, self.proj.weight, self.proj.bias,
                 self.tau, self.cayley_alpha, self.cayley_iters, self.eps,
+                self._carrier_bf16,
             )
             y = sublayer_fn(x_bar, *args, **kwargs)
-            return self._hc_region_exit(Hres, Hpost_row, h_link, y, post_inject)
+            return self._hc_region_exit(Hres, Hpost_row, h_link, y, post_inject,
+                                        self._carrier_bf16)
         dt = h.dtype
         if norm is not None or self._fused_grad:
             # model.hc_fused_norm / model.hc_fused_grad (Python constants per call: traced
