@@ -1,0 +1,12 @@
+# nowta_pointer_fast_spdcells_speed with the span decoder's target cut to the first 8 tokens of
+# the next span (tul.spandec_max_tokens, 0 = the span cap 32). The cell lens read the decoders
+# using about 2 tokens of the next span. Behaviour change; same prereg as the speed package.
+defaults:
+  - nowta_pointer_fast_spdcells_speed
+  - _self_
+
+tul:
+  spandec_max_tokens: 8
+
+wandb:
+  name: nowta-pointer-fast-spdcells-speed-sd8

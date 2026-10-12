@@ -1,0 +1,16 @@
+# The fan recipe (nowta_pointer_fast_spdcells) with the 2026-10-11 speed levers that are not
+# bit-identical switched on: the packed span decoder (model.spandec_packed), the LM head on the
+# rows a loss reads (model.lmhead_row_cap, C2) and the compiled loop norms
+# (model.loop_glue_compile). The byte-identical levers (HC retunes, loop glue) need no key.
+# Quality check: lab/experiments/planned/2026-10-12-fan-speed-package.md.
+defaults:
+  - nowta_pointer_fast_spdcells
+  - _self_
+
+model:
+  spandec_packed: true
+  lmhead_row_cap: true
+  loop_glue_compile: true
+
+wandb:
+  name: nowta-pointer-fast-spdcells-speed
