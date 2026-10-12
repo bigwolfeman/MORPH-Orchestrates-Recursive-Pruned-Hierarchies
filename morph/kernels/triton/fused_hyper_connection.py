@@ -2069,12 +2069,33 @@ class _FusedHCPost(torch.autograd.Function):
 # Launch shapes of the region kernels (measured on the 5090 at 7680 and 1536 positions;
 # perf/graph/blockfuse/tune_split.py, tune_fsplit.py). A kernel splits C across a second
 # grid axis while its token blocks alone give fewer than 2 programs per SM (the core).
+# `_HCR_TUNE` is the base set (measured at 7680 and 1536 rows). `_hcr_tune(T)` overlays the
+# launch shapes that won an interleaved before/after run at other row counts (2026-10-11,
+# lab/perf/bench_hc_kernels.py --ref). Every overlay is bit-identical to the base set at
+# T = 5 .. 7680: it changes the tile shape, warp count or token tile of a launch, never the
+# C-split counts or the per-token order, which are part of the arithmetic. (The carrier
+# kernel is NOT retuned: every faster config rounded the carrier grad differently in
+# the last place, and the ones that ran faster in isolation ran slower in the real chain.)
 _HCR_TUNE = dict(bc=64,
                  fsp_bt=32, fsp_bc=64, fsp_warps=2, fsp_stages=3,
                  fmap_bt=16, fmap_bc=128, fmap_warps=4, fmap_max_split=4,
                  red_bt=16, red_bc=64, red_warps=8, red_stages=2, red_max_split=2,
+                 red_launch_bt=16,   # token tile of the launch; `red_bt` only feeds the split rule
                  map_bt=32, map_warps=2,
-                 car_bc=128, car_warps=8, car_stages=1, car_max_split=8)
+                 car_bc=128, car_warps=8, car_stages=1, car_max_split=8,
+                 post_warps=8)
+
+
+def _hcr_tune(T: int) -> dict:
+    """The launch shapes for a region call over `T` positions."""
+    tu = dict(_HCR_TUNE)
+    tu["post_warps"] = 16        # one token per program: 16 warps keep more bytes in flight
+    if T < 4096:                 # the core's late passes: small tiles, more programs
+        tu.update(fmap_bt=8, fmap_bc=128, fmap_warps=2, fmap_max_split=8, red_launch_bt=8,
+                  red_warps=4)
+    if T <= 1024:                # a narrower token tile shortens the C loop's serial chain
+        tu.update(fsp_bt=16)
+    return tu
 
 
 def _dev_idx(device: torch.device) -> int:
@@ -2104,7 +2125,7 @@ class _HCRegionEntry(torch.autograd.Function):
         hpr = torch.empty(B, S, N, device=dev, dtype=f32)
         raw = torch.empty(B, S, 48, device=dev, dtype=f32)
         rms = torch.empty(B, S, 1, device=dev, dtype=f32)
-        tu = _HCR_TUNE
+        tu = _hcr_tune(T)
         sms = _FOLD_SM_COUNT[_dev_idx(dev)]
         # The projection weight is cast to bf16 once, as the autocast mm cast it; the
         # kernels then stream half the weight bytes.
@@ -2147,18 +2168,20 @@ class _HCRegionEntry(torch.autograd.Function):
         gh = torch.empty_like(h)
         graw = torch.empty(B, S, 48, device=h.device, dtype=torch.float32)
         coef = torch.empty(B, S, 24, device=h.device, dtype=torch.float32)
-        tu = _HCR_TUNE
+        tu = _hcr_tune(T)
         sms = _FOLD_SM_COUNT[_dev_idx(h.device)]
         # C splits only while the token blocks alone leave SMs idle (fixed per shape, so
-        # the partial-sum order is fixed: deterministic).
+        # the partial-sum order is fixed: deterministic). The rule counts token blocks of
+        # `red_bt`; the launch tile is `red_launch_bt` (the partial sums do not depend on it).
         rbt, rbc = tu["red_bt"], min(tu["red_bc"], C)
+        lbt = tu["red_launch_bt"]
         nsplit = 1
         while (triton.cdiv(T, rbt) * nsplit < 2 * sms and C % (2 * nsplit * rbc) == 0
                and nsplit < tu["red_max_split"]):
             nsplit *= 2
         red = torch.empty(nsplit, T, 20, device=h.device, dtype=torch.float32)
-        _hcr_bwd_reduce_kernel[(triton.cdiv(T, rbt), nsplit)](
-            g_xbar, g_link, h, red, T, N=N, C=C, BT=rbt, BC=rbc, CS=C // nsplit,
+        _hcr_bwd_reduce_kernel[(triton.cdiv(T, lbt), nsplit)](
+            g_xbar, g_link, h, red, T, N=N, C=C, BT=lbt, BC=rbc, CS=C // nsplit,
             num_warps=tu["red_warps"], num_stages=tu["red_stages"],
         )
         _hcr_bwd_map_kernel[(triton.cdiv(T, tu["map_bt"]),)](
@@ -2200,7 +2223,8 @@ class _HCRegionExit(torch.autograd.Function):
         out = torch.empty(B, S, N, C, device=h_link.device, dtype=h_link.dtype)
         _hc_post_fwd_kernel[(B * S,)](
             hres, hpost_row, h_link, y, out, term_arg,
-            N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, **_LAUNCH,
+            N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, num_stages=1,
+            num_warps=_hcr_tune(B * S)["post_warps"],
         )
         ctx.save_for_backward(hpost_row, y)
         ctx.term_dtype = term.dtype if has_term else None
