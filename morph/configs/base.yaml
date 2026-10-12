@@ -292,6 +292,15 @@ model:
   #   (morph/model/ternary_qat.py TernaryStepCache; tests/test_ternary_step_cache.py).
   #   Refused with an in-run carve. false = every read re-quantises and re-casts.
   ternary_step_cache: false
+  # fp8_ternary_fwd: the forward GEMM of every dense ternary MLP linear (prelude, core and coda
+  #   MortarLinear) runs on the 5090's FP8 tensor cores. The STE's {-1,0,+1} codes are exact in
+  #   e4m3 (cached beside the bf16 weight, refilled once per forward), the weight scale rides
+  #   the GEMM scale, and the activations are quantised per row (per token) to e4m3. The
+  #   backward is unchanged: STE dgrad and wgrad stay bf16 on the saved bf16 input. NOT
+  #   bit-identical (the activation rounding, ~2.6 % relative on a layer's output). Needs
+  #   ternary_step_cache; refused with an in-run carve (the layers must stay dense). Plain
+  #   nn.Linear and attention projections are untouched. false = every GEMM bf16.
+  fp8_ternary_fwd: false
   # fan_twin_compile: the fan's EMA target twin (tul.fan_opf / fan_route latent /
   #   fan_loop_select) runs its prelude blocks through training.compile_blocks' block compile,
   #   as the live prelude does (FanTargetFront.compile_blocks_; state_dict names unchanged).
