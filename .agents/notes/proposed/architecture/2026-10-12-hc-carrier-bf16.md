@@ -34,8 +34,19 @@ Key `model.hc_carrier_bf16`, default false (key off is byte-identical to master)
   main loop's bf16 output).
 - Refusals, no fallback: build raises without `hc_use_kernel` and `hc_region_fused`;
   `_hc_region_active(carrier_bf16=True)` raises at call time without CUDA + Triton, n=4, an fp32 or
-  bf16 carrier and bf16 autocast. `train.evaluate` supplies the autocast for its ablation forwards
-  when the key is on.
+  bf16 carrier and bf16 autocast.
+- Entry points outside the trainer (2026-10-12): `MORPHTransformer.forward` and every other public
+  method that runs the network (`tul_forward_ablated`, `tul_forward_halt`, `tul_forward_cw_arms`,
+  `tul_forward_with_plan_nats`, `tul_fm_forward`, the slot-state, attention-lift and MUX probes,
+  `fm_eval_probe`, `prelude_states`) carry `@_carrier_autocast`. Key on and autocast off, the
+  method enters bf16 autocast itself and so computes the function it trained with. Under any
+  autocast it adds nothing (another dtype still raises in the HC gate). No CUDA: a clear
+  RuntimeError, no fp32 fallback. Key off: the call is untouched (byte gate unchanged). This
+  replaces the autocast wrapper that `train.evaluate` carried; generation, `evaluate`, the
+  probes, `code_eval` and `sft` all reach the model through these methods.
+- The KV-cached and graphed decoders (`tul_generate_cached._check_supported`) refuse the key:
+  they run submodules directly, store the carrier in fp32, and were not checked against the
+  bf16 function. Eager `generate_tul` reproduces it.
 - Carrier grads are bf16 because autograd matches a gradient to its tensor's dtype. A bf16 carrier
   with fp32 carrier grads is not possible without a custom cast at every sublayer boundary; not
   built, not measured.
@@ -77,6 +88,15 @@ Measured 2026-10-12 on the 5090, recipe `nowta_pointer_fast_spdcells_speed`, scr
 - Tests: `tests/test_hc_carrier_bf16.py` 13 passed on GPU (kernel fwd/bwd against fp64 with the bf16
   store tolerance, fp32-equivalence at the store, dtypes, refusals, model carrier dtypes with the
   hinge fp32, step-0 gain, evaluate autocast); sabotage checks recorded in its docstring.
+- Entry points, 2026-10-12: `tests/test_hc_carrier_bf16.py` 17 passed on GPU. A no-autocast
+  `forward` and `tul_forward_ablated` match the autocast call to 1e-5 on the logits (two
+  autocast calls of one model already differ by 2.4e-7 from slot-gather atomics, so bit equality is
+  not available), the HC carrier reads bf16 in that call, eager `generate_tul` emits 6 tokens on
+  the key-on tiny fan model, the cached decoder refuses, no CUDA raises. Sabotage (wrapper made a
+  pass-through) fails the no-autocast and generate tests. Real trainer: a 30-step
+  `nowta_pointer_fast_spdcells_speed_bf16c` run with `eval_every=15` evaluates (`[VAL 15]`
+  prints) with the old evaluate wrapper removed. Byte gate key off:
+  `4a73ebf5...bd70d7`; the 120-step deterministic trace with eval every 40 is identical to master.
 - Not yet: the orchestrator's 5k quality check (K1-K6, CE, divergence) on the recipe.
 
 ## Risks
@@ -87,9 +107,10 @@ Measured 2026-10-12 on the 5090, recipe `nowta_pointer_fast_spdcells_speed`, scr
   sensitive to the loop map's gain; only 300 steps ran. The hinge reads the map at the same point
   within 3e-3 of gain (tiny model) and 2e-4 (recipe, step 0), but the operating point itself is a
   bf16-rounded state.
-- Paths outside the training forward that run without bf16 autocast raise with the key on
-  (generation, `code_eval`, probes, `sft`). Only the training loop and `evaluate` were exercised;
-  cached/graphed decode was not run.
+- Decorated entry points enter autocast only when none is active. A caller that runs the model
+  under fp16 autocast still raises. `code_eval` and `sft` were not run with the key on; they call
+  `model(...)`, which is covered by the wrapper, but only `evaluate` (trainer smoke) and
+  `generate_tul` (tiny model) were exercised.
 - Carrier-sized fp32 copies remain: the hinge's widening, the fan diversity term's `.float()` of the
   cells. aten copy launches rose 1381 -> 1598 per step (+0.8 ms); inductor copy launches unchanged.
 - `x_bar` is bf16, so the sublayer RMSNorm input is rounded once more than before.

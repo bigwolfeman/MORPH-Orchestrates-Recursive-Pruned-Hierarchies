@@ -139,6 +139,8 @@ def _check_supported(model) -> None:
         if not cond:
             raise NotImplementedError(f"generate_tul_cached does not reproduce: {what}")
 
+    need(not cfg.hc_carrier_bf16, "model.hc_carrier_bf16 (its caches and graphs store the "
+                                  "carrier in fp32; eager generate_tul reproduces the key)")
     need(bool(model._tg_strict), "a geometry other than tul.tg_geometry='strict'")
     need(tc.tg_coda_prefix_reach == "all", f"tg_coda_prefix_reach={tc.tg_coda_prefix_reach!r}")
     need(not tc.tokens_through_core, "the paid loop (tul.tokens_through_core)")

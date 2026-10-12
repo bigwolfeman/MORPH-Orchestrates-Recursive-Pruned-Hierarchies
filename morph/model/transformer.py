@@ -1969,6 +1969,28 @@ def _fp_term_exact(acc: tuple[Tensor, Tensor, Tensor, Tensor], h_star: Tensor | 
     return torch.where(n > 0, fp, torch.zeros_like(fp))
 
 
+def _carrier_autocast(fn):
+    """model.hc_carrier_bf16: a model entry point that runs the network enters bf16 autocast
+    itself when the key is on and the caller has not. The key promises the function the model
+    trained with (bf16 carrier storage, bf16 autocast numerics, the HC region kernels); an
+    entry point without autocast would raise at the first HC op, and an fp32 carrier would be
+    a different function. Called under any autocast (the trainer, ``evaluate``) it adds
+    nothing: a bf16 one is the right one, another dtype raises in the HC gate. No CUDA:
+    raises (the region kernels need it). Key off: the call is untouched."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        if not self._carrier_bf16 or torch.is_autocast_enabled("cuda"):
+            return fn(self, *args, **kwargs)     # (a non-bf16 autocast still raises in the HC gate)
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"model.hc_carrier_bf16: {fn.__name__} needs CUDA (the HC region "
+                "kernels that store the bf16 carrier are CUDA + Triton); there is no fp32 "
+                "fallback, it would be a different function from the one trained")
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class MORPHTransformer(nn.Module):
 
     # Operating-point capture for the core-map Jacobian probe
@@ -5516,6 +5538,7 @@ class MORPHTransformer(nn.Module):
                 "without a stream axis, so reaching here is a wiring bug.")
         return self.final_norm(self.lm_mixer(x)).mean(dim=2)
 
+    @_carrier_autocast
     def prelude_states(self, input_ids: Tensor, apply_input_norm: bool = True,
                        layout: "SlotLayout | None" = None) -> Tensor:
         """``[B, L, d_model]`` FEATURE READ-OUT after the prelude. Adds no behaviour.
@@ -16665,6 +16688,7 @@ class MORPHTransformer(nn.Module):
         _sk = slot_cell_inject_keep(layout, x_coda.dtype)
         return kw, (_sk if keep is None else keep * _sk)
 
+    @_carrier_autocast
     def tul_forward_ablated(self, input_ids: Tensor, labels: Tensor | None,
                             layout: SlotLayout, plan_mode: str = "normal",
                             tul_step_mode: str | None = None,
@@ -16767,6 +16791,7 @@ class MORPHTransformer(nn.Module):
         finally:
             tc.slot_seed = orig
 
+    @_carrier_autocast
     def tul_fm_forward(self, input_ids: Tensor, labels: Tensor | None,
                        layout: SlotLayout, plan_mode: str = "normal") -> dict:
         """FM1's name for :meth:`tul_forward_ablated`, kept so the FM1 gates and the
@@ -16790,6 +16815,7 @@ class MORPHTransformer(nn.Module):
                 return prm
         raise RuntimeError("no euclidean embedding parameter found")
 
+    @_carrier_autocast
     def tul_mux_grad_share(self, input_ids: Tensor, labels: Tensor,
                            layout: SlotLayout) -> dict:
         """Eval-only: how much of the tied embedding table's gradient the MUX term owns.
@@ -16842,6 +16868,7 @@ class MORPHTransformer(nn.Module):
                 "mux_embed_grad_norm": n_mx, "ce_embed_grad_norm": n_ce}
 
     @torch.no_grad()
+    @_carrier_autocast
     def tul_attn_lift_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
         """Eval-only: MUX §8.3's reasoning attention lift, on the WINDOW branch.
 
@@ -16864,6 +16891,7 @@ class MORPHTransformer(nn.Module):
         return stats.summary()
 
     @torch.no_grad()
+    @_carrier_autocast
     def tul_slot_state_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
         """Eval-only: the homogeneity dial. Effective rank and mean pairwise cosine of
         the WRITTEN slot states, read at the point the coda reads them.
@@ -17021,6 +17049,7 @@ class MORPHTransformer(nn.Module):
         }
 
     @torch.no_grad()
+    @_carrier_autocast
     def fm_eval_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
         """Eval-only FM1 instruments: target geometry and the copy gap.
 
@@ -17074,6 +17103,7 @@ class MORPHTransformer(nn.Module):
         k = self.tul_gate.choose_k(g_fin).clamp(min=1)
         return torch.where(layout.slot_valid, k, torch.zeros_like(k))
 
+    @_carrier_autocast
     def tul_forward_halt(self, input_ids: Tensor, labels: Tensor | None,
                          slot_layout: SlotLayout) -> dict:
         """Eval-only: arm ``TUL-halt`` — the gate chooses each slot's loop depth (§7).
@@ -17158,6 +17188,7 @@ class MORPHTransformer(nn.Module):
         x_coda, keep = self.tul.apply_token_dropout(x_coda, layout, self.training)
         return x_coda, x0, bigram_emb, keep, depths
 
+    @_carrier_autocast
     def tul_forward_cw_arms(self, input_ids: Tensor, labels: Tensor, layout: SlotLayout,
                             cut: int, seed: int = 0) -> dict[str, dict]:
         """Eval-only: score CW0/CW1/CW2/CW3 in one pass (.agents/notes/implemented/architecture/2026-08-18-tul-compaction-window.md).
@@ -17355,6 +17386,7 @@ class MORPHTransformer(nn.Module):
         return not (tc is None or tc.tokens_through_core or tc.loop_reads_tokens or tc.code
                     or self.fm_planner is not None)
 
+    @_carrier_autocast
     def forward(self, input_ids: Tensor, labels: Tensor | None = None,
                 bag_size: int = 0, seq_lens: Tensor | None = None,
                 slot_layout: SlotLayout | None = None,
@@ -17402,6 +17434,7 @@ class MORPHTransformer(nn.Module):
                                     _gram_sample_seed=gram_sample_seed,
                                     _generate=generate)
 
+    @_carrier_autocast
     def tul_forward_with_plan_nats(self, input_ids: Tensor, labels: Tensor,
                                    slot_layout: SlotLayout) -> dict:
         """Eval-only: also run the coda with the slots gathered out (spec §7.2).

@@ -28,6 +28,13 @@ What each test pins (2026-10-12):
      bf16-rounded state; seeds differ by 0.007 among themselves), a hinge on the bf16 carrier
      reads +0.039 to +0.046 and moves the loss by +0.02 to +0.09 (the trap of 2026-10-08).
 
+  5. ENTRY POINTS (2026-10-12). `MORPHTransformer.forward` and every other public entry that
+     runs the network is wrapped by `_carrier_autocast`: key on and autocast off, it enters
+     bf16 autocast itself (same function as the training forward); without CUDA it raises;
+     key off it is untouched. `generate_tul` (eager) emits tokens on the key-on fan model;
+     the KV-cached decoders refuse the key. Sabotage (c): wrapper made a pass-through ->
+     the no-autocast and the generate tests fail (the HC gate raises).
+
 Sabotage checks, run and reverted (session report, not committed):
   (a) ``_slot_gain_penalty`` without the ``hp = hp.float()`` widening -> test 4 fails (the
       hinge applications read a bf16 carrier).
@@ -46,6 +53,7 @@ from morph.model.hyper_connections import HyperConnectionResidual
 
 C = 1024
 STORE_TOL = 2.0e-3
+ATOL = 1.0e-5
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
 
@@ -283,17 +291,103 @@ def test_model_carrier_dtypes_and_step0_hinge(monkeypatch):
     assert abs(g1 - g0) < 5e-3, (g0, g1)    # a bf16 hinge misses by 4e-2
 
 
+# ── entry points outside the trainer (the key's contract: the function it trained with) ───────
+
+def _eval_model(monkeypatch, on: bool):
+    m, rt = _tiny_recipe(monkeypatch, on)
+    return m.eval(), rt
+
+
 @cuda
-def test_evaluate_runs_under_autocast_only_with_the_key(monkeypatch):
-    """The ablation forwards of ``evaluate`` run outside autocast, where the bf16 carrier
-    raises. With the key on ``evaluate`` supplies the autocast; with it off nothing changes
-    (eval then runs those forwards as before). Found by an eval smoke run, 2026-10-12."""
-    import types
-    from morph.training import train as TR
+def test_no_autocast_forward_is_the_autocast_forward_bit_for_bit(monkeypatch):
+    """Key on: an entry point called with autocast off enters bf16 autocast itself, so it
+    returns what the same call returns inside the caller's autocast. The wrapper is
+    `torch.autocast` around the same call, so the ops are the same ops. Not bit for bit,
+    because two autocast calls of the SAME model already differ from each other by 2.4e-7
+    on the logits (atomics in the slot gather; measured 2026-10-12, 3 repeats), so the bound
+    is `ATOL` = 1e-5, 40x that floor. An fp32 carrier would differ by about 1e-2 (bf16
+    store rounding), and the carrier-dtype check below pins which function ran. Covers
+    `forward` (the label-free val forward) and `tul_forward_ablated` (an `evaluate`
+    ablation forward that raised before the wrapper)."""
+    from test_graph_step import _batches
+    m, rt = _eval_model(monkeypatch, True)
+    x, y, lay = _batches(rt, 3)[0]
+    for call in (lambda: m(x, slot_layout=lay),
+                 lambda: m.tul_forward_ablated(x, y, lay, plan_mode="zero")):
+        with torch.no_grad():
+            torch.manual_seed(7)
+            assert not torch.is_autocast_enabled("cuda")
+            got = call()
+            torch.manual_seed(7)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                want = call()
+        key = "logits" if got.get("logits") is not None else "loss"
+        assert got[key].dtype == want[key].dtype
+        a, b = got[key], want[key]
+        # pad rows of the eval logits hold NaN in both runs: same mask, then the max error
+        # over the rest.
+        assert torch.equal(a.isnan(), b.isnan())
+        err = (a - b).nan_to_num().abs().max().item()
+        assert err <= ATOL, err
+    # The wrapper is not a silent fp32 carrier: the carrier it ran is bf16.
     seen = []
-    monkeypatch.setattr(TR, "_evaluate", lambda *a, **k: seen.append(
-        torch.is_autocast_enabled("cuda")) or (0.0, 1.0))
-    for flag in (False, True):
-        m = types.SimpleNamespace(cfg=types.SimpleNamespace(hc_carrier_bf16=flag))
-        TR.evaluate(m, torch.device("cuda"), iter(()), 1)
-    assert seen == [False, True], seen
+    hooks = [mod.register_forward_pre_hook(lambda mod, a: seen.append(a[0].dtype))
+             for mod in m.modules() if isinstance(mod, HyperConnectionResidual)]
+    with torch.no_grad():
+        m(x, slot_layout=lay)
+    for hk in hooks:
+        hk.remove()
+    assert seen and set(seen) == {torch.bfloat16}, set(seen)
+
+
+@cuda
+def test_key_off_adds_no_autocast(monkeypatch):
+    """Key off: the entry points run exactly as before, with autocast left off."""
+    from test_graph_step import _batches
+    m, rt = _eval_model(monkeypatch, False)
+    x, y, lay = _batches(rt, 3)[0]
+    seen = []
+    hk = m.register_forward_pre_hook(lambda mod, a, kw: seen.append(
+        torch.is_autocast_enabled("cuda")), with_kwargs=True)
+    with torch.no_grad():
+        m(x, slot_layout=lay)
+    hk.remove()
+    assert seen == [False]
+
+
+def test_key_on_without_cuda_raises_clearly(monkeypatch):
+    from morph.model.transformer import _carrier_autocast
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    class _Stub(torch.nn.Module):
+        _carrier_bf16 = True
+
+        @_carrier_autocast
+        def forward(self, x):
+            raise AssertionError("must not run")
+    with pytest.raises(RuntimeError, match="needs CUDA.*no fp32 fallback"):
+        _Stub()(1)
+
+
+@cuda
+def test_eager_generate_tul_on_the_fan_recipe_with_the_key(monkeypatch):
+    """`generate_tul` (eager, no autocast anywhere in it) runs on the key-on fan model and
+    emits tokens; the same call raised before the model entered autocast itself."""
+    from test_graph_step import SEQ, _rule
+    from morph.inference.tul_generate import generate_tul
+    from morph.model.tul_layout import TulLayoutSpec
+    m, rt = _eval_model(monkeypatch, True)
+    spec = TulLayoutSpec(seq_len=SEQ, prefix_k=rt.data_cfg.prefix_k, max_slots=10,
+                         slot_id=rt.data_cfg.slot_id)
+    toks, builder = generate_tul(m, [5, 6, 7, 8, 10, 12, 13], _rule(), spec,
+                                 max_new_tokens=6, temperature=0.0, device="cuda",
+                                 emit_source="token")
+    assert len(toks) == 6 and all(0 <= int(t) < 64 for t in toks), toks
+
+
+@cuda
+def test_cached_decoders_refuse_the_key(monkeypatch):
+    from morph.inference.tul_generate_cached import _check_supported
+    m, _ = _eval_model(monkeypatch, True)
+    with pytest.raises(NotImplementedError, match="hc_carrier_bf16"):
+        _check_supported(m)

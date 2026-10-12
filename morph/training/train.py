@@ -109,28 +109,6 @@ def evaluate(
     extra: dict | None = None,
     halt: bool = False,
 ) -> tuple[float, float]:
-    """``_evaluate`` (below), run under bf16 autocast when ``model.hc_carrier_bf16`` is on.
-
-    The bf16 carrier needs the HC region kernels, which need autocast; ``_evaluate``'s
-    main forward runs under it, but its ablation and instrument forwards
-    (``tul_forward_ablated`` and the rest) do not, and with the key on they would raise.
-    Key off: no autocast is added, so those forwards run as before."""
-    _cfg = getattr(getattr(model, "_orig_mod", model), "cfg", None)
-    if _cfg is not None and getattr(_cfg, "hc_carrier_bf16", False):
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            return _evaluate(model, device, loader, n_batches, tul, extra, halt)
-    return _evaluate(model, device, loader, n_batches, tul, extra, halt)
-
-
-def _evaluate(
-    model: nn.Module,
-    device: torch.device,
-    loader,
-    n_batches: int = 20,
-    tul: bool = False,
-    extra: dict | None = None,
-    halt: bool = False,
-) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps.
 
     ``tul=True``: the val loader yields the 3-tuple (input_ids, labels, slot_layout) and
