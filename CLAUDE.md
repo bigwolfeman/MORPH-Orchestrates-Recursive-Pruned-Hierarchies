@@ -106,12 +106,12 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 
 `morph/configs/nowta_pointer_fast_spdcells.yaml`: 4 independent cells per slot (no router, no reset), the coda
 reads all 4, pointer head, and the training-only span decoder cross-attends to the 4 cells as a set
-(`tul.spandec_reads_cells`). 5k, 480 rows, seed 1, 3 runs: CE@6 3.8952, K1-K6 +0.0054, cell cos -0.28, 29.2k tok/s
-on master. Start new loop and speed work from it; it supersedes LXTUL as the loop base (DITTO on the fan is untested).
+(`tul.spandec_reads_cells`). 5k, 480 rows, seed 1, 3 runs: CE@6 3.8952, K1-K6 +0.0054, cell cos -0.28, 26.9k tok/s wall
+(229 ms/step; the 29.2k in older filings is the pre-2026-10-12 HOST rate, about 1.5x high on GPU-bound steps) on master. Start new loop and speed work from it; it supersedes LXTUL as the loop base (DITTO on the fan is untested).
 Caveats (one seed; no 1-cell inference; cached decode refuses the fan) and the full arm table:
 [`2026-10-11-ungraded-fan-set-reader.md`](.agents/notes/implemented/architecture/2026-10-11-ungraded-fan-set-reader.md).
 Speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed.yaml` = the recipe + packed decoder, head on loss rows,
-compiled loop glue: +8.3 % tok/s, K1-K6 held, CE@6 +0.003 on one run (`lab/experiments/failures/2026-10-12-fan-speed-package.md`).
+compiled loop glue: 213.5 ms/step wall (+7.1 %), K1-K6 held, CE@6 +0.003 on one run (`lab/experiments/failures/2026-10-12-fan-speed-package.md`).
 
 ## Previous winner (Wolfe, 2026-10-07): LXTUL + pointer + DITTO
 
