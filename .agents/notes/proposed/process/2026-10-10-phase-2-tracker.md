@@ -47,6 +47,11 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   the prereg line, one run; filed `lab/experiments/failures/2026-10-12-fan-speed-package.md`). Kept under the 5 %
   loop-contribution rule; the `_speed` config is the base for further speed work. [x] T1 [x] T2 [x] T7 [x] T8.
   [x] T3 REJECTED: the 8-token decoder is +17.8 % faster but CE@6 3.9213, worse than no decoder; cap stays 32.
+  **Round 2 (2026-10-12, sonnet builders, branches off 7b792ccb):** [~] T4 hinge on k of B rows + the standard
+  steady-state bench `lab/perf/bench_step.py` (perf/hinge-rows; hinge is 17.5 ms). [~] T9 bf16-stored HC carrier with
+  fp32 math and an fp32 carrier for the hinge's applications (perf/bf16-carrier-v2; HC Triton 56 ms, bandwidth bound).
+  [~] T10 FP8 e4m3 forward GEMMs for the ternary linears (codes exact; perf/fp8-fwd; stops if < 1.3x at real shapes).
+  Then one 5k package run against the `_speed` config. Not started: T5 pad slots, small-row core passes (megakernel; ask Wolfe).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
   2026-10-08 flame ledger). 9.1 is the analytic LXTUL step: three times the decode forward,
