@@ -802,9 +802,9 @@ training:
   # The ablation / probe block (plan worth zero / shuffle / wrong_seed, slot-state probe,
   # attention lift) runs on every k-th periodic eval, the first included. 1 = every eval.
   # The val loss and every other reading are computed on every eval. The final eval always
-  # runs the block. A skipped block also skips its RNG draw (the shuffle probe's permutation
-  # comes from the global CUDA stream), so k > 1 moves the training stream after the skipped
-  # evals: the same distribution, not the same trajectory as k = 1.
+  # runs the block. k > 1 forks the RNG around every eval (the shuffle probe draws from the
+  # global CUDA stream), so the training stream is the same whatever k > 1 is; it differs from
+  # k = 1, whose evals advance the training stream as they always did.
   eval_diag_every: 1
   ckpt_every: 2500
   # How many periodic `step_*.pt` files to keep. The oldest is deleted once this many

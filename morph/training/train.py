@@ -4878,7 +4878,13 @@ def main(cfg: DictConfig) -> None:
             if eval_keep_graphs:
                 torch.cuda.synchronize()
                 torch.cuda.reset_peak_memory_stats()
-            with (contextlib.nullcontext if eval_keep_graphs else _gs_release)():
+            # eval_diag_every > 1: the probe block (the shuffle ablation draws torch.rand on the
+            # global CUDA stream) runs on some evals only, so without a fork the training RNG
+            # after an eval would depend on which evals ran it. Forked, every eval leaves the
+            # training stream untouched, whatever k is. k = 1 keeps the old draw (byte-identical).
+            _eval_rng = (torch.random.fork_rng(devices=[device] if device.type == "cuda" else [])
+                         if eval_diag_every > 1 else contextlib.nullcontext())
+            with _eval_rng, (contextlib.nullcontext if eval_keep_graphs else _gs_release)():
                 val_loss, val_ppl = evaluate(
                     model, device, val_loader, n_eval_batches, tul=phase.tul_on,
                     extra=_val_extra, halt=_halt_eval, lean_probe=eval_keep_graphs,
