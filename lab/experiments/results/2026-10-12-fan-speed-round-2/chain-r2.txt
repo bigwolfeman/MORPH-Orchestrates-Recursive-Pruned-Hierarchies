@@ -1,0 +1,12 @@
+[10-12 03:37:42] gate start
+[10-12 03:38:58] gate sha=4a73ebf5426b9dfa889c81a8608a23d23a6785bb225ff32e2d5dd03476bd70d7
+[10-12 03:39:04] test tests/test_hc_carrier_bf16.py: 13 passed, 14 warnings in 3.48s
+[10-12 03:39:09] test tests/test_slot_gain_rows.py: 5 passed, 14 warnings in 4.12s
+[10-12 03:39:13] test tests/test_fp8_ternary_fwd.py: 8 passed, 15 warnings in 1.86s
+[10-12 03:47:13] bench exit=0 speed 214.59 192.52 222.11 28632 214.69, 213.97 speed2 186.92 168.95 194.56 32870 186.92, 186.91 ratio of medians speed/speed2 = 1.1480 
+[10-12 03:47:13] speed2 train start
+[10-12 04:11:43] speed2 train exit=0 Final val_loss=3.9065 tok/s: tok/s=33392 tok/s=33396 tok/s=33397 
+[10-12 04:12:54] speed2 sweep exit=0 speed2 depth=1 ce=3.9152 span_first=3.5179 spandec_ce=4.5239 speed2 depth=6 ce=3.9117 span_first=3.5106 spandec_ce=4.4958 speed2 ce_tokens K1-K6: +0.0035 [+0.0030, +0.0039] over 480 rows speed2 spandec_ce K1-K6: +0.0281 [+0.0267, +0.0295] over 160 batches 
+val/slot_cell_pairwise_cos=-0.2784
+[10-12 04:12:54] stab gain_est n=200 min=0.8866 max=0.9057 mean=0.8965; grad_norm n=240 median=2.070 max=14.514 max/median=7.0
+[10-12 04:12:54] done

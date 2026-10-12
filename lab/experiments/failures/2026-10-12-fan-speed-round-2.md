@@ -1,6 +1,6 @@
 # Fan speed round 2: hinge rows, bf16 carrier, FP8 forward at 5k
 
-Status: planned
+Status: failure
 
 ## Question
 
@@ -48,3 +48,34 @@ equal `4a73ebf5...bd70d7`, or nothing else runs. Step 2: the three new GPU test 
 bench, speed base vs package, 2 repeats interleaved. Step 4: `nowta_pointer_fast_spdcells_speed2`,
 5000 steps, seed 1, WANDB offline, then the 480-row depth sweep (`core_depth_sweep.py --depths 1,6
 --rows 480 --batch 3`).
+
+## Results
+
+Gate SHA `4a73ebf5...bd70d7` (equal). GPU tests: `test_hc_carrier_bf16.py` 13 passed,
+`test_slot_gain_rows.py` 5 passed, `test_fp8_ternary_fwd.py` 8 passed. Log: `chain-r2.txt`.
+
+| Quantity | Speed base | Package | Pass if | Held |
+|---|---|---|---|---|
+| CE@1 | 3.9038 | 3.9152 | | |
+| CE@6 | 3.8985 | 3.9117 | <= 3.9005 | no (+0.0112) |
+| K1-K6 [95 % CI] | +0.0053 [+0.0049, +0.0058] | +0.0035 [+0.0030, +0.0039] | >= +0.0045 | no |
+| wall ms/step (bench, 2 repeats) | 214.6 | 186.9 (1.148x) | <= 200 | yes |
+| grad-norm max / median, steps >= 200 | 7.9 | 7.0 | <= 30 | yes |
+| `tul/gain_est` steps 1000-5000 | 0.884-0.902 | 0.887-0.906 | inside 0.85-0.95 | yes |
+| cell cos | -0.08 | -0.28 | diagnostic | |
+
+The fixed trainer rate reads 33.4k tok/s on the 5k run against the bench's 32.9k.
+
+## Verdict
+
+Failure. The package is 14.8 % faster on the wall clock and the loop stays stable, but CE@6 is
+0.013 worse than the speed base and K1-K6 falls 34 %, past the 5 % loop-contribution rule. The
+bf16 carrier, the hinge rows and FP8 were not separated; this run cannot name the lever.
+
+## Updated hypothesis
+
+One lever costs the loop's depth use. First suspect: the bf16 carrier, because it rounds the
+loop's state at every store across up to 8 passes, and depth use lives in small per-pass
+changes to that state. Second: FP8, which rounds every MLP input by about 2.7 %. The hinge rows
+change only the regulariser's estimate, which stayed in range. Next: one 5k run per lever on the
+speed base (`lab/experiments/planned/2026-10-12-fan-speed-lever-split.md`).
