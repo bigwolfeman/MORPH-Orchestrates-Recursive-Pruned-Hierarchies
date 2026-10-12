@@ -72,6 +72,8 @@ Two knobs change WHAT the decoder reads and WHAT it decodes (2026-09-13)
 """
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -80,8 +82,8 @@ from torch import Tensor
 from .attention import RMSNorm
 from .tul_layout import SlotLayout
 
-__all__ = ["SpanDecoder", "horizon_span_slots", "next_span_slots",
-           "own_span_slots", "span_slots"]
+__all__ = ["PackedCtx", "PackedSpans", "SpanDecoder", "horizon_span_slots", "next_span_slots",
+           "own_span_slots", "chunk_segment_mask", "pack_spans", "span_slots"]
 
 # Private init streams. Two constants, never the global RNG: building the decoder must not
 # shift a single weight of the model it is bolted onto (the `TULSlots.W_sent` rule).
@@ -225,6 +227,99 @@ def horizon_span_slots(input_ids: Tensor, layout: SlotLayout, per_span_tokens: i
             torch.cat([p[1] for p in parts], dim=2))
 
 
+class PackedSpans(NamedTuple):
+    """:func:`pack_spans`' result: every tensor ``[B, cap]``, ``over`` a 0-dim bool."""
+    slot: Tensor      # int64 slot id of the position (0 at an unused tail position)
+    j: Tensor         # int64 offset inside the slot's span (0 at the tail)
+    ids: Tensor       # int64 token the position PREDICTS (its label), 0 at the tail
+    prev: Tensor      # int64 token the position READS (span token j-1), 0 at j == 0
+    ok: Tensor        # bool: a real span token (False = unused tail)
+    over: Tensor      # bool 0-dim: some row holds more than ``cap`` span tokens
+
+
+def pack_spans(ids: Tensor, valid: Tensor, cap: int) -> PackedSpans:
+    """Pack ``ids`` / ``valid`` ``[B, S, J]`` into ``[B, cap]``, per row, in slot order.
+
+    Slot ``s`` contributes its ``n_s = valid[b, s].sum()`` real positions (a span's valid
+    offsets are a prefix, see :func:`span_slots`); position ``(s, j)`` lands at
+    ``sum_{s' < s} n_s' + j``. The destination is an exclusive cumsum on the device and the
+    move is a ``scatter_`` into ``cap + 1`` columns whose last one is a dump: no boolean
+    indexing and no host read, so the shapes are fixed and a CUDA graph can capture it.
+
+    ``over`` is True when a row has more than ``cap`` real positions. The positions past
+    ``cap`` are dropped into the dump column, so the caller MUST turn ``over`` into a loud
+    failure (the model turns the loss into NaN, the ``row_cap`` precedent): a silent drop
+    would train on fewer tokens than the loss reports.
+    """
+    B, S, J = ids.shape
+    dev = ids.device
+    n = valid.sum(-1)                                              # [B, S]
+    end = n.cumsum(1)
+    dest = (end - n).unsqueeze(-1) + torch.arange(J, device=dev)   # [B, S, J]
+    flat = torch.where(valid & (dest < cap), dest, torch.full_like(dest, cap)).reshape(B, S * J)
+
+    def put(src: Tensor) -> Tensor:
+        out = src.new_zeros(B, cap + 1)
+        out.scatter_(1, flat, src.reshape(B, S * J))
+        return out[:, :cap]
+
+    prev = torch.cat([torch.zeros_like(ids[..., :1]), ids[..., :-1]], dim=-1)
+    return PackedSpans(
+        slot=put(torch.arange(S, device=dev).view(1, S, 1).expand(B, S, J)),
+        j=put(torch.arange(J, device=dev).view(1, 1, J).expand(B, S, J)),
+        ids=put(ids), prev=put(prev), ok=put(valid), over=(end[:, -1] > cap).any())
+
+
+def chunk_segment_mask(seg: Tensor, chunk: int) -> Tensor:
+    """``[B * nc, 1, chunk, 2 * chunk]`` bool for :meth:`PackedCtx.attend`, ``seg`` ``[B, P]``
+    segment ids with ``P = nc * chunk``.
+
+    Query ``i`` of chunk ``n`` sits at global position ``n * chunk + i``; its keys are chunk
+    ``n - 1`` then chunk ``n`` (key ``k`` at ``n * chunk - chunk + k``). It may read a key
+    iff the key is at or before it and carries the same segment id. A segment is at most
+    ``chunk`` positions long (a slot decodes at most ``J`` offsets), so the two chunks hold
+    every key a position may read and the window loses nothing. Chunk 0 has no previous
+    chunk: its keys get id ``-1``, which no position carries. Every row keeps its own
+    diagonal, so no row is fully masked (SDPA would return NaN)."""
+    B, P = seg.shape
+    nc = P // chunk
+    cur = seg.view(B, nc, chunk)
+    prev = F.pad(cur, (0, 0, 1, 0), value=-1)[:, :-1]
+    key = torch.cat([prev, cur], dim=2)                                 # [B, nc, 2c]
+    same = cur.unsqueeze(3) == key.unsqueeze(2)                         # [B, nc, c, 2c]
+    i = torch.arange(chunk, device=seg.device).view(chunk, 1)
+    k = torch.arange(2 * chunk, device=seg.device).view(1, 2 * chunk)
+    return (same & (k <= i + chunk)).reshape(B * nc, 1, chunk, 2 * chunk)
+
+
+class PackedCtx(NamedTuple):
+    """What the blocks need to run on a packed layout (:meth:`SpanDecoder.decode_packed`)."""
+    slot_oh: Tensor   # [B, P, S] one-hot of the position's slot, in the compute dtype (0 at the tail)
+    mask: Tensor      # :func:`chunk_segment_mask`
+    chunk: int
+
+    def attend(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        """Block-diagonal causal attention over the packed row, ``q`` / ``k`` / ``v``
+        ``[B, H, P, dh]`` -> ``[B, H, P, dh]``. Each query chunk reads its own and the
+        previous chunk (``2 * chunk`` keys), not all ``P``: a segment never exceeds one
+        chunk, so this is exactly the full segment-causal attention at ``chunk / P`` of its
+        cost."""
+        B, H, P, dh = q.shape
+        c = self.chunk
+        nc = P // c
+
+        def chunks(t: Tensor) -> Tensor:
+            return t.reshape(B, H, nc, c, dh)
+
+        kc, vc = chunks(k), chunks(v)
+        k2 = torch.cat([F.pad(kc, (0, 0, 0, 0, 1, 0))[:, :, :-1], kc], dim=3)
+        v2 = torch.cat([F.pad(vc, (0, 0, 0, 0, 1, 0))[:, :, :-1], vc], dim=3)
+        to_batch = lambda t: t.transpose(1, 2).reshape(B * nc, H, t.shape[3], dh)  # noqa: E731
+        a = F.scaled_dot_product_attention(to_batch(chunks(q)), to_batch(k2), to_batch(v2),
+                                           attn_mask=self.mask)
+        return a.reshape(B, nc, H, c, dh).transpose(1, 2).reshape(B, H, P, dh)
+
+
 class _SpanDecCross(nn.Module):
     """``tul.spandec_reads_cells`` — cross-attention onto a slot's M REGISTER CELLS.
 
@@ -274,8 +369,15 @@ class _SpanDecCross(nn.Module):
         for m in (self.q, self.kv, self.proj):
             m._ternary_exclude = True
 
-    def forward(self, x: Tensor, mem: Tensor) -> Tensor:
-        """``x [N, J, C]``, ``mem [N, M, C]`` -> ``[N, J, C]`` residual term."""
+    def forward(self, x: Tensor, mem: Tensor, slot_oh: Tensor | None = None) -> Tensor:
+        """``x [N, J, C]``, ``mem [N, M, C]`` -> ``[N, J, C]`` residual term.
+
+        ``slot_oh`` ``[B, P, S]`` (``model.spandec_packed``) switches to the PACKED layout:
+        ``x`` is ``[B, P, C]``, ``mem`` is ``[B, S, M, C]`` and position ``p`` attends to the
+        M cells of its own slot, the same attention the per-slot path computes for it.
+        """
+        if slot_oh is not None:
+            return self._forward_packed(x, mem, slot_oh)
         N, J, C = x.shape
         M = mem.shape[1]
         q = self.q(self.norm_q(x).to(x.dtype))
@@ -285,6 +387,24 @@ class _SpanDecCross(nn.Module):
         v = v.view(N, M, self.n_heads, self.d_head).transpose(1, 2)
         a = F.scaled_dot_product_attention(q, k, v)
         return self.proj(a.transpose(1, 2).reshape(N, J, C))
+
+    def _forward_packed(self, x: Tensor, mem: Tensor, slot_oh: Tensor) -> Tensor:
+        """The packed twin. K and V are projected once per SLOT (``[B, S, M, C]``), the
+        scores against every slot are one small einsum, and the one-hot ``slot_oh`` keeps the
+        position's own slot (a product with 0 or 1, so exact). No gather of K / V to the
+        positions: that gather, and the scatter-add behind it, cost more than the einsum.
+        The softmax over the M cells is fp32, like SDPA's. ``proj`` keeps its zero init."""
+        B, P, C = x.shape
+        S, M = mem.shape[1], mem.shape[2]
+        H, dh = self.n_heads, self.d_head
+        q = self.q(self.norm_q(x).to(x.dtype)).view(B, P, H, dh)
+        k, v = self.kv(self.norm_kv(mem).to(x.dtype)).chunk(2, dim=-1)
+        k, v = k.reshape(B, S, M, H, dh), v.reshape(B, S, M, H, dh)
+        oh = slot_oh.view(B, P, S, 1, 1)
+        w = (torch.einsum("bphd,bsmhd->bpshm", q, k) * oh).sum(2)         # [B, P, H, M]
+        w = (w.float() * (dh ** -0.5)).softmax(-1).to(v.dtype)
+        a = torch.einsum("bpshm,bsmhd->bphd", w.unsqueeze(2) * oh, v)
+        return self.proj(a.reshape(B, P, C))
 
 
 class _SpanDecBlock(nn.Module):
@@ -329,7 +449,13 @@ class _SpanDecBlock(nn.Module):
             self.cross = _SpanDecCross(d_model, n_heads, gen_cross)
             torch.random.set_rng_state(_rng0)
 
-    def forward(self, x: Tensor, mem: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor, mem: Tensor | None = None,
+                packed: PackedCtx | None = None) -> Tensor:
+        """``packed`` is the PACKED layout's context (``model.spandec_packed``): the
+        self-attention is causal inside a slot's segment and blind across segments
+        (:meth:`PackedCtx.attend`, in place of ``is_causal``) and the cross-attention reads
+        each position's own slot's cells. ``None`` is the per-slot path, op for op what it
+        was before it."""
         B, T, C = x.shape
         h = self.norm1(x).to(x.dtype)
         q, k, v = self.qkv(h).chunk(3, dim=-1)
@@ -337,12 +463,16 @@ class _SpanDecBlock(nn.Module):
         q = q.view(shp).transpose(1, 2)
         k = k.view(shp).transpose(1, 2)
         v = v.view(shp).transpose(1, 2)
-        a = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if packed is None:
+            a = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            a = packed.attend(q, k, v)
         x = x + self.proj(a.transpose(1, 2).reshape(B, T, C))
         # A Python-level constant decided at construction (the tree's no-runtime-flag
         # rule): a decoder without the knob traces no branch here at all.
         if self.cross is not None:
-            x = x + self.cross(x, mem)
+            x = x + (self.cross(x, mem) if packed is None
+                     else self.cross(x, mem, packed.slot_oh))
         h = self.norm2(x).to(x.dtype)
         g, u = self.gate_up(h).chunk(2, dim=-1)
         return x + self.down(F.silu(g) * u)
@@ -442,6 +572,27 @@ class SpanDecoder(nn.Module):
              for _ in range(n_layers)])
         self.out_norm = RMSNorm(d_model)
 
+    def _check_mem(self, mem: Tensor | None, B: int, S: int, C: int, dtype) -> Tensor | None:
+        """Validate the register cells ``mem`` and return them as ``[B, S, M, C]`` in
+        ``dtype`` (``None`` stays ``None``)."""
+        if self.reads_cells and mem is None:
+            raise ValueError(
+                "SpanDecoder was built with reads_cells=True (tul.spandec_reads_cells) "
+                "and got no `mem`: the per-layer cross-attention has nothing to read. The "
+                "caller must hand it the slot's M register cells.")
+        if mem is not None and not self.reads_cells:
+            raise ValueError(
+                "SpanDecoder.decode got `mem` but was built with reads_cells=False: no "
+                "block can read it, so the argument would be silently ignored.")
+        if mem is not None:
+            if mem.dim() != 4 or mem.shape[0] != B or mem.shape[1] != S \
+                    or mem.shape[-1] != C:
+                raise ValueError(
+                    f"SpanDecoder.decode mem {tuple(mem.shape)} must be "
+                    f"[B, S, M, C] = [{B}, {S}, M, {C}]")
+            return mem.to(dtype)
+        return None
+
     def decode(self, z: Tensor, ids: Tensor, valid: Tensor, emb: Tensor,
                pos: Tensor | None = None, mem: Tensor | None = None) -> Tensor:
         """``z [B, S, C]``, ``ids``/``valid`` ``[B, S, J]``, ``emb [V, C]`` -> ``[B, S, J, C]``.
@@ -468,22 +619,9 @@ class SpanDecoder(nn.Module):
         B, S, J = ids.shape
         C = z.shape[-1]
         dtype = z.dtype
-        if self.reads_cells and mem is None:
-            raise ValueError(
-                "SpanDecoder was built with reads_cells=True (tul.spandec_reads_cells) "
-                "and got no `mem`: the per-layer cross-attention has nothing to read. The "
-                "caller must hand it the slot's M register cells.")
-        if mem is not None and not self.reads_cells:
-            raise ValueError(
-                "SpanDecoder.decode got `mem` but was built with reads_cells=False: no "
-                "block can read it, so the argument would be silently ignored.")
+        mem = self._check_mem(mem, B, S, C, dtype)
         if mem is not None:
-            if mem.dim() != 4 or mem.shape[0] != B or mem.shape[1] != S \
-                    or mem.shape[-1] != C:
-                raise ValueError(
-                    f"SpanDecoder.decode mem {tuple(mem.shape)} must be "
-                    f"[B, S, M, C] = [{B}, {S}, M, {C}]")
-            mem = mem.to(dtype).reshape(B * S, mem.shape[2], C)
+            mem = mem.reshape(B * S, mem.shape[2], C)
         table = self.pos if pos is None else pos
         limit = int(table.shape[0])
         if J > limit:
@@ -506,3 +644,66 @@ class SpanDecoder(nn.Module):
         for blk in self.blocks:
             x = blk(x, mem)
         return self.out_norm(x).reshape(B, S, J, -1)
+
+    def decode_packed(self, z: Tensor, ids: Tensor, valid: Tensor, emb: Tensor, cap: int,
+                      mem: Tensor | None = None, chunk: int = 0
+                      ) -> tuple[Tensor, Tensor, Tensor]:
+        """:meth:`decode` on a PACKED layout (``model.spandec_packed``).
+
+        :meth:`decode` runs the blocks on ``B * S * J`` rows although a slot's span fills
+        only its first ``n_s`` positions (past the span's end and at pad slots the row is
+        dead weight). Here each row's real positions are concatenated in slot order into
+        ``P`` positions (:func:`pack_spans`; ``cap`` rounded up to a multiple of ``chunk``)
+        and the blocks run on ``B * P`` rows.
+        ``cap`` is a bound on ``sum_s n_s`` proven from shapes by the caller
+        (``MORPHTransformer._spandec_packed_cap``): a row's labels are token positions,
+        and a row with ``n`` valid slots holds ``L - K n`` of them, each slot at most ``J``.
+
+        Per position nothing changes: position ``(s, 0)`` reads ``z_in(z_s)``, ``(s, j)``
+        reads ``tok_in(emb(t_{j-1}))``, both plus ``pos[j]``. Self-attention is causal
+        inside a slot's segment and blind across segments, so a position sees exactly the
+        positions :meth:`decode` shows it. Cross-attention reads the position's own slot's
+        cells. The unused tail gets a zero input, its own segment and label ``-100``.
+        ``chunk`` (default ``J``) is the self-attention window: a segment is at most ``J``
+        positions, so a query needs only its own and the previous ``chunk`` positions
+        (:meth:`PackedCtx.attend`); it must be at least ``J``.
+
+        Returns ``(states [B, P, C], labels [B, P], over)``: the pre-head states, the
+        label per position (``-100`` at the tail) and the 0-dim bool of
+        :class:`PackedSpans`. Only the next-span target of one block is defined here.
+        """
+        B, S, J = ids.shape
+        C = z.shape[-1]
+        dtype = z.dtype
+        if self.horizon != 1 or self.target_offset != 1:
+            raise ValueError(
+                f"SpanDecoder.decode_packed supports horizon 1 / target_offset 1 only (got "
+                f"{self.horizon} / {self.target_offset}).")
+        if J > self.pos.shape[0]:
+            raise ValueError(
+                f"SpanDecoder.decode_packed got J={J} positions but was built for "
+                f"max_tokens={self.pos.shape[0]}: the position table has no row past that.")
+        chunk = int(chunk) or J
+        if chunk < J:
+            raise ValueError(f"SpanDecoder.decode_packed chunk {chunk} < J {J}: a segment "
+                             f"would not fit in the attention window.")
+        P = -(-int(cap) // chunk) * chunk
+        mem = self._check_mem(mem, B, S, C, dtype)
+        pk = pack_spans(ids, valid, P)
+        # One-hot of the position's slot (all zero at the unused tail): the z read and the
+        # cross-attention select with it, a product with 0 or 1, instead of a gather whose
+        # backward is a scatter-add.
+        oh = F.one_hot(pk.slot, S).to(dtype) * pk.ok.unsqueeze(-1).to(dtype)
+        z_p = torch.bmm(oh, self.z_in(z))
+        tok = self.tok_in(F.embedding(pk.prev, emb.to(dtype)))
+        x = torch.where((pk.j == 0).unsqueeze(-1), z_p, tok)
+        x = x + F.embedding(pk.j, self.pos.to(dtype))
+        x = torch.where(pk.ok.unsqueeze(-1), x, torch.zeros_like(x))
+        # Block-diagonal causal relation. The tail shares segment S, so every row of the
+        # mask keeps at least its own diagonal (no all-masked row, no NaN).
+        ctx = PackedCtx(oh, chunk_segment_mask(
+            torch.where(pk.ok, pk.slot, torch.full_like(pk.slot, S)), chunk), chunk)
+        for blk in self.blocks:
+            x = blk(x, mem, packed=ctx)
+        lab = torch.where(pk.ok, pk.ids, torch.full_like(pk.ids, -100))
+        return self.out_norm(x), lab, pk.over

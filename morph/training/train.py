@@ -731,6 +731,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         ce_compact_rows=bool(getattr(m, "ce_compact_rows", False)),
         # MORPHConfig.spandec_ce_row_cap: the span decoder's CE on a fixed, proven row cap.
         spandec_ce_row_cap=bool(getattr(m, "spandec_ce_row_cap", False)),
+        # MORPHConfig.spandec_packed: the span decoder's blocks on a packed, fixed-capacity layout.
+        spandec_packed=bool(getattr(m, "spandec_packed", False)),
         # MORPHConfig.lmhead_row_cap: the token head's rows a loss reads, on a fixed proven cap.
         lmhead_row_cap=bool(getattr(m, "lmhead_row_cap", False)),
         # MORPHConfig.graph_safe: a training forward with no host sync and fixed shapes.

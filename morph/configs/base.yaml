@@ -247,6 +247,14 @@ model:
   #   (ce_compact_rows is not). A batch over the bound gives a NaN loss, never a silent drop.
   #   NOT bit-identical (sum order). false = every row.
   spandec_ce_row_cap: false
+  # spandec_packed: the span decoder's BLOCKS run on each row's real span positions packed in
+  #   slot order at a fixed capacity proven from the shapes (1132 per row, against S*J = 2048
+  #   at the lxtul shapes; MORPHTransformer._spandec_packed_cap), with block-diagonal causal self-attention and the slot's own
+  #   cells in the cross-attention (SpanDecoder.decode_packed). No host sync (graph_step
+  #   legal); a batch over the bound gives a NaN loss. Needs horizon 1, target offset 1,
+  #   spandec_read mean, and no per-pass target / oracle-z / K-fold rollouts (refused at
+  #   build). NOT bit-identical (matmul row counts differ). false = the per-slot decoder.
+  spandec_packed: false
   # lmhead_row_cap: the token head's per-row log-prob (the pointer / DITTO route) runs on the
   #   rows a loss reads only (labelled token rows; slot rows read no loss at emit_weight 0),
   #   packed on the device into a FIXED row count proven from the shapes (1140 of 1280 per row

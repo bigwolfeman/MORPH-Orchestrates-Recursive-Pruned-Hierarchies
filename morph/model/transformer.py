@@ -415,6 +415,18 @@ class MORPHConfig:
     # half the decoder's rows are past their span's end. Not bit-identical (the loss and
     # grad sums run over different chunks). False = every row (the tree before the key).
     spandec_ce_row_cap: bool = False
+    # The span decoder's BLOCKS on a packed layout (`SpanDecoder.decode_packed`): each row's
+    # real span positions, concatenated in slot order, at a fixed capacity proven from the
+    # shapes (`MORPHTransformer._spandec_packed_cap`, 1132 per row at the lxtul shapes),
+    # in place of B*S*J rows of which about half lie past their span's end or at pad slots.
+    # Per position it computes what the per-slot decoder computes (block-diagonal causal
+    # self-attention, the slot's own cells in the cross-attention); no host sync, CUDA-graph
+    # safe; a batch over the bound gives a NaN loss. The vocab CE then runs on the packed
+    # rows (the pack IS the row cap). Refused beside horizon > 1, target offset != 1,
+    # spandec_read != mean, the per-pass target, the oracle-z teacher, gram_iw_k > 1 and
+    # code_enum_k. Not bit-identical to the per-slot decoder (matmul row counts differ).
+    # False builds nothing: the tree before the key.
+    spandec_packed: bool = False
     # The token head's per-row log-prob (`_tul_group_losses`, the pointer / DITTO route) on
     # the rows any loss reads only (labelled TOKEN rows, plus slot rows with a nonzero emit
     # weight), packed on the device into a FIXED row count proven from the shapes
@@ -3589,6 +3601,29 @@ class MORPHTransformer(nn.Module):
                                              float(cfg.tul.code_enum_ratio))
             if cfg.tul.code_enum_credit == "hard":
                 self._enum_hard_eps = float(cfg.tul.code_enum_hard_eps)
+        # `model.spandec_packed`: a build-time bool (no runtime flag). Everything it does not
+        # define is refused here, by name, instead of falling back to the per-slot decoder.
+        self._spandec_packed: bool = bool(cfg.spandec_packed)
+        if self._spandec_packed:
+            _dec, _tc = self.tul_spandec, cfg.tul
+            if _dec is None:
+                raise ValueError("model.spandec_packed needs tul.spandec: true (no span "
+                                 "decoder is built, so the key would change nothing).")
+            _why = [name for name, bad in (
+                ("tul.spandec_horizon > 1", _dec.horizon != 1),
+                ("tul.spandec_target_offset != 1", _dec.target_offset != 1),
+                ("tul.spandec_read != 'mean'", str(_tc.spandec_read) != "mean"),
+                ("tul.spandec_per_pass", bool(_tc.spandec_per_pass)),
+                ("tul.oracle_z (the oracle-z teacher)", bool(_tc.oracle_z)),
+                ("tul.gram_iw_k > 1", self._gram_iw_k > 1),
+                ("tul.code_enum_k > 1", bool(self._code_enum_k)),
+            ) if bad]
+            if _why:
+                raise ValueError(
+                    "model.spandec_packed is defined for the next-span target of the mean "
+                    "reader (horizon 1, offset 1, spandec_read mean) without the per-pass "
+                    f"target, the oracle-z teacher or K-fold rollouts; refused with: "
+                    f"{', '.join(_why)}.")
         # ── arm B: the code policy (tul.code_policy_k; tul_code_policy.py) ──────────
         # LX's codes, ONE rollout, one code PER SLOT chosen by a policy head on the slot's
         # detached loop-entry state and trained by REINFORCE on the span's own CE. `None`
@@ -12076,6 +12111,18 @@ class MORPHTransformer(nn.Module):
         return B * min(per_row, S * J * int(dec.horizon))
 
     @staticmethod
+    def _spandec_packed_cap(L: int, layout: SlotLayout, dec) -> int:
+        """Positions per row of the packed span decoder (``model.spandec_packed``): the
+        per-row labelled-row bound of :meth:`_spandec_row_cap` (one batch row, one block).
+        Its proof holds for the packed positions too, they ARE the labelled rows. A fixed
+        layout has ``L = seq_len + K S`` positions but a row with ``n`` valid slots holds
+        ``L - K n`` tokens, so the bound is ``max_n min(L - K n, J (n - 1))``, not
+        ``seq_len`` (1132, not 1024, at the lxtul shapes; measured: a real row held 1073).
+        A batch over the bound turns the loss into NaN
+        (:func:`morph.model.tul_spandec.pack_spans`'s ``over``), never a silent drop."""
+        return MORPHTransformer._spandec_row_cap(1, L, layout, dec)
+
+    @staticmethod
     def _lmhead_rows(lab: Tensor, slot_mask: Tensor, row_w: Tensor) -> Tensor:
         """``[B*L]`` bool: the token head's rows a loss reads (``model.lmhead_row_cap``).
         A labelled TOKEN row (the weighted CE, the pointer mixture, DITTO's positions and the
@@ -12193,30 +12240,43 @@ class MORPHTransformer(nn.Module):
         # table that the slot's own seed (`E_slot` + a bag-mean OF that table) is built
         # from — the feedback loop `TULConfig.mux_detach_head` records. `SpanDecoder.tok_in`
         # is the learnable map that lets the decoder adapt without writing into the table.
-        if (self._gram_iw_k > 1 or self._code_enum_k) and self.training:
-            # LXTUL-GK (tul.gram_objective="iw", K > 1) and LXTUL-E (tul.code_enum_k > 1,
-            # when a teacher-forced decoder is kept beside it): the decoder runs on K rollouts'
-            # exit states, and its activations were ~4.4 GB of a 20 GB step at B=6, K=4
-            # (memory trace 2026-09-23). The decode is checkpointed, as the per-pass
-            # decoder's is below; `checkpoint` recomputes, it does not re-weight. Every
-            # other forward takes the plain call.
-            st = checkpoint(dec.decode, z, ids, valid, w_tied.detach(), mem=mem,
-                            use_reentrant=False)
-        else:
-            st = dec.decode(z, ids, valid, w_tied.detach(), mem=mem)   # [B, S, J, C]
-        C = st.shape[-1]
-        lab = torch.where(valid, ids, torch.full_like(ids, -100))
-        _row_cap = (self._spandec_row_cap(z.shape[0], input_ids.shape[1], layout, dec)
-                    if self.cfg.spandec_ce_row_cap else 0)
-        if select_best:
-            if not fold_cells:
-                raise RuntimeError("select_best grades the folded cells: pass fold_cells=True")
-            loss = self._spandec_best_of_cells(st, w_head, lab, valid, M_f, _row_cap, stats)
-        else:
+        if self._spandec_packed:
+            st, lab, _over = dec.decode_packed(
+                z, ids, valid, w_tied.detach(),
+                self._spandec_packed_cap(input_ids.shape[1], layout, dec), mem=mem)
+            C = st.shape[-1]
+            # The pack is the row cap: nearly every packed row carries a label.
             loss = fused_linear_cross_entropy(
                 st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
-                chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
-                row_cap=_row_cap, **self._ce_kw)
+                chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id, **self._ce_kw)
+            loss = torch.where(_over, torch.full_like(loss, float("nan")), loss)
+        else:
+            if (self._gram_iw_k > 1 or self._code_enum_k) and self.training:
+                # LXTUL-GK (tul.gram_objective="iw", K > 1) and LXTUL-E (tul.code_enum_k > 1,
+                # when a teacher-forced decoder is kept beside it): the decoder runs on K rollouts'
+                # exit states, and its activations were ~4.4 GB of a 20 GB step at B=6, K=4
+                # (memory trace 2026-09-23). The decode is checkpointed, as the per-pass
+                # decoder's is below; `checkpoint` recomputes, it does not re-weight. Every
+                # other forward takes the plain call.
+                st = checkpoint(dec.decode, z, ids, valid, w_tied.detach(), mem=mem,
+                                use_reentrant=False)
+            else:
+                st = dec.decode(z, ids, valid, w_tied.detach(), mem=mem)   # [B, S, J, C]
+            C = st.shape[-1]
+            lab = torch.where(valid, ids, torch.full_like(ids, -100))
+            _row_cap = (self._spandec_row_cap(z.shape[0], input_ids.shape[1], layout, dec)
+                        if self.cfg.spandec_ce_row_cap else 0)
+            if select_best:
+                if not fold_cells:
+                    raise RuntimeError(
+                        "select_best grades the folded cells: pass fold_cells=True")
+                loss = self._spandec_best_of_cells(st, w_head, lab, valid, M_f, _row_cap,
+                                                   stats)
+            else:
+                loss = fused_linear_cross_entropy(
+                    st.reshape(-1, C), w_head, lab.reshape(-1), ignore_index=-100,
+                    chunk_size=self.cfg.ce_chunk_size, mask_token_id=tc.slot_id,
+                    row_cap=_row_cap, **self._ce_kw)
         if stats is not None:
             # THE DECODE-CHEAP READOUT. `spandec_ce` is a per-TOKEN conditional CE over the
             # next span, so it is directly comparable with the model's own token CE — which
