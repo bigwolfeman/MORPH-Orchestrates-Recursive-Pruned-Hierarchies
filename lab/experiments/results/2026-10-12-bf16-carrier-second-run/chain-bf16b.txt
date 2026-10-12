@@ -1,0 +1,6 @@
+[10-12 08:51:50] bf16b train start
+[10-12 09:11:46] bf16b train exit=0 Final val_loss=3.8981 tok/s: tok/s=32026 tok/s=31261  eval-keep: eval-keep] eval peak 5.75 GiB allocated beside the graph pool; device free after eval 6.24 of 31.39 GiB
+[10-12 09:14:16] bf16b sweep exit=0 bf16b depth=1 ce=3.9118 span_first=3.5114 spandec_ce=4.5224 bf16b depth=6 ce=3.9060 span_first=3.5001 spandec_ce=4.4907 bf16b ce_tokens K1-K6: +0.0058 [+0.0053, +0.0062] over 480 rows bf16b spandec_ce K1-K6: +0.0317 [+0.0303, +0.0332] over 160 batches 
+val/slot_cell_pairwise_cos=-0.2882
+[10-12 09:14:16] stab gain_est n=200 min=0.8891 max=0.9022 mean=0.8963; grad_norm n=240 median=2.095 max=13.897 max/median=6.6
+[10-12 09:14:16] done
