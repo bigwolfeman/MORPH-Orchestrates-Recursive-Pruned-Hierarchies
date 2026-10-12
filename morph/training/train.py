@@ -3536,6 +3536,17 @@ def main(cfg: DictConfig) -> None:
     _train_mode()
     step_times: list[float] = []
     t_start = time.perf_counter()
+    # Wall-clock rate (perf/tokens_per_sec). A step is asynchronous: the host queues it and
+    # runs ahead, and the GPU backlog drains at the next sync. `step_times` times the HOST
+    # (it excludes the post-step block where that drain lands), so on a GPU-bound step it
+    # read ~1.5x the true rate (fan recipe: 139 ms host vs 214 ms wall, 2026-10-12). The wall
+    # rate runs from one synced logging step to the next, minus the eval / generation /
+    # checkpoint blocks, each timed from a sync so the training backlog stays in the window.
+    _wall_sync = torch.cuda.synchronize if device.type == "cuda" else (lambda: None)
+    _wall_sync()
+    _wall_anchor = time.perf_counter()
+    _wall_excl = 0.0
+    _wall_steps = 0
     # In-process divergence guard: counts consecutive eval-cadence points with train ppl
     # over a hard ceiling (after step 2000); aborts after K consecutive strikes so finite
     # prune-bounces (ppl≲70) don't trip it but a real divergence (ppl→1e5) does. Env-tunable.
@@ -4283,6 +4294,7 @@ def main(cfg: DictConfig) -> None:
         # steps_per_sec a pure training-throughput metric regardless of eval cadence.
         if len(step_times) > 100:
             step_times = step_times[-100:]
+        _wall_steps += 1
         if step_time_print:
             # lab/perf/bench_step.py reads these. The wall clock at the END of the step, not
             # a per-step duration: the step is asynchronous (the host runs ahead of the GPU by
@@ -4298,7 +4310,11 @@ def main(cfg: DictConfig) -> None:
 
         # ── Logging (every 20 steps) ──────────────────────────────────────
         if step % 20 == 0:
-            sps = 1.0 / (sum(step_times) / max(len(step_times), 1))
+            host_sps = 1.0 / (sum(step_times) / max(len(step_times), 1))
+            _wall_sync()
+            _t_sync = time.perf_counter()
+            sps = _wall_steps / max(_t_sync - _wall_anchor - _wall_excl, 1e-9)
+            _wall_anchor, _wall_excl, _wall_steps = _t_sync, 0.0, 0
             # Memory: allocated = peak live tensors; reserved = what the caching
             # allocator grabbed from the driver (alloc overhead/fragmentation).
             # The eager-vs-kernel gap in BOTH is the real "alloc overhead" delta.
@@ -4438,6 +4454,9 @@ def main(cfg: DictConfig) -> None:
                 "train/ppl": math.exp(min(_lv, 20.0)),
                 "train/lr": lr,
                 "perf/steps_per_sec": sps,
+                # The host's dispatch rate (the pre-2026-10-12 perf/steps_per_sec): above the
+                # wall rate whenever the GPU is the bottleneck.
+                "perf/host_steps_per_sec": host_sps,
                 # TST superposition ingests s× raw tokens per step (same FLOPs); count them.
                 "perf/tokens_per_sec": sps * batch_size * seq_len * (phase.bag_size or 1),
                 "perf/peak_mem_alloc_mib": peak_alloc,
@@ -4818,6 +4837,14 @@ def main(cfg: DictConfig) -> None:
                     flush=True,
                 )
 
+        _t_excl0 = None
+        if ((step % eval_every == 0 and step > 0)
+                or (gen_every > 0 and step % gen_every == 0 and step > 0)
+                or (ckpt_every > 0 and step % ckpt_every == 0 and step > 0)
+                or (_roll_every > 0 and step % _roll_every == 0 and step > 0)):
+            _wall_sync()
+            _t_excl0 = time.perf_counter()
+
         # ── Validation (every eval_every steps) ──────────────────────────
         if step % eval_every == 0 and step > 0:
             _val_extra: dict = {}
@@ -4971,6 +4998,8 @@ def main(cfg: DictConfig) -> None:
         # Anchor the next step's _dt here, AFTER logging/eval/gen/ckpt, so those
         # non-training blocks don't inflate steps_per_sec (see Timing block above).
         t_start = time.perf_counter()
+        if _t_excl0 is not None:
+            _wall_excl += t_start - _t_excl0
 
     if _gs is not None:
         _st = _gs.stats
