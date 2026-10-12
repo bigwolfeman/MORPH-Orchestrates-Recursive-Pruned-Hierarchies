@@ -42,9 +42,10 @@ The two keys of this module change that, in two steps that can be measured apart
     those of the full row. The rows past the active ones are inactive cells (frozen, finished
     or pad): real, finite states whose outputs are discarded and never written to a cache.
 
-Everything moves rows with ``_RowPermute``: a gather by a full per-row permutation whose
-backward is the gather by the inverse permutation. No scatter, no atomics, deterministic, and
-the backward of a row selection never accumulates (each row has exactly one source).
+Rows move with ``_RowTake`` (a gather of the pass's ``n`` positions) and ``_RowPut`` (a
+scatter of ``n`` rows into the carrier). The ``n`` positions are distinct, so the backward of
+each is the mirror move: one write per row, no atomics, no accumulation, deterministic. Only
+the ``n`` rows of a pass are read or written, never the whole row.
 """
 from __future__ import annotations
 
@@ -104,19 +105,16 @@ def stratified_slot_depths(n_rows: int, n_slots: int, mean: float, max_d: int,
     return d.gather(1, perm)
 
 
-def compact_order(active: Tensor) -> tuple[Tensor, Tensor]:
-    """``(perm, inv)`` for ``active`` ``[B, N]`` bool: ``perm[b, r]`` is the row position at
-    rank ``r`` (active rows first, then the rest, each in position order) and ``inv`` its
-    inverse (``inv[b, perm[b, r]] = r``). int64, deterministic (a stable sort and cumsums)."""
-    a = active.to(torch.int64)
-    n_act = a.sum(dim=1, keepdim=True)
-    inv = torch.where(active, a.cumsum(dim=1) - 1, n_act + (1 - a).cumsum(dim=1) - 1)
-    perm = torch.argsort((~active).to(torch.int8), dim=1, stable=True)
-    return perm, inv
+def compact_order(active: Tensor) -> Tensor:
+    """``perm`` for ``active`` ``[B, N]`` bool: ``perm[b, r]`` is the row position at rank
+    ``r`` (active rows first, then the rest, each in position order). int64, deterministic
+    (a stable sort)."""
+    return torch.argsort((~active).to(torch.int8), dim=1, stable=True)
 
 
 def _index_view(idx: Tensor, like: Tensor, dim: int, bdim: int) -> Tensor:
-    """``idx`` ``[B, N]`` broadcast to ``like``'s shape, B at ``bdim`` and N at ``dim``."""
+    """``idx`` ``[B, n]`` broadcast to ``like``'s shape with ``dim`` cut to ``n``, B at
+    ``bdim`` and n at ``dim``."""
     shape = [1] * like.dim()
     shape[bdim], shape[dim] = idx.shape[0], idx.shape[1]
     out = list(like.shape)
@@ -124,44 +122,67 @@ def _index_view(idx: Tensor, like: Tensor, dim: int, bdim: int) -> Tensor:
     return idx.view(shape).expand(out)
 
 
-class _RowPermute(torch.autograd.Function):
-    """``out = x.gather(dim, idx)`` with ``idx`` a full per-row permutation and ``back`` its
-    inverse; the backward is ``g.gather(dim, back)``. Exact (each output row has one source),
-    deterministic, and graph-capturable."""
+class _RowTake(torch.autograd.Function):
+    """``out = x.gather(dim, idx)`` with ``idx`` ``[B, n]`` distinct positions per row (the first
+    ``n`` ranks of a ``compact_order``). The backward writes each gradient row back at its
+    position into zeros: ``scatter_`` of distinct indices, one write per row, no atomics, no
+    accumulation, deterministic and graph-capturable. Only the ``n`` rows are touched on the
+    way forward."""
 
     @staticmethod
-    def forward(ctx, x: Tensor, idx: Tensor, back: Tensor, dim: int, bdim: int) -> Tensor:
-        ctx.save_for_backward(back)
-        ctx.dims = (dim, bdim)
+    def forward(ctx, x: Tensor, idx: Tensor, dim: int, bdim: int) -> Tensor:
+        ctx.save_for_backward(idx)
+        ctx.meta = (dim, bdim, x.shape)
         return x.gather(dim, _index_view(idx, x, dim, bdim))
 
     @staticmethod
     def backward(ctx, g: Tensor):
-        (back,) = ctx.saved_tensors
-        dim, bdim = ctx.dims
-        return g.gather(dim, _index_view(back, g, dim, bdim)), None, None, None, None
+        (idx,) = ctx.saved_tensors
+        dim, bdim, shape = ctx.meta
+        gx = g.new_zeros(shape).scatter_(dim, _index_view(idx, g, dim, bdim), g)
+        return gx, None, None, None
 
 
-def take_rows(x: Tensor, perm: Tensor, inv: Tensor, n: int, dim: int = 1,
-              bdim: int = 0) -> Tensor:
+class _RowPut(torch.autograd.Function):
+    """``out = fill`` with the rows at ``idx`` (``[B, n]`` distinct positions) replaced by
+    ``src``. The backward is the mirror of ``_RowTake``: ``src`` gets the gradient rows at
+    ``idx``, ``fill`` the gradient with those rows zeroed. Distinct indices, so exact and
+    deterministic."""
+
+    @staticmethod
+    def forward(ctx, src: Tensor, fill: Tensor, idx: Tensor, dim: int, bdim: int) -> Tensor:
+        ctx.save_for_backward(idx)
+        ctx.meta = (dim, bdim)
+        return fill.scatter(dim, _index_view(idx, src, dim, bdim), src)
+
+    @staticmethod
+    def backward(ctx, g: Tensor):
+        (idx,) = ctx.saved_tensors
+        dim, bdim = ctx.meta
+        iv = _index_view(idx, g, dim, bdim)
+        return g.gather(dim, iv), g.scatter(dim, iv, 0.0), None, None, None
+
+
+def take_rows(x: Tensor, perm: Tensor, n: int, dim: int = 1, bdim: int = 0) -> Tensor:
     """The first ``n`` rows of ``x`` in ``perm`` order (``compact_order``)."""
-    return _RowPermute.apply(x, perm, inv, dim, bdim).narrow(dim, 0, n)
+    return _RowTake.apply(x, perm[:, :n], dim, bdim)
 
 
-def put_rows(x_c: Tensor, perm: Tensor, inv: Tensor, fill: Tensor, keep: Tensor,
-             dim: int = 1, bdim: int = 0) -> Tensor:
+def put_rows(x_c: Tensor, perm: Tensor, fill: Tensor, keep: Tensor, dim: int = 1,
+             bdim: int = 0, fill_c: Tensor | None = None) -> Tensor:
     """``x_c`` (rows in ``perm`` order, the first ``n``) written back at their positions
     where ``keep`` ``[B, N]`` is True, ``fill`` everywhere else. ``keep`` must lie inside the
-    first ``n`` ranks (the caller's capacity bound): a kept row past them would read the
-    zero padding."""
-    n_all = perm.shape[1]
-    pad_shape = list(x_c.shape)
-    pad_shape[dim] = n_all - x_c.shape[dim]
-    full = torch.cat([x_c, x_c.new_zeros(pad_shape)], dim=dim) if pad_shape[dim] else x_c
-    back = _RowPermute.apply(full, inv, perm, dim, bdim)
-    kshape = [1] * fill.dim()
-    kshape[bdim], kshape[dim] = keep.shape[0], keep.shape[1]
-    return torch.where(keep.view(kshape), back.to(fill.dtype), fill)
+    first ``n`` ranks (the caller's capacity bound): a kept row past them keeps ``fill``.
+    ``fill_c`` is ``take_rows(fill, perm, n)`` when the caller already holds it."""
+    n = x_c.shape[dim]
+    idx = perm[:, :n]
+    if fill_c is None:
+        fill_c = _RowTake.apply(fill, idx, dim, bdim)
+    kshape = [1] * x_c.dim()
+    kshape[bdim], kshape[dim] = keep.shape[0], n
+    keep_c = keep.gather(1, idx).view(kshape)
+    src = torch.where(keep_c, x_c.to(fill.dtype), fill_c)
+    return _RowPut.apply(src, fill, idx, dim, bdim)
 
 
 def compact_attn_input(xa: Tensor, payload: tuple) -> Tensor:
@@ -169,19 +190,19 @@ def compact_attn_input(xa: Tensor, payload: tuple) -> Tensor:
 
     ``xa`` is the layer's ``norm(x_bar)`` on the rows this pass computes (all ``N`` cells in
     ``"full"`` mode, the first ``n`` ranks in ``"gather"`` mode); ``payload`` is
-    ``(cache, keep, perm, inv)``: the layer's cache ``[B, N, C]`` (None at the first pass),
+    ``(cache, keep, perm)``: the layer's cache ``[B, N, C]`` (None at the first pass),
     the cells whose pass this is (``active``), and the row order (None in ``"full"`` mode).
     The result is ``xa`` at the active cells and the cache elsewhere; it is also the cache
     the next pass reads, so a frozen cell keeps the input of its last active pass.
     """
-    cache, keep, perm, inv = payload
+    cache, keep, perm = payload
     if cache is None:
         # pass 0: every cell is active (valid slots draw depth >= 1, pads loop once), so
         # the zeros are never read; they only give `where` its shape
         cache = xa.new_zeros(keep.shape[0], keep.shape[1], xa.shape[-1])
     if perm is None:
         return torch.where(keep.unsqueeze(-1), xa.to(cache.dtype), cache)
-    return put_rows(xa, perm, inv, cache, keep, dim=1)
+    return put_rows(xa, perm, cache, keep, dim=1)
 
 
 def validate_slot_compact(cfg) -> None:

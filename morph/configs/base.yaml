@@ -305,6 +305,13 @@ model:
   #   EMA); fixed-weight teacher picks agree 93-98 % per pass (perf/audit/AUDIT.md). Needs a
   #   training run to qualify. false = the EMA twin's target.
   fan_target_online: false
+  # loop_glue_compile: the slot loop's two full-width RMS norms (the entry `input_norm` over
+  #   the token positions and the per-pass slot-cell norm, tul.slot_cell_pass_norm: rms) run
+  #   through torch.compile (morph/model/loop_glue.py): one fused kernel forward, two
+  #   backward, instead of six and about a dozen eager ones. NOT bit-identical (Inductor's
+  #   reduction order); fp64-referenced in tests/test_loop_glue.py. Needs a slot loop.
+  #   false = eager norms.
+  loop_glue_compile: false
   # Parallel multi-token prediction on the coda readout (arc E8, 2026-09-07). 1 = the plain
   # next-token head only (bit-identical; no module built). k > 1 adds k-1 heads (RMSNorm ->
   # identity-init Linear -> the tied LM head) trained on labels shifted by 1..k-1, loss

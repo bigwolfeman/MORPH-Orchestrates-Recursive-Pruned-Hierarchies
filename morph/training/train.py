@@ -747,6 +747,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         fan_twin_compile=bool(getattr(m, "fan_twin_compile", False)),
         # MORPHConfig.fan_div_fast: the fan's epi / vol terms batched in fp32.
         fan_div_fast=bool(getattr(m, "fan_div_fast", False)),
+        # MORPHConfig.loop_glue_compile: the slot loop's full-width RMS norms compiled.
+        loop_glue_compile=bool(getattr(m, "loop_glue_compile", False)),
         # MORPHConfig.fan_lsel_pick_bf16: the per-pass teacher pick's head GEMMs in bf16.
         fan_lsel_pick_bf16=bool(getattr(m, "fan_lsel_pick_bf16", False)),
         # MORPHConfig.fan_target_online: the fan target from the online prelude (no twin pass).

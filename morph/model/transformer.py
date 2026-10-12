@@ -56,6 +56,7 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
                           swor_uniform)
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
+from .loop_glue import compile_rms_norm
 from .slot_compact import (compact_attn_input, compact_order, put_rows, slot_depth_capacity,
                            stratified_slot_depths, take_rows, validate_slot_compact)
 from .tul_ditto import ditto_loss
@@ -487,6 +488,12 @@ class MORPHConfig:
     # EMA). The twin is still built, EMA-updated and checkpointed, so the key can be turned
     # off on resume. False = the EMA twin's target (today).
     fan_target_online: bool = False
+    # The slot loop's full-width RMS norms (the entry `input_norm` over the token positions
+    # and the per-pass slot-cell norm) run through `torch.compile` (morph/model/loop_glue.py)
+    # instead of eager `attention.RMSNorm`: one fused reduction kernel forward and two
+    # backward. NOT bit-identical (Inductor's reduction order); bounded against an fp64
+    # reference in tests/test_loop_glue.py. Needs a slot loop. False = eager norms (today).
+    loop_glue_compile: bool = False
 
     # Parallel multi-token prediction on the coda readout (Gloeckle et al. 2024, arXiv
     # 2404.19737; arc E8, 2026-09-07 [W]). mtp_heads = the number of future tokens each
@@ -903,11 +910,18 @@ class DiagonalInjection(nn.Module):
             self.log_A = nn.Parameter(init_decay_vec.float().log())
             self.log_dt = nn.Parameter(init_dt_vec.float().log())
 
+    def source_view(self, e: Tensor) -> Tensor:
+        """The channels of ``e`` that ``forward`` reads. A caller that moves ``e`` around
+        (the compacted slot loop gathers it once per pass) may hand ``forward`` this view
+        instead of the full tensor."""
+        return e[..., self.start:self.end]
+
     def forward(self, h: Tensor, e: Tensor) -> Tensor:
+        """``e`` is the full source or its ``source_view`` (told apart by the last dim)."""
         A = self.log_A.exp().clamp(max=0.9999)
         dt = self.log_dt.exp()
         h_ctx = h[..., self.start:self.end]
-        e_ctx = e[..., self.start:self.end]
+        e_ctx = e if e.shape[-1] == self.end - self.start else self.source_view(e)
         if self.B is not None:
             e_ctx = e_ctx @ self.B.to(e_ctx.dtype).T
         new_ctx = A * h_ctx + dt * e_ctx
@@ -2084,6 +2098,11 @@ class MORPHTransformer(nn.Module):
         # (the magnitude governor was magnitude-invariant). Cheap: tensor-reduced, 1 sync/forward.
         self._diag_corecos = bool(os.environ.get("MORPH_DIAG_CORECOS"))
         self._fwd_count = 0
+        if cfg.loop_glue_compile and (cfg.tul is None or cfg.tul.tokens_through_core
+                                      or int(cfg.n_core) == 0
+                                      or getattr(cfg, "fm", None) is not None):
+            raise ValueError("model.loop_glue_compile needs a slot loop (tul set, "
+                             "tul.tokens_through_core false, n_core > 0, no FM planner).")
         d = cfg.d_model
         n_total = cfg.n_prelude + cfg.n_core + cfg.n_coda
 
@@ -3208,6 +3227,10 @@ class MORPHTransformer(nn.Module):
                     raise NotImplementedError(
                         f"tul.slot_cell_pass_norm={self._cell_norm_mode!r} with {_why}.")
             self.tul_cell_norm = RMSNorm(d)
+        # `model.loop_glue_compile`: the compiled RMS norm (loop_glue.py) for the two
+        # full-width norms of the slot loop. A Python-level constant: None keeps the eager
+        # `RMSNorm.__call__` at both sites.
+        self._tul_rms_compiled = compile_rms_norm() if cfg.loop_glue_compile else None
 
         # ── The discrete thought (TULConfig.vq_codes; morph/model/tul_vq.py) ──────
         # K codes per span instead of one continuous vector, lifted into the K prefix
@@ -3989,6 +4012,13 @@ class MORPHTransformer(nn.Module):
                   f"{_tx.prefix_k} cells x {cfg.hc_streams} streams -> {_n_x:,} params "
                   f"(bf16, never ternarised)", flush=True)
 
+        # `model.inject_fold` on the core: layer i's per-layer injection term rides the exit
+        # write of layer i-1 (`next_inject_term`), as it already does in the prelude and the
+        # coda. A Python constant. A Parcae block refuses the fold and an xHC residual does
+        # not define it, so neither takes it.
+        self._core_fold_inject = (bool(cfg.inject_fold) and not self._core_is_parcae
+                                  and self._xhc_streams == 0)
+
         # ── The slot loop's carrier constant (tul.loop_attn_center / tul.loop_attn_hc) ──
         # Both act on the CORE blocks' attention sublayer, built after every other module:
         # neither draws RNG (the uniform residual and the center have no parameters), and
@@ -4318,6 +4348,12 @@ class MORPHTransformer(nn.Module):
             self._cell_norm_stats[f"slot_cell_mean_rms_t{t}"] = rm
         return out
 
+    def _tul_rms(self, norm: RMSNorm, x: Tensor) -> Tensor:
+        """``norm(x)``, through the compiled form when ``model.loop_glue_compile`` built one."""
+        if self._tul_rms_compiled is None:
+            return norm(x)
+        return self._tul_rms_compiled(x, norm.weight, norm.eps)
+
     def _cell_norm_apply(self, h: Tensor) -> Tensor:
         """The norm itself, for the two modes (a Python-level constant picks one).
 
@@ -4346,7 +4382,7 @@ class MORPHTransformer(nn.Module):
         pre-map. Step 1 here bounds the streams first; step 2 only shifts their common
         part. ``g`` is the same ``tul_cell_norm.weight``: one gain, every pass."""
         if self._cell_norm_mode == "rms":
-            return self.tul_cell_norm(h).to(h.dtype)
+            return self._tul_rms(self.tul_cell_norm, h).to(h.dtype)
         eps = self.tul_cell_norm.eps
         hf = h.float()
         u = hf * hf.pow(2).mean(-1, keepdim=True).add(eps).rsqrt()           # [B, S, n, C]
@@ -4554,9 +4590,21 @@ class MORPHTransformer(nn.Module):
         ret_cap = {} if self._core_has_retention else None
         ds_out = [] if ds_capture else None
         xa_out = [] if compact_out else None
+        # One `unbind` instead of `inj_terms[i]` per layer: each select's backward builds a
+        # zero tensor of the WHOLE stack and the engine adds the n_core of them (a fill and
+        # n_core - 1 full-width adds per pass); the unbind's backward is one stack.
+        if isinstance(inj_terms, Tensor):
+            inj_terms = inj_terms.unbind(0)
+        # `model.inject_fold`: layer 0's term is added here, every later layer's term is added
+        # by the previous layer's HC exit kernel. Only for the plain per-layer add: no source
+        # skip, no stage conditioning (it modulates between the add and the layer), no depth
+        # state (its term is added after this one), and the terms precomputed.
+        fold = (self._core_fold_inject and inj_terms is not None
+                and not (source_free or source_decay_only)
+                and stage_cond is None and ds_state_in is None)
         for i, layer in enumerate(self.core):
             gi = np_ + i
-            if not (source_free or source_decay_only):
+            if not (source_free or source_decay_only) and not (fold and i > 0):
                 if inj_terms is not None:
                     term = inj_terms[i]
                 else:
@@ -4588,6 +4636,8 @@ class MORPHTransformer(nn.Module):
             h_injected = layer(h_injected, mlp_kwargs=mlp_kw,
                                ret_state=rs_arg, ret_capture=rc_arg,
                                attn_kwargs=_akw, pass_idx=iter_idx,
+                               **({"next_inject_term": inj_terms[i + 1]}
+                                  if fold and i + 1 < len(self.core) else {}),
                                **({} if xhc_valid is None else {"xhc_valid": xhc_valid}),
                                **({} if xhc_route is None else {"xhc_route": xhc_route}))
             if compact_out:
@@ -6481,7 +6531,7 @@ class MORPHTransformer(nn.Module):
                 derive_shadow(layout.slot_valid, np.repeat(_vh_slots, _m_cells, axis=1))
         gidx, gvalid = layout.slot_index, layout.slot_valid
 
-        xn = self.input_norm(x)
+        xn = self._tul_rms(self.input_norm, x)
         _xn_base = xn
         if iw_rollouts > 1:
             xn = repeat_along_batch(xn, iw_rollouts)
@@ -7397,6 +7447,10 @@ class MORPHTransformer(nn.Module):
                               progressive=_prog or None, gain_reuse=_gain_reuse or None,
                               gain_all=_gain_all or None, recur_gate=self.tul_recur_gate))
             _cpt_plans = self._slot_compact_plans(depths, _n_slots, _m_cells, total_iters)
+        # The compacted pass gathers `e` once per pass and the injection reads only its
+        # context channels, so gather (and, in the backward, scatter and accumulate over the
+        # passes) that slice alone. A view, taken once outside the loop.
+        _e_step = _e_arg if _cpt_plans is None else self.injection.source_view(_e_arg)
         for t in range(total_iters):
             active = alive if halt else (depths > t)               # [B, S]
             _sc = self.tul_stage_cond.stage_embed(iter_stage_value(t, x.device)) \
@@ -7625,7 +7679,7 @@ class MORPHTransformer(nn.Module):
                                        carry=_cy, want_carry=_want_carry,
                                        use_reentrant=False)
             else:
-                _step_out = _core_step(_h_in, _e_arg, _inj_arg, ret_state=ret_state,
+                _step_out = _core_step(_h_in, _e_step, _inj_arg, ret_state=ret_state,
                                        iter_idx=t, stage_cond=_sc,
                                        carry=_cy, want_carry=_want_carry, **_cpt_kw)
             if _ctr_w is not None:
@@ -7709,7 +7763,7 @@ class MORPHTransformer(nn.Module):
                     _gm = _gm & ~_pfx
                 if (not _prog) or bool(_gm.any()):
                     _gain_terms.append(self._slot_gain_penalty(
-                        _core_step, _h_in, _e_arg, _inj_arg, ret_state, t, _sc,
+                        _core_step, _h_in, _e_step, _inj_arg, ret_state, t, _sc,
                         _gm, _gain_lambda, carry=_cy,
                         # keyword passed only when on: the knob-off call is the old call
                         **({} if _gain_renorm_to is None
@@ -7941,9 +7995,8 @@ class MORPHTransformer(nn.Module):
                     _fv = _fin.view(*_fin.shape, *([1] * (h.dim() - 2)))
                     _tp = torch.full_like(depths, t)
                     if _fp_acc is None:
-                        _fp_acc = (torch.where(_fv, _h_det, torch.zeros_like(_h_det)),
-                                   torch.where(_fv, h, torch.zeros_like(h)), _fin,
-                                   torch.where(_fin, _tp, torch.zeros_like(_tp)))
+                        _fp_acc = (torch.where(_fv, _h_det, 0.0), torch.where(_fv, h, 0.0), _fin,
+                                   torch.where(_fin, _tp, 0))
                     else:
                         _fp_acc = (torch.where(_fv, _h_det, _fp_acc[0]),
                                    torch.where(_fv, h, _fp_acc[1]), _fp_acc[2] | _fin,
@@ -8188,14 +8241,14 @@ class MORPHTransformer(nn.Module):
 
     def _slot_compact_plans(self, depths: Tensor, n_slots: int, m_cells: int,
                             total_iters: int) -> list[tuple]:
-        """One ``(perm, inv, qpos, active)`` per pass (``perm`` / ``inv`` / ``qpos`` None in
+        """One ``(perm, qpos, active)`` per pass (``perm`` / ``qpos`` None in
         ``"full"`` mode). ``depths`` is the cell-level table ``[B, S * M]``, constant within
         a slot. In ``"gather"`` mode pass ``t`` computes ``C_t * M`` rows, ``C_t`` the
         stratified draw's capacity (``slot_depth_capacity``); a device assert (no host read)
         stops the run if more cells than that are active, which would mean the draw and the
         proved bound disagree."""
         if self.cfg.slot_compact == "full":
-            return [(None, None, None, depths > t) for t in range(total_iters)]
+            return [(None, None, depths > t) for t in range(total_iters)]
         tc = self.cfg.tul
         caps = slot_depth_capacity(float(tc.slot_mean_depth or self.cfg.mean_depth),
                                    int(tc.slot_max_depth or self.cfg.max_depth), n_slots)
@@ -8205,16 +8258,16 @@ class MORPHTransformer(nn.Module):
             n = caps[t] * m_cells
             torch._assert_async(act.sum(dim=1).max() <= n,
                                 "model.slot_compact: more active cells than the capacity C_t")
-            perm, inv = compact_order(act)
-            plans.append((perm, inv, perm[:, :n].to(torch.int32).contiguous(), act))
+            perm = compact_order(act)
+            plans.append((perm, perm[:, :n].to(torch.int32).contiguous(), act))
         return plans
 
     def _slot_compact_step(self, h_in: Tensor, e_in: Tensor, inj: Tensor, compact: tuple,
                            akw: tuple, iter_idx: int) -> tuple[Tensor, None, tuple]:
         """One slot-loop pass under ``model.slot_compact``: ``(h_out, None, caches)``.
 
-        ``compact`` is ``(perm, inv, qpos, active, caches)``: a ``_slot_compact_plans``
-        entry plus the per-layer attention-input caches (None at the first pass). In
+        ``compact`` is ``(perm, qpos, active, caches)``: a ``_slot_compact_plans`` entry plus the
+        per-layer attention-input caches (None at the first pass). In
         ``"gather"`` mode the carrier, the injection source and the per-layer injection
         terms are cut to the plan's rows, the core blocks run on them (the attention's keys
         and values over every cell, from the caches with this pass's rows written in:
@@ -8223,23 +8276,23 @@ class MORPHTransformer(nn.Module):
         ones are kept, so both modes hand the loop the same tensor. ``akw`` is the loop's
         per-layer attention kwargs; every core layer shares the cells index (the guard
         refused ``loop_reach``)."""
-        perm, inv, qpos, act, caches = compact
+        perm, qpos, act, caches = compact
         tg = akw[0]["tg_index"]
         if perm is not None:
             n = qpos.shape[1]
-            h_c = take_rows(h_in, perm, inv, n)
-            e_c = take_rows(e_in, perm, inv, n)
-            inj_c = take_rows(inj, perm, inv, n, dim=2, bdim=1)
-            tg = {**tg, "qpos": qpos, "perm": perm, "inv": inv}
+            h_c = take_rows(h_in, perm, n)
+            e_c = take_rows(e_in, perm, n)
+            inj_c = take_rows(inj, perm, n, dim=2, bdim=1)
+            tg = {**tg, "qpos": qpos, "perm": perm}
         else:
             h_c, e_c, inj_c = h_in, e_in, inj
         kws = tuple({"tg_index": tg,
-                     "slot_compact": (None if caches is None else caches[i], act, perm, inv)}
+                     "slot_compact": (None if caches is None else caches[i], act, perm)}
                     for i in range(self.cfg.n_core))
         h_out, _, xa = self._apply_core_step(h_c, e_c, None, None, None, iter_idx=iter_idx,
                                              inj_terms=inj_c, attn_kw=kws, compact_out=True)
         if perm is not None:
-            h_out = put_rows(h_out, perm, inv, h_in, act)
+            h_out = put_rows(h_out, perm, h_in, act, fill_c=h_c)
         else:
             h_out = torch.where(act.view(*act.shape, *([1] * (h_in.dim() - 2))), h_out, h_in)
         return h_out, None, xa

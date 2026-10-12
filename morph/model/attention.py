@@ -620,11 +620,11 @@ def _tg_index_attend(cca: "_CCABase", x: Tensor, q: Tensor, k: Tensor, v: Tensor
         if win_capture is not None:
             raise NotImplementedError("tg_win_capture (tul.loop_carry) with query rows by "
                                       "position (model.slot_compact)")
-        perm, inv, n = tg_index["perm"], tg_index["inv"], qpos.shape[1]
-        q = take_rows(q, perm, inv, n, dim=2)
-        x = take_rows(x, perm, inv, n)
-        q_lat = take_rows(q_lat, perm, inv, n)
-        gate_pre = None if gate_pre is None else take_rows(gate_pre, perm, inv, n)
+        perm, n = tg_index["perm"], qpos.shape[1]
+        q = take_rows(q, perm, n, dim=2)
+        x = take_rows(x, perm, n)
+        q_lat = take_rows(q_lat, perm, n)
+        gate_pre = None if gate_pre is None else take_rows(gate_pre, perm, n)
     out_comp, out_win = tg_strict_attention(q, k, v, cca.sink_logits, tg_index,
                                             cca.window_size, scale)
     return cca._gate_combine_up(x, out_comp, out_win, q_lat=q_lat, gate_pre=gate_pre,
