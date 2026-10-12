@@ -113,8 +113,9 @@ Caveats (one seed; no 1-cell inference; cached decode refuses the fan) and the f
 Speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed.yaml` = the recipe + packed decoder, head on loss rows,
 compiled loop glue: 213.5 ms/step wall (+7.1 %), K1-K6 held, CE@6 +0.003 on one run (`lab/experiments/failures/2026-10-12-fan-speed-package.md`).
 Current speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed_bf16c.yaml` = the above + the HC carrier stored in bf16
-(`model.hc_carrier_bf16`): 198.9 ms/step wall (1.15x the locked recipe). ON HOLD 2026-10-12: two runs read CE@6 3.8996 / 3.9060,
-K1-K6 +0.0052 / +0.0058; matched controls decide it (`lab/experiments/planned/2026-10-12-bf16-carrier-matched-controls.md`). FP8 forward is
+(`model.hc_carrier_bf16`): 198.9 ms/step wall (1.15x the locked recipe). Free at 5k against matched fp32 controls (2 seeds
+each: CE@6 +0.0005, K1-K6 105 %): `lab/experiments/successes/2026-10-12-bf16-carrier-matched-controls.md`. READ THAT FILE before
+judging any 5k speed check: K1-K6 spreads 0.0023 between two seeds (44 % of its mean), so one run cannot test the 5 % rule. FP8 forward is
 rejected (it costs the loop 55 % of K1-K6): `lab/experiments/failures/2026-10-12-fan-speed-lever-split.md`.
 
 ## Previous winner (Wolfe, 2026-10-07): LXTUL + pointer + DITTO

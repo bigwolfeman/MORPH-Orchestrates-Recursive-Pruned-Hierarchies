@@ -1,0 +1,13 @@
+[10-12 09:15:26] ctl-s1 train start (nowta_pointer_fast_spdcells_speed training.eval_keep_graphs=true training.eval_diag_every=4)
+[10-12 09:37:49] ctl-s1 train exit=0 Final val_loss=3.8985 tok/s: tok/s=29448 tok/s=29273 
+[10-12 09:40:52] ctl-s1 sweep exit=0 ctl-s1 depth=1 ce=3.9102 span_first=3.5117 spandec_ce=4.5194 ctl-s1 depth=6 ce=3.9061 span_first=3.5022 spandec_ce=4.4844 ctl-s1 ce_tokens K1-K6: +0.0041 [+0.0037, +0.0045] over 480 rows ctl-s1 spandec_ce K1-K6: +0.0350 [+0.0340, +0.0362] over 160 batches 
+[10-12 09:40:52] stab gain_est n=200 min=0.8901 max=0.9012 mean=0.8966; grad_norm n=240 median=2.052 max=14.628 max/median=7.1
+[10-12 09:40:52] ctl-s2 train start (nowta_pointer_fast_spdcells_speed training.eval_keep_graphs=true training.eval_diag_every=4 training.seed=2)
+[10-12 10:05:11] ctl-s2 train exit=0 Final val_loss=3.8973 tok/s: tok/s=29006 tok/s=29140 
+[10-12 10:08:18] ctl-s2 sweep exit=0 ctl-s2 depth=1 ce=3.9093 span_first=3.5130 spandec_ce=4.4972 ctl-s2 depth=6 ce=3.9029 span_first=3.4992 spandec_ce=4.4705 ctl-s2 ce_tokens K1-K6: +0.0064 [+0.0059, +0.0068] over 480 rows ctl-s2 spandec_ce K1-K6: +0.0267 [+0.0254, +0.0281] over 160 batches 
+[10-12 10:08:18] stab gain_est n=200 min=0.8910 max=0.9019 mean=0.8975; grad_norm n=240 median=1.836 max=14.936 max/median=8.1
+[10-12 10:08:18] bf16-s2 train start (nowta_pointer_fast_spdcells_speed_bf16c training.seed=2)
+[10-12 10:30:11] bf16-s2 train exit=0 Final val_loss=3.8987 tok/s: tok/s=31178 tok/s=31629 
+[10-12 10:31:34] bf16-s2 sweep exit=0 bf16-s2 depth=1 ce=3.9093 span_first=3.5121 spandec_ce=4.5100 bf16-s2 depth=6 ce=3.9040 span_first=3.4998 spandec_ce=4.4725 bf16-s2 ce_tokens K1-K6: +0.0052 [+0.0048, +0.0057] over 480 rows bf16-s2 spandec_ce K1-K6: +0.0375 [+0.0361, +0.0389] over 160 batches 
+[10-12 10:31:35] stab gain_est n=200 min=0.8901 max=0.9016 mean=0.8975; grad_norm n=240 median=1.903 max=14.806 max/median=7.8
+[10-12 10:31:35] done
