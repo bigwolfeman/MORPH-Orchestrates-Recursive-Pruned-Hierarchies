@@ -59,7 +59,11 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   tok/s), speed base 213.5 (28.8k), + FP8 209.9, + hinge rows 207.5, all three round-2 levers 186.9 (32.9k, 1.148x the
   base). Round-2 package FAILED at 5k (`lab/experiments/failures/2026-10-12-fan-speed-round-2.md`): CE@6 3.9117,
   K1-K6 +0.0035 (-34 %), stability held. [~] Lever split running (one 5k per lever, prereg `planned/2026-10-12-fan-speed-lever-split.md`).
-  Found: the ~20 steps after each eval run at half speed (graph re-record), about 1.7 % of a 5k run at eval_every 250.
+  [x] Lever split filed (`failures/2026-10-12-fan-speed-lever-split.md`): bf16 carrier holds (3.8996 / +0.0052), FP8 forward
+  costs the loop (3.9057 / +0.0024, rejected), hinge rows 3.8975 / +0.0044 (off; one more run before use). Speed base is now
+  `nowta_pointer_fast_spdcells_speed_bf16c`: 198.9 ms/step wall. bf16-carrier models run outside autocast (master 24b5077c;
+  decorator costs 0: 198.7 ms). Eval is ~26 % of a 5k run's wall (20 evals x ~19 s: ~13 s eval + 6 s graph re-record
+  after GraphStep.released()); [~] eval-cost builder (perf/eval-cost).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
   2026-10-08 flame ledger). 9.1 is the analytic LXTUL step: three times the decode forward,

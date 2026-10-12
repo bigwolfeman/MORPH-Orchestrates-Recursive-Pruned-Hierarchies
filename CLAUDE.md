@@ -112,6 +112,9 @@ Caveats (one seed; no 1-cell inference; cached decode refuses the fan) and the f
 [`2026-10-11-ungraded-fan-set-reader.md`](.agents/notes/implemented/architecture/2026-10-11-ungraded-fan-set-reader.md).
 Speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed.yaml` = the recipe + packed decoder, head on loss rows,
 compiled loop glue: 213.5 ms/step wall (+7.1 %), K1-K6 held, CE@6 +0.003 on one run (`lab/experiments/failures/2026-10-12-fan-speed-package.md`).
+Current speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed_bf16c.yaml` = the above + the HC carrier stored in bf16
+(`model.hc_carrier_bf16`): 198.9 ms/step wall (1.15x the locked recipe), CE@6 3.8996, K1-K6 +0.0052 on one run. FP8 forward is
+rejected (it costs the loop 55 % of K1-K6): `lab/experiments/failures/2026-10-12-fan-speed-lever-split.md`.
 
 ## Previous winner (Wolfe, 2026-10-07): LXTUL + pointer + DITTO
 
