@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded as the loop base 2026-10-11 by [the ungraded fan + set reader](2026-10-11-ungraded-fan-set-reader.md).
+
 ## Problem
 
 Since 2026-08-16 the slot loop has had one recurring failure: its passes do not add to the

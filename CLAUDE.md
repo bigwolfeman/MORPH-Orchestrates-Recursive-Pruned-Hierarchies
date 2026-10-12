@@ -102,7 +102,16 @@ depth (0.233 nats), and the identity-escape law says why every alternative faile
 > it holds one seed of two, doubles the time to failure (step 1150 -> 2225) and reaches 0.78
 > and 0.46 nats better val CE on the two seeds.
 
-## ⭐ WINNER (Wolfe, 2026-10-07): LXTUL + pointer + DITTO
+## ⭐ FAN RECIPE (Wolfe, 2026-10-11): ungraded fan + set-reader span decoder
+
+`morph/configs/nowta_pointer_fast_spdcells.yaml`: 4 independent cells per slot (no router, no reset), the coda
+reads all 4, pointer head, and the training-only span decoder cross-attends to the 4 cells as a set
+(`tul.spandec_reads_cells`). 5k, 480 rows, seed 1, 3 runs: CE@6 3.8952, K1-K6 +0.0054, cell cos -0.28, 29.2k tok/s
+on master. Start new loop and speed work from it; it supersedes LXTUL as the loop base (DITTO on the fan is untested).
+Caveats (one seed; no 1-cell inference; cached decode refuses the fan) and the full arm table:
+[`2026-10-11-ungraded-fan-set-reader.md`](.agents/notes/implemented/architecture/2026-10-11-ungraded-fan-set-reader.md).
+
+## Previous winner (Wolfe, 2026-10-07): LXTUL + pointer + DITTO
 
 `morph/configs/lxtul_pointer.yaml` (5k: `lxtul.yaml` + `tul.pointer_heads: 4`, the output-only copy head)
 then the 1000-step `lxtul_pointer_ditto.yaml` phase (DITTO repetition rows). CE 3.9280 at 5k, 0.150 ahead

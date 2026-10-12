@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded in part 2026-10-11: the loop base is now [the ungraded fan + set reader](2026-10-11-ungraded-fan-set-reader.md); the pointer stays, DITTO on the fan is untested.
+
 ## Problem
 
 The locked LXTUL candidate ([2026-10-04 note](2026-10-04-lxtul-primary-candidate.md)) earns
