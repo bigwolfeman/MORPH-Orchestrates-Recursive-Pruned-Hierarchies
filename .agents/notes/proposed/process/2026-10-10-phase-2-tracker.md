@@ -50,7 +50,9 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   **Round 2 (2026-10-12, sonnet builders, branches off 7b792ccb):** [~] T4 hinge on k of B rows + the standard
   steady-state bench `lab/perf/bench_step.py` (perf/hinge-rows; hinge is 17.5 ms). [~] T9 bf16-stored HC carrier with
   fp32 math and an fp32 carrier for the hinge's applications (perf/bf16-carrier-v2; HC Triton 56 ms, bandwidth bound).
-  [~] T10 FP8 e4m3 forward GEMMs for the ternary linears (codes exact; perf/fp8-fwd; stops if < 1.3x at real shapes).
+  [x] T10 FP8 e4m3 forward GEMMs, PARKED (perf/fp8-fwd 61b4fa45): 2x at 6144 rows in isolation, but the ternary MLP
+  forward is ~1.5 of 15.3 TFLOP, so the step moves 139.0 -> 136.7 ms (1.8 %). Not in the package. FP8 dgrad would add
+  about as much again. Note: steady-state step is ~139 ms (44k tok/s); the 5k trainer mean (32.6k) includes eval every 250.
   Then one 5k package run against the `_speed` config. Not started: T5 pad slots, small-row core passes (megakernel; ask Wolfe).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
