@@ -1,0 +1,16 @@
+# Speed round 2 (2026-10-12): the speed base (nowta_pointer_fast_spdcells_speed) plus three
+# levers that change the trained function: the gain hinge on 2 of the 6 batch rows
+# (model.slot_gain_rows), the HC carrier stored in bf16 with fp32 math and an fp32 carrier for
+# the hinge (model.hc_carrier_bf16), and e4m3 forward GEMMs for the dense ternary MLP layers
+# (model.fp8_ternary_fwd). Quality check: lab/experiments/planned/2026-10-12-fan-speed-round-2.md.
+defaults:
+  - nowta_pointer_fast_spdcells_speed
+  - _self_
+
+model:
+  slot_gain_rows: 2
+  hc_carrier_bf16: true
+  fp8_ternary_fwd: true
+
+wandb:
+  name: nowta-pointer-fast-spdcells-speed2
