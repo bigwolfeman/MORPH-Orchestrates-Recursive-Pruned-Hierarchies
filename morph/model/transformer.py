@@ -479,6 +479,13 @@ class MORPHConfig:
     # (morph/model/ternary_qat.py, TernaryStepCache; bound by the trainer after compile).
     # Bit-identical to False. False = today: every read re-quantises and re-casts.
     ternary_step_cache: bool = False
+    # The forward GEMM of every dense ternary MLP linear (MortarLinear: prelude, core, coda) on
+    # FP8 tensor cores: the STE's codes as e4m3 (exact) with the scale folded into the GEMM
+    # scale, the activations quantised per row (morph/model/layers/block_sparse.py
+    # _TernaryFP8Fwd; the e4m3 codes ride the step cache). The backward is unchanged (bf16 STE
+    # dgrad / wgrad). NOT bit-identical: the activation rounding. Needs ternary_step_cache;
+    # refused with an in-run carve. False = today.
+    fp8_ternary_fwd: bool = False
     # The fan's EMA target twin (tul_fan_route.FanTargetFront) runs its prelude blocks
     # through the trainer's block compile (training.compile_blocks), like the live prelude.
     # NOT bit-identical (Inductor's fused rounding vs the eager twin). False = eager twin.

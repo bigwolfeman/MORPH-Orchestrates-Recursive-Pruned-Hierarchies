@@ -745,6 +745,9 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         # MORPHConfig.ternary_step_cache: bf16 ternary weights once per forward (bound below,
         # after torch.compile).
         ternary_step_cache=bool(getattr(m, "ternary_step_cache", False)),
+        # MORPHConfig.fp8_ternary_fwd: the ternary MLP forward GEMMs on e4m3 codes (bound with
+        # the step cache).
+        fp8_ternary_fwd=bool(getattr(m, "fp8_ternary_fwd", False)),
         # MORPHConfig.fan_twin_compile: the fan's EMA twin prelude blocks compiled (below).
         fan_twin_compile=bool(getattr(m, "fan_twin_compile", False)),
         # MORPHConfig.fan_div_fast: the fan's epi / vol terms batched in fp32.
@@ -2664,13 +2667,16 @@ def main(cfg: DictConfig) -> None:
     # eager_on_recompile stance (the fill compiles here, in the thread-free window).
     def _bind_ternary_step_cache(mode: str | None) -> None:
         if not bool(model.cfg.ternary_step_cache):
+            if bool(model.cfg.fp8_ternary_fwd):
+                raise ValueError("model.fp8_ternary_fwd needs model.ternary_step_cache=true: "
+                                 "the e4m3 codes ride the step cache")
             return
         _cs = int(getattr(tr, "compact_step", 10**9))
         if _cs < total_steps:
             raise ValueError(f"model.ternary_step_cache is refused: training.compact_step={_cs} "
                              f"< steps={total_steps}; the carve removes the STEs it caches")
         from morph.model.ternary_qat import bind_ternary_step_cache
-        _tsc = bind_ternary_step_cache(model, mode)
+        _tsc = bind_ternary_step_cache(model, mode, fp8_fwd=bool(model.cfg.fp8_ternary_fwd))
         print(f"  [ternary-step-cache] ON: {_tsc.summary()}, refreshed once per forward",
               flush=True)
 
