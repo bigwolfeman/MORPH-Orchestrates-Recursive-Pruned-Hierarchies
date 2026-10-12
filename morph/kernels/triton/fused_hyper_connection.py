@@ -2202,7 +2202,12 @@ class _HCRegionEntry(torch.autograd.Function):
         # grad_w / grad_b exactly as _FusedHCPreMap.backward (fp32 GEMM over the carrier).
         graw2 = graw.reshape(T, 48)
         x_flat = h.reshape(T, N * C)
-        grad_w = (graw2.to(h.dtype).t() @ x_flat).float()
+        if h.dtype == torch.float32:
+            grad_w = (graw2.to(h.dtype).t() @ x_flat).float()
+        else:
+            # bf16 carrier: the same bf16 GEMM operands the autocast projection used, with
+            # an fp32 result (no bf16 rounding of the 48 x 4C weight grad).
+            grad_w = torch.mm(graw2.to(h.dtype).t(), x_flat, out_dtype=torch.float32)
         grad_b = (graw2 * rms.reshape(T, 1)).sum(0)
         return gh, grad_w.to(w_dtype), grad_b.to(b_dtype), None, None, None
 
@@ -2414,43 +2419,60 @@ def hc_pre_map_fold(
                                      norm_eps, out_dtype)
 
 
-def _hc_region_active(h: Tensor) -> bool:
+def _hc_region_active(h: Tensor, carrier_bf16: bool = False) -> bool:
     """The ONE branch test of ``hc_region_entry`` and ``hc_region_exit``. The exit's backward
     is only correct after the region entry ran (it hands gout to the entry as h_link's grad),
     so both must decide the same way on the same forward: CUDA + Triton, n=4, an fp32 carrier,
     and bf16 autocast on (the region entry's projection is the bf16 GEMM that autocast would
-    run; with autocast off the old path's projection is fp32, so the reference path runs)."""
+    run; with autocast off the old path's projection is fp32, so the reference path runs).
+
+    ``carrier_bf16`` (model.hc_carrier_bf16): the carrier may be bf16 as well as fp32, and the
+    case the reference path would serve RAISES instead: the key promises a bf16-stored
+    carrier, and the reference path would silently keep it fp32 or round Hres to bf16."""
     from morph.kernels.triton._eager_flag import hc_force_eager
-    return (not hc_force_eager() and TRITON_AVAILABLE and h.is_cuda and h.shape[2] == 4
-            and h.dtype == torch.float32 and torch.is_autocast_enabled("cuda")
-            and torch.get_autocast_dtype("cuda") == torch.bfloat16)
+    ok = (not hc_force_eager() and TRITON_AVAILABLE and h.is_cuda and h.shape[2] == 4
+          and torch.is_autocast_enabled("cuda")
+          and torch.get_autocast_dtype("cuda") == torch.bfloat16)
+    if carrier_bf16:
+        if not ok or h.dtype not in (torch.float32, torch.bfloat16):
+            raise RuntimeError(
+                "model.hc_carrier_bf16 needs the HC region kernels: CUDA + Triton, n=4, an "
+                "fp32 or bf16 carrier and bf16 autocast on (and MORPH_HC_FORCE_EAGER unset); "
+                f"got cuda={h.is_cuda}, dtype={h.dtype}, shape={tuple(h.shape)}, autocast="
+                f"{torch.is_autocast_enabled('cuda')}")
+        return True
+    return ok and h.dtype == torch.float32
 
 
 def hc_region_entry(
     h: Tensor, proj_w: Tensor, proj_b: Tensor, tau: float, alpha: float, iters: int, eps: float,
+    carrier_bf16: bool = False,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """model.hc_region_fused entry: ``(x_bar, Hres, Hpost_row, h_link)``.
 
     ``hc_pre_map``'s outputs plus ``h_link``, the carrier the exit must read (pass it to
     ``hc_region_exit`` in place of ``h``). Where ``_hc_region_active``: ``_HCRegionEntry``.
     Anywhere else: ``hc_pre_map`` and ``h`` itself, so there the key changes nothing.
+    ``carrier_bf16`` (model.hc_carrier_bf16): ``h`` may be bf16, and x_bar leaves in ``h``'s
+    dtype; Hres and Hpost_row are fp32 either way. No fallback: see ``_hc_region_active``.
     """
     if int(iters) != 3:
         # The exit cannot tell which entry ran: both must take the same branch, and the
         # exit's test has no `iters`. HyperConnectionResidual refuses this at build.
         raise ValueError("model.hc_region_fused needs hc_cayley_iters=3")
-    if not _hc_region_active(h):
+    if not _hc_region_active(h, carrier_bf16):
         x_bar, Hres, Hpost_row = hc_pre_map(h, proj_w, proj_b, tau, alpha, iters, eps)
         return x_bar, Hres.to(h.dtype), Hpost_row.to(h.dtype), h
     return _hc_region_entry_dispatch(h, proj_w, proj_b, tau, alpha, eps)
 
 
 def hc_region_exit(hres: Tensor, hpost_row: Tensor, h_link: Tensor, y: Tensor,
-                   term: Tensor | None = None) -> Tensor:
+                   term: Tensor | None = None, carrier_bf16: bool = False) -> Tensor:
     """model.hc_region_fused exit: ``hc_post`` on the entry's ``h_link``. On CUDA:
     ``_HCRegionExit`` (its backward hands gout to the entry's backward). Anywhere else:
-    ``hc_post``. The branch test is ``hc_region_entry``'s, so both take the same one."""
-    if not _hc_region_active(h_link):
+    ``hc_post``. The branch test is ``hc_region_entry``'s, so both take the same one.
+    The output has ``h_link``'s dtype (bf16 in, bf16 stored)."""
+    if not _hc_region_active(h_link, carrier_bf16):
         return hc_post(hres, hpost_row, h_link, y, term)
     return _hc_region_exit_dispatch(hres, hpost_row, h_link, y, term)
 

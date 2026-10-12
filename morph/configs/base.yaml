@@ -412,6 +412,16 @@ model:
                            # stream expand): one carrier read + write less per block. Forward
                            # bit-identical; the term's grad is summed in the exit kernel. Needs
                            # hc_region_fused. tests/test_hc_region_fused.py. blockfuse 2026-10-08.
+  hc_carrier_bf16: false   # true ⇒ the HC carrier [B,S,4,C] is stored in bf16 between sublayers
+                           # (prelude, slot loop, coda, stream expand, exit mix): half the bytes
+                           # for the bandwidth-bound HC kernels. Loads widen to fp32, mixing math
+                           # and Hres/Hpost_row/projection stay fp32, only the store rounds. The
+                           # slot-loop gain hinge runs its two applications on an fp32 carrier (its
+                           # 0.02 finite difference reads bf16 storage rounding as gain). Carrier
+                           # grads are bf16 too (autograd matches the tensor's dtype). Needs
+                           # hc_use_kernel, hc_region_fused, CUDA and bf16 autocast (raises
+                           # otherwise). Rounding change, NOT bit-identical; off = byte-identical.
+                           # .agents/notes/proposed/architecture/2026-10-12-hc-carrier-bf16.md
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
