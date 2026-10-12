@@ -124,6 +124,13 @@ model:
   #   the numbers above were measured on a fixed pass. `6` on seed 1 reproduces those runs.
   #   Under training.graph_step one graph is recorded per pass (morph/training/graph_step.py).
   slot_gain_pass_force: -1
+  # slot_gain_rows: the hinge's two core applications run on k of the step's B batch rows (0 =
+  #   all rows, today). Rows never attend across a batch row, so the kept rows are exact; the
+  #   gain is their mean. The kept rows rotate each step from a device-side counter (so a
+  #   graph_step replay moves them): step n reads rows n*k .. n*k+k-1 mod B. Needs
+  #   slot_gain_lambda > 0 and slot_compact != off; 0 < k < B or the first hinge raises.
+  #   CHANGES THE TRAINING FUNCTION (a noisier gain estimate for ~k/B of the hinge's cost).
+  slot_gain_rows: 0
   # slot_gain_tail_lambda: a second hinge on the PER-SLOT gain g_s of the same finite
   #   difference, lambda_tail * mean over valid slots of relu(g_s - slot_gain_tail_target)^2,
   #   added to the row hinge. The row hinge holds the typical gain; the tail bounds ONE
@@ -763,6 +770,9 @@ training:
 
   # Evaluation / logging
   eval_every: 500
+  # true = print one `[steptime] step= t= tokens=` line per step (the wall clock at the step's
+  # end). Read by lab/perf/bench_step.py, the one speed number. false = no extra line.
+  step_time_print: false
   n_eval_batches: 20
   ckpt_every: 2500
   # How many periodic `step_*.pt` files to keep. The oldest is deleted once this many

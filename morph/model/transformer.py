@@ -851,6 +851,14 @@ class MORPHConfig:
     # host and replays the graph recorded for that pass (morph/training/graph_step.py).
     # Phase-2 tracker items A2/A3 (.agents/notes/proposed/process/2026-10-10-phase-2-tracker.md).
     slot_gain_pass_force: int = -1
+    # slot_gain_rows — the hinge's two applications run on k of the step's B batch rows
+    # instead of all B (rows never attend across a batch row, so the kept rows' values are
+    # exact; the gain is the mean over those rows). The kept rows ROTATE: step n reads rows
+    # (n*k + 0..k-1) mod B, n a device-side counter, so a CUDA-graph replay moves them
+    # (`_gain_rows_index`). 0 = every row, the function from before the key. Needs
+    # model.slot_compact != "off" (its guard is what makes the step row-sliceable) and
+    # 0 < k < the batch size (raises at the first hinge otherwise).
+    slot_gain_rows: int = 0
     # slot_depth_stratified — the slot loop's training depth draw is, per row, a SYSTEMATIC
     # sample of clamp(Poisson(mean), 1, max) randomly permuted over the slots: each slot's
     # marginal law is unchanged, the joint law is not (a row cannot draw many deep slots at
@@ -3881,6 +3889,18 @@ class MORPHTransformer(nn.Module):
         # model.slot_depth_stratified / model.slot_compact: refused outside the recipe they
         # were built for (morph/model/slot_compact.py).
         validate_slot_compact(cfg)
+        if int(cfg.slot_gain_rows) < 0:
+            raise ValueError(f"model.slot_gain_rows must be >= 0 (0 = every row), "
+                             f"got {cfg.slot_gain_rows}")
+        if int(cfg.slot_gain_rows) > 0:
+            if cfg.slot_gain_lambda <= 0.0:
+                raise ValueError("model.slot_gain_rows needs model.slot_gain_lambda > 0: it "
+                                 "changes how the hinge runs.")
+            if str(cfg.slot_compact) == "off":
+                raise NotImplementedError(
+                    "model.slot_gain_rows needs model.slot_compact != 'off': row slicing "
+                    "is built for the compacted step (validate_slot_compact bars every "
+                    "per-pass feature whose batch-shaped state it would also have to slice).")
         if (cfg.slot_gain_reuse_f0 and cfg.tul is not None
                 and int(cfg.tul.xhc_streams) > 0):
             # The expanded residuals' TopK route is recorded by the hinge's own f(h) and
@@ -3951,6 +3971,12 @@ class MORPHTransformer(nn.Module):
         # The pass the last draw (or the force key) chose, for the trainer's `loop/gain_pass`.
         # Host-side, so logging it costs no device sync. The trainer clears it every step.
         self._gain_pass_last: int | None = None
+        # model.slot_gain_rows: the hinge's call counter, ON THE DEVICE so a CUDA-graph replay
+        # advances it (a host int would be frozen into the graph). Not persistent: a resume
+        # restarts the rotation, which is a choice of rows and not training state.
+        if int(cfg.slot_gain_rows) > 0:
+            self.register_buffer("_gain_rows_ctr", torch.zeros((), dtype=torch.long),
+                                 persistent=False)
         if cfg.tul is not None and cfg.tul.slot_source_once and cfg.scse_enabled:
             raise NotImplementedError(
                 "tul.slot_source_once under SCSE: SCSE's core is already source-free "
@@ -8463,6 +8489,19 @@ class MORPHTransformer(nn.Module):
                if "gain_raw" in terms[0] else {}),
         }
 
+    def _gain_rows_index(self, n_rows: int, k: int, device) -> Tensor:
+        """The ``k`` batch rows the next hinge call reads, ``[k]`` int64 on ``device``:
+        ``(n * k + 0..k-1) mod n_rows`` for the call count ``n``, which advances by one. Pure
+        device ops (no host read, no RNG), so a CUDA graph that records it replays a NEW
+        choice each time (tests/test_slot_gain_rows.py). Rows rotate through the batch, so
+        every row is read equally often and no fixed data position is favoured."""
+        if not 0 < k < n_rows:
+            raise ValueError(f"model.slot_gain_rows {k} must satisfy 0 < k < the batch size "
+                             f"{n_rows}: the hinge runs on a strict subset of the rows.")
+        idx = (self._gain_rows_ctr * k + torch.arange(k, device=device)) % n_rows
+        self._gain_rows_ctr.add_(1)
+        return idx
+
     def _slot_gain_penalty(self, core_step, h_in, e_arg, inj_arg, ret_state, t, stage_cond,
                            mask, lam: float, carry=None, renorm_to=None,
                            f0: Tensor | None = None, f0_rng: tuple | None = None,
@@ -8504,6 +8543,26 @@ class MORPHTransformer(nn.Module):
         applications is returned DETACHED as ``gain_raw`` (an instrument, not in the loss).
         None: g is f's gain and ``gain_raw`` is absent.
         """
+        k_rows = int(self.cfg.slot_gain_rows)
+        if k_rows > 0:
+            # model.slot_gain_rows: every batch-shaped input is cut to the same k rows, then
+            # the body below runs unchanged on the sliced batch (a row attends only within
+            # itself, so the kept rows' values are the full-batch hinge's). Batch axis: dim 0
+            # of h, e, the mask, the plan and its caches; dim 1 of the injection stack
+            # [n_core, B, N, ...]. validate: slot_compact is on, so ret_state, carry and f0
+            # are None (validate_slot_compact bars the features that would set them).
+            if compact is None or f0 is not None or ret_state is not None or carry is not None:
+                raise NotImplementedError(
+                    "model.slot_gain_rows slices the compacted step's inputs only (no "
+                    "retention state, carry or reused f0).")
+            ri = self._gain_rows_index(h_in.shape[0], k_rows, h_in.device)
+            h_in, e_arg, mask = h_in.index_select(0, ri), e_arg.index_select(0, ri), mask.index_select(0, ri)
+            inj_arg = inj_arg.index_select(1, ri)
+            if renorm_to is not None:
+                renorm_to = renorm_to.index_select(0, ri)
+            *plan, caches = compact
+            compact = (*(None if x is None else x.index_select(0, ri) for x in plan),
+                       None if caches is None else tuple(c.index_select(0, ri) for c in caches))
         cpu_rng = torch.get_rng_state()
         cuda_rng = torch.cuda.get_rng_state() if h_in.is_cuda else None
         def _restore():

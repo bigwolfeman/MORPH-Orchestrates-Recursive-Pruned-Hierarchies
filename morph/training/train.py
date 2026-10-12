@@ -800,6 +800,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
         # MORPHConfig.slot_gain_pass_force: -1 = a fresh hinge pass per step (2026-10-10)
         slot_gain_pass_force=int(getattr(m, "slot_gain_pass_force", -1)),
+        slot_gain_rows=int(getattr(m, "slot_gain_rows", 0)),
         # MORPHConfig.slot_depth_stratified / slot_compact (morph/model/slot_compact.py)
         slot_depth_stratified=bool(getattr(m, "slot_depth_stratified", False)),
         slot_compact=str(getattr(m, "slot_compact", "off")),
@@ -2358,6 +2359,7 @@ def main(cfg: DictConfig) -> None:
     seq_len = int(data_cfg.seq_len)
     grad_clip = float(getattr(tr, "grad_clip", 1.0))
     eval_every = int(getattr(tr, "eval_every", 500))
+    step_time_print = bool(getattr(tr, "step_time_print", False))
     ckpt_every = int(getattr(tr, "ckpt_every", 2500))
     # Retention for the periodic `step_*.pt` checkpoints. 0 = keep every one, which is
     # UNBOUNDED: a 100k-step run at ckpt_every=2500 writes 40 files of ~2.3 GB = 90 GB,
@@ -4275,6 +4277,15 @@ def main(cfg: DictConfig) -> None:
         # steps_per_sec a pure training-throughput metric regardless of eval cadence.
         if len(step_times) > 100:
             step_times = step_times[-100:]
+        if step_time_print:
+            # lab/perf/bench_step.py reads these. The wall clock at the END of the step, not
+            # a per-step duration: the step is asynchronous (the host runs ahead of the GPU by
+            # a few steps) and only the logging steps sync, so one step's duration is noise.
+            # The difference of two stamps taken at the same phase (20 steps apart, one sync
+            # inside) is exact. The logged sps is a rolling 100-step mean that still holds the
+            # compile warm-up, so it cannot give a steady-state rate.
+            print(f"[steptime] step={step} t={t_now:.6f} tokens={batch_size * seq_len * (phase.bag_size or 1)}",
+                  flush=True)
         if _dbg_step:
             _flag = "  <<< SLOW" if _dt > 3.0 else ""
             print(f"  [dbg] step {step}: {_dt:.2f}s depths={_dbg['depths']}{_flag}", flush=True)
