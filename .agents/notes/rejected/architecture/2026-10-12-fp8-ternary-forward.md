@@ -1,6 +1,6 @@
 # Agent Note: FP8 forward GEMMs for the ternary MLPs
 
-Status: proposed
+Status: rejected — FP8 activation rounding inside the slot loop cost 55 % of K1-K6 and 0.007 CE@6 at 5k (lab/experiments/failures/2026-10-12-fan-speed-lever-split.md) for 1.7 % of the step
 
 ## Problem
 

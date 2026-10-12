@@ -1,0 +1,16 @@
+[10-12 04:13:55] split-bf16carrier train start (model.hc_carrier_bf16=true)
+[10-12 04:38:43] split-bf16carrier train exit=0 Final val_loss=3.8989 tok/s: tok/s=31925 tok/s=31409 
+[10-12 04:39:53] split-bf16carrier sweep exit=0 split-bf16carrier depth=1 ce=3.9048 span_first=3.5027 spandec_ce=4.5118 split-bf16carrier depth=6 ce=3.8996 span_first=3.4905 spandec_ce=4.4762 split-bf16carrier ce_tokens K1-K6: +0.0052 [+0.0047, +0.0057] over 480 rows split-bf16carrier spandec_ce K1-K6: +0.0356 [+0.0341, +0.0372] over 160 batches 
+val/slot_cell_pairwise_cos=-0.2717
+[10-12 04:39:53] stab gain_est n=200 min=0.8888 max=0.9018 mean=0.8962; grad_norm n=240 median=2.002 max=14.737 max/median=7.4
+[10-12 04:39:53] split-rows2 train start (model.slot_gain_rows=2)
+[10-12 05:09:39] split-rows2 train exit=0 Final val_loss=3.8890 tok/s: tok/s=29971 tok/s=29912 
+[10-12 05:10:49] split-rows2 sweep exit=0 split-rows2 depth=1 ce=3.9019 span_first=3.5008 spandec_ce=4.5057 split-rows2 depth=6 ce=3.8975 span_first=3.4924 spandec_ce=4.4742 split-rows2 ce_tokens K1-K6: +0.0044 [+0.0039, +0.0048] over 480 rows split-rows2 spandec_ce K1-K6: +0.0315 [+0.0300, +0.0329] over 160 batches 
+val/slot_cell_pairwise_cos=-0.2730
+[10-12 05:10:49] stab gain_est n=200 min=0.8878 max=0.9118 mean=0.8961; grad_norm n=240 median=1.870 max=15.638 max/median=8.4
+[10-12 05:10:49] split-fp8 train start (model.fp8_ternary_fwd=true)
+[10-12 05:40:37] split-fp8 train exit=0 Final val_loss=3.8941 tok/s: tok/s=30215 tok/s=30454 
+[10-12 05:41:47] split-fp8 sweep exit=0 split-fp8 depth=1 ce=3.9081 span_first=3.5109 spandec_ce=4.5039 split-fp8 depth=6 ce=3.9057 span_first=3.5051 spandec_ce=4.4846 split-fp8 ce_tokens K1-K6: +0.0024 [+0.0021, +0.0027] over 480 rows split-fp8 spandec_ce K1-K6: +0.0193 [+0.0181, +0.0204] over 160 batches 
+val/slot_cell_pairwise_cos=-0.2736
+[10-12 05:41:47] stab gain_est n=200 min=0.8895 max=0.9034 mean=0.8962; grad_norm n=240 median=1.897 max=15.410 max/median=8.1
+[10-12 05:41:47] done
