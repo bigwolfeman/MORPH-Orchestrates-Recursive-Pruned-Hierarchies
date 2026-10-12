@@ -4,8 +4,8 @@ What each test pins:
   1. The stratified draw's capacity bound ``C_t`` holds on every row (pads included) and is
      attained, at the LXTUL shape and at shapes whose thresholds sit near integers; each
      slot's marginal law is the clamped Poisson law (CPU).
-  2. ``compact_order`` is a permutation with the active rows first, in order, and its
-     inverse; ``take_rows`` / ``put_rows`` pass a float64 gradcheck (CPU).
+  2. ``compact_order`` is a permutation with the active rows first, in order;
+     ``take_rows`` / ``put_rows`` pass a float64 gradcheck (CPU).
   3. The strict attention kernel with query rows by position (``qpos``) equals the full
      kernel's rows at those positions, forward and every gradient (CUDA).
   4. THE MACHINERY IS EXACT: with the stratified draw on in both arms, ``"gather"`` (only the
@@ -91,29 +91,29 @@ def test_marginal_is_the_clamped_poisson_law():
 def test_compact_order_puts_active_rows_first_in_order():
     torch.manual_seed(3)
     act = torch.rand(5, 40) < 0.4
-    perm, inv = compact_order(act)
+    perm = compact_order(act)
     for b in range(5):
         a = act[b].nonzero().flatten()
         r = (~act[b]).nonzero().flatten()
         assert torch.equal(perm[b], torch.cat([a, r]))
-    assert torch.equal(perm.gather(1, inv), torch.arange(40).expand(5, 40))
+    assert torch.equal(perm.sort(dim=1).values, torch.arange(40).expand(5, 40))
 
 
 def test_row_moves_gradcheck():
     torch.manual_seed(4)
     act = torch.rand(3, 12) < 0.5
     act[:, 0] = True
-    perm, inv = compact_order(act)
+    perm = compact_order(act)
     n = int(act.sum(1).max())
     x = torch.randn(3, 12, 2, 5, dtype=torch.float64, requires_grad=True)
-    torch.autograd.gradcheck(lambda x: take_rows(x, perm, inv, n), (x,))
+    torch.autograd.gradcheck(lambda x: take_rows(x, perm, n), (x,))
     xq = torch.randn(4, 3, 12, 5, dtype=torch.float64, requires_grad=True)   # [L, B, N, C]
-    torch.autograd.gradcheck(lambda x: take_rows(x, perm, inv, n, dim=2, bdim=1), (xq,))
+    torch.autograd.gradcheck(lambda x: take_rows(x, perm, n, dim=2, bdim=1), (xq,))
     xc = torch.randn(3, n, 2, 5, dtype=torch.float64, requires_grad=True)
     fill = torch.randn(3, 12, 2, 5, dtype=torch.float64, requires_grad=True)
-    torch.autograd.gradcheck(lambda a, f: put_rows(a, perm, inv, f, act), (xc, fill))
+    torch.autograd.gradcheck(lambda a, f: put_rows(a, perm, f, act), (xc, fill))
     # the round trip writes the active rows back and keeps the rest
-    y = put_rows(take_rows(x, perm, inv, n), perm, inv, torch.zeros_like(x), act)
+    y = put_rows(take_rows(x, perm, n), perm, torch.zeros_like(x), act)
     assert torch.equal(y, torch.where(act.view(3, 12, 1, 1), x, torch.zeros_like(x)))
 
 
@@ -129,7 +129,7 @@ def _kernel_case(dtype, seed, qpos_override=None):
     sink = torch.randn(H, device="cuda", generator=g).requires_grad_()
     act = (torch.rand(B, S_slots, device="cuda", generator=g) < 0.6).repeat_interleave(M, 1)
     act[:, :M] = True
-    perm, inv = compact_order(act)
+    perm = compact_order(act)
     n = int(act.sum(1).max()) + M                 # room for padding rows, as the plans have
     qpos = perm[:, :n].to(torch.int32).contiguous()
     idx = tg_strict_index("cells", cells=M)

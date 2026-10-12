@@ -509,7 +509,7 @@ class MORPHBlock(nn.Module):
             attn_kwargs = dict(attn_kwargs)
             _persist_capture = attn_kwargs.pop("tg_persist_capture")
         # model.slot_compact (`MORPHTransformer._slot_compact_step`, core blocks only): the
-        # private payload `(cache, active, perm, inv)`. The attention then reads its input
+        # private payload `(cache, active, perm)`. The attention then reads its input
         # over EVERY cell (`compact_attn_input`: this call's rows at the active cells, the
         # cache elsewhere) and the block returns `(h, that input)`, the next pass's cache.
         # Popped like the persist capture above; None on every other call.
