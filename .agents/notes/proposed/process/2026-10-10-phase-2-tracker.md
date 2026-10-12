@@ -20,6 +20,33 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
 - **Recipe switch 2026-10-11:** speed work now targets `nowta_pointer_fast_spdcells` (the fan recipe,
   [note](../../implemented/architecture/2026-10-11-ungraded-fan-set-reader.md)). The fan has no EMA twin and no
   router; it keeps the 4-cell loop, the hinge and the span decoder (now with a cross-attention onto the cells).
+- **Fan ledger, measured 2026-10-11** (master 95a2c6e9, `nowta_pointer_fast_spdcells`, one eager step with the
+  hinge active, `/home/wolfe/morph-scratch/perf/flame2/out/flops.{json,folded}`): **15.25 TFLOP/step**, not
+  the 21 I estimated. Span decoder 3.69 (head 1.37 on the labelled rows; blocks 2.3 on all 12288 rows, 45 %
+  of them past the span end); coda 2.34; LM head 2.34 (runs on 1280 rows, 1024 are tokens); prelude 2.12;
+  loop 3.65 + glue 0.14 (`slot_compact` already shrinks each pass to its live slots: pass 0 0.61 -> pass 7
+  0.22; recompute 0); hinge 0.91 on an active step (C4 skips its backward on inactive steps). At 29.2k tok/s
+  that is 72.6 TFLOPS, 33 % of the 5090's dense bf16 peak. The deploy-model parts sum to 10.65: the analytic
+  9.1 leaves out attention scores, pads and slot rows in the head, so 9.1 is below the measured floor of
+  this model; about 9.9 is reachable without a model change.
+- **Plan to the target (2026-10-11):** [ ] T1 packed span decoder (rows = real span tokens, fixed capacity
+  B x L; exact in math) about -1.0. [ ] T2 C2 head on token rows -0.47 (built, needs the 5k check).
+  [ ] T3 `tul.spandec_max_tokens: 8` (behaviour change; the lens says the decoders read about 2 tokens)
+  about -1.6, no build. [ ] T4 hinge on a row subsample about -0.35. [ ] T5 pad slots out of prelude, coda,
+  head about -0.3. [ ] T6 GPU-time ledger (time, not FLOPs: 33 % MFU is the larger lever). Quality: one
+  package run per class against the locked recipe (CE@6 3.8952, K1-K6 +0.0054).
+  [x] T6 GPU-time ledger 2026-10-11 (`/home/wolfe/morph-scratch/perf/flame2/LEDGER.md`, flame PNGs in
+  `flame2/png/`): graph replay 253 ms busy under the profiler (trainer step about 210 ms), 14750 kernels, 58
+  TFLOPS. Ms over ideal: core passes 54.8, coda 22.0, prelude 21.1, span decoder 16.9, core glue 15.9, hinge
+  12.5, LM head 8.4. The HC Cayley Triton kernels are the top non-GEMM cost in every block region (about 51 ms
+  in all); fp32 elementwise dominates core glue and the decoder; late core passes run GEMMs at 80 TFLOPS
+  (small compacted rows). [~] T7 loop glue fusion (sonnet, perf/loop-glue). [~] T8 HC kernel speed (sonnet,
+  perf/hc-kernels). [~] T1 (sonnet, perf/spandec-packed).
+  **2026-10-12, merged master 0c01b175:** T1 + T2 + T7 + T8 as one package (`nowta_pointer_fast_spdcells_speed`):
+  +8.3 % paired trainer rate (30.1k -> 32.6k harmonic mean), K1-K6 +0.0053 (held), CE@6 3.8985 (+0.0010 over
+  the prereg line, one run; filed `lab/experiments/failures/2026-10-12-fan-speed-package.md`). Kept under the 5 %
+  loop-contribution rule; the `_speed` config is the base for further speed work. [x] T1 [x] T2 [x] T7 [x] T8.
+  [x] T3 REJECTED: the 8-token decoder is +17.8 % faster but CE@6 3.9213, worse than no decoder; cap stays 32.
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
   2026-10-08 flame ledger). 9.1 is the analytic LXTUL step: three times the decode forward,

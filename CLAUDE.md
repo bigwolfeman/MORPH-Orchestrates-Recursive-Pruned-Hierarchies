@@ -110,6 +110,8 @@ reads all 4, pointer head, and the training-only span decoder cross-attends to t
 on master. Start new loop and speed work from it; it supersedes LXTUL as the loop base (DITTO on the fan is untested).
 Caveats (one seed; no 1-cell inference; cached decode refuses the fan) and the full arm table:
 [`2026-10-11-ungraded-fan-set-reader.md`](.agents/notes/implemented/architecture/2026-10-11-ungraded-fan-set-reader.md).
+Speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed.yaml` = the recipe + packed decoder, head on loss rows,
+compiled loop glue: +8.3 % tok/s, K1-K6 held, CE@6 +0.003 on one run (`lab/experiments/failures/2026-10-12-fan-speed-package.md`).
 
 ## Previous winner (Wolfe, 2026-10-07): LXTUL + pointer + DITTO
 
