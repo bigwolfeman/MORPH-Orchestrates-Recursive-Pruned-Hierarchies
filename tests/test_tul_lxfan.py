@@ -150,9 +150,15 @@ class _Spy:
 # only the gradient sum moved, by ~2.6e-9 relative -- the fused kernel's analytic backward
 # accumulates in a different order than `F.cross_entropy`'s autograd-generated one.
 # tests/test_tul_wta_fused_ce.py pins the tolerance this needed against the old path.
+#
+# "fan4" / "fan6" grad-sum moved again 2026-10-10 (42044e87, train-speed lever E: one int-N
+# quantisation and one tied head per forward). Losses and the logit sum stayed bit-identical;
+# on fan4 ONE of 179 gradients differs, `embed.hybrid.lor_embed.space_embed.weight`, max abs
+# 7.5e-9 against max |g| 0.19 (3.9e-8 relative, fp32 summation order of the embedding grad
+# now gathered through one cached forward). Found and re-pinned 2026-10-12.
 HEAD_PINS = {
-    "fan4": (10.31538200378418, 1358.1454057991505, 5.132460117340088, 1436.3044122054762, 179),
-    "fan6": (10.335302352905273, 1519.400069154045, 5.132365703582764, 1426.9059611385153, 179),
+    "fan4": (10.31538200378418, 1358.1454057991505, 5.132460117340088, 1436.304412149524, 179),
+    "fan6": (10.335302352905273, 1519.400069154045, 5.132365703582764, 1426.9059611590535, 179),
     "lx": (9.606481552124023, -52828.743996977806, 9.570661544799805, 1201.495515583244, 190),
     "lx_live": (9.606481552124023, -52828.743996977806, 9.570661544799805,
                 1523.0509139084759, 190),
