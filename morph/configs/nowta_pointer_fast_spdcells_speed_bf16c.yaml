@@ -10,5 +10,10 @@ defaults:
 model:
   hc_carrier_bf16: true
 
+# Eval beside the held CUDA-graph pool (no release / re-record): the training trace and every
+# val key are bit-identical to false (graph-step-survives-eval note); 23.2 -> 16.3 s per eval.
+training:
+  eval_keep_graphs: true
+
 wandb:
   name: nowta-pointer-fast-spdcells-speed-bf16c

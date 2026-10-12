@@ -63,7 +63,11 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   costs the loop (3.9057 / +0.0024, rejected), hinge rows 3.8975 / +0.0044 (off; one more run before use). Speed base is now
   `nowta_pointer_fast_spdcells_speed_bf16c`: 198.9 ms/step wall. bf16-carrier models run outside autocast (master 24b5077c;
   decorator costs 0: 198.7 ms). Eval is ~26 % of a 5k run's wall (20 evals x ~19 s: ~13 s eval + 6 s graph re-record
-  after GraphStep.released()); [~] eval-cost builder (perf/eval-cost).
+  after GraphStep.released()); [x] eval cost (master 30a246fb): `training.eval_keep_graphs` (exact; ON in the bf16c speed base)
+  23.2 -> 16.3 s per eval; `training.eval_diag_every: k` runs the ablation/probe block (75 % of eval) on every k-th eval,
+  5.0 s on the skipped ones; k > 1 forks the RNG around eval (traces identical for k 2 vs 3, verified). Left: the
+  attention-lift probe reads 0 calls on this recipe (2.8 s of every eval for one constant); base-forward sharing (~5 s).
+  Fixed on the way: test_tul_lxfan pins moved by lever E (one embedding grad, 3.9e-8 rel), re-pinned 8d489734.
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
   2026-10-08 flame ledger). 9.1 is the analytic LXTUL step: three times the decode forward,
