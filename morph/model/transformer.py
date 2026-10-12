@@ -16869,7 +16869,8 @@ class MORPHTransformer(nn.Module):
 
     @torch.no_grad()
     @_carrier_autocast
-    def tul_attn_lift_probe(self, input_ids: Tensor, layout: SlotLayout) -> dict:
+    def tul_attn_lift_probe(self, input_ids: Tensor, layout: SlotLayout,
+                            lean: bool = False) -> dict:
         """Eval-only: MUX §8.3's reasoning attention lift, on the WINDOW branch.
 
         "The slot is the only route" is architecture; "the token actually looks at it"
@@ -16880,6 +16881,12 @@ class MORPHTransformer(nn.Module):
         Eager only — it swaps the window-branch reference implementation for one forward.
         Works on the unrestricted control too (same reference path), so the two arms are
         comparable on this metric.
+
+        ``lean`` (``training.eval_keep_graphs``): the forward stops at the coda readout
+        (``_coda_state_only``), so the ``[B, L, V]`` logits and the pointer mixture over the
+        vocabulary are never built (8.9 GB of the probe's 8.9 GB peak on the fan recipe). The
+        attention layers run the same calls in the same order, so the counted statistics are
+        the same numbers; ``False`` is the forward as before.
         """
         if self.tul is None:
             raise RuntimeError("tul_attn_lift_probe needs MORPHConfig(tul=...)")
@@ -16887,7 +16894,10 @@ class MORPHTransformer(nn.Module):
 
         stats = AttnLiftStats()
         with capture_attn_lift(layout, stats):
-            self(input_ids, labels=None, slot_layout=layout)
+            if lean:
+                self._forward_single(input_ids, None, 0, None, layout, _coda_state_only=True)
+            else:
+                self(input_ids, labels=None, slot_layout=layout)
         return stats.summary()
 
     @torch.no_grad()
