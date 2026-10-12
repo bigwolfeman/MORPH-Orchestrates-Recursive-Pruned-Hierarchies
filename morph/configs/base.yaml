@@ -793,6 +793,19 @@ training:
   # end). Read by lab/perf/bench_step.py, the one speed number. false = no extra line.
   step_time_print: false
   n_eval_batches: 20
+  # true = periodic eval runs beside the held CUDA-graph pool instead of freeing the graphs and
+  # re-recording them (training.graph_step only; ~5.5 s per eval on the fan recipe). The
+  # attention-lift probe then skips the logits and pointer mixture it never reads (same values),
+  # which is what makes eval fit beside the pool. Final eval and generation still release.
+  # false = the graphs are released around every eval, as before.
+  eval_keep_graphs: false
+  # The ablation / probe block (plan worth zero / shuffle / wrong_seed, slot-state probe,
+  # attention lift) runs on every k-th periodic eval, the first included. 1 = every eval.
+  # The val loss and every other reading are computed on every eval. The final eval always
+  # runs the block. k > 1 forks the RNG around every eval (the shuffle probe draws from the
+  # global CUDA stream), so the training stream is the same whatever k > 1 is; it differs from
+  # k = 1, whose evals advance the training stream as they always did.
+  eval_diag_every: 1
   ckpt_every: 2500
   # How many periodic `step_*.pt` files to keep. The oldest is deleted once this many
   # exist, so a run's checkpoint cost is BOUNDED at ckpt_keep_last x ~2.3 GB regardless

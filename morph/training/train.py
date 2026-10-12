@@ -108,8 +108,17 @@ def evaluate(
     tul: bool = False,
     extra: dict | None = None,
     halt: bool = False,
+    lean_probe: bool = False,
+    diag: bool = True,
 ) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps.
+
+    ``lean_probe`` (``training.eval_keep_graphs``): the attention-lift probe runs its forward
+    without building the logits and the pointer mixture (same attention calls, same values;
+    8.9 GB less peak on the fan recipe), so eval fits beside a held CUDA-graph pool.
+    ``diag=False`` (``training.eval_diag_every``): this eval skips the ablation and probe
+    block (plan worth zero / shuffle / wrong_seed, slot-state probe, attention lift, ...); the
+    val loss and every other reading are unchanged.
 
     ``tul=True``: the val loader yields the 3-tuple (input_ids, labels, slot_layout) and
     the model is called with the layout ON and bag_size 0 (spec invariant 6). The §7.2
@@ -425,7 +434,7 @@ def evaluate(
                 acc.setdefault("val/halt_layer_passes_per_token", []).append(
                     float(out_h["layer_passes"]) / max(float(out_h["n_tokens"]), 1.0))
             _has_fm = getattr(_m, "fm_planner", None) is not None
-            _ablate = bool(getattr(_tul_cfg, "eval_ablations", False))
+            _ablate = bool(getattr(_tul_cfg, "eval_ablations", False)) and diag
             if _has_fm or _ablate:
                 # Plan WORTH is the ce_tokens COST of removing the plan (zero) or of
                 # destroying only its correspondence to the slot (shuffle). Report the
@@ -475,7 +484,7 @@ def evaluate(
                     acc.setdefault(f"val/{_k}", []).append(float(_v))
                 # MUX §8.3 reasoning attention lift, WINDOW branch only (see
                 # morph/model/attn_lift.py for exactly which branch and why). Eager only.
-                for _k, _v in _m.tul_attn_lift_probe(x, layout).items():
+                for _k, _v in _m.tul_attn_lift_probe(x, layout, lean=lean_probe).items():
                     if _v == _v:                       # skip NaN (no eligible query)
                         acc.setdefault(f"val/{_k}", []).append(float(_v))
                 if float(getattr(_tul_cfg, "mux_beta", 0.0)) > 0.0:
@@ -2377,6 +2386,16 @@ def main(cfg: DictConfig) -> None:
     _roll_ring = RetentionRing(max(1, int(getattr(tr, "ckpt_rolling_keep", 8))), tag="roll")
     gen_every = int(getattr(tr, "gen_every", 0))  # 0 = disabled
     n_eval_batches = int(getattr(tr, "n_eval_batches", 20))
+    # training.eval_keep_graphs: periodic eval runs beside the held CUDA-graph pool (no
+    # `released()`, no re-record). training.eval_diag_every: the ablation / probe block runs
+    # on every k-th periodic eval (1 = every eval, the shipped behaviour).
+    eval_keep_graphs = bool(getattr(tr, "eval_keep_graphs", False))
+    eval_diag_every = int(getattr(tr, "eval_diag_every", 1))
+    if eval_diag_every < 1:
+        raise ValueError(f"training.eval_diag_every must be >= 1, got {eval_diag_every}")
+    if eval_keep_graphs and not bool(getattr(tr, "graph_step", False)):
+        raise ValueError("training.eval_keep_graphs=true needs training.graph_step=true: it "
+                         "keeps the graphs through eval, and there are none otherwise.")
     resume_path: Optional[str] = getattr(tr, "resume", None)
     init_from_path: Optional[str] = getattr(tr, "init_from", None)
 
@@ -4856,10 +4875,28 @@ def main(cfg: DictConfig) -> None:
                 val_loader = _make_val_loader(phase.tul_on)   # rewound: the same docs
             if _gs is not None:
                 loss = out = _gnorm = None      # the graphs' outputs, freed with them
-            with _gs_release():
-                val_loss, val_ppl = evaluate(model, device, val_loader, n_eval_batches,
-                                             tul=phase.tul_on, extra=_val_extra,
-                                             halt=_halt_eval)
+            if eval_keep_graphs:
+                torch.cuda.synchronize()
+                torch.cuda.reset_peak_memory_stats()
+            # eval_diag_every > 1: the probe block (the shuffle ablation draws torch.rand on the
+            # global CUDA stream) runs on some evals only, so without a fork the training RNG
+            # after an eval would depend on which evals ran it. Forked, every eval leaves the
+            # training stream untouched, whatever k is. k = 1 keeps the old draw (byte-identical).
+            _eval_rng = (torch.random.fork_rng(devices=[device] if device.type == "cuda" else [])
+                         if eval_diag_every > 1 else contextlib.nullcontext())
+            with _eval_rng, (contextlib.nullcontext if eval_keep_graphs else _gs_release)():
+                val_loss, val_ppl = evaluate(
+                    model, device, val_loader, n_eval_batches, tul=phase.tul_on,
+                    extra=_val_extra, halt=_halt_eval, lean_probe=eval_keep_graphs,
+                    diag=(step // eval_every - 1) % eval_diag_every == 0)
+            if eval_keep_graphs:
+                # The margin of the held pool, on the console every eval: the eval's peak
+                # allocation beside the pool and the device memory still free after it. A
+                # margin near 0 means the next desktop allocation can OOM the run.
+                _free_b, _tot_b = torch.cuda.mem_get_info()
+                print(f"  [eval-keep] eval peak {torch.cuda.max_memory_allocated() / 2**30:.2f} GiB"
+                      f" allocated beside the graph pool; device free after eval"
+                      f" {_free_b / 2**30:.2f} of {_tot_b / 2**30:.2f} GiB", flush=True)
             val_log: dict = {"val/loss": val_loss, "val/ppl": val_ppl}
             if _lp_mode != "off":
                 # Stage 1: val/loss is the LATENT objective (no token CE exists), so a
