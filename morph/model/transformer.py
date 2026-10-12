@@ -676,6 +676,14 @@ class MORPHConfig:
     # Forward bit-identical; the term's grad is summed in the exit kernel. Needs
     # hc_region_fused. Default off.
     inject_fold: bool = False
+    # model.hc_carrier_bf16: the HC residual carrier [B, S, n, C] is STORED in bf16 between
+    # sublayers (prelude, slot-loop core, coda, the stream expand and the exit mix). Kernel
+    # loads widen to fp32 and all mixing math stays fp32; only the store rounds. Hres,
+    # Hpost_row and the projection stay fp32. The slot-loop gain hinge runs its two map
+    # applications on an fp32 carrier (its finite difference is 0.02 of the state: bf16
+    # storage rounding would read as gain). Needs hc_use_kernel, hc_region_fused and bf16
+    # autocast; refused otherwise. Default off = the fp32 carrier, byte-identical.
+    hc_carrier_bf16: bool = False
 
     # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
     # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
@@ -924,6 +932,8 @@ class DiagonalInjection(nn.Module):
         super().__init__()
         self.start = channel_start
         self.end = channel_end
+        # model.hc_carrier_bf16 (set by MORPHTransformer): keep the carrier's dtype.
+        self.keep_dtype = False
         d = channel_end - channel_start
         # Parcae's B (identity init, no RNG draw): new_ctx = A * h_ctx + dt * (e_ctx @ B^T).
         # Registered LAST so a model without it keeps byte-identical parameters and RNG.
@@ -952,6 +962,10 @@ class DiagonalInjection(nn.Module):
         if self.B is not None:
             e_ctx = e_ctx @ self.B.to(e_ctx.dtype).T
         new_ctx = A * h_ctx + dt * e_ctx
+        if self.keep_dtype:
+            # model.hc_carrier_bf16: the fp32 coefficients widen the slice, the carrier's
+            # own dtype is what the cat must keep (else the whole carrier promotes).
+            new_ctx = new_ctx.to(h.dtype)
         return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
 
     def decay(self, h: Tensor) -> Tensor:
@@ -959,6 +973,8 @@ class DiagonalInjection(nn.Module):
         passes t >= 1). The Jacobian in h, and so the floor above, is `forward`'s."""
         A = self.log_A.exp().clamp(max=0.9999)
         new_ctx = A * h[..., self.start:self.end]
+        if self.keep_dtype:
+            new_ctx = new_ctx.to(h.dtype)
         return torch.cat([h[..., :self.start], new_ctx, h[..., self.end:]], dim=-1)
 
 
@@ -2313,7 +2329,15 @@ class MORPHTransformer(nn.Module):
             init_gain=cfg.hc_init_gain, use_kernel=cfg.hc_use_kernel,
             fused_norm=cfg.hc_fused_norm, fused_grad=cfg.hc_fused_grad,
             region_fused=cfg.hc_region_fused,                    # model.hc_region_fused
+            carrier_bf16=cfg.hc_carrier_bf16,                    # model.hc_carrier_bf16
         )
+        # model.hc_carrier_bf16: a Python constant for the build; HyperConnectionResidual
+        # refuses the other halves of the contract (kernels, region path, n=4).
+        self._carrier_bf16 = bool(cfg.hc_carrier_bf16)
+        if self._carrier_bf16 and not (cfg.hc_use_kernel and cfg.hc_region_fused):
+            raise ValueError("model.hc_carrier_bf16 needs model.hc_use_kernel=true and "
+                             "model.hc_region_fused=true (the bf16 carrier is stored by the "
+                             "region kernels)")
         if cfg.inject_fold and not cfg.hc_region_fused:          # model.inject_fold
             raise ValueError("model.inject_fold needs model.hc_region_fused=true (the old "
                              "post kernel returns the term's grad in bf16)")
@@ -2363,6 +2387,7 @@ class MORPHTransformer(nn.Module):
             raise ValueError(f"model.injection_channels must be 'ctx' or 'all', "
                              f"got {cfg.injection_channels!r}")
 
+        self.injection.keep_dtype = self._carrier_bf16
         # ── Core (shared across loop iterations — MortarLinear for CMS pruning)
         # `core_impl` is read ONCE, here. `self._core_is_parcae` is a Python bool that is
         # never rebound, so every branch on it in the forward resolves at trace time and
@@ -4549,17 +4574,19 @@ class MORPHTransformer(nn.Module):
                 den = h.detach().float().flatten(2).pow(2).mean(-1).sqrt()     # [B, S*M]
         return term, mask, den
 
-    @staticmethod
-    def _apply_injection(h: Tensor, term: Tensor) -> Tensor:
+    def _apply_injection(self, h: Tensor, term: Tensor) -> Tensor:
         """Broadcast-add the [B,S,C] injection term into the carrier in ONE pass.
 
         For an HC ``[B,S,n,C]`` carrier the single-stream term is inserted on the
         stream axis so it broadcasts to every stream; for a plain ``[B,S,C]``
-        carrier it adds directly.
+        carrier it adds directly. With ``model.hc_carrier_bf16`` the sum is rounded back
+        to the carrier's dtype (an fp32 term would promote the whole carrier).
         """
         with _prof("carrier::inject_add"):
             if term.ndim == h.ndim - 1:
                 term = term.unsqueeze(-2)
+            if self._carrier_bf16:
+                return (h + term).to(h.dtype)
             return h + term
 
     def _apply_core_step(self, h_in, e_in, ids, x0_terms, bg,
@@ -4963,8 +4990,10 @@ class MORPHTransformer(nn.Module):
                 i, _x0_injects[i].precompute(x0), input_ids, bigram_emb, x.dtype,
                 ve_bagged=ve_bagged) for i in range(len(_prelude))]
             with _prof("carrier::expand_contig"):
-                x = (x + terms[0]).unsqueeze(2).expand(
-                    B, T, self._n_streams, x.shape[-1]).contiguous()
+                x = x + terms[0]
+                if self._carrier_bf16:
+                    x = x.to(torch.bfloat16)     # round once, then replicate (model.hc_carrier_bf16)
+                x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
             for i, layer in enumerate(_prelude):
                 _akw = (attn_kwargs_at[i] if attn_kwargs_at and i in attn_kwargs_at
                         else attn_kwargs)
@@ -4974,6 +5003,8 @@ class MORPHTransformer(nn.Module):
 
         if self._is_hc:
             with _prof("carrier::expand_contig"):
+                if self._carrier_bf16:
+                    x = x.to(torch.bfloat16)     # model.hc_carrier_bf16: store the carrier in bf16
                 x = x.unsqueeze(2).expand(B, T, self._n_streams, x.shape[-1]).contiguous()
 
         # ── Prelude ───────────────────────────────────────────────────
@@ -5168,6 +5199,12 @@ class MORPHTransformer(nn.Module):
         """
         hp = args[0].detach()
         e_d = args[1].detach() if torch.is_tensor(args[1]) else args[1]
+        if self._carrier_bf16:
+            # model.hc_carrier_bf16: the probe's finite difference runs on an fp32 carrier
+            # (see `_slot_gain_penalty`).
+            hp = hp.float()
+            if torch.is_tensor(e_d) and e_d.dtype == torch.bfloat16:
+                e_d = e_d.float()
         inj_d = args[2].detach() if torch.is_tensor(args[2]) else args[2]
         rs_d = rs_a.detach() if torch.is_tensor(rs_a) else rs_a
         cpu_rng = torch.get_rng_state()
@@ -6600,6 +6637,8 @@ class MORPHTransformer(nn.Module):
         gidx, gvalid = layout.slot_index, layout.slot_valid
 
         xn = self._tul_rms(self.input_norm, x)
+        if self._carrier_bf16:
+            xn = xn.to(torch.bfloat16)     # model.hc_carrier_bf16: the loop's source and carrier
         _xn_base = xn
         if iw_rollouts > 1:
             xn = repeat_along_batch(xn, iw_rollouts)
@@ -8583,6 +8622,20 @@ class MORPHTransformer(nn.Module):
         # 70.9 upstream against the hinge's own 0.28 on the core; live: 0.14).
         _live = (h_in, e_arg, inj_arg, ret_state, carry)
         hp = h_in.detach()
+        if self._carrier_bf16:
+            # model.hc_carrier_bf16: the finite difference is 0.02 of the state, so the two
+            # applications run on an FP32 carrier (the bf16 main loop's state widened
+            # exactly, the source likewise). On a bf16 carrier the hinge reads the storage
+            # rounding as gain (2026-10-08, lxtul-training-speed-plan section B: step-0
+            # total loss 24.32 -> 25.73 with CE unchanged). A reused f(h) is the main
+            # loop's bf16 output and would put that rounding back.
+            if f0 is not None:
+                raise NotImplementedError(
+                    "model.slot_gain_reuse_f0 with model.hc_carrier_bf16: the reused f(h) "
+                    "is the main loop's bf16 step output")
+            hp = hp.float()
+            if torch.is_tensor(e_arg) and e_arg.dtype == torch.bfloat16:
+                e_arg = e_arg.float()
         # The map's gain in h at a FIXED source: the injection source and the retention
         # state are detached too, so the penalty shapes the core's weights and nothing
         # upstream of the loop (tests/test_slot_gain_reg.py: prelude grads bit-identical).

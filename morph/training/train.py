@@ -109,6 +109,28 @@ def evaluate(
     extra: dict | None = None,
     halt: bool = False,
 ) -> tuple[float, float]:
+    """``_evaluate`` (below), run under bf16 autocast when ``model.hc_carrier_bf16`` is on.
+
+    The bf16 carrier needs the HC region kernels, which need autocast; ``_evaluate``'s
+    main forward runs under it, but its ablation and instrument forwards
+    (``tul_forward_ablated`` and the rest) do not, and with the key on they would raise.
+    Key off: no autocast is added, so those forwards run as before."""
+    _cfg = getattr(getattr(model, "_orig_mod", model), "cfg", None)
+    if _cfg is not None and getattr(_cfg, "hc_carrier_bf16", False):
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            return _evaluate(model, device, loader, n_batches, tul, extra, halt)
+    return _evaluate(model, device, loader, n_batches, tul, extra, halt)
+
+
+def _evaluate(
+    model: nn.Module,
+    device: torch.device,
+    loader,
+    n_batches: int = 20,
+    tul: bool = False,
+    extra: dict | None = None,
+    halt: bool = False,
+) -> tuple[float, float]:
     """Return (avg_loss, ppl) over n_batches validation steps.
 
     ``tul=True``: the val loader yields the 3-tuple (input_ids, labels, slot_layout) and
@@ -772,6 +794,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         hc_region_fused=bool(getattr(m, "hc_region_fused", False)),
         cca_prologue_tiled=bool(getattr(m, "cca_prologue_tiled", False)),
         inject_fold=bool(getattr(m, "inject_fold", False)),      # model.inject_fold
+        hc_carrier_bf16=bool(getattr(m, "hc_carrier_bf16", False)),  # model.hc_carrier_bf16
         l2_persist=bool(getattr(m, "l2_persist", False)),
         retention=bool(getattr(m, "retention", True)),
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),
