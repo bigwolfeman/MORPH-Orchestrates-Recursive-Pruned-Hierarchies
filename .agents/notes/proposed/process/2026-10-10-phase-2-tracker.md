@@ -54,6 +54,12 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   forward is ~1.5 of 15.3 TFLOP, so the step moves 139.0 -> 136.7 ms (1.8 %). Not in the package. FP8 dgrad would add
   about as much again. Note: steady-state step is ~139 ms (44k tok/s); the 5k trainer mean (32.6k) includes eval every 250.
   Then one 5k package run against the `_speed` config. Not started: T5 pad slots, small-row core passes (megakernel; ask Wolfe).
+  **Wall clock (2026-10-12, `lab/perf/bench_step.py`, merged master 3dd77c05):** the trainer's tok/s before dea1911d timed
+  the HOST (about 1.5x high on this GPU-bound step); it is now the synced wall rate. Locked recipe 228.7 ms/step (26.9k
+  tok/s), speed base 213.5 (28.8k), + FP8 209.9, + hinge rows 207.5, all three round-2 levers 186.9 (32.9k, 1.148x the
+  base). Round-2 package FAILED at 5k (`lab/experiments/failures/2026-10-12-fan-speed-round-2.md`): CE@6 3.9117,
+  K1-K6 +0.0035 (-34 %), stability held. [~] Lever split running (one 5k per lever, prereg `planned/2026-10-12-fan-speed-lever-split.md`).
+  Found: the ~20 steps after each eval run at half speed (graph re-record), about 1.7 % of a 5k run at eval_every 250.
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
   2026-10-08 flame ledger). 9.1 is the analytic LXTUL step: three times the decode forward,
