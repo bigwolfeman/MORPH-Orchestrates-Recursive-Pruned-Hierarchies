@@ -1,0 +1,7 @@
+[10-12 10:32:41] regA-s2 train start (nowta_pointer_fast_spdcells_speed training.eval_keep_graphs=false training.eval_diag_every=1 training.seed=2)
+--- relaunch after power loss 10-12 18:10:54
+[10-12 18:11:16] regA-s2 train start (nowta_pointer_fast_spdcells_speed training.eval_keep_graphs=false training.eval_diag_every=1 training.seed=2)
+[10-12 18:43:54] regA-s2 train exit=0 Final val_loss=3.8996 tok/s: tok/s=27389 tok/s=27598 
+[10-12 18:48:23] regA-s2 sweep exit=0 regA-s2 depth=1 ce=3.9127 span_first=3.5090 spandec_ce=4.4958 regA-s2 depth=6 ce=3.9076 span_first=3.4978 spandec_ce=4.4663 regA-s2 ce_tokens K1-K6: +0.0051 [+0.0046, +0.0056] over 480 rows regA-s2 spandec_ce K1-K6: +0.0295 [+0.0285, +0.0306] over 160 batches 
+[10-12 18:48:24] stab gain_est n=200 min=0.8909 max=0.9030 mean=0.8977; grad_norm n=240 median=1.799 max=13.877 max/median=7.7
+[10-12 18:48:24] done
