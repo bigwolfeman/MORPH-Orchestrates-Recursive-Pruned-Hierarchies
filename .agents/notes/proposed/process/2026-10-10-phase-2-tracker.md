@@ -17,6 +17,10 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
 
 ### Targets (Wolfe 2026-10-10)
 
+- **Target restated (Wolfe 2026-10-12):** 9.1 TFLOP/step for everything EXCEPT the training-only span decoder
+  (measured today: 15.25 total, decoder 3.69, so the rest is 11.56). Megakernel design pass approved (Opus).
+  `eval_diag_every: 4` approved for now.
+
 - **Recipe switch 2026-10-11:** speed work now targets `nowta_pointer_fast_spdcells` (the fan recipe,
   [note](../../implemented/architecture/2026-10-11-ungraded-fan-set-reader.md)). The fan has no EMA twin and no
   router; it keeps the 4-cell loop, the hinge and the span decoder (now with a cross-attention onto the cells).

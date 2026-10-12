@@ -14,6 +14,9 @@ model:
 # val key are bit-identical to false (graph-step-survives-eval note); 23.2 -> 16.3 s per eval.
 training:
   eval_keep_graphs: true
+  # Wolfe 2026-10-12: the ablation / probe block (75 % of eval) on every 4th eval; the RNG is
+  # forked around eval so the training stream does not depend on this number.
+  eval_diag_every: 4
 
 wandb:
   name: nowta-pointer-fast-spdcells-speed-bf16c
