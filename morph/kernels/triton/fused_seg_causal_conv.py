@@ -69,7 +69,6 @@ fp32. Under bf16 that is a ~1e-2 relative difference, exactly as the unsegmented
 
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 import torch
 from torch import Tensor
@@ -112,10 +111,7 @@ if TRITON_AVAILABLE:
         B, C, S, seg_sb,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -153,10 +149,7 @@ if TRITON_AVAILABLE:
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
         PREC: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -201,10 +194,7 @@ if TRITON_AVAILABLE:
         B, C, S, seg_sb,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -253,10 +243,7 @@ if TRITON_AVAILABLE:
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
         PREC: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -300,10 +287,7 @@ if TRITON_AVAILABLE:
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
         PREC: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -408,7 +392,7 @@ def _dw_forward(x, w_dw, seg, sb, K):
     n_tt = (S + BT - 1) // BT
     y = torch.empty_like(x)
     _seg_dw_fwd_kernel[(B * C * n_tt,)](x, w_dw, seg, y, B, C, S, sb,
-                                        K=K, BLOCK_T=BT, **_LAUNCH, **pdl_opts())
+                                        K=K, BLOCK_T=BT, **_LAUNCH)
     return y
 
 
@@ -419,7 +403,7 @@ def _gp_forward(x, w_gp, seg, sb, CG, K):
     y = torch.empty_like(x)
     _seg_gp_fwd_kernel[(B * G * ((S + BT - 1) // BT),)](
         x, w_gp, seg, y, B, C, S, sb,
-        CG=CG, K=K, BLOCK_T=BT, PREC=_prec(x.dtype), **_LAUNCH, **pdl_opts())
+        CG=CG, K=K, BLOCK_T=BT, PREC=_prec(x.dtype), **_LAUNCH)
     return y
 
 
@@ -430,7 +414,7 @@ def _dw_backward(go, x_in, w_dw, seg, sb, K):
     dx = torch.empty_like(go)
     dw_part = torch.empty(B * n_tt, C, K, device=go.device, dtype=torch.float32)
     _seg_dw_bwd_kernel[(B * C * n_tt,)](go, w_dw, x_in, seg, dx, dw_part,
-                                        B, C, S, sb, K=K, BLOCK_T=BT, **_LAUNCH, **pdl_opts())
+                                        B, C, S, sb, K=K, BLOCK_T=BT, **_LAUNCH)
     return dx, dw_part.sum(dim=0)                        # [C, K]
 
 
@@ -446,11 +430,11 @@ def _gp_backward(go, x_in, w_gp, seg, sb, CG, K, need_dx: bool, need_dw: bool):
     if need_dx:
         dx = torch.empty_like(go)
         _seg_gp_bwd_dx_kernel[grid](go, w_gp, seg, dx, B, C, S, sb,
-                                    CG=CG, K=K, BLOCK_T=BT, PREC=prec, **_LAUNCH, **pdl_opts())
+                                    CG=CG, K=K, BLOCK_T=BT, PREC=prec, **_LAUNCH)
     if need_dw:
         dw_part = torch.empty(B * n_tt, C, CG, K, device=go.device, dtype=torch.float32)
         _seg_gp_bwd_dw_kernel[grid](go, x_in, seg, dw_part, B, C, S, sb,
-                                    CG=CG, K=K, BLOCK_T=BT, PREC=prec, **_LAUNCH, **pdl_opts())
+                                    CG=CG, K=K, BLOCK_T=BT, PREC=prec, **_LAUNCH)
         dw = dw_part.sum(dim=0)                          # [C, Cg, K]
     return dx, dw
 

@@ -25,7 +25,6 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
-from morph.kernels.triton._pdl import configure as configure_pdl
 from .attention import MORPHAttention, RMSNorm
 from .diffusion_blocks import euler_step
 from .embeddings import MORPHEmbedding
@@ -700,11 +699,6 @@ class MORPHConfig:
     # (kernels/triton/kv_flat.py). Rounding-only (sum order), not bit-identical. Needs
     # block_custom_ops. Default off = byte-identical.
     kv_flat_kernels: bool = False
-    # model.pdl: programmatic dependent launch. The step's custom Triton kernels launch with the
-    # PDL attribute and wait (gdc_wait) before their first load, and inductor's own kernels take
-    # TORCHINDUCTOR_ENABLE_PDL's path (kernels/triton/_pdl.py). Timing only, never the math:
-    # the byte gate prints the same hash on and off. Needs a sm_90+ device. Default off.
-    pdl: bool = False
 
     # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
     # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
@@ -2421,7 +2415,6 @@ class MORPHTransformer(nn.Module):
         if cfg.kv_flat_kernels and not cfg.block_custom_ops:
             raise ValueError("model.kv_flat_kernels needs model.block_custom_ops (the re-tiled "
                              "backward runs inside the conv and prologue ops)")
-        configure_pdl(bool(cfg.pdl))                             # model.pdl (process-wide switch)
         # model.hc_carrier_bf16: a Python constant for the build; HyperConnectionResidual
         # refuses the other halves of the contract (kernels, region path, n=4).
         self._carrier_bf16 = bool(cfg.hc_carrier_bf16)

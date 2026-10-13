@@ -63,7 +63,6 @@ without a graph break and a CUDA graph captures it (fixed shapes, no host reads)
 """
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 import torch
 from torch import Tensor
@@ -138,9 +137,7 @@ if TRITON_AVAILABLE:
                     H, S, SQ, NT, scale_log2, W,
                     MODE: tl.constexpr, CELLS: tl.constexpr, D: tl.constexpr,
                     BM: tl.constexpr, BN: tl.constexpr, SAVE32: tl.constexpr,
-                    PREC: tl.constexpr, HAS_QPOS: tl.constexpr, PDL: tl.constexpr = False):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
+                    PREC: tl.constexpr, HAS_QPOS: tl.constexpr):
         qt = tl.program_id(0)
         bh = tl.program_id(1)
         b = bh // H
@@ -235,11 +232,8 @@ if TRITON_AVAILABLE:
 
     @triton.jit
     def _bwd_pre_kernel(OC, OW, DOC, DOW, LC, SINK, DC, DW, PSD, H, S,
-                        D: tl.constexpr, BM: tl.constexpr, PREC: tl.constexpr,
-                        PDL: tl.constexpr = False):
+                        D: tl.constexpr, BM: tl.constexpr, PREC: tl.constexpr):
         """delta_c / delta_w = rowsum(dO * O) and the sink's per-row gradient term."""
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         qt = tl.program_id(0)
         bh = tl.program_id(1)
         h = bh % H
@@ -265,9 +259,7 @@ if TRITON_AVAILABLE:
                          DK, DV, H, S, SQ, NT, scale, scale_log2, W,
                          MODE: tl.constexpr, CELLS: tl.constexpr, D: tl.constexpr,
                          BM: tl.constexpr, BN: tl.constexpr, PREC: tl.constexpr,
-                         HAS_QPOS: tl.constexpr, PDL: tl.constexpr = False):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
+                         HAS_QPOS: tl.constexpr):
         kt = tl.program_id(0)
         bh = tl.program_id(1)
         b = bh // H
@@ -346,9 +338,7 @@ if TRITON_AVAILABLE:
                        H, S, SQ, NT, scale, scale_log2, W,
                        MODE: tl.constexpr, CELLS: tl.constexpr, D: tl.constexpr,
                        BM: tl.constexpr, BN: tl.constexpr, PREC: tl.constexpr,
-                       HAS_QPOS: tl.constexpr, PDL: tl.constexpr = False):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
+                       HAS_QPOS: tl.constexpr):
         qt = tl.program_id(0)
         bh = tl.program_id(1)
         b = bh // H
@@ -501,8 +491,7 @@ def _fwd_op(q: Tensor, k: Tensor, v: Tensor, sink: Tensor, bag: Tensor | None,
         q, k, v, sink, bag, slot, tmin, tmax, _qp, oc, ow, lc, lw, oc32, ow32,
         H, S, SQ, triton.cdiv(S, bt), scale * _LOG2E, window,
         MODE=mode, CELLS=max(cells, 1), D=D, BM=bt, BN=bt,
-        SAVE32=save32, PREC=_prec(q.dtype), HAS_QPOS=qpos is not None, **_launch(q.dtype),
-        **pdl_opts())
+        SAVE32=save32, PREC=_prec(q.dtype), HAS_QPOS=qpos is not None, **_launch(q.dtype))
     return oc, ow, lc, lw, oc32, ow32
 
 
@@ -530,7 +519,7 @@ def _bwd_op(q: Tensor, k: Tensor, v: Tensor, sink: Tensor, bag: Tensor | None,
     dc = torch.empty(B, H, SQ, device=q.device, dtype=torch.float32)
     dw, psd = torch.empty_like(dc), torch.empty_like(dc)
     _bwd_pre_kernel[(nqt, B * H)](oc, ow, doc, dow, lc, sink, dc, dw, psd, H, SQ,
-                                  D=D, BM=bt, PREC=_prec(q.dtype), num_warps=4, **pdl_opts())
+                                  D=D, BM=bt, PREC=_prec(q.dtype), num_warps=4)
     tmin, tmax = _tile_bounds(bag, S, q.device, bt)
     if bag is None:
         bag = slot = tmin
@@ -540,9 +529,9 @@ def _bwd_op(q: Tensor, k: Tensor, v: Tensor, sink: Tensor, bag: Tensor | None,
     meta = dict(MODE=mode, CELLS=max(cells, 1), D=D, BM=bt, BN=bt, PREC=_prec(q.dtype),
                 HAS_QPOS=qpos is not None, **_launch(q.dtype))
     _bwd_dkdv_kernel[(nt, B * H)](q, k, v, doc, dow, lc, lw, dc, dw, bag, slot, tmin, tmax,
-                                  _qp, dk, dv, *common, **meta, **pdl_opts())
+                                  _qp, dk, dv, *common, **meta)
     _bwd_dq_kernel[(nqt, B * H)](q, k, v, doc, dow, lc, lw, dc, dw, bag, slot, tmin, tmax,
-                                 _qp, dq, *common, **meta, **pdl_opts())
+                                 _qp, dq, *common, **meta)
     dsink = psd.sum(dim=(0, 2)).to(sink.dtype)
     return dq, dk, dv, dsink
 

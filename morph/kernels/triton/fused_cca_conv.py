@@ -53,7 +53,6 @@ Date:   2026-05-31
 
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 from typing import Tuple
 
@@ -92,10 +91,7 @@ if TRITON_AVAILABLE:
         B, C, S,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -133,10 +129,7 @@ if TRITON_AVAILABLE:
         CG: tl.constexpr,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -191,10 +184,7 @@ if TRITON_AVAILABLE:
         B, C, S,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -245,10 +235,7 @@ if TRITON_AVAILABLE:
         CG: tl.constexpr,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -290,10 +277,7 @@ if TRITON_AVAILABLE:
         CG: tl.constexpr,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -344,8 +328,7 @@ def _dw_forward(x, w_dw, K):
     BT = _block_t(S)
     n_tt = (S + BT - 1) // BT
     y = torch.empty_like(x)
-    _dw_fwd_kernel[(B * C * n_tt,)](x, w_dw, y, B, C, S, K=K, BLOCK_T=BT, **_LAUNCH,
-                                    **pdl_opts())
+    _dw_fwd_kernel[(B * C * n_tt,)](x, w_dw, y, B, C, S, K=K, BLOCK_T=BT, **_LAUNCH)
     return y
 
 
@@ -355,8 +338,7 @@ def _gp_forward(x, w_gp, CG, K):
     BT = _block_t(S)
     n_tt = (S + BT - 1) // BT
     y = torch.empty_like(x)
-    _gp_fwd_kernel[(B * G * n_tt,)](x, w_gp, y, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH,
-                                    **pdl_opts())
+    _gp_fwd_kernel[(B * G * n_tt,)](x, w_gp, y, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH)
     return y
 
 
@@ -367,7 +349,7 @@ def _dw_backward(go, x_in, w_dw, K):
     dx = torch.empty_like(go)
     dw_part = torch.empty(B * n_tt, C, K, device=go.device, dtype=torch.float32)
     _dw_bwd_kernel[(B * C * n_tt,)](go, w_dw, x_in, dx, dw_part,
-                                    B, C, S, K=K, BLOCK_T=BT, **_LAUNCH, **pdl_opts())
+                                    B, C, S, K=K, BLOCK_T=BT, **_LAUNCH)
     dw = dw_part.sum(dim=0)                              # [C, K]
     return dx, dw
 
@@ -379,10 +361,9 @@ def _gp_backward(go, x_in, w_gp, CG, K):
     n_tt = (S + BT - 1) // BT
     dx = torch.empty_like(go)
     dw_part = torch.empty(B * n_tt, C, CG, K, device=go.device, dtype=torch.float32)
-    _gp_bwd_dx_kernel[(B * G * n_tt,)](go, w_gp, dx, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH,
-                                       **pdl_opts())
+    _gp_bwd_dx_kernel[(B * G * n_tt,)](go, w_gp, dx, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH)
     _gp_bwd_dw_kernel[(B * G * n_tt,)](go, x_in, dw_part, B, C, S, CG=CG, K=K, BLOCK_T=BT,
-                                       **_LAUNCH, **pdl_opts())
+                                       **_LAUNCH)
     dw = dw_part.sum(dim=0)                              # [C, Cg, K]
     return dx, dw
 

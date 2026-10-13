@@ -26,7 +26,6 @@ reference and against the eager kernel.
 """
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 import torch
 import triton
@@ -38,10 +37,7 @@ def _ce_softmax_grad_kernel(
     logit_ptr, lab_ptr, w_ptr, loss_ptr,
     stride_row, V, V_pad, mask_id,
     BLOCK_V: tl.constexpr,
-    PDL: tl.constexpr = False,
 ):
-    if PDL:
-        tl.extra.cuda.gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     base = logit_ptr + row * stride_row
     lab = tl.load(lab_ptr + row)
@@ -93,7 +89,7 @@ def ce_softmax_grad_(logits: torch.Tensor, labels: torch.Tensor, w: torch.Tensor
     _ce_softmax_grad_kernel[(c,)](
         logits, labels.contiguous(), w.contiguous().to(torch.float32), loss,
         logits.stride(0), int(V), int(v_pad), int(mask_id),
-        BLOCK_V=2048, num_warps=8, **pdl_opts(),
+        BLOCK_V=2048, num_warps=8,
     )
     return loss
 
@@ -115,10 +111,7 @@ def _ce_row_lse_kernel(
     logit_ptr, lab_ptr, valid_ptr, out_ptr, lse_ptr,
     stride_row, V, V_pad, mask_id,
     BLOCK_V: tl.constexpr,
-    PDL: tl.constexpr = False,
 ):
-    if PDL:
-        tl.extra.cuda.gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     base = logit_ptr + row * stride_row
     lab = tl.load(lab_ptr + row)
@@ -149,10 +142,7 @@ def _ce_logprob_grad_kernel(
     logit_ptr, lab_ptr, g_ptr, lse_ptr,
     stride_row, V, V_pad, mask_id,
     BLOCK_V: tl.constexpr,
-    PDL: tl.constexpr = False,
 ):
-    if PDL:
-        tl.extra.cuda.gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     base = logit_ptr + row * stride_row
     lab = tl.load(lab_ptr + row)
@@ -190,7 +180,7 @@ def ce_row_lse(logits: torch.Tensor, labels: torch.Tensor, valid: torch.Tensor, 
     _ce_row_lse_kernel[(c,)](
         logits, labels.contiguous(), valid.contiguous().to(torch.int8), out, lse,
         logits.stride(0), int(V), int(v_pad), int(mask_id),
-        BLOCK_V=2048, num_warps=8, **pdl_opts(),
+        BLOCK_V=2048, num_warps=8,
     )
     return out, lse
 
@@ -209,6 +199,6 @@ def ce_logprob_grad_(logits: torch.Tensor, labels: torch.Tensor, g: torch.Tensor
         logits, labels.contiguous(), g.contiguous().to(torch.float32),
         lse.contiguous().to(torch.float32),
         logits.stride(0), int(V), int(v_pad), int(mask_id),
-        BLOCK_V=2048, num_warps=8, **pdl_opts(),
+        BLOCK_V=2048, num_warps=8,
     )
     return logits
