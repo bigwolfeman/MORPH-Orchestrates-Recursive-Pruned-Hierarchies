@@ -1,6 +1,6 @@
 # Triton GEMMs (G1) with S5 on the Poisson cell-count base at 5k
 
-Status: planned
+Status: success
 
 ## Question
 
@@ -48,3 +48,34 @@ Master at the commit adding this file, `git archive` to `/home/wolfe/morph-scrat
 key-off byte gate (`4a73ebf5...`); stop on mismatch. (3) Seeds 1 and 2, 5000 steps each, then
 `core_depth_sweep.py --depths 1,6 --rows 480 --batch 3` and `stab.keep.py`. (4)
 `cell_count_sweep.py --cells 1,2,4 --depth 6 --rows 480 --batch 3` on both new checkpoints.
+
+## Results
+
+Log `abq/chain-g1.log`, tree `abq/tree-g1` (master d19cb5d5). On that tree, before the runs:
+`test_stream_overlap.py` 37 passed and `test_graph_step.py` 24 passed on the GPU; key-off byte
+gate `4a73ebf5` (match).
+
+| Arm | Seed | CE@1 | CE@6 | K1-K6 [95 % CI] | grad-norm max/median | gain_est 1000-5000 |
+|---|---|---|---|---|---|---|
+| Poisson base (filed, no S5, no G1) | 1 | 3.9166 | 3.9117 | +0.0049 [+0.0044, +0.0053] | 7.4 | 0.881-0.904 |
+| Poisson base (filed, no S5, no G1) | 2 | 3.9043 | 3.8987 | +0.0056 [+0.0051, +0.0060] | 7.8 | 0.875-0.905 |
+| S5 + G1 on the Poisson base | 1 | 3.9080 | 3.9023 | +0.0057 [+0.0053, +0.0062] | 7.6 | 0.878-0.905 |
+| S5 + G1 on the Poisson base | 2 | 3.9100 | 3.9033 | +0.0067 [+0.0062, +0.0072] | 7.3 | 0.883-0.904 |
+
+- Means: arm CE@6 3.9028, K1-K6 +0.0062; control 3.9052, +0.00525.
+- Arm - control CE@6: -0.0024 (rule <= +0.003: held). K1-K6 118 % (rule >= 95 %: held).
+- Cell knob: gap(1) +0.0059 / +0.0059 (mean +0.0059, rule <= +0.015: held); gap(2) -0.0001 /
+  +0.0002 (mean +0.0001, rule <= +0.003: held).
+- Stability held on both runs. Neither run re-recorded a graph (the G1 untuned-key path was not
+  reached; every key was tuned in the warm-up).
+- Trainer tok/s 40.5-42.3k (sanity check; the controls read 38-40k without S5 and G1).
+
+## Verdict
+
+Success: the predictions held. G1 goes ON in `nowta_pointer_fast_spdcells_speed_bf16c`, so the
+Poisson speed base inherits S5 and G1.
+
+## Updated hypothesis
+
+G1 is rounding only at 5k: S5 + G1 on the Poisson base sit inside the seed spread on CE@6 and
+K1-K6, and the cell-count knob is unchanged.

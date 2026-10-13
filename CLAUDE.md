@@ -115,7 +115,8 @@ compiled loop glue: 213.5 ms/step wall (+7.1 %), K1-K6 held, CE@6 +0.003 on one 
 **Speed base (2026-10-13): `nowta_pointer_fast_spdcells_speed_bf16c_cellp3.yaml`** = the bf16c config below + a per-batch
 Poisson(3.5) cell count in [1, 4] (`tul.cell_count`): CE@6 +0.0002, K1-K6 95.5 %, 0.921x step wall, and it runs at 2 cells for
 +0.0002 / 1 cell for +0.005 (`lab/experiments/successes/2026-10-13-fan-variable-cell-count-v1.md`). Bench speed levers on
-the bf16c parent (M fixed at 4) with `model.slot_gain_pass_force=3`.
+the bf16c parent (M fixed at 4) with `model.slot_gain_pass_force=3`. Since 2026-10-13 the parent also runs G1 (`model.split_wgrad_triton`, Triton GEMMs in the split op): pinned bench 164.2 ms
+at M = 4 (`lab/experiments/successes/2026-10-13-g1-triton-gemm-5k.md`).
 Its parent (2026-10-12): `nowta_pointer_fast_spdcells_speed_bf16c.yaml` = the above + the HC carrier stored in bf16
 (`model.hc_carrier_bf16`): 198.9 ms/step wall (1.15x the locked recipe). Since 2026-10-12 evening it also runs S1 + S2
 (`model.slot_gain_stream`, `model.split_wgrad`, exact): 177.2 vs 199.3 ms on the same bench (1.124x); eval has ~0.34 GiB free, so desktop GPU load can OOM it. Since 2026-10-13 it also runs S5 (`model.block_custom_ops`, one compiled graph per block; masks redrawn, 5k 2 seeds CE@6 -0.0047, K1-K6 102 %): 167.85 vs 171.70 ms (1.0229), `lab/experiments/successes/2026-10-13-s5-custom-ops-5k.md`. Free at 5k against matched fp32 controls (2 seeds
