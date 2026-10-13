@@ -170,6 +170,11 @@ def main() -> None:
     ap.add_argument("--pointer-off", action="store_true",
                     help="tul.pointer_heads leak check: force the pointer gate onto the model "
                          "(every head's weight 0), so the logits are the model's own")
+    ap.add_argument("--compile-blocks", action="store_true",
+                    help="compile every prelude / core / coda block as the trainer does "
+                         "(training.compile_blocks: mode default, core dynamic-batch), so the "
+                         "readout runs the COMPILED path. model.block_custom_ops changes only "
+                         "what compiles; its eager readout is bit-identical by construction.")
     ap.add_argument("--rows", type=int, default=48)
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--device", default="cuda")
@@ -195,6 +200,15 @@ def main() -> None:
         model, step = load_ckpt(cfg, path,
                                 device, tul_rt.model_cfg if tul_rt else None)
         model.eval()
+        if a.compile_blocks:
+            import torch._dynamo as _dynamo
+            _dynamo.config.cache_size_limit = max(_dynamo.config.cache_size_limit, 256)
+            _dynamo.config.accumulated_cache_size_limit = max(
+                _dynamo.config.accumulated_cache_size_limit, 512)
+            for group in (model.prelude, model.core, model.coda):
+                dyn = True if group is model.core else None
+                for i in range(len(group)):
+                    group[i] = torch.compile(group[i], mode="default", dynamic=dyn)
         if a.pointer_off:
             if getattr(model, "tul_pointer", None) is None:
                 raise ValueError(f"{label}: --pointer-off on a model with no tul.pointer_heads")

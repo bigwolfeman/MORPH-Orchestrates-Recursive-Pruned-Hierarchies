@@ -221,6 +221,21 @@ about 3,900 launches. If fusion halves the launches: -4 ms, with a wide range (1
 much inductor fuses across an opaque op is not measured. Risk: compile time, recompiles at the 8
 pass shapes (the cache limit is already 256), `fail_on_recompile`.
 
+**Built and measured 2026-10-13** (`model.block_custom_ops`, default false, branch
+`perf/block-custom-ops`; code in `morph/kernels/triton/block_ops.py`; 22 eager-bit and compile tests in
+`tests/test_block_custom_ops.py`). Five ops: HC region entry and exit, CCA conv, the strict
+geometry's segment-reset conv, the row-tiled CCA prologue. The strict attention was already an op.
+Each op body is the old Function's body, moved to a shared `*_impl`, so eager results are bit-identical.
+Graph breaks in the recipe's warm-up compile: 978 log lines off, 0 on. Bench, interleaved, two
+repeats (`bench_step.py`, bf16c): off 209.69 / 209.89, on 206.82 / 205.76 ms; ratio 1.0164 (-3.4 ms,
+inside the 1-7 range). Kernels per step (graph-replay profile): 14,728 -> 13,968; core passes 7,226
+-> 6,662 (903 -> 833 per pass), of which inductor 2,328 -> 2,184. Fusion across the opaque ops
+removed 6 % of the inductor launches, not half: the norm, cast, SiLU and dropout kernels sit
+BETWEEN opaque kernels, and an opaque kernel is still a fusion barrier. Cold warm-up compile
+115.8 s -> 162.2 s (+46 s). Graph pool 18.84 -> 18.87 GiB. Recompiles at the pass shapes: 328 -> 106
+(no cache-limit hit). The HC link is an uninitialised carrier-sized tensor (a custom op may not
+return an alias of its input); see the `block_ops.py` module docstring.
+
 ### S6. GEMM shape choice
 
 What: the compaction capacities C_t are 64, 63, 61, 55, ... slots per row, so passes 1-3 run

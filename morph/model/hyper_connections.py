@@ -132,6 +132,9 @@ class HyperConnectionResidual(nn.Module):
                        the region kernels widen their loads to fp32, do all mixing math in
                        fp32 and round only at the store. Hres / Hpost_row stay fp32. Needs
                        ``region_fused``; refused at call time without CUDA and bf16 autocast.
+        block_custom_ops: model.block_custom_ops. The region entry and exit run as
+                       ``torch.library`` ops (``kernels/triton/block_ops.py``), so the block
+                       compiles as one graph. Needs ``region_fused``.
     """
 
     def __init__(
@@ -147,6 +150,7 @@ class HyperConnectionResidual(nn.Module):
         fused_grad: bool = False,
         region_fused: bool = False,
         carrier_bf16: bool = False,
+        block_custom_ops: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -204,8 +208,14 @@ class HyperConnectionResidual(nn.Module):
                                  "hc_fused_norm=false, hc_streams=4, hc_cayley_iters=3")
             from morph.kernels.triton.fused_hyper_connection import (
                 hc_region_entry, hc_region_exit)
+            if block_custom_ops:
+                from morph.kernels.triton.block_ops import (
+                    hc_region_entry_ops as hc_region_entry, hc_region_exit_ops as hc_region_exit)
             self._hc_region_entry = hc_region_entry
             self._hc_region_exit = hc_region_exit
+        if block_custom_ops and not region_fused:
+            raise ValueError("model.block_custom_ops needs model.hc_region_fused=true (only the "
+                             "region entry and exit are ops)")
         self._carrier_bf16 = bool(carrier_bf16)
         if carrier_bf16 and not region_fused:
             raise ValueError("model.hc_carrier_bf16 needs model.hc_region_fused=true (and so "

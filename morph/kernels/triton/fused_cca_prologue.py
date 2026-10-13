@@ -830,6 +830,65 @@ def _strides3(t: Tensor) -> tuple[int, int, int]:
     return t.stride(0), t.stride(1), t.stride(2)
 
 
+def _rows_fwd_impl(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin,
+                   H, Hkv, D, n_rep, n_skip_rope, eps):
+    """The row-tiled prologue forward: ``(out_q, out_k, out_v)``. ``_FusedCCAPrologueRows`` and
+    the custom op (``block_ops``, model.block_custom_ops) both call it."""
+    B, S, _ = q_lat.shape
+    n_rows = B * S
+    dev, odt = q_lat.device, q_lat.dtype
+    out_q = torch.empty(B, H, S, D, device=dev, dtype=odt)
+    out_k = torch.empty(B, H, S, D, device=dev, dtype=odt)
+    out_v = torch.empty(B, H, S, D, device=dev, dtype=odt)
+    vhalf = v_curr.shape[-1]
+    _cca_rows_fwd_kernel[(triton.cdiv(n_rows, _ROWS_BR),)](
+        q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin,
+        out_q, out_k, out_v, n_rows, S, n_skip_rope,
+        *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
+        *_strides3(v_curr), *_strides3(v_prev),
+        H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
+        **_ROWS_LAUNCH,
+    )
+    return out_q, out_k, out_v
+
+
+def _rows_bwd_impl(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin,
+                   H, Hkv, D, n_rep, n_skip_rope, eps, vhalf):
+    """The row-tiled prologue backward: the nine input grads (q_lat, k_lat, q_conv, k_conv,
+    v_curr, v_prev, wq, wk, temp)."""
+    B, S, _ = q_lat.shape
+    n_rows = B * S
+    n_prog = triton.cdiv(n_rows, _ROWS_BR)
+    dev = q_lat.device
+    grad_q = grad_q.contiguous()
+    grad_k = grad_k.contiguous()
+    grad_v = grad_v.contiguous()
+    # Every grad lands in its input's dtype (q_lat's for v, as _FusedCCAPrologue does).
+    d_ql = torch.empty_like(q_lat)
+    d_kl = torch.empty_like(k_lat)
+    d_qc = torch.empty_like(q_conv)
+    d_kc = torch.empty_like(k_conv)
+    d_vc = torch.empty(B, S, vhalf, device=dev, dtype=q_lat.dtype)
+    d_vp = torch.empty(B, S, vhalf, device=dev, dtype=q_lat.dtype)
+    f32 = torch.float32
+    dwq_part = torch.empty(n_prog, D, device=dev, dtype=f32)
+    dwk_part = torch.empty(n_prog, D, device=dev, dtype=f32)
+    dtemp_part = torch.empty(n_prog, Hkv, device=dev, dtype=f32)
+    _cca_rows_bwd_kernel[(n_prog,)](
+        grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv,
+        wq, wk, temp, cos, sin, d_ql, d_kl, d_qc, d_kc, d_vc, d_vp,
+        dwq_part, dwk_part, dtemp_part, n_rows, S, n_skip_rope,
+        *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
+        *_strides3(d_ql), *_strides3(d_kl), *_strides3(d_qc), *_strides3(d_kc),
+        *_strides3(d_vc), *_strides3(d_vp),
+        H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
+        **_ROWS_LAUNCH,
+    )
+    return (d_ql, d_kl, d_qc, d_kc, d_vc, d_vp,
+            dwq_part.sum(0).to(wq.dtype), dwk_part.sum(0).to(wk.dtype),
+            dtemp_part.sum(0).to(temp.dtype))
+
+
 class _FusedCCAPrologueRows(torch.autograd.Function):
     """``_FusedCCAPrologue`` on the row-tiled kernels (model.cca_prologue_tiled). Same
     inputs, outputs and gradient contract; inputs are read through their strides and each
@@ -839,62 +898,20 @@ class _FusedCCAPrologueRows(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
                 wq, wk, temp, cos, sin, H, Hkv, D, n_rep, n_skip_rope, eps):
-        B, S, _ = q_lat.shape
-        n_rows = B * S
-        dev, odt = q_lat.device, q_lat.dtype
-        out_q = torch.empty(B, H, S, D, device=dev, dtype=odt)
-        out_k = torch.empty(B, H, S, D, device=dev, dtype=odt)
-        out_v = torch.empty(B, H, S, D, device=dev, dtype=odt)
-        vhalf = v_curr.shape[-1]
-        _cca_rows_fwd_kernel[(triton.cdiv(n_rows, _ROWS_BR),)](
-            q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin,
-            out_q, out_k, out_v, n_rows, S, n_skip_rope,
-            *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
-            *_strides3(v_curr), *_strides3(v_prev),
-            H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
-            **_ROWS_LAUNCH,
-        )
+        out = _rows_fwd_impl(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos,
+                             sin, H, Hkv, D, n_rep, n_skip_rope, eps)
         ctx.save_for_backward(q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin)
-        ctx.dims = (H, Hkv, D, n_rep, n_skip_rope, eps, vhalf)
+        ctx.dims = (H, Hkv, D, n_rep, n_skip_rope, eps, v_curr.shape[-1])
         ctx.vdt = (v_curr.dtype, tuple(v_curr.shape), v_prev.dtype, tuple(v_prev.shape))
-        return out_q, out_k, out_v
+        return out
 
     @staticmethod
     def backward(ctx, grad_q, grad_k, grad_v):
         q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin = ctx.saved_tensors
         H, Hkv, D, n_rep, n_skip_rope, eps, vhalf = ctx.dims
-        B, S, _ = q_lat.shape
-        n_rows = B * S
-        n_prog = triton.cdiv(n_rows, _ROWS_BR)
-        dev = q_lat.device
-        grad_q = grad_q.contiguous()
-        grad_k = grad_k.contiguous()
-        grad_v = grad_v.contiguous()
-        # Every grad lands in its input's dtype (q_lat's for v, as _FusedCCAPrologue does).
-        d_ql = torch.empty_like(q_lat)
-        d_kl = torch.empty_like(k_lat)
-        d_qc = torch.empty_like(q_conv)
-        d_kc = torch.empty_like(k_conv)
-        d_vc = torch.empty(B, S, vhalf, device=dev, dtype=q_lat.dtype)
-        d_vp = torch.empty(B, S, vhalf, device=dev, dtype=q_lat.dtype)
-        f32 = torch.float32
-        dwq_part = torch.empty(n_prog, D, device=dev, dtype=f32)
-        dwk_part = torch.empty(n_prog, D, device=dev, dtype=f32)
-        dtemp_part = torch.empty(n_prog, Hkv, device=dev, dtype=f32)
-        _cca_rows_bwd_kernel[(n_prog,)](
-            grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv,
-            wq, wk, temp, cos, sin, d_ql, d_kl, d_qc, d_kc, d_vc, d_vp,
-            dwq_part, dwk_part, dtemp_part, n_rows, S, n_skip_rope,
-            *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
-            *_strides3(d_ql), *_strides3(d_kl), *_strides3(d_qc), *_strides3(d_kc),
-            *_strides3(d_vc), *_strides3(d_vp),
-            H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
-            **_ROWS_LAUNCH,
-        )
-        return (d_ql, d_kl, d_qc, d_kc, d_vc, d_vp,
-                dwq_part.sum(0).to(wq.dtype), dwk_part.sum(0).to(wk.dtype),
-                dtemp_part.sum(0).to(temp.dtype),
-                None, None, None, None, None, None, None, None)
+        grads = _rows_bwd_impl(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk,
+                               temp, cos, sin, H, Hkv, D, n_rep, n_skip_rope, eps, vhalf)
+        return (*grads, None, None, None, None, None, None, None, None)
 
 
 # ===========================================================================
@@ -907,7 +924,7 @@ def fused_cca_prologue(
     q_norm_weight: Tensor, k_norm_weight: Tensor, temp: Tensor,
     cos: Tensor, sin: Tensor,
     n_heads: int, n_kv_heads: int, d_head: int,
-    n_skip_rope: int = 0, eps: float = 1e-6, tiled: bool = False,
+    n_skip_rope: int = 0, eps: float = 1e-6, tiled: bool = False, custom_op: bool = False,
 ):
     """Fused CCA attention prologue (forward + backward in Triton).
 
@@ -925,6 +942,8 @@ def fused_cca_prologue(
         tiled:  model.cca_prologue_tiled — run the row-tiled kernels
                 (``_FusedCCAPrologueRows``: one launch each way, strided inputs). Not
                 bit-identical to the per-(row, head) kernels (reduction orders only).
+        custom_op: model.block_custom_ops — the tiled prologue as a ``torch.library`` op
+                (block_ops.py), not behind the dynamo fence. Needs ``tiled``.
 
     Returns:
         q, k, v each [B, n_heads, S, d_head], dtype = q_lat.dtype.
@@ -945,11 +964,21 @@ def fused_cca_prologue(
     if tiled:
         # model.cca_prologue_tiled: D must be a power of two (the tile's column range).
         assert D & (D - 1) == 0, f"cca_prologue_tiled needs a power-of-two d_head, got {D}"
+        if custom_op:
+            from morph.kernels.triton.block_ops import cca_prologue_rows_op
+            return cca_prologue_rows_op(
+                q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
+                q_norm_weight, k_norm_weight, temp, cos2, sin2,
+                H, Hkv, D, n_rep, n_skip_rope, eps,
+            )
         return _cca_prologue_rows_dispatch(
             q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
             q_norm_weight, k_norm_weight, temp, cos2, sin2,
             H, Hkv, D, n_rep, n_skip_rope, eps,
         )
+    if custom_op:
+        raise ValueError("model.block_custom_ops needs model.cca_prologue_tiled=true (only the "
+                         "row-tiled prologue is an op)")
     return _cca_prologue_dispatch(
         q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
         q_norm_weight, k_norm_weight, temp, cos2, sin2,
