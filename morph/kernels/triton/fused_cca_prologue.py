@@ -49,11 +49,14 @@ Date:   2026-05-31
 
 from __future__ import annotations
 
+from ._pdl import pdl_opts
+
 import math
 from typing import Optional
 
 import torch
 from ._eager_flag import kernel_fence
+from .kv_flat import _sum_partials
 from torch import Tensor
 
 try:
@@ -627,7 +630,10 @@ if TRITON_AVAILABLE:
         H: tl.constexpr, Hkv: tl.constexpr, D: tl.constexpr,
         N_REP: tl.constexpr, EPS: tl.constexpr, VHALF: tl.constexpr,
         BR: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         r = pid * BR + tl.arange(0, BR)
         rmask = r < n_rows
@@ -727,8 +733,11 @@ if TRITON_AVAILABLE:
         s_dvc_b, s_dvc_s, s_dvc_c, s_dvp_b, s_dvp_s, s_dvp_c,
         H: tl.constexpr, Hkv: tl.constexpr, D: tl.constexpr,
         N_REP: tl.constexpr, EPS: tl.constexpr, VHALF: tl.constexpr,
-        BR: tl.constexpr,
+        BR: tl.constexpr, KV_N: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         r = pid * BR + tl.arange(0, BR)
         rmask = r < n_rows
@@ -750,7 +759,10 @@ if TRITON_AVAILABLE:
         dwk = tl.zeros((D,), dtype=tl.float32)
         odt = dql_ptr.dtype.element_ty
 
-        for kv in tl.static_range(Hkv):
+        # KV_N == Hkv: one program walks every kv group (program_id(1) == 0, grid y == 1).
+        # KV_N == 1 (model.kv_flat_kernels): grid y == Hkv, one program per (row block, kv group).
+        for kvi in tl.static_range(KV_N):
+            kv = tl.program_id(1) + kvi
             kl = tl.load(_rows_ptrs(kl_ptr, b, s, s_kl_b, s_kl_s, s_kl_c, kv * D + d),
                          mask=m2, other=0.0).to(tl.float32)
             # ---- K path (_cca_k_bwd_kernel) ----
@@ -818,12 +830,19 @@ if TRITON_AVAILABLE:
             tl.store(_rows_ptrs(dkl_ptr, b, s, s_dkl_b, s_dkl_s, s_dkl_c, kv * D + d),
                      (0.5 * da_k + d_kl_q).to(odt), mask=m2)
 
-        tl.store(dwq_part_ptr + pid * D + d, dwq)
-        tl.store(dwk_part_ptr + pid * D + d, dwk)
+        slot = pid * tl.num_programs(1) + tl.program_id(1)
+        tl.store(dwq_part_ptr + slot * D + d, dwq)
+        tl.store(dwk_part_ptr + slot * D + d, dwk)
 
 
 _ROWS_BR = 16
 _ROWS_LAUNCH = dict(num_stages=1, num_warps=4)
+# model.kv_flat_kernels: fewer rows per program (more programs at the core pass's 1,536 rows),
+# partials summed by one fixed-order kernel. Tile from lab/perf/bench_kv_flat.py.
+_ROWS_BR_FLAT = 16
+# below this many row blocks (170 SMs) the kv groups also split across programs (grid y)
+_ROWS_KV_SPLIT_BELOW = 192
+_ROWS_LAUNCH_FLAT = dict(num_stages=1, num_warps=2)
 
 
 def _strides3(t: Tensor) -> tuple[int, int, int]:
@@ -847,18 +866,20 @@ def _rows_fwd_impl(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, c
         *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
         *_strides3(v_curr), *_strides3(v_prev),
         H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
-        **_ROWS_LAUNCH,
+        **_ROWS_LAUNCH, **pdl_opts(),
     )
     return out_q, out_k, out_v
 
 
 def _rows_bwd_impl(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin,
-                   H, Hkv, D, n_rep, n_skip_rope, eps, vhalf):
+                   H, Hkv, D, n_rep, n_skip_rope, eps, vhalf, flat=False):
     """The row-tiled prologue backward: the nine input grads (q_lat, k_lat, q_conv, k_conv,
-    v_curr, v_prev, wq, wk, temp)."""
+    v_curr, v_prev, wq, wk, temp). ``flat`` (model.kv_flat_kernels): the re-tiled launch and
+    one fixed-order kernel for the three partial sums."""
     B, S, _ = q_lat.shape
     n_rows = B * S
-    n_prog = triton.cdiv(n_rows, _ROWS_BR)
+    br, launch = (_ROWS_BR_FLAT, _ROWS_LAUNCH_FLAT) if flat else (_ROWS_BR, _ROWS_LAUNCH)
+    n_prog = triton.cdiv(n_rows, br)
     dev = q_lat.device
     grad_q = grad_q.contiguous()
     grad_k = grad_k.contiguous()
@@ -871,19 +892,23 @@ def _rows_bwd_impl(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk,
     d_vc = torch.empty(B, S, vhalf, device=dev, dtype=q_lat.dtype)
     d_vp = torch.empty(B, S, vhalf, device=dev, dtype=q_lat.dtype)
     f32 = torch.float32
-    dwq_part = torch.empty(n_prog, D, device=dev, dtype=f32)
-    dwk_part = torch.empty(n_prog, D, device=dev, dtype=f32)
+    ny = Hkv if (flat and n_prog < _ROWS_KV_SPLIT_BELOW) else 1
+    dwq_part = torch.empty(n_prog * ny, D, device=dev, dtype=f32)
+    dwk_part = torch.empty(n_prog * ny, D, device=dev, dtype=f32)
     dtemp_part = torch.empty(n_prog, Hkv, device=dev, dtype=f32)
-    _cca_rows_bwd_kernel[(n_prog,)](
+    _cca_rows_bwd_kernel[(n_prog, ny)](
         grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv,
         wq, wk, temp, cos, sin, d_ql, d_kl, d_qc, d_kc, d_vc, d_vp,
         dwq_part, dwk_part, dtemp_part, n_rows, S, n_skip_rope,
         *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
         *_strides3(d_ql), *_strides3(d_kl), *_strides3(d_qc), *_strides3(d_kc),
         *_strides3(d_vc), *_strides3(d_vp),
-        H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
-        **_ROWS_LAUNCH,
-    )
+        H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=br, KV_N=Hkv // ny,
+        **launch, **pdl_opts())
+    if flat:
+        d_wq, d_wk, d_temp = torch.empty_like(wq), torch.empty_like(wk), torch.empty_like(temp)
+        _sum_partials([(dwq_part, d_wq, 1), (dwk_part, d_wk, 1), (dtemp_part, d_temp, 1)])
+        return d_ql, d_kl, d_qc, d_kc, d_vc, d_vp, d_wq, d_wk, d_temp
     return (d_ql, d_kl, d_qc, d_kc, d_vc, d_vp,
             dwq_part.sum(0).to(wq.dtype), dwk_part.sum(0).to(wk.dtype),
             dtemp_part.sum(0).to(temp.dtype))
@@ -925,6 +950,7 @@ def fused_cca_prologue(
     cos: Tensor, sin: Tensor,
     n_heads: int, n_kv_heads: int, d_head: int,
     n_skip_rope: int = 0, eps: float = 1e-6, tiled: bool = False, custom_op: bool = False,
+    flat: bool = False,
 ):
     """Fused CCA attention prologue (forward + backward in Triton).
 
@@ -944,6 +970,8 @@ def fused_cca_prologue(
                 bit-identical to the per-(row, head) kernels (reduction orders only).
         custom_op: model.block_custom_ops — the tiled prologue as a ``torch.library`` op
                 (block_ops.py), not behind the dynamo fence. Needs ``tiled``.
+        flat:   model.kv_flat_kernels — the backward on the re-tiled launch (kv_flat.py).
+                Needs ``custom_op``; raises otherwise.
 
     Returns:
         q, k, v each [B, n_heads, S, d_head], dtype = q_lat.dtype.
@@ -961,6 +989,9 @@ def fused_cca_prologue(
             H, Hkv, D, n_skip_rope, eps,
         )  # traceable
 
+    if flat and not (tiled and custom_op):
+        raise ValueError("model.kv_flat_kernels needs model.cca_prologue_tiled and "
+                         "model.block_custom_ops (the re-tiled backward runs inside the op)")
     if tiled:
         # model.cca_prologue_tiled: D must be a power of two (the tile's column range).
         assert D & (D - 1) == 0, f"cca_prologue_tiled needs a power-of-two d_head, got {D}"
@@ -969,7 +1000,7 @@ def fused_cca_prologue(
             return cca_prologue_rows_op(
                 q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,
                 q_norm_weight, k_norm_weight, temp, cos2, sin2,
-                H, Hkv, D, n_rep, n_skip_rope, eps,
+                H, Hkv, D, n_rep, n_skip_rope, eps, flat,
             )
         return _cca_prologue_rows_dispatch(
             q_lat, k_lat, q_conv, k_conv, v_curr, v_prev,

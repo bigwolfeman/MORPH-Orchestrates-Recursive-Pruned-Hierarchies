@@ -28,6 +28,8 @@ in a capture never compiles. Every config accumulates K in the same sequential o
 """
 from __future__ import annotations
 
+from ._pdl import pdl_opts
+
 import contextlib
 
 import torch
@@ -53,7 +55,9 @@ _TUNE_REPS = 3                            # timed launches per config; the faste
 @triton.jit
 def _mm_kernel(a, b, c, M, N, K, sam, sak, sbk, sbn, scm, scn,
                BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr, GM: tl.constexpr,
-               MODE: tl.constexpr):
+               MODE: tl.constexpr, PDL: tl.constexpr = False):
+    if PDL:
+        tl.extra.cuda.gdc_wait()
     pid = tl.program_id(0)
     npm = tl.cdiv(M, BM)
     npn = tl.cdiv(N, BN)
@@ -105,7 +109,7 @@ def _launch(a: Tensor, b: Tensor, c: Tensor, mode: int, cfg: tuple) -> None:
     grid = (triton.cdiv(M, bm) * triton.cdiv(N, bn),)
     _mm_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
                      c.stride(0), c.stride(1), BM=bm, BN=bn, BK=bk, GM=_GM, MODE=mode,
-                     num_warps=nw, num_stages=ns)
+                     num_warps=nw, num_stages=ns, **pdl_opts())
 
 
 def _tune(a: Tensor, b: Tensor, c: Tensor, mode: int) -> tuple:

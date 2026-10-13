@@ -53,6 +53,8 @@ Date:   2026-05-31
 
 from __future__ import annotations
 
+from ._pdl import pdl_opts
+
 from typing import Tuple
 
 import torch
@@ -90,7 +92,10 @@ if TRITON_AVAILABLE:
         B, C, S,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -128,7 +133,10 @@ if TRITON_AVAILABLE:
         CG: tl.constexpr,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -183,7 +191,10 @@ if TRITON_AVAILABLE:
         B, C, S,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -234,7 +245,10 @@ if TRITON_AVAILABLE:
         CG: tl.constexpr,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -276,7 +290,10 @@ if TRITON_AVAILABLE:
         CG: tl.constexpr,
         K: tl.constexpr,
         BLOCK_T: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_ttiles = (S + BLOCK_T - 1) // BLOCK_T
         t_tile = pid % n_ttiles
@@ -327,7 +344,8 @@ def _dw_forward(x, w_dw, K):
     BT = _block_t(S)
     n_tt = (S + BT - 1) // BT
     y = torch.empty_like(x)
-    _dw_fwd_kernel[(B * C * n_tt,)](x, w_dw, y, B, C, S, K=K, BLOCK_T=BT, **_LAUNCH)
+    _dw_fwd_kernel[(B * C * n_tt,)](x, w_dw, y, B, C, S, K=K, BLOCK_T=BT, **_LAUNCH,
+                                    **pdl_opts())
     return y
 
 
@@ -337,7 +355,8 @@ def _gp_forward(x, w_gp, CG, K):
     BT = _block_t(S)
     n_tt = (S + BT - 1) // BT
     y = torch.empty_like(x)
-    _gp_fwd_kernel[(B * G * n_tt,)](x, w_gp, y, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH)
+    _gp_fwd_kernel[(B * G * n_tt,)](x, w_gp, y, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH,
+                                    **pdl_opts())
     return y
 
 
@@ -348,7 +367,7 @@ def _dw_backward(go, x_in, w_dw, K):
     dx = torch.empty_like(go)
     dw_part = torch.empty(B * n_tt, C, K, device=go.device, dtype=torch.float32)
     _dw_bwd_kernel[(B * C * n_tt,)](go, w_dw, x_in, dx, dw_part,
-                                    B, C, S, K=K, BLOCK_T=BT, **_LAUNCH)
+                                    B, C, S, K=K, BLOCK_T=BT, **_LAUNCH, **pdl_opts())
     dw = dw_part.sum(dim=0)                              # [C, K]
     return dx, dw
 
@@ -360,8 +379,10 @@ def _gp_backward(go, x_in, w_gp, CG, K):
     n_tt = (S + BT - 1) // BT
     dx = torch.empty_like(go)
     dw_part = torch.empty(B * n_tt, C, CG, K, device=go.device, dtype=torch.float32)
-    _gp_bwd_dx_kernel[(B * G * n_tt,)](go, w_gp, dx, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH)
-    _gp_bwd_dw_kernel[(B * G * n_tt,)](go, x_in, dw_part, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH)
+    _gp_bwd_dx_kernel[(B * G * n_tt,)](go, w_gp, dx, B, C, S, CG=CG, K=K, BLOCK_T=BT, **_LAUNCH,
+                                       **pdl_opts())
+    _gp_bwd_dw_kernel[(B * G * n_tt,)](go, x_in, dw_part, B, C, S, CG=CG, K=K, BLOCK_T=BT,
+                                       **_LAUNCH, **pdl_opts())
     dw = dw_part.sum(dim=0)                              # [C, Cg, K]
     return dx, dw
 
@@ -383,9 +404,14 @@ def _cca_conv_fwd_impl(x, w_dw2, w_gp, CG, K):
     return y_gp, y_dw, x, w_gp
 
 
-def _cca_conv_bwd_impl(grad_out, x, y_dw, w_dw2, w_gp, CG, K):
-    """``(dx, dw_dw [C, K], dw_gp)``, each in its input's dtype."""
+def _cca_conv_bwd_impl(grad_out, x, y_dw, w_dw2, w_gp, CG, K, flat=False):
+    """``(dx, dw_dw [C, K], dw_gp)``, each in its input's dtype. ``flat``
+    (model.kv_flat_kernels): the re-tiled kernels of ``kv_flat.py`` (same math, other sum
+    order)."""
     grad_out = grad_out.contiguous()
+    if flat:
+        from morph.kernels.triton.kv_flat import cca_conv_bwd_flat
+        return cca_conv_bwd_flat(grad_out, x, y_dw, w_dw2, w_gp, CG, K)
 
     # grouped: d_input (-> grad of y_dw), d_weight_gp
     d_ydw, dw_gp = _gp_backward(grad_out, y_dw, w_gp, CG, K)
@@ -420,7 +446,8 @@ class _FusedCCAConv(torch.autograd.Function):
 # ===========================================================================
 
 def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
-                   groups: int, kernel: int, custom_op: bool = False) -> Tensor:
+                   groups: int, kernel: int, custom_op: bool = False,
+                   flat: bool = False) -> Tensor:
     """Fused stacked causal convs (depthwise then head-grouped) on [B, C, S].
 
     Args:
@@ -431,6 +458,8 @@ def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
         kernel: kernel size k (causal left-pad p = k-1).
         custom_op: model.block_custom_ops — run as a ``torch.library`` op (block_ops.py), not
                 behind the dynamo fence.
+        flat: model.kv_flat_kernels — the backward on the re-tiled kernels (kv_flat.py). Needs
+                ``custom_op`` (the op carries the flag to its backward); raises otherwise.
 
     Returns:
         [B, C, S], same dtype as x_BCS. Equivalent to ``_CCABase._causal_conv``.
@@ -443,9 +472,12 @@ def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
     if force_eager() or not TRITON_AVAILABLE or not x_BCS.is_cuda:
         return causal_conv_reference(x_BCS, w_dw, w_gp, kernel)  # traceable
 
+    if flat and not custom_op:
+        raise ValueError("model.kv_flat_kernels needs model.block_custom_ops (the re-tiled "
+                         "backward runs inside the op)")
     if custom_op:
         from morph.kernels.triton.block_ops import cca_conv_op
-        return cca_conv_op(x_BCS, w_dw, w_gp, CG, kernel)
+        return cca_conv_op(x_BCS, w_dw, w_gp, CG, kernel, flat)
     return _cca_conv_dispatch(x_BCS, w_dw, w_gp, CG, kernel)
 
 

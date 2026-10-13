@@ -915,6 +915,9 @@ class _CCABase(nn.Module):
         # model.block_custom_ops: the conv and the prologue run as torch.library ops (block_ops.py),
         # so the block compiles as one graph. A Python constant per instance, like the line above.
         self.block_custom_ops = False
+        # model.kv_flat_kernels: the conv and prologue backward on the re-tiled kernels
+        # (kernels/triton/kv_flat.py). Needs the two keys above. A Python constant per instance.
+        self.kv_flat = False
 
         # model.split_wgrad: the covered W_up (bind_split_wgrad sets it); None = the plain read.
         self._split_up: SplitWeight | None = None
@@ -934,6 +937,7 @@ class _CCABase(nn.Module):
         return fused_cca_conv(
             x_t, conv_dw.weight.to(x_t.dtype), conv_gp.weight.to(x_t.dtype),
             conv_gp.groups, conv_dw.kernel_size[0], custom_op=self.block_custom_ops,
+            flat=self.kv_flat,
         )
 
     def _cca_project(self, x: Tensor, n_skip_rope: int = 0, return_klat: bool = False,
@@ -993,7 +997,8 @@ class _CCABase(nn.Module):
             # (matches _causal_conv which casts to x_t.dtype = the conv input).
             conv_pair = fused_cca_conv(
                 qk_pair.transpose(1, 2), w_dw.to(qk_pair.dtype), w_gp.to(qk_pair.dtype),
-                H + Hkv, self.conv_q_dw.kernel_size[0], custom_op=self.block_custom_ops)
+                H + Hkv, self.conv_q_dw.kernel_size[0], custom_op=self.block_custom_ops,
+                flat=self.kv_flat)
             q_conv = conv_pair[:, :self.latent_q_dim].transpose(1, 2)
             k_conv = conv_pair[:, self.latent_q_dim:].transpose(1, 2)
         else:
@@ -1013,7 +1018,7 @@ class _CCABase(nn.Module):
             self.q_norm.weight, self.k_norm.weight, self.temp,
             cos, sin,
             H, Hkv, D, n_skip_rope=n_skip_rope, eps=self.q_norm.eps,
-            tiled=self.prologue_tiled, custom_op=self.block_custom_ops,
+            tiled=self.prologue_tiled, custom_op=self.block_custom_ops, flat=self.kv_flat,
         )
 
         if return_klat:
@@ -1156,7 +1161,7 @@ class _CCACSAAttention(nn.Module):
                  window_size: int, init_alpha: float, conv_kernel: int,
                  tg_restrict: bool = False, tg_span_gate: bool = False,
                  graph_safe: bool = False, cca_prologue_tiled: bool = False,
-                 block_custom_ops: bool = False):
+                 block_custom_ops: bool = False, kv_flat_kernels: bool = False):
         super().__init__()
         self.top_k = top_k
         self.compress_ratio = csa_compress_ratio
@@ -1169,6 +1174,7 @@ class _CCACSAAttention(nn.Module):
                             init_alpha, conv_kernel)
         self.cca.prologue_tiled = cca_prologue_tiled   # model.cca_prologue_tiled
         self.cca.block_custom_ops = block_custom_ops   # model.block_custom_ops
+        self.cca.kv_flat = kv_flat_kernels             # model.kv_flat_kernels
 
         if tg_restrict:
             # docs/tul-tg-spec.md §3: the compressed branch attends directly to slot
@@ -1373,7 +1379,7 @@ class _CCAHCAAttention(nn.Module):
                  window_size: int, init_alpha: float, conv_kernel: int,
                  tg_restrict: bool = False, tg_span_gate: bool = False,
                  graph_safe: bool = False, cca_prologue_tiled: bool = False,
-                 block_custom_ops: bool = False):
+                 block_custom_ops: bool = False, kv_flat_kernels: bool = False):
         super().__init__()
         self.compress_ratio = hca_compress_ratio
         self.tg_restrict = tg_restrict
@@ -1385,6 +1391,7 @@ class _CCAHCAAttention(nn.Module):
                             init_alpha, conv_kernel)
         self.cca.prologue_tiled = cca_prologue_tiled   # model.cca_prologue_tiled
         self.cca.block_custom_ops = block_custom_ops   # model.block_custom_ops
+        self.cca.kv_flat = kv_flat_kernels             # model.kv_flat_kernels
 
         if tg_restrict:
             # docs/tul-tg-spec.md §3: see _CCACSAAttention's twin comment. HCA has no
@@ -1556,6 +1563,8 @@ class MORPHAttention(nn.Module):
                             row-tiled kernels (fused_cca_prologue(tiled=True)).
         block_custom_ops:   model.block_custom_ops — the CCA conv and prologue run as
                             torch.library ops (block_ops.py); needs cca_prologue_tiled.
+        kv_flat_kernels:    model.kv_flat_kernels — their backward on the re-tiled kernels
+                            (kernels/triton/kv_flat.py); needs block_custom_ops.
 
     Forward:
         x: [B, S, d_model]
@@ -1607,6 +1616,7 @@ class MORPHAttention(nn.Module):
         graph_safe: bool = False,
         cca_prologue_tiled: bool = False,
         block_custom_ops: bool = False,
+        kv_flat_kernels: bool = False,
     ):
         super().__init__()
 
@@ -1617,7 +1627,7 @@ class MORPHAttention(nn.Module):
             init_alpha=init_alpha, conv_kernel=conv_kernel,
             tg_restrict=tg_restrict, tg_span_gate=tg_span_gate,
             graph_safe=graph_safe, cca_prologue_tiled=cca_prologue_tiled,
-            block_custom_ops=block_custom_ops,
+            block_custom_ops=block_custom_ops, kv_flat_kernels=kv_flat_kernels,
         )
 
         if layer_idx % 2 == 0:

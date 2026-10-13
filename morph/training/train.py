@@ -787,6 +787,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         inject_fold=bool(getattr(m, "inject_fold", False)),      # model.inject_fold
         hc_carrier_bf16=bool(getattr(m, "hc_carrier_bf16", False)),  # model.hc_carrier_bf16
         block_custom_ops=bool(getattr(m, "block_custom_ops", False)),  # model.block_custom_ops
+        kv_flat_kernels=bool(getattr(m, "kv_flat_kernels", False)),    # model.kv_flat_kernels
+        pdl=bool(getattr(m, "pdl", False)),                            # model.pdl
         l2_persist=bool(getattr(m, "l2_persist", False)),
         retention=bool(getattr(m, "retention", True)),
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),

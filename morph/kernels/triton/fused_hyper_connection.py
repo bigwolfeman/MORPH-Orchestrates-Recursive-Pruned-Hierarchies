@@ -37,6 +37,8 @@ Date:   2026-06-05
 
 from __future__ import annotations
 
+from ._pdl import pdl_opts
+
 import torch
 from ._eager_flag import kernel_fence
 import torch.nn.functional as F
@@ -1008,7 +1010,10 @@ if TRITON_AVAILABLE:
         term_ptr,         # [B, S, C] or dummy — single-stream inject for the NEXT layer
         N: tl.constexpr, C: tl.constexpr,
         BLOCK_C: tl.constexpr, HAS_TERM: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         tok = tl.program_id(0)
         c = tl.arange(0, BLOCK_C)
         cmask = c < C
@@ -1154,7 +1159,10 @@ if TRITON_AVAILABLE:
         ssq_ptr,          # [N, T] fp32 out: per-stream sum of squares
         T,
         N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         NC: tl.constexpr = N * C
         j = tl.program_id(1)
         t = tl.program_id(0) * BT + tl.arange(0, BT)
@@ -1190,7 +1198,10 @@ if TRITON_AVAILABLE:
         TAU: tl.constexpr, ALPHA: tl.constexpr, EPS: tl.constexpr,
         N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
         CS: tl.constexpr,  # x_bar columns per program (grid axis 1)
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         NC: tl.constexpr = N * C
         t = tl.program_id(0) * BT + tl.arange(0, BT)
         tmask = t < T
@@ -1307,7 +1318,10 @@ if TRITON_AVAILABLE:
         gy_ptr, ghpost_ptr, gterm_ptr,
         N: tl.constexpr, C: tl.constexpr,
         BLOCK_C: tl.constexpr, HAS_TERM: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         tok = tl.program_id(0)
         c = tl.arange(0, BLOCK_C)
         cmask = c < C
@@ -1351,7 +1365,10 @@ if TRITON_AVAILABLE:
         T,
         N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
         CS: tl.constexpr,  # columns per split (C // NSPLIT)
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         NC: tl.constexpr = N * C
         pid = tl.program_id(0)
         sp = tl.program_id(1)
@@ -1423,7 +1440,10 @@ if TRITON_AVAILABLE:
         T,
         TAU: tl.constexpr, ALPHA: tl.constexpr,
         N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, NSPLIT: tl.constexpr,
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         t = tl.program_id(0) * BT + tl.arange(0, BT)
         tmask = t < T
         gcm0 = _hcr_red(red_ptr, t, tmask, T, 0, NSPLIT)
@@ -1665,7 +1685,10 @@ if TRITON_AVAILABLE:
         T,
         N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
         CS: tl.constexpr,  # columns per program along C (grid axis 1)
+        PDL: tl.constexpr = False,
     ):
+        if PDL:
+            tl.extra.cuda.gdc_wait()
         NC: tl.constexpr = N * C
         t = tl.program_id(0) * BT + tl.arange(0, BT)
         tmask = t < T
@@ -2027,7 +2050,7 @@ class _FusedHCPost(torch.autograd.Function):
         BLOCK_C = _next_pow2(C)
         _hc_post_fwd_kernel[(B * S,)](
             hres, hpost_row, h, y, out, term_arg,
-            N=N, C=C, BLOCK_C=BLOCK_C, HAS_TERM=has_term, **_LAUNCH,
+            N=N, C=C, BLOCK_C=BLOCK_C, HAS_TERM=has_term, **_LAUNCH, **pdl_opts(),
         )
         ctx.save_for_backward(hres, hpost_row, h, y)
         ctx.shape = (B, S, N, C)
@@ -2135,6 +2158,7 @@ def _hcr_entry_fwd_impl(h, proj_w, proj_b, tau, alpha, eps):
     _hcr_fwd_proj_kernel[(triton.cdiv(T, pbt), N)](
         h, wbf, part, ssq, T, N=N, C=C, BT=pbt, BC=min(tu["fsp_bc"], C),
         num_warps=tu["fsp_warps"], num_stages=tu["fsp_stages"] if C >= 4 * tu["fsp_bc"] else 1,
+        **pdl_opts(),
     )
     mbt, mbc = tu["fmap_bt"], min(tu["fmap_bc"], C)
     msplit = 1
@@ -2145,7 +2169,7 @@ def _hcr_entry_fwd_impl(h, proj_w, proj_b, tau, alpha, eps):
         h, part, ssq, pb, xbar, hres, hpr, raw, rms, T,
         TAU=float(tau), ALPHA=float(alpha), EPS=float(eps),
         N=N, C=C, BT=mbt, BC=mbc, CS=C // msplit,
-        num_warps=tu["fmap_warps"], num_stages=1,
+        num_warps=tu["fmap_warps"], num_stages=1, **pdl_opts(),
     )
     return xbar, hres, hpr, raw, rms, h, w, pb
 
@@ -2178,12 +2202,12 @@ def _hcr_entry_bwd_impl(g_xbar, g_hpr, g_link, h, w, pb, raw, rms, tau, alpha, w
     red = torch.empty(nsplit, T, 20, device=h.device, dtype=torch.float32)
     _hcr_bwd_reduce_kernel[(triton.cdiv(T, lbt), nsplit)](
         g_xbar, g_link, h, red, T, N=N, C=C, BT=lbt, BC=rbc, CS=C // nsplit,
-        num_warps=tu["red_warps"], num_stages=tu["red_stages"],
+        num_warps=tu["red_warps"], num_stages=tu["red_stages"], **pdl_opts(),
     )
     _hcr_bwd_map_kernel[(triton.cdiv(T, tu["map_bt"]),)](
         red, g_hpr, pb, raw, rms, graw, coef, T,
         TAU=tau, ALPHA=alpha, N=N, C=C, BT=tu["map_bt"], NSPLIT=nsplit,
-        num_warps=tu["map_warps"], num_stages=1,
+        num_warps=tu["map_warps"], num_stages=1, **pdl_opts(),
     )
     cbc = min(tu["car_bc"], C)
     csplit = 1
@@ -2193,7 +2217,7 @@ def _hcr_entry_bwd_impl(g_xbar, g_hpr, g_link, h, w, pb, raw, rms, tau, alpha, w
     _hcr_bwd_carrier_kernel[(triton.cdiv(T, 16), csplit)](
         g_xbar, g_link, h, w, graw, coef, gh, T,
         N=N, C=C, BT=16, BC=cbc, CS=C // csplit,
-        num_warps=tu["car_warps"], num_stages=tu["car_stages"],
+        num_warps=tu["car_warps"], num_stages=tu["car_stages"], **pdl_opts(),
     )
     # grad_w / grad_b exactly as _FusedHCPreMap.backward (fp32 GEMM over the carrier).
     graw2 = graw.reshape(T, 48)
@@ -2245,7 +2269,7 @@ def _hcr_exit_fwd_impl(hres, hpost_row, h_link, y, term):
     _hc_post_fwd_kernel[(B * S,)](
         hres, hpost_row, h_link, y, out, term_arg,
         N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, num_stages=1,
-        num_warps=_hcr_tune(B * S)["post_warps"],
+        num_warps=_hcr_tune(B * S)["post_warps"], **pdl_opts(),
     )
     return out, hpost_row, y
 
@@ -2260,7 +2284,7 @@ def _hcr_exit_bwd_impl(grad_out, hpost_row, y, term_dtype):
     gterm = (torch.empty(B, S, C, device=y.device, dtype=term_dtype) if has_term else gy)
     _hcr_exit_bwd_kernel[(B * S,)](
         grad_out, hpost_row, y, gy, ghpost, gterm,
-        N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, **_LAUNCH,
+        N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, **_LAUNCH, **pdl_opts(),
     )
     return gy, ghpost, gterm
 

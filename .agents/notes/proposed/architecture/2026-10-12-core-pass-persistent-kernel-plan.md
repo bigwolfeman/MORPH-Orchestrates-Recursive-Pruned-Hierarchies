@@ -288,3 +288,70 @@ pending key raises. Test: `test_the_recording_tunes_the_keys_the_warm_up_never_r
 `block_custom_ops` (S5), pinned bench: base 171.07 ms vs G1 164.21 ms, -6.9 ms (-4.0 %). Unpinned 300-step
 runs of the speed base and of the `cellp3` config (64 graphs) both finished with no re-record, because the
 warm-up had already tuned every key those recordings reach.
+
+## Status 2026-10-13: K1 built (key off, 5k check owed), P0 built (key off, borderline)
+
+Scratch, logs and scripts: `/home/wolfe/morph-scratch/abq/kvflat/`. Speed base
+`nowta_pointer_fast_spdcells_speed_bf16c` (S1, S2, S5, G1 ON, cell count 4), `model.slot_gain_pass_force=3` on
+every arm, 300 steps, skip 100, interleaved arms, shared GPU.
+
+**Fresh K/V-side profile** (kineto window, steps 160-164, per step; the plan's 1.36 / 1.03 / 0.36 numbers were 8
+passes only and predate S5 and G1). `_gp_bwd_dw_kernel` 1.84 ms (60 launches, 30.7 us, 144 programs),
+`_dw_bwd_kernel` 1.53 (25.5 us, 9,216 programs), `_gp_bwd_dx_kernel` 0.49, `_cca_rows_bwd_kernel` 2.33
+(68 launches, 34.2 us; the 96-program core calls and the 480-program prelude/coda calls average together),
+`_gp_fwd_kernel` 0.81, `_cca_rows_fwd_kernel` 1.29. The core shapes are B = 6, C = 768 (q 512 + k 256),
+S = 256, CG = 64, K = 4 for the conv and B = 6, S = 256, H = 8, Hkv = 4, D = 64 for the prologue. The torch
+`sum` and cast kernels after the conv and prologue backward are not named in the trace.
+
+**K1 kill test (microbench `lab/perf/bench_kv_flat.py`, CUDA-graph replay, warm L2).** Conv backward as the
+model calls it (all kernels, reduces and casts): 61.9 us in tree, 20.6 us re-tiled, x3.00. Prologue rows backward
+(with its partial sums): core shape 6 x 256 31.2 us to 14.7 us, x2.12; prelude/coda shape 6 x 1280 56.5 us to
+36.0 us, x1.57 (that shape is not on the 2x rule; it is the 7 prelude and coda blocks only). Kill rule (< 2x at the
+real shapes) not met, so K1 was built. What changed: the grouped conv dx and dw share one launch and dw is split
+over (group, tap, position chunk) with the accumulator in registers; the depthwise backward tiles 4 channels; the
+prologue rows backward splits the kv groups across programs below 192 row blocks; all weight-grad partials go
+through one fixed-order sum kernel (no atomics) that also casts and transposes. The "one conv weight grad over
+all 8 passes" idea was NOT built: after the re-tile the per-pass partials cost 0.31 + 0.86 ms per step in total
+(`_kvf_dw_bwd_kernel`, `_kvf_sum_kernel`), and a deferred weight grad needs S2's side-stream plumbing for the conv.
+
+| check | result |
+|---|---|
+| byte gate, key off (K1 code, then K1 + P0 code) | `FINAL_SHA256 4a73ebf5426b9dfa889c81a8608a23d23a6785bb225ff32e2d5dd03476bd70d7` both times |
+| fp64 parity per kernel (`tests/test_kv_flat.py`) | flat error vs fp64 no worse than in-tree (2 % slack + 5e-7 floor) for dx, dw_dw, dw_gp and all nine prologue grads, 4 conv shapes and 4 prologue shapes. bf16 grads read 2.3e-3 (conv) and 1.7e-3 (prologue) for BOTH paths; the three fp32 vector grads read 1.4e-7 to 1.8e-7 for both, with d_temp at 6 x 1280 at 4.4e-7 vs 2.3e-7 (another sum order, inside the floor) |
+| tests | `test_kv_flat.py` 18 passed; `test_block_custom_ops.py` 22, `test_cca_prologue_tiled.py` 5, `test_cca_prologue_precision.py` 12, `test_segment_causal_conv_kernel.py` 37 (16 skipped) all pass on the edited kernels |
+| sabotage | (a) `cca_conv_bwd_flat` serving the first call's `dw_gp` -> `test_flat_conv_does_not_serve_a_stale_weight_grad` fails; (b) tap and channel axes swapped in the depthwise partial store -> `test_conv_backward_matches_fp64` fails. A third test shows the stale check itself catches a stale sum. All restored |
+| fixed-weight readout, step_5000 of `ab-bf16b`, 480 rows, depths 1,6, compiled blocks | key off and on identical: CE@1 3.9117, CE@6 3.9060, K1-K6 +0.0057 [+0.0053, +0.0062], spandec K1-K6 +0.0317. EXPECTED: the key changes the backward only and the readout is forward only, so this row cannot test the key |
+| gradient parity (the readout's batch, 3 rows, depth 6, bf16 autocast, plain backward, 415 grads) | key off twice: relative difference 1.4e-8 (deterministic). Key on vs off: global relative difference 3.95e-3, cosine 0.99999222, per-tensor worst 3 % (alpha) and 0.5-2 % elsewhere. Same size as the bf16 error of either path against fp64 (2.3e-3), so it reads as rounding, not a different gradient. Not checked: a per-tensor fp64 gradient of the whole model |
+| pinned bench, 300 steps, 2 repeats, off vs on | 164.12 ms (164.17, 164.10) vs 160.20 ms (160.05, 160.25): -3.9 ms (-2.4 %). Second session, 3 repeats: 164.18 vs 160.26, -3.9 ms. Keep rule (>= 2 ms) met |
+| profile (steps 160-164) | conv backward kernels 3.86 ms to 1.27 ms (`_kvf_gp_bwd` 0.96, `_kvf_dw_bwd` 0.31) plus `_kvf_sum` 0.86 (128 launches, also sums the prologue partials); `_cca_rows_bwd` 2.33 to 1.06; launches per step 13,216 to 12,840 |
+| memory | graph pool 19.40 GiB both; device free after eval 6.96 (off) vs 6.97 GiB (on); one extra fp32 partial buffer per call (1.5 MB), freed at the end of the backward |
+| 300-step quality proxy (not a verdict) | loss at steps 100 / 200 / 280, off: 16.836 / 14.247 / 12.805; on: 16.840 / 14.287 / 12.832. MORPH runs decorrelate within tens of steps, so a 0.03 gap is inside the noise (memory note "n=1 run comparisons are unreadable") |
+
+Not verified for K1: a 5k run (CE@6 and K1-K6 against matched controls, 2 seeds) is owed to the orchestrator. The
+fp32 vector grads (`wq`, `wk`, `temp`) sum in another order; no run longer than 600 steps used the key.
+
+**P0 (`model.pdl`).** Triton 3.6.0 and torch 2.11.0 support it: `launch_pdl` is a launch option,
+`tl.extra.cuda.gdc_wait` emits `griddepcontrol.wait`, and `torch._inductor.config.triton.enable_pdl` exists (the key
+sets it; inductor then inserts its own waits). 35 custom kernels got `PDL: tl.constexpr = False`,
+`if PDL: tl.extra.cuda.gdc_wait()` as the first statement and `**pdl_opts()` at every launch: HC region and
+`_hc_post_fwd`, strict attention (4), CCA prologue rows (2), CCA conv (5), segment conv (5), kv-flat (3), G1
+`_mm_kernel`, CE (3), int row quant, exact reduce (2) and the two AdEMAMix kernels. Left alone: decode kernels, the
+non-step attention kernels (CSA, HCA, window, flash, GLA), the router kernels, `morph_set_cond`. Off, the kernels
+compile as before (the constexpr is False and `pdl_opts()` is empty).
+
+| check | result |
+|---|---|
+| byte gate, key OFF | `FINAL_SHA256 4a73ebf5...bd70d7` |
+| byte gate, key ON (`model.pdl=true`) | `FINAL_SHA256 4a73ebf5426b9dfa889c81a8608a23d23a6785bb225ff32e2d5dd03476bd70d7` (same) |
+| tests (`tests/test_pdl.py`) | 75 passed: static (all 35 kernels end their signature in `PDL: tl.constexpr = False`, wait first, every launch passes `**pdl_opts()`, `launch_pdl` appears only in `_pdl.py`), `griddepcontrol.wait` in the PTX with PDL on and absent with it off, conv + G1 GEMM chain bit-equal PDL on vs off in eager AND replayed from a CUDA graph on sm_120 |
+| sabotage (on a scratch copy of the tree) | wait line deleted from `_kvf_sum_kernel` -> `test_every_pdl_kernel_waits_first` and `test_the_wait_reaches_the_ptx` fail; `**pdl_opts()` removed from the `_mm_kernel` launch -> `test_every_launch_passes_pdl_opts` fails |
+| pinned bench 1 (3 arms, 2 repeats) | off 163.69 (163.62, 163.86) vs pdl 163.23 (162.84, 163.32): -0.46 ms |
+| pinned bench 2 (4 arms, 3 repeats) | off 164.18 (164.17, 164.36, 163.71) vs pdl 163.23 (163.12, 163.23, 163.52): -0.95 ms. kv 160.26 (160.26, 160.48, 160.12) vs kv + pdl 159.58 (159.70, 159.43, 158.42): -0.68 ms |
+
+Verdict on the keep rule (>= 0.5 ms): the two sessions read -0.46 and -0.95 ms for PDL alone and -0.68 ms on top of
+K1; the five paired repeats give -0.78, -0.54, -1.05, -1.13, -0.19 ms (mean -0.74). It clears 0.5 ms on the pooled
+mean and on three of four reads, and misses it by 0.04 ms on one session's medians. The plan expected -1 ms (-0.5 to
+-1.5). It is small and near the noise floor of this bench (off arms differ by up to 0.7 ms between sessions); keep
+it default off and decide on the next bench. Not verified: PDL under an eval forward in the trainer (the eval after
+step 290 ran on a PDL-off build only), the 5k quality (PDL cannot change math, and the byte gate agrees), memory with the key on (not measured), and whether
+inductor's early `gdc_launch_dependents` helps or hurts on its own (it is on whenever the key is on).
