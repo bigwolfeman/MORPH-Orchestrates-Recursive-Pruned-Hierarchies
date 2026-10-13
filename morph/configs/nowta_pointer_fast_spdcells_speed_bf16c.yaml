@@ -24,6 +24,11 @@ model:
   # 164.21 ms/step; 5k, 2 seeds on the Poisson base: CE@6 -0.0024, K1-K6 118 %, cell knob unchanged
   # (lab/experiments/successes/2026-10-13-g1-triton-gemm-5k.md).
   split_wgrad_triton: true
+  # K1 (2026-10-13): the CCA conv and prologue-rows backward re-tiled, weight-grad partials summed in
+  # one fixed-order kernel (sum order only). Pinned bench 164.12 -> 160.20 ms/step. 5k, 3 seeds:
+  # CE@6 +0.0003, K1-K6 87.7 % (paired -0.0003 +- 0.0005); Wolfe accepted it on 2026-10-13 because
+  # the 95 % rule is tighter than the seed noise (lab/experiments/failures/2026-10-13-k1-5k.md).
+  kv_flat_kernels: true
 
 # Eval beside the held CUDA-graph pool (no release / re-record): the training trace and every
 # val key are bit-identical to false (graph-step-survives-eval note); 23.2 -> 16.3 s per eval.
