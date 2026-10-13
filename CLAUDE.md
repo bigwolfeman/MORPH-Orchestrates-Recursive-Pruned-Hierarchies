@@ -112,7 +112,11 @@ Caveats (one seed; no 1-cell inference; cached decode refuses the fan) and the f
 [`2026-10-11-ungraded-fan-set-reader.md`](.agents/notes/implemented/architecture/2026-10-11-ungraded-fan-set-reader.md).
 Speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed.yaml` = the recipe + packed decoder, head on loss rows,
 compiled loop glue: 213.5 ms/step wall (+7.1 %), K1-K6 held, CE@6 +0.003 on one run (`lab/experiments/failures/2026-10-12-fan-speed-package.md`).
-Current speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed_bf16c.yaml` = the above + the HC carrier stored in bf16
+**Speed base (2026-10-13): `nowta_pointer_fast_spdcells_speed_bf16c_cellp3.yaml`** = the bf16c config below + a per-batch
+Poisson(3.5) cell count in [1, 4] (`tul.cell_count`): CE@6 +0.0002, K1-K6 95.5 %, 0.921x step wall, and it runs at 2 cells for
++0.0002 / 1 cell for +0.005 (`lab/experiments/successes/2026-10-13-fan-variable-cell-count-v1.md`). Bench speed levers on
+the bf16c parent (M fixed at 4) with `model.slot_gain_pass_force=3`.
+Its parent (2026-10-12): `nowta_pointer_fast_spdcells_speed_bf16c.yaml` = the above + the HC carrier stored in bf16
 (`model.hc_carrier_bf16`): 198.9 ms/step wall (1.15x the locked recipe). Since 2026-10-12 evening it also runs S1 + S2
 (`model.slot_gain_stream`, `model.split_wgrad`, exact): 177.2 vs 199.3 ms on the same bench (1.124x); eval has ~0.34 GiB free, so desktop GPU load can OOM it. Since 2026-10-13 it also runs S5 (`model.block_custom_ops`, one compiled graph per block; masks redrawn, 5k 2 seeds CE@6 -0.0047, K1-K6 102 %): 167.85 vs 171.70 ms (1.0229), `lab/experiments/successes/2026-10-13-s5-custom-ops-5k.md`. Free at 5k against matched fp32 controls (2 seeds
 each: CE@6 +0.0005, K1-K6 105 %): `lab/experiments/successes/2026-10-12-bf16-carrier-matched-controls.md`. READ THAT FILE before
@@ -144,6 +148,10 @@ Start new loop work from it. Decision record:
 > pass, so this would be a test-time compute knob. Raise it whenever cell count, the fan
 > or test-time compute comes up and this has not already been discussed in the session.
 > Note: [`2026-10-05-lxtul-variable-cell-count.md`](.agents/notes/proposed/architecture/2026-10-05-lxtul-variable-cell-count.md).
+> **v1 measured 2026-10-13** (fan, cells keep their trained roles, M <= 4 at train): a FLOP lever (0.921x) and a
+> downward knob (M = 1 for +0.005), but NO arm gains above M = 4 (cyclic or fresh cells: +0.05 to +0.14). The "train at 4,
+> infer at 128" question is still open and needs v2 (exchangeable cells, pooled coda read; design note
+> [`2026-10-12-fan-variable-cell-count-design.md`](.agents/notes/proposed/architecture/2026-10-12-fan-variable-cell-count-design.md)). Keep raising it.
 >
 > CE work list (status kept there): [`2026-10-04-lxtul-ce-test-queue.md`](.agents/notes/proposed/architecture/2026-10-04-lxtul-ce-test-queue.md).
 

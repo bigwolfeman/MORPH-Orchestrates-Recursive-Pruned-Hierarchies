@@ -3,6 +3,12 @@
 # the cells are roles 0 .. M-1 (tul.cell_count_subset: prefix). fan_k stays 4 = the role table.
 # One CUDA graph per (kind, hinge pass, M). Design and acceptance:
 # .agents/notes/proposed/architecture/2026-10-12-fan-variable-cell-count-design.md
+# THE LOOP RECIPE'S SPEED BASE since 2026-10-13. 5k, 2 seeds vs the fixed-four bf16 controls: CE@6
+# +0.0002, K1-K6 95.5 %, step wall 0.921x (per-M bench m1 0.758 / m2 0.839 / m3 0.925); at
+# inference M = 2 costs +0.0002 and M = 1 +0.005 nats (the fixed-four model: +0.071 / +0.135):
+# lab/experiments/successes/2026-10-13-fan-variable-cell-count-v1.md. Smoke with S5 on (inherited):
+# 297/300 replays, 64 graphs, eval ran beside the pool. Bench speed work on the parent config
+# (M = 4 fixed, slot_gain_pass_force=3): the M draw makes per-step time vary 0.76-1.0x.
 defaults:
   - nowta_pointer_fast_spdcells_speed_bf16c
   - _self_
