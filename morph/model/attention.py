@@ -482,7 +482,8 @@ def _tg_span_attention(q: Tensor, k: Tensor, v: Tensor, bag_id: Tensor,
     return torch.einsum("bhij,bhjd->bhid", weights[..., :M], v_s)
 
 
-def segment_causal_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor) -> Tensor:
+def segment_causal_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor,
+                        custom_op: bool = False) -> Tensor:
     """THE segment-reset causal conv pair: one Triton kernel per stage on CUDA.
 
     Dispatch only — :func:`segment_causal_conv_reference` below is the definition of
@@ -502,8 +503,14 @@ def segment_causal_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor) 
     accumulates every tap in fp32 where the reference rounds to the input dtype after
     each tap, and the reference's fp32 path runs on cuDNN with TF32 enabled. Both
     measured against an fp64 oracle in tests/test_segment_causal_conv_kernel.py.
+
+    ``custom_op`` (model.block_custom_ops): the fused path runs as a ``torch.library`` op
+    (``block_ops.seg_conv_op``) instead of behind the dynamo fence.
     """
     if seg_conv_available(x_BCS, w_dw, w_gp):
+        if custom_op:
+            from morph.kernels.triton.block_ops import seg_conv_op
+            return seg_conv_op(x_BCS, w_dw, w_gp, seg)
         return fused_segment_causal_conv(x_BCS, w_dw, w_gp, seg)
     return segment_causal_conv_reference(x_BCS, w_dw, w_gp, seg)
 
@@ -905,6 +912,9 @@ class _CCABase(nn.Module):
         # (fused_cca_prologue(tiled=True)). Set by the owning attention module at build; a
         # Python constant per instance, so the call below traces out.
         self.prologue_tiled = False
+        # model.block_custom_ops: the conv and the prologue run as torch.library ops (block_ops.py),
+        # so the block compiles as one graph. A Python constant per instance, like the line above.
+        self.block_custom_ops = False
 
         # model.split_wgrad: the covered W_up (bind_split_wgrad sets it); None = the plain read.
         self._split_up: SplitWeight | None = None
@@ -923,7 +933,7 @@ class _CCABase(nn.Module):
         # Triton is unavailable. Weights cast to x dtype for the autocast bf16 path.
         return fused_cca_conv(
             x_t, conv_dw.weight.to(x_t.dtype), conv_gp.weight.to(x_t.dtype),
-            conv_gp.groups, conv_dw.kernel_size[0],
+            conv_gp.groups, conv_dw.kernel_size[0], custom_op=self.block_custom_ops,
         )
 
     def _cca_project(self, x: Tensor, n_skip_rope: int = 0, return_klat: bool = False,
@@ -964,10 +974,12 @@ class _CCABase(nn.Module):
             v_prev = v_prev * same_prev
             q_conv = segment_causal_conv(
                 q_lat.transpose(1, 2), self.conv_q_dw.weight.to(q_lat.dtype),
-                self.conv_q_gp.weight.to(q_lat.dtype), seg).transpose(1, 2)
+                self.conv_q_gp.weight.to(q_lat.dtype), seg,
+                custom_op=self.block_custom_ops).transpose(1, 2)
             k_conv = segment_causal_conv(
                 k_lat.transpose(1, 2), self.conv_k_dw.weight.to(k_lat.dtype),
-                self.conv_k_gp.weight.to(k_lat.dtype), seg).transpose(1, 2)
+                self.conv_k_gp.weight.to(k_lat.dtype), seg,
+                custom_op=self.block_custom_ops).transpose(1, 2)
         elif qk_pair is not None and _FUSED_ATTN_QKCONV:
             # One fused conv over the concatenated q‖k channel pair. The depthwise
             # stage is per-channel; the grouped stage keeps its Cg=D group
@@ -981,7 +993,7 @@ class _CCABase(nn.Module):
             # (matches _causal_conv which casts to x_t.dtype = the conv input).
             conv_pair = fused_cca_conv(
                 qk_pair.transpose(1, 2), w_dw.to(qk_pair.dtype), w_gp.to(qk_pair.dtype),
-                H + Hkv, self.conv_q_dw.kernel_size[0])
+                H + Hkv, self.conv_q_dw.kernel_size[0], custom_op=self.block_custom_ops)
             q_conv = conv_pair[:, :self.latent_q_dim].transpose(1, 2)
             k_conv = conv_pair[:, self.latent_q_dim:].transpose(1, 2)
         else:
@@ -1001,7 +1013,7 @@ class _CCABase(nn.Module):
             self.q_norm.weight, self.k_norm.weight, self.temp,
             cos, sin,
             H, Hkv, D, n_skip_rope=n_skip_rope, eps=self.q_norm.eps,
-            tiled=self.prologue_tiled,
+            tiled=self.prologue_tiled, custom_op=self.block_custom_ops,
         )
 
         if return_klat:
@@ -1143,7 +1155,8 @@ class _CCACSAAttention(nn.Module):
                  d_indexer: int, max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
                  tg_restrict: bool = False, tg_span_gate: bool = False,
-                 graph_safe: bool = False, cca_prologue_tiled: bool = False):
+                 graph_safe: bool = False, cca_prologue_tiled: bool = False,
+                 block_custom_ops: bool = False):
         super().__init__()
         self.top_k = top_k
         self.compress_ratio = csa_compress_ratio
@@ -1155,6 +1168,7 @@ class _CCACSAAttention(nn.Module):
                             max_seq_len, context_len, window_size,
                             init_alpha, conv_kernel)
         self.cca.prologue_tiled = cca_prologue_tiled   # model.cca_prologue_tiled
+        self.cca.block_custom_ops = block_custom_ops   # model.block_custom_ops
 
         if tg_restrict:
             # docs/tul-tg-spec.md §3: the compressed branch attends directly to slot
@@ -1358,7 +1372,8 @@ class _CCAHCAAttention(nn.Module):
                  max_seq_len: int, context_len: int,
                  window_size: int, init_alpha: float, conv_kernel: int,
                  tg_restrict: bool = False, tg_span_gate: bool = False,
-                 graph_safe: bool = False, cca_prologue_tiled: bool = False):
+                 graph_safe: bool = False, cca_prologue_tiled: bool = False,
+                 block_custom_ops: bool = False):
         super().__init__()
         self.compress_ratio = hca_compress_ratio
         self.tg_restrict = tg_restrict
@@ -1369,6 +1384,7 @@ class _CCAHCAAttention(nn.Module):
                             max_seq_len, context_len, window_size,
                             init_alpha, conv_kernel)
         self.cca.prologue_tiled = cca_prologue_tiled   # model.cca_prologue_tiled
+        self.cca.block_custom_ops = block_custom_ops   # model.block_custom_ops
 
         if tg_restrict:
             # docs/tul-tg-spec.md §3: see _CCACSAAttention's twin comment. HCA has no
@@ -1538,6 +1554,8 @@ class MORPHAttention(nn.Module):
                             ``dense_slot_cols``), in train and eval mode alike.
         cca_prologue_tiled: model.cca_prologue_tiled — the CCA prologue runs on the
                             row-tiled kernels (fused_cca_prologue(tiled=True)).
+        block_custom_ops:   model.block_custom_ops — the CCA conv and prologue run as
+                            torch.library ops (block_ops.py); needs cca_prologue_tiled.
 
     Forward:
         x: [B, S, d_model]
@@ -1588,6 +1606,7 @@ class MORPHAttention(nn.Module):
         tg_span_gate: bool = False,
         graph_safe: bool = False,
         cca_prologue_tiled: bool = False,
+        block_custom_ops: bool = False,
     ):
         super().__init__()
 
@@ -1598,6 +1617,7 @@ class MORPHAttention(nn.Module):
             init_alpha=init_alpha, conv_kernel=conv_kernel,
             tg_restrict=tg_restrict, tg_span_gate=tg_span_gate,
             graph_safe=graph_safe, cca_prologue_tiled=cca_prologue_tiled,
+            block_custom_ops=block_custom_ops,
         )
 
         if layer_idx % 2 == 0:

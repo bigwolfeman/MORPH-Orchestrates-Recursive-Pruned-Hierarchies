@@ -685,6 +685,12 @@ class MORPHConfig:
     # storage rounding would read as gain). Needs hc_use_kernel, hc_region_fused and bf16
     # autocast; refused otherwise. Default off = the fp32 carrier, byte-identical.
     hc_carrier_bf16: bool = False
+    # model.block_custom_ops: the HC region entry / exit, the CCA conv and the row-tiled CCA
+    # prologue run as torch.library custom ops (kernels/triton/block_ops.py) instead of
+    # autograd Functions behind a dynamo fence, so each compiled block is ONE graph and inductor
+    # fuses the glue between the kernels. Same kernels, same eager bits; compiled results differ
+    # by fusion rounding. Needs hc_region_fused and cca_prologue_tiled. Default off = byte-identical.
+    block_custom_ops: bool = False
 
     # L2 residency: mark the active carrier's address range PERSISTING (cudaAccessPolicyWindow)
     # so it survives the sublayer GEMMs' streaming between HC ops. Numerically a no-op (caching
@@ -2353,6 +2359,7 @@ class MORPHTransformer(nn.Module):
                           else False),
             graph_safe=bool(cfg.graph_safe) and "slot_cols" in cfg.graph_safe_parts,
             cca_prologue_tiled=bool(cfg.cca_prologue_tiled),     # model.cca_prologue_tiled
+            block_custom_ops=bool(cfg.block_custom_ops),         # model.block_custom_ops
         )
 
         # ── Residual = n-stream Hyper-Connection (Cayley/JPmHC), the sole residual ──
@@ -2366,7 +2373,13 @@ class MORPHTransformer(nn.Module):
             fused_norm=cfg.hc_fused_norm, fused_grad=cfg.hc_fused_grad,
             region_fused=cfg.hc_region_fused,                    # model.hc_region_fused
             carrier_bf16=cfg.hc_carrier_bf16,                    # model.hc_carrier_bf16
+            block_custom_ops=cfg.block_custom_ops,               # model.block_custom_ops
         )
+        if cfg.block_custom_ops and not (cfg.hc_use_kernel and cfg.hc_region_fused
+                                         and cfg.cca_prologue_tiled):
+            raise ValueError("model.block_custom_ops needs model.hc_use_kernel, "
+                             "model.hc_region_fused and model.cca_prologue_tiled (only the region "
+                             "HC and the row-tiled CCA prologue are ops)")
         # model.hc_carrier_bf16: a Python constant for the build; HyperConnectionResidual
         # refuses the other halves of the contract (kernels, region path, n=4).
         self._carrier_bf16 = bool(cfg.hc_carrier_bf16)

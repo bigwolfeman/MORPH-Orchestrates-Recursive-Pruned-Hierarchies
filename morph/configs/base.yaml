@@ -454,6 +454,15 @@ model:
                            # hc_use_kernel, hc_region_fused, CUDA and bf16 autocast (raises
                            # otherwise). Rounding change, NOT bit-identical; off = byte-identical.
                            # .agents/notes/proposed/architecture/2026-10-12-hc-carrier-bf16.md
+  block_custom_ops: false  # true ⇒ the HC region entry / exit, the CCA conv and the row-tiled CCA
+                           # prologue are torch.library custom ops (kernels/triton/block_ops.py)
+                           # instead of autograd Functions behind a dynamo fence: a compiled block
+                           # is ONE graph and inductor fuses the casts / SiLU / dropout / norms
+                           # between the kernels. Same kernels and eager bits; compiled results
+                           # differ by fusion rounding (and by which graph draws a dropout seed).
+                           # Needs hc_use_kernel, hc_region_fused, cca_prologue_tiled
+                           # (raises otherwise). tests/test_block_custom_ops.py.
+                           # .agents/notes/proposed/architecture/2026-10-12-core-pass-megakernel-design.md (S5)
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.

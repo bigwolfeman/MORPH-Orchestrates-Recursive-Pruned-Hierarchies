@@ -442,6 +442,51 @@ def _gp_backward(go, x_in, w_gp, seg, sb, CG, K, need_dx: bool, need_dw: bool):
 # autograd.Function
 # ===========================================================================
 
+def _seg_conv_fwd_impl(x, w_dw2, w_gp, seg, CG, K):
+    """Both stages: ``(y_gp, y_dw, x, w_gp, seg)``, the last three the contiguous / indexable
+    operands the backward reads. ``_FusedSegCausalConv`` and the custom op (``block_ops``,
+    model.block_custom_ops) both call it."""
+    x = x.contiguous()
+    w_dw2 = w_dw2.contiguous()
+    w_gp = w_gp.contiguous()                              # [C, Cg, K]
+    seg, sb = _seg_strides(seg, x.shape[0])
+
+    y_dw = _dw_forward(x, w_dw2, seg, sb, K)
+    y_gp = _gp_forward(y_dw, w_gp, seg, sb, CG, K)
+    return y_gp, y_dw, x, w_gp, seg
+
+
+def _seg_conv_bwd_impl(grad_out, x, y_dw, w_dw2, w_gp, seg, CG, K, need_x, need_dw, need_gp):
+    """``(dx, dw_dw [C, K], dw_gp)``, each None where its input wants no gradient."""
+    if grad_out.dtype != w_gp.dtype:
+        # x, w_dw and w_gp share one dtype (seg_conv_shapes_supported enforces it)
+        # and the output carries it, so the incoming grad carries it too. tl.dot
+        # would otherwise be handed two different element types.
+        raise TypeError(
+            f"fused segment conv: grad dtype {grad_out.dtype} != weight dtype "
+            f"{w_gp.dtype}")
+    grad_out = grad_out.contiguous()
+    seg, sb = _seg_strides(seg, x.shape[0])
+
+    # The grouped stage's d_input feeds the depthwise stage, so it is needed
+    # whenever ANY of x / w_dw wants a gradient, not only x.
+    need_ydw = need_x or need_dw
+    d_ydw, dw_gp = _gp_backward(grad_out, y_dw, w_gp, seg, sb, CG, K,
+                                need_dx=need_ydw, need_dw=need_gp)
+
+    dx = None
+    dw_dw = None
+    if need_ydw:
+        dx_full, dw_dw_full = _dw_backward(d_ydw, x, w_dw2, seg, sb, K)
+        if need_x:
+            dx = dx_full.to(x.dtype)
+        if need_dw:
+            dw_dw = dw_dw_full.to(w_dw2.dtype)
+    if dw_gp is not None:
+        dw_gp = dw_gp.to(w_gp.dtype)
+    return dx, dw_dw, dw_gp
+
+
 class _FusedSegCausalConv(torch.autograd.Function):
     """Both stages of the segment-reset causal conv, forward and backward.
 
@@ -458,49 +503,22 @@ class _FusedSegCausalConv(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, w_dw, w_gp, seg, CG, K):
-        x = x.contiguous()
         w_dw2 = w_dw.reshape(w_dw.shape[0], K).contiguous()   # [C, K]
-        w_gp = w_gp.contiguous()                              # [C, Cg, K]
-        seg, sb = _seg_strides(seg, x.shape[0])
-
-        y_dw = _dw_forward(x, w_dw2, seg, sb, K)
-        y_gp = _gp_forward(y_dw, w_gp, seg, sb, CG, K)
+        y_gp, y_dw, x, w_gp, seg = _seg_conv_fwd_impl(x, w_dw2, w_gp, seg, CG, K)
 
         ctx.save_for_backward(x, y_dw, w_dw2, w_gp, seg)
-        ctx.CG, ctx.K, ctx.sb = CG, K, sb
+        ctx.CG, ctx.K = CG, K
         ctx.w_dw_shape = tuple(w_dw.shape)
         return y_gp
 
     @staticmethod
     def backward(ctx, grad_out):
         x, y_dw, w_dw2, w_gp, seg = ctx.saved_tensors
-        CG, K, sb = ctx.CG, ctx.K, ctx.sb
         need_x, need_dw, need_gp = ctx.needs_input_grad[:3]
-        if grad_out.dtype != w_gp.dtype:
-            # x, w_dw and w_gp share one dtype (seg_conv_shapes_supported enforces it)
-            # and the output carries it, so the incoming grad carries it too. tl.dot
-            # would otherwise be handed two different element types.
-            raise TypeError(
-                f"fused segment conv: grad dtype {grad_out.dtype} != weight dtype "
-                f"{w_gp.dtype}")
-        grad_out = grad_out.contiguous()
-
-        # The grouped stage's d_input feeds the depthwise stage, so it is needed
-        # whenever ANY of x / w_dw wants a gradient, not only x.
-        need_ydw = need_x or need_dw
-        d_ydw, dw_gp = _gp_backward(grad_out, y_dw, w_gp, seg, sb, CG, K,
-                                    need_dx=need_ydw, need_dw=need_gp)
-
-        dx = None
-        dw_dw = None
-        if need_ydw:
-            dx_full, dw_dw_full = _dw_backward(d_ydw, x, w_dw2, seg, sb, K)
-            if need_x:
-                dx = dx_full.to(x.dtype)
-            if need_dw:
-                dw_dw = dw_dw_full.reshape(ctx.w_dw_shape).to(w_dw2.dtype)
-        if dw_gp is not None:
-            dw_gp = dw_gp.to(w_gp.dtype)
+        dx, dw_dw, dw_gp = _seg_conv_bwd_impl(grad_out, x, y_dw, w_dw2, w_gp, seg, ctx.CG, ctx.K,
+                                              need_x, need_dw, need_gp)
+        if dw_dw is not None:
+            dw_dw = dw_dw.reshape(ctx.w_dw_shape)
         return dx, dw_dw, dw_gp, None, None, None
 
 

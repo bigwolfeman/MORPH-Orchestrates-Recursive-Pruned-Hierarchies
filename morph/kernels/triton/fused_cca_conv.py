@@ -370,16 +370,37 @@ def _gp_backward(go, x_in, w_gp, CG, K):
 # autograd.Function
 # ===========================================================================
 
+def _cca_conv_fwd_impl(x, w_dw2, w_gp, CG, K):
+    """Both conv stages: ``(y_gp, y_dw, x, w_gp)``, the last two the contiguous operands the
+    backward reads. ``_FusedCCAConv`` and the custom op (``block_ops``, model.block_custom_ops)
+    both call it. ``w_dw2`` is the depthwise weight as ``[C, K]``."""
+    x = x.contiguous()
+    w_dw2 = w_dw2.contiguous()
+    w_gp = w_gp.contiguous()                              # [C, Cg, K]
+
+    y_dw = _dw_forward(x, w_dw2, K)
+    y_gp = _gp_forward(y_dw, w_gp, CG, K)
+    return y_gp, y_dw, x, w_gp
+
+
+def _cca_conv_bwd_impl(grad_out, x, y_dw, w_dw2, w_gp, CG, K):
+    """``(dx, dw_dw [C, K], dw_gp)``, each in its input's dtype."""
+    grad_out = grad_out.contiguous()
+
+    # grouped: d_input (-> grad of y_dw), d_weight_gp
+    d_ydw, dw_gp = _gp_backward(grad_out, y_dw, w_gp, CG, K)
+    # depthwise: d_input (-> grad of x), d_weight_dw
+    dx, dw_dw = _dw_backward(d_ydw, x, w_dw2, K)
+
+    return dx.to(x.dtype), dw_dw.to(w_dw2.dtype), dw_gp.to(w_gp.dtype)
+
+
 class _FusedCCAConv(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, w_dw, w_gp, CG, K):
-        x = x.contiguous()
         w_dw2 = w_dw.reshape(w_dw.shape[0], K).contiguous()   # [C, K]
-        w_gp = w_gp.contiguous()                              # [C, Cg, K]
-
-        y_dw = _dw_forward(x, w_dw2, K)
-        y_gp = _gp_forward(y_dw, w_gp, CG, K)
+        y_gp, y_dw, x, w_gp = _cca_conv_fwd_impl(x, w_dw2, w_gp, CG, K)
 
         ctx.save_for_backward(x, y_dw, w_dw2, w_gp)
         ctx.CG = CG
@@ -390,18 +411,8 @@ class _FusedCCAConv(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_out):
         x, y_dw, w_dw2, w_gp = ctx.saved_tensors
-        CG, K = ctx.CG, ctx.K
-        grad_out = grad_out.contiguous()
-
-        # grouped: d_input (-> grad of y_dw), d_weight_gp
-        d_ydw, dw_gp = _gp_backward(grad_out, y_dw, w_gp, CG, K)
-        # depthwise: d_input (-> grad of x), d_weight_dw
-        dx, dw_dw = _dw_backward(d_ydw, x, w_dw2, K)
-
-        dw_dw = dw_dw.reshape(ctx.w_dw_shape).to(w_dw2.dtype)   # back to [C,1,K]
-        dw_gp = dw_gp.to(w_gp.dtype)
-        dx = dx.to(x.dtype)
-        return dx, dw_dw, dw_gp, None, None
+        dx, dw_dw, dw_gp = _cca_conv_bwd_impl(grad_out, x, y_dw, w_dw2, w_gp, ctx.CG, ctx.K)
+        return dx, dw_dw.reshape(ctx.w_dw_shape), dw_gp, None, None
 
 
 # ===========================================================================
@@ -409,7 +420,7 @@ class _FusedCCAConv(torch.autograd.Function):
 # ===========================================================================
 
 def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
-                   groups: int, kernel: int) -> Tensor:
+                   groups: int, kernel: int, custom_op: bool = False) -> Tensor:
     """Fused stacked causal convs (depthwise then head-grouped) on [B, C, S].
 
     Args:
@@ -418,6 +429,8 @@ def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
         w_gp:   grouped weight   [C, C//groups, kernel] (nn.Conv1d groups=groups).
         groups: number of head-groups for the grouped conv (G).
         kernel: kernel size k (causal left-pad p = k-1).
+        custom_op: model.block_custom_ops — run as a ``torch.library`` op (block_ops.py), not
+                behind the dynamo fence.
 
     Returns:
         [B, C, S], same dtype as x_BCS. Equivalent to ``_CCABase._causal_conv``.
@@ -430,6 +443,9 @@ def fused_cca_conv(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor,
     if force_eager() or not TRITON_AVAILABLE or not x_BCS.is_cuda:
         return causal_conv_reference(x_BCS, w_dw, w_gp, kernel)  # traceable
 
+    if custom_op:
+        from morph.kernels.triton.block_ops import cca_conv_op
+        return cca_conv_op(x_BCS, w_dw, w_gp, CG, kernel)
     return _cca_conv_dispatch(x_BCS, w_dw, w_gp, CG, kernel)
 
 

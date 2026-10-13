@@ -2105,49 +2105,116 @@ def _dev_idx(device: torch.device) -> int:
     return idx
 
 
+def _hcr_entry_fwd_impl(h, proj_w, proj_b, tau, alpha, eps):
+    """The entry forward: ``(xbar, hres, hpr, raw, rms, h, w, pb)``; ``h``, ``w`` and ``pb`` are
+    the contiguous operands the backward reads. ``_HCRegionEntry`` and the custom op
+    (``block_ops``, model.block_custom_ops) both call it, so they launch the same kernels."""
+    B, S, N, C = h.shape
+    assert N == 4, "model.hc_region_fused: the mapping unroll assumes n=4"
+    assert C % _HCR_TUNE["bc"] == 0, (f"model.hc_region_fused: C={C} must be a multiple of "
+                                      f"{_HCR_TUNE['bc']}")
+    h = h.contiguous()
+    T = B * S
+    dev = h.device
+    f32 = torch.float32
+    w = proj_w.contiguous()
+    pb = proj_b.float().contiguous()
+    xbar = torch.empty(B, S, C, device=dev, dtype=h.dtype)
+    hres = torch.empty(B, S, N, N, device=dev, dtype=f32)
+    hpr = torch.empty(B, S, N, device=dev, dtype=f32)
+    raw = torch.empty(B, S, 48, device=dev, dtype=f32)
+    rms = torch.empty(B, S, 1, device=dev, dtype=f32)
+    tu = _hcr_tune(T)
+    sms = _FOLD_SM_COUNT[_dev_idx(dev)]
+    # The projection weight is cast to bf16 once, as the autocast mm cast it; the
+    # kernels then stream half the weight bytes.
+    wbf = w.to(torch.bfloat16)
+    part = torch.empty(N, T, 64, device=dev, dtype=f32)
+    ssq = torch.empty(N, T, device=dev, dtype=f32)
+    pbt = tu["fsp_bt"]
+    _hcr_fwd_proj_kernel[(triton.cdiv(T, pbt), N)](
+        h, wbf, part, ssq, T, N=N, C=C, BT=pbt, BC=min(tu["fsp_bc"], C),
+        num_warps=tu["fsp_warps"], num_stages=tu["fsp_stages"] if C >= 4 * tu["fsp_bc"] else 1,
+    )
+    mbt, mbc = tu["fmap_bt"], min(tu["fmap_bc"], C)
+    msplit = 1
+    while (triton.cdiv(T, mbt) * msplit < 2 * sms and C % (2 * msplit * mbc) == 0
+           and msplit < tu["fmap_max_split"]):
+        msplit *= 2
+    _hcr_fwd_map_kernel[(triton.cdiv(T, mbt), msplit)](
+        h, part, ssq, pb, xbar, hres, hpr, raw, rms, T,
+        TAU=float(tau), ALPHA=float(alpha), EPS=float(eps),
+        N=N, C=C, BT=mbt, BC=mbc, CS=C // msplit,
+        num_warps=tu["fmap_warps"], num_stages=1,
+    )
+    return xbar, hres, hpr, raw, rms, h, w, pb
+
+
+def _hcr_entry_bwd_impl(g_xbar, g_hpr, g_link, h, w, pb, raw, rms, tau, alpha, w_dtype,
+                        b_dtype):
+    """The entry backward: ``(gh, grad_w, grad_b)``; shared with the custom op."""
+    # g_hres is None (the exit forms no grad for it; this kernel computes it).
+    B, S, N, C = h.shape
+    T = B * S
+    g_xbar = (torch.zeros(B, S, C, device=h.device, dtype=h.dtype) if g_xbar is None
+              else g_xbar.contiguous())
+    g_hpr = (torch.zeros(B, S, N, device=h.device, dtype=torch.float32) if g_hpr is None
+             else g_hpr.contiguous().float())
+    g_link = torch.zeros_like(h) if g_link is None else g_link.contiguous()
+    gh = torch.empty_like(h)
+    graw = torch.empty(B, S, 48, device=h.device, dtype=torch.float32)
+    coef = torch.empty(B, S, 24, device=h.device, dtype=torch.float32)
+    tu = _hcr_tune(T)
+    sms = _FOLD_SM_COUNT[_dev_idx(h.device)]
+    # C splits only while the token blocks alone leave SMs idle (fixed per shape, so
+    # the partial-sum order is fixed: deterministic). The rule counts token blocks of
+    # `red_bt`; the launch tile is `red_launch_bt` (the partial sums do not depend on it).
+    rbt, rbc = tu["red_bt"], min(tu["red_bc"], C)
+    lbt = tu["red_launch_bt"]
+    nsplit = 1
+    while (triton.cdiv(T, rbt) * nsplit < 2 * sms and C % (2 * nsplit * rbc) == 0
+           and nsplit < tu["red_max_split"]):
+        nsplit *= 2
+    red = torch.empty(nsplit, T, 20, device=h.device, dtype=torch.float32)
+    _hcr_bwd_reduce_kernel[(triton.cdiv(T, lbt), nsplit)](
+        g_xbar, g_link, h, red, T, N=N, C=C, BT=lbt, BC=rbc, CS=C // nsplit,
+        num_warps=tu["red_warps"], num_stages=tu["red_stages"],
+    )
+    _hcr_bwd_map_kernel[(triton.cdiv(T, tu["map_bt"]),)](
+        red, g_hpr, pb, raw, rms, graw, coef, T,
+        TAU=tau, ALPHA=alpha, N=N, C=C, BT=tu["map_bt"], NSPLIT=nsplit,
+        num_warps=tu["map_warps"], num_stages=1,
+    )
+    cbc = min(tu["car_bc"], C)
+    csplit = 1
+    while (triton.cdiv(T, 16) * csplit < 2 * sms and C % (2 * csplit * cbc) == 0
+           and csplit < tu["car_max_split"]):
+        csplit *= 2
+    _hcr_bwd_carrier_kernel[(triton.cdiv(T, 16), csplit)](
+        g_xbar, g_link, h, w, graw, coef, gh, T,
+        N=N, C=C, BT=16, BC=cbc, CS=C // csplit,
+        num_warps=tu["car_warps"], num_stages=tu["car_stages"],
+    )
+    # grad_w / grad_b exactly as _FusedHCPreMap.backward (fp32 GEMM over the carrier).
+    graw2 = graw.reshape(T, 48)
+    x_flat = h.reshape(T, N * C)
+    if h.dtype == torch.float32:
+        grad_w = (graw2.to(h.dtype).t() @ x_flat).float()
+    else:
+        # bf16 carrier: the same bf16 GEMM operands the autocast projection used, with
+        # an fp32 result (no bf16 rounding of the 48 x 4C weight grad).
+        grad_w = torch.mm(graw2.to(h.dtype).t(), x_flat, out_dtype=torch.float32)
+    grad_b = (graw2 * rms.reshape(T, 1)).sum(0)
+    return gh, grad_w.to(w_dtype), grad_b.to(b_dtype)
+
+
 class _HCRegionEntry(torch.autograd.Function):
     """HC entry (rms + projection + mapping + x_bar) from one carrier read."""
 
     @staticmethod
     def forward(ctx, h, proj_w, proj_b, tau, alpha, eps):
-        B, S, N, C = h.shape
-        assert N == 4, "model.hc_region_fused: the mapping unroll assumes n=4"
-        assert C % _HCR_TUNE["bc"] == 0, (f"model.hc_region_fused: C={C} must be a multiple of "
-                                          f"{_HCR_TUNE['bc']}")
-        h = h.contiguous()
-        T = B * S
-        dev = h.device
-        f32 = torch.float32
-        w = proj_w.contiguous()
-        pb = proj_b.float().contiguous()
-        xbar = torch.empty(B, S, C, device=dev, dtype=h.dtype)
-        hres = torch.empty(B, S, N, N, device=dev, dtype=f32)
-        hpr = torch.empty(B, S, N, device=dev, dtype=f32)
-        raw = torch.empty(B, S, 48, device=dev, dtype=f32)
-        rms = torch.empty(B, S, 1, device=dev, dtype=f32)
-        tu = _hcr_tune(T)
-        sms = _FOLD_SM_COUNT[_dev_idx(dev)]
-        # The projection weight is cast to bf16 once, as the autocast mm cast it; the
-        # kernels then stream half the weight bytes.
-        wbf = w.to(torch.bfloat16)
-        part = torch.empty(N, T, 64, device=dev, dtype=f32)
-        ssq = torch.empty(N, T, device=dev, dtype=f32)
-        pbt = tu["fsp_bt"]
-        _hcr_fwd_proj_kernel[(triton.cdiv(T, pbt), N)](
-            h, wbf, part, ssq, T, N=N, C=C, BT=pbt, BC=min(tu["fsp_bc"], C),
-            num_warps=tu["fsp_warps"], num_stages=tu["fsp_stages"] if C >= 4 * tu["fsp_bc"] else 1,
-        )
-        mbt, mbc = tu["fmap_bt"], min(tu["fmap_bc"], C)
-        msplit = 1
-        while (triton.cdiv(T, mbt) * msplit < 2 * sms and C % (2 * msplit * mbc) == 0
-               and msplit < tu["fmap_max_split"]):
-            msplit *= 2
-        _hcr_fwd_map_kernel[(triton.cdiv(T, mbt), msplit)](
-            h, part, ssq, pb, xbar, hres, hpr, raw, rms, T,
-            TAU=float(tau), ALPHA=float(alpha), EPS=float(eps),
-            N=N, C=C, BT=mbt, BC=mbc, CS=C // msplit,
-            num_warps=tu["fmap_warps"], num_stages=1,
-        )
+        xbar, hres, hpr, raw, rms, h, w, pb = _hcr_entry_fwd_impl(h, proj_w, proj_b, tau, alpha,
+                                                                  eps)
         ctx.save_for_backward(h, w, pb, raw, rms)
         ctx.cfg = (float(tau), float(alpha), proj_w.dtype, proj_b.dtype)
         ctx.set_materialize_grads(False)
@@ -2158,58 +2225,44 @@ class _HCRegionEntry(torch.autograd.Function):
         # g_hres is None (the exit forms no grad for it; this kernel computes it).
         h, w, pb, raw, rms = ctx.saved_tensors
         tau, alpha, w_dtype, b_dtype = ctx.cfg
-        B, S, N, C = h.shape
-        T = B * S
-        g_xbar = (torch.zeros(B, S, C, device=h.device, dtype=h.dtype) if g_xbar is None
-                  else g_xbar.contiguous())
-        g_hpr = (torch.zeros(B, S, N, device=h.device, dtype=torch.float32) if g_hpr is None
-                 else g_hpr.contiguous().float())
-        g_link = torch.zeros_like(h) if g_link is None else g_link.contiguous()
-        gh = torch.empty_like(h)
-        graw = torch.empty(B, S, 48, device=h.device, dtype=torch.float32)
-        coef = torch.empty(B, S, 24, device=h.device, dtype=torch.float32)
-        tu = _hcr_tune(T)
-        sms = _FOLD_SM_COUNT[_dev_idx(h.device)]
-        # C splits only while the token blocks alone leave SMs idle (fixed per shape, so
-        # the partial-sum order is fixed: deterministic). The rule counts token blocks of
-        # `red_bt`; the launch tile is `red_launch_bt` (the partial sums do not depend on it).
-        rbt, rbc = tu["red_bt"], min(tu["red_bc"], C)
-        lbt = tu["red_launch_bt"]
-        nsplit = 1
-        while (triton.cdiv(T, rbt) * nsplit < 2 * sms and C % (2 * nsplit * rbc) == 0
-               and nsplit < tu["red_max_split"]):
-            nsplit *= 2
-        red = torch.empty(nsplit, T, 20, device=h.device, dtype=torch.float32)
-        _hcr_bwd_reduce_kernel[(triton.cdiv(T, lbt), nsplit)](
-            g_xbar, g_link, h, red, T, N=N, C=C, BT=lbt, BC=rbc, CS=C // nsplit,
-            num_warps=tu["red_warps"], num_stages=tu["red_stages"],
-        )
-        _hcr_bwd_map_kernel[(triton.cdiv(T, tu["map_bt"]),)](
-            red, g_hpr, pb, raw, rms, graw, coef, T,
-            TAU=tau, ALPHA=alpha, N=N, C=C, BT=tu["map_bt"], NSPLIT=nsplit,
-            num_warps=tu["map_warps"], num_stages=1,
-        )
-        cbc = min(tu["car_bc"], C)
-        csplit = 1
-        while (triton.cdiv(T, 16) * csplit < 2 * sms and C % (2 * csplit * cbc) == 0
-               and csplit < tu["car_max_split"]):
-            csplit *= 2
-        _hcr_bwd_carrier_kernel[(triton.cdiv(T, 16), csplit)](
-            g_xbar, g_link, h, w, graw, coef, gh, T,
-            N=N, C=C, BT=16, BC=cbc, CS=C // csplit,
-            num_warps=tu["car_warps"], num_stages=tu["car_stages"],
-        )
-        # grad_w / grad_b exactly as _FusedHCPreMap.backward (fp32 GEMM over the carrier).
-        graw2 = graw.reshape(T, 48)
-        x_flat = h.reshape(T, N * C)
-        if h.dtype == torch.float32:
-            grad_w = (graw2.to(h.dtype).t() @ x_flat).float()
-        else:
-            # bf16 carrier: the same bf16 GEMM operands the autocast projection used, with
-            # an fp32 result (no bf16 rounding of the 48 x 4C weight grad).
-            grad_w = torch.mm(graw2.to(h.dtype).t(), x_flat, out_dtype=torch.float32)
-        grad_b = (graw2 * rms.reshape(T, 1)).sum(0)
-        return gh, grad_w.to(w_dtype), grad_b.to(b_dtype), None, None, None
+        gh, grad_w, grad_b = _hcr_entry_bwd_impl(g_xbar, g_hpr, g_link, h, w, pb, raw, rms, tau,
+                                                 alpha, w_dtype, b_dtype)
+        return gh, grad_w, grad_b, None, None, None
+
+
+def _hcr_exit_fwd_impl(hres, hpost_row, h_link, y, term):
+    """The exit forward ``out = Hres . h + Hpost_row (x) y (+ term)``: ``(out, hpost_row, y)``, the
+    last two the contiguous operands the backward reads. ``_HCRegionExit`` and the custom op
+    (``block_ops``, model.block_custom_ops) both call it."""
+    B, S, N, C = h_link.shape
+    hres = hres.contiguous()
+    hpost_row = hpost_row.contiguous()
+    h_link = h_link.contiguous()
+    y = y.contiguous()
+    has_term = term is not None
+    term_arg = term.contiguous() if has_term else y      # dummy ptr when unused
+    out = torch.empty(B, S, N, C, device=h_link.device, dtype=h_link.dtype)
+    _hc_post_fwd_kernel[(B * S,)](
+        hres, hpost_row, h_link, y, out, term_arg,
+        N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, num_stages=1,
+        num_warps=_hcr_tune(B * S)["post_warps"],
+    )
+    return out, hpost_row, y
+
+
+def _hcr_exit_bwd_impl(grad_out, hpost_row, y, term_dtype):
+    """The exit backward kernel: ``(gy, ghpost, gterm)`` for a contiguous ``grad_out``
+    (``gterm`` is ``gy`` itself when ``term_dtype`` is None)."""
+    B, S, N, C = grad_out.shape
+    has_term = term_dtype is not None
+    gy = torch.empty_like(y)
+    ghpost = torch.empty(B, S, N, device=y.device, dtype=torch.float32)
+    gterm = (torch.empty(B, S, C, device=y.device, dtype=term_dtype) if has_term else gy)
+    _hcr_exit_bwd_kernel[(B * S,)](
+        grad_out, hpost_row, y, gy, ghpost, gterm,
+        N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, **_LAUNCH,
+    )
+    return gy, ghpost, gterm
 
 
 class _HCRegionExit(torch.autograd.Function):
@@ -2218,37 +2271,17 @@ class _HCRegionExit(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, hres, hpost_row, h_link, y, term=None):
-        B, S, N, C = h_link.shape
-        hres = hres.contiguous()
-        hpost_row = hpost_row.contiguous()
-        h_link = h_link.contiguous()
-        y = y.contiguous()
-        has_term = term is not None
-        term_arg = term.contiguous() if has_term else y      # dummy ptr when unused
-        out = torch.empty(B, S, N, C, device=h_link.device, dtype=h_link.dtype)
-        _hc_post_fwd_kernel[(B * S,)](
-            hres, hpost_row, h_link, y, out, term_arg,
-            N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, num_stages=1,
-            num_warps=_hcr_tune(B * S)["post_warps"],
-        )
+        out, hpost_row, y = _hcr_exit_fwd_impl(hres, hpost_row, h_link, y, term)
         ctx.save_for_backward(hpost_row, y)
-        ctx.term_dtype = term.dtype if has_term else None
+        ctx.term_dtype = term.dtype if term is not None else None
         return out
 
     @staticmethod
     def backward(ctx, grad_out):
         hpost_row, y = ctx.saved_tensors
         grad_out = grad_out.contiguous()
-        B, S, N, C = grad_out.shape
         has_term = ctx.term_dtype is not None
-        gy = torch.empty_like(y)
-        ghpost = torch.empty(B, S, N, device=y.device, dtype=torch.float32)
-        gterm = (torch.empty(B, S, C, device=y.device, dtype=ctx.term_dtype) if has_term
-                 else gy)
-        _hcr_exit_bwd_kernel[(B * S,)](
-            grad_out, hpost_row, y, gy, ghpost, gterm,
-            N=N, C=C, BLOCK_C=_next_pow2(C), HAS_TERM=has_term, **_LAUNCH,
-        )
+        gy, ghpost, gterm = _hcr_exit_bwd_impl(grad_out, hpost_row, y, ctx.term_dtype)
         return (None, ghpost.to(hpost_row.dtype), grad_out, gy,
                 gterm if has_term else None)
 

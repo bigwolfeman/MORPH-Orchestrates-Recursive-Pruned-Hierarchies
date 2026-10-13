@@ -169,3 +169,14 @@ a matched fp64 mask is exact to 4e-16). At fp32, bf16 and fp16 — every dtype M
 matched and mismatched masks agree to the last bit. Do not "fix" the hot path for a case that
 cannot occur; do not write an fp64 test against this function either
 (`tests/test_attn_sink_probe.py` says so in place).
+
+## `model.block_custom_ops` (2026-10-13)
+
+The HC region entry / exit, the CCA conv, the segment-reset conv and the row-tiled CCA prologue
+run as `torch.library` custom ops (`morph/kernels/triton/block_ops.py`) instead of autograd
+Functions behind `kernel_fence`, so a compiled block is ONE graph (0 graph breaks in the recipe's
+warm-up compile). Each op body is the Function's body in a shared `*_impl`: change the kernel in the
+`*_impl`, never in one caller. The HC `h_link` is the pair `(h, link)` with `link` an uninitialised
+tensor whose only job is the autograd edge for gout (an op may not return an alias of its input).
+The key needs `hc_region_fused` and `cca_prologue_tiled` and raises at build without them.
+`tests/test_block_custom_ops.py` pins eager bit-equality and `fullgraph=True`.

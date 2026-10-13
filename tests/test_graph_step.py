@@ -270,6 +270,11 @@ _BLOCKFUSE = ("model.hc_region_fused=true", "model.cca_prologue_tiled=true",
               "model.inject_fold=true")
 
 
+# The block kernels as torch.library ops (model.block_custom_ops, 2026-10-13): the ops allocate
+# inside the capture (the HC link is an uninitialised carrier) and must capture and replay.
+_BLOCKOPS = _BLOCKFUSE + ("model.block_custom_ops=true",)
+
+
 # The hinge branch (graph_step.py module notes, THE HINGE BRANCH; 2026-10-10): a target of 0
 # makes every step's hinge active (body A, the eager backward), a target of 100 none (body B,
 # the backward without the penalty's edge); both must replay the eager step bit for bit.
@@ -278,10 +283,11 @@ _HINGE_OFF = ("model.slot_gain_target=100.0",)
 
 
 @cuda
-@pytest.mark.parametrize("extra", [(), _CORELOOP, _COMPACT, _BLOCKFUSE, _HINGE_ON, _HINGE_OFF,
-                                   _COMPACT + ("model.slot_gain_rows=1",)],
+@pytest.mark.parametrize("extra", [(), _CORELOOP, _COMPACT, _BLOCKFUSE, _BLOCKOPS, _HINGE_ON,
+                                   _HINGE_OFF, _COMPACT + ("model.slot_gain_rows=1",)],
                          ids=["winner", "coreloop_keys", "slot_compact", "blockfuse_keys",
-                              "hinge_active", "hinge_inactive", "gain_rows"])
+                              "block_custom_ops", "hinge_active", "hinge_inactive",
+                              "gain_rows"])
 def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra):
     from morph.training.graph_step import GraphStep
     cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *extra)
