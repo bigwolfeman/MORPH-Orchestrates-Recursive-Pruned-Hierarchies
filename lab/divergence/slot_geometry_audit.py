@@ -241,11 +241,12 @@ class GeometryHooks:
         inj.forward = inj_fwd
         self._patched.append((inj, "forward", real_inj))
 
-        # (2) the per-core-layer x0/bigram term. `_apply_injection` is a staticmethod
+        # (2) the per-core-layer x0/bigram term. `_apply_injection` is an instance method
+        #     (a staticmethod before 1a294303, which made it read `self._carrier_bf16`),
         #     called as `self._apply_injection(h, term)`, so an instance attribute
         #     shadows it for the core, the prelude and the coda alike — hence the shape
         #     guard: only the compact/looped carrier of the current section is cut.
-        real_apply = type(m)._apply_injection
+        real_apply = m._apply_injection        # bound method, captured before the shadow
 
         def apply_inj(h, term):
             in_core = ctx["sec"] is not None and h.shape[1] == ctx["S"]

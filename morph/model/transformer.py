@@ -94,8 +94,10 @@ from .tul_code import (TULCodeEncoder, TULCodeHead, TULCodeProj, TULCodeTime,
                        code_grade_distinct2, code_grade_pref_loss, code_enc_var_floor,
                        TULCodeSymHead, mdm_loss, mdm_mask, maskgit_sample)
 from .tul_denoise import (TULLoopDenoiseIn, loop_denoise_interp, loop_denoise_levels)
-from .tul_latent_pre import (PLAIN_TARGET_FNS, latent_infonce, latent_l2, latent_readings,
-                             latent_wta, standardise)
+# `latent_infonce` is ALSO a name in `.tul_explore` (knob 4, [R,N,C] hypotheses); the stage-1
+# [B,S,C] version is imported under its own alias so it cannot shadow the explore one (fe6351fb did).
+from .tul_latent_pre import (PLAIN_TARGET_FNS, latent_infonce as latent_pre_infonce, latent_l2,
+                             latent_readings, latent_wta, standardise)
 from .tul_gram import (GRAM_MODES, TULGramStep, gram_kl_balanced, iw_span_bound,
                        iw_span_groups)
 from .tul_layout import (SlotLayout, span_reach_allow, span_ids_from_ids,
@@ -10825,7 +10827,7 @@ class MORPHTransformer(nn.Module):
         if tc.latent_pre_loss == "l2":
             loss = latent_l2(pred[:, :, 0], z, ok)
         elif tc.latent_pre_loss == "infonce":
-            loss = latent_infonce(pred[:, :, 0], z, ok, float(tc.latent_pre_tau))
+            loss = latent_pre_infonce(pred[:, :, 0], z, ok, float(tc.latent_pre_tau))
         else:
             loss, winner = latent_wta(pred, z, ok, float(tc.latent_pre_eps))
         stats: dict[str, Tensor] = {}
