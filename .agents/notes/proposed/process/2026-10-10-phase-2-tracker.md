@@ -73,8 +73,10 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   attention-lift probe reads 0 calls on this recipe (2.8 s of every eval for one constant); base-forward sharing (~5 s).
   Fixed on the way: test_tul_lxfan pins moved by lever E (one embedding grad, 3.9e-8 rel), re-pinned 8d489734.
   **Core-pass plan (Opus design, c85cd646, `2026-10-12-core-pass-megakernel-design.md`):** fresh profile 202.4 ms/step,
-  core passes 62.5 ms (floor ~17-23). No megakernel yet; stages S1-S7 ~-25 to -30 ms. [~] S1 hinge stream + S2 wgrad
-  stream + idle gap (perf/streams, exact). [x] S4 HC exit+entry fusion: exact but 0.975x
+  core passes 62.5 ms (floor ~17-23). No megakernel yet; stages S1-S7 ~-25 to -30 ms. [x] S1 hinge stream + S2 wgrad
+  stream MERGED (9a4bcb3a, keys default off; bench off 215.05 -> both 196.80 ms, 1.093x; graph pool +1.15 GiB,
+  0.34 GiB free after eval). [ ] both-keys byte gate after the buffer change + a quiet-desktop bench, then ON in
+  speed_bf16c. [ ] idle gap (3.8-5.4 ms, cause not found). [x] S4 HC exit+entry fusion: exact but 0.975x
   (213.8 -> 219.3 ms), parked on perf/hc-exit-entry 1c220f33 for a re-bench at larger width (Wolfe 2026-10-12).
   Bench drift (2026-10-12 evening): the bf16c off arm reads 213-215 ms vs 198.9 this morning. Same code (24b5077c
   tree) reads 212.9 now, so it is the environment (desktop GPU/CPU load, a game), not the code; core pinning (213.1 vs
