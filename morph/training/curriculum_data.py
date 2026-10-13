@@ -292,6 +292,10 @@ class MultiSourceCurriculumLoader:
                     raise NotImplementedError(
                         "tul.ditto_rows under the curriculum loader: only data.py builds "
                         "DITTO rows")
+                if tul.cell_law is not None or tul.eval_cells:
+                    raise NotImplementedError(
+                        "tul.cell_count under the curriculum loader: only data.py re-lays "
+                        "out rows")
                 if tul.gate is not None and getattr(self, "_tul_rng", None) is None:
                     self._tul_rng = np.random.default_rng(tul.seed)
                 out = pack_tul_batch(buf, tul.rule, spec, batch_size, gate=tul.gate,

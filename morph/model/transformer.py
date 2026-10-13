@@ -3084,7 +3084,19 @@ class MORPHTransformer(nn.Module):
                     "REPLACES the core loop and writes ONE plan per slot through W_prefix.")
             self.tul_register = TULSlotRegister(d, cfg.tul.slot_cells,
                                                 cfg.tul.slot_cell_init == "distinct",
-                                                n_heads=cfg.tul.slot_pool_heads)
+                                                n_heads=cfg.tul.slot_pool_heads,
+                                                cell_var=cfg.tul.cell_count != "fixed")
+
+        # tul.cell_count (variable cell count): a BUILD-TIME bool, so the per-cell reads of the
+        # role table are Python constants. `cell_extend` is a probe's choice for an eval forward
+        # with M > fan_k ("refuse" | "cyclic" | "fresh", `tul.select_cell_rows`); a training
+        # forward refuses M > fan_k whatever it says (`_check_layout_cells`).
+        self._cell_var: bool = bool(cfg.tul is not None and cfg.tul.cell_count != "fixed")
+        self._cell_extend: str = "refuse"
+        if self._cell_var and float(cfg.slot_gain_rows) > 0:
+            raise NotImplementedError(
+                "tul.cell_count with model.slot_gain_rows > 0: the hinge's row subset has not "
+                "been checked at a variable cell count.")
 
         # ── LXTUL: the fan's exit mixture (TULConfig.fan_k; morph/model/tul_fan.py) ──
         # `fan_k: 0` builds nothing and the attribute stays None, so every branch that
@@ -3098,7 +3110,8 @@ class MORPHTransformer(nn.Module):
         # arm's step-0 forward equals the mean control's exactly.
         self.tul_fan: TULFanMix | None = None
         if cfg.tul is not None and cfg.tul.fan_k > 0:
-            self.tul_fan = TULFanMix(d, cfg.tul.fan_k, cfg.tul.fan_mix)
+            self.tul_fan = TULFanMix(d, cfg.tul.fan_k, cfg.tul.fan_mix,
+                                     cell_var=cfg.tul.cell_count != "fixed")
         # `tul.fan_trigger_every_pass` — a BUILD-TIME bool, so `_tul_core`'s per-pass
         # branch on it is a Python-level constant that traces out and an arm with the key
         # off runs the graph from before it existed. It builds NOTHING: the tensor it
@@ -5639,9 +5652,7 @@ class MORPHTransformer(nn.Module):
                     "MORPHConfig(tul=...); this model has no TUL parameters "
                     "(E_slot / E_mask / W_prefix).")
             tc = self.cfg.tul
-            if layout.prefix_k != tc.prefix_k:
-                raise ValueError(
-                    f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
+            self._check_layout_cells(layout)
             tg_attn_kwargs = tg_reset = None
             if self._tg_strict:
                 # The SAME prelude relation `_forward_tul` builds (tul.tg_geometry /
@@ -6679,7 +6690,7 @@ class MORPHTransformer(nn.Module):
         # check. The mechanisms that would read ONE state per slot (the chain, the reread,
         # the energy feature, the per-pass targets) are refused at construction, so a
         # cell-level layout never reaches them.
-        _m_cells = int(self.cfg.tul.slot_cells)
+        _m_cells = self._cells_of(layout)
         _n_slots = layout.slot_index.shape[1]
         # model.graph_safe: a Python-level constant for this forward. TRAINING only — an
         # eval forward is never captured and keeps today's path, host reads included.
@@ -6690,7 +6701,7 @@ class MORPHTransformer(nn.Module):
         _gs_ctr = _gsafe and "center" in self.cfg.graph_safe_parts
         _layout_slots = layout          # the PER-SLOT view, kept for the register and the
                                         # per-slot depth draw; `layout` becomes per-CELL
-        if _m_cells > 1:
+        if self.tul_register is not None:
             _off = torch.arange(_m_cells, device=layout.slot_index.device)
             layout = SlotLayout(
                 slot_mask=layout.slot_mask, bag_id=layout.bag_id,
@@ -7113,7 +7124,7 @@ class MORPHTransformer(nn.Module):
                 depths = (self._sample_slot_depths(layout, x.device, cells=_m_cells)
                           if slot_depths is None
                           else self._slot_depth_override(layout, slot_depths, x.device))
-            if _m_cells > 1:
+            if self.tul_register is not None:
                 # ONE depth per SPAN, not per cell: the M cells of a slot are one register
                 # and they iterate together. The draw above runs on the S*M axis and cell
                 # 0's value is taken for the whole slot, so the arm consumes more of the RNG
@@ -7278,7 +7289,7 @@ class MORPHTransformer(nn.Module):
         # real second difference and the smoke's tok/s decides.
         _reach = int(self.cfg.tul.loop_reach)
         _core_akw = None
-        if _m_cells > 1:
+        if self.tul_register is not None:
             # ── the register's IN-LOOP relation ───────────────────────────────────
             # Cell i of slot k is ALLOWED every cell of slots < k (as today, and as
             # narrowed by `loop_reach`) AND every cell of its OWN slot k.
@@ -7410,7 +7421,7 @@ class MORPHTransformer(nn.Module):
         _carry = self.tul_carry
         _carry_cap: dict = {}
         if _carry is not None:
-            if _carry.mode == "persist" and _m_cells > 1:
+            if _carry.mode == "persist" and self.tul_register is not None:
                 _cross = _mask0 & ~_same
                 _core_akw = (({**_core_akw[0],
                                "tg_persist_capture": (_cross, _seg_slot, _carry_cap)},)
@@ -8423,6 +8434,57 @@ class MORPHTransformer(nn.Module):
             _gain_reg = self._slot_gain_reduce(_gain_terms)
         return xn, h, depths, g_traj, _db_traj, _gain_reg, _mep_keep
 
+    # ── tul.cell_count: the cell count of THIS forward ───────────────────────────────
+
+    @property
+    def cell_extend(self) -> str:
+        """What an EVAL forward with more cells than ``fan_k`` does for the cells past the role
+        table: ``refuse`` (default), ``cyclic`` (cell ``i`` is role ``i mod fan_k``) or ``fresh``
+        (a new query from the init law, a zero offset, an identity write)."""
+        return self._cell_extend
+
+    @cell_extend.setter
+    def cell_extend(self, rule: str) -> None:
+        if rule not in ("refuse", "cyclic", "fresh"):
+            raise ValueError(f"cell_extend must be 'refuse', 'cyclic' or 'fresh', got {rule!r}")
+        if rule != "refuse" and self.training:
+            raise ValueError("cell_extend != 'refuse' is an eval-mode setting: training never "
+                             "runs more cells than the role table has")
+        self._cell_extend = rule
+        for mod in (self.tul, self.tul_register):
+            if mod is not None:
+                mod.cell_extend = rule
+
+    def _cells_of(self, layout: SlotLayout) -> int:
+        """Cells per slot in this forward. ``tul.cell_count: fixed`` (every model before the
+        key): the config's ``slot_cells``. Otherwise the batch's own count, ``layout.prefix_k``
+        (``fan_k`` is then the size of the role table, not the cell count)."""
+        tc = self.cfg.tul
+        return int(tc.slot_cells) if tc.cell_count == "fixed" else int(layout.prefix_k)
+
+    def _check_layout_cells(self, layout: SlotLayout) -> None:
+        """The layout's cell width against the model. Fixed: it must equal ``prefix_k``. Variable:
+        ``1 <= M <= fan_k`` in training; above ``fan_k`` only at eval with ``cell_extend`` set
+        (a probe's choice, ``select_cell_rows``) and a row that fits ``max_seq_len``."""
+        tc = self.cfg.tul
+        m = int(layout.prefix_k)
+        if tc.cell_count == "fixed":
+            if m != tc.prefix_k:
+                raise ValueError(f"layout prefix_k {m} != model {tc.prefix_k}")
+            return
+        if m < 1:
+            raise ValueError(f"layout prefix_k {m} < 1")
+        if m > tc.fan_k:
+            if self.training:
+                raise ValueError(f"layout prefix_k {m} > fan_k {tc.fan_k}: the role table has "
+                                 f"{tc.fan_k} rows, and training never extends it")
+            if self.cell_extend == "refuse":
+                raise ValueError(f"layout prefix_k {m} > fan_k {tc.fan_k} at eval with "
+                                 f"model.cell_extend='refuse'; set it to 'cyclic' or 'fresh'")
+            if layout.l_total > self.cfg.max_seq_len:
+                raise ValueError(f"layout row {layout.l_total} > max_seq_len "
+                                 f"{self.cfg.max_seq_len} at {m} cells per slot")
+
     # ── model.slot_compact (morph/model/slot_compact.py) ─────────────────────────────
 
     def _slot_compact_guard(self, *, halt: bool, iw_rollouts: int, n_nograd: int,
@@ -8435,7 +8497,8 @@ class MORPHTransformer(nn.Module):
         bad = sorted(k for k, v in per_pass.items() if v is not None) + [k for k, ok in (
             ("halt", not halt), ("iw_rollouts>1", iw_rollouts == 1),
             ("a no-grad pass", n_nograd == 0), ("a checkpointed pass", n_ckpt == 0),
-            ("slot_cells==1", m_cells > 1), ("graph_safe passes off", gs_pass),
+            ("slot_cells==1", self.tul_register is not None),
+            ("graph_safe passes off", gs_pass),
             (f"total_iters {total_iters} != slot_max_depth {max_d}", total_iters == max_d))
             if not ok]
         if bad:
@@ -14535,8 +14598,7 @@ class MORPHTransformer(nn.Module):
                 "tul.core_stage_cond='sigma': eval on a sigma-conditioned model runs the "
                 "deterministic Euler ladder, which drives no gate and reads no halting "
                 "decision.")
-        if layout.prefix_k != tc.prefix_k:
-            raise ValueError(f"layout prefix_k {layout.prefix_k} != model {tc.prefix_k}")
+        self._check_layout_cells(layout)
         B, L = input_ids.shape
         if tc.coda_token_cut >= L:
             raise ValueError(
@@ -14932,7 +14994,7 @@ class MORPHTransformer(nn.Module):
             # (tests/test_tul_cond4_strict.py pins it against the pre-change source).
             # Everything downstream — the mux local loss, the span decoder, SIGReg, the
             # gate budget, the plan ablations, prefix_project — reads the stack's output.
-            _m = int(tc.slot_cells)
+            _m = self._cells_of(layout)
             _S = layout.slot_index.shape[1]
             if self.tul_cond is not None:
                 h_slots = self._tul_cond_apply(h_slots, n_slots=_S, m_cells=_m)
@@ -14954,7 +15016,7 @@ class MORPHTransformer(nn.Module):
             if self.tul_center is not None:
                 h_slots = self.tul_center(h_slots, layout.slot_valid, m_cells=_m)
             _reg_cells = None
-            if _m > 1:
+            if self.tul_register is not None:
                 _reg_cells = h_slots.reshape(h_slots.shape[0], _S, _m, *h_slots.shape[2:])
                 if self.tul_fan is None:
                     h_slots = _reg_cells.mean(dim=2)
@@ -15069,7 +15131,9 @@ class MORPHTransformer(nn.Module):
                     # the seed included, is still measured and reported as
                     # `fan/stream_cos_t{t}` under no_grad. Training only — at eval the
                     # cosines are instruments and there is no term.
-                    if db_traj is not None and not generate:
+                    # tul.cell_count: ONE cell has nothing to be repelled from (vol / (M - 1) is
+                    # 0 / 0), so an M = 1 batch has no term and logs no `fan/*_t{t}` reading.
+                    if db_traj is not None and not generate and _m > 1:
                         _mode = str(tc.fan_repel_mode)
                         # LX-Fan: the epi term's ridge readout is a BATCH fit over the valid
                         # slots, and on the K-fold batch every seed (`traj[0]`, before any
@@ -17044,7 +17108,7 @@ class MORPHTransformer(nn.Module):
         if self.tul_cond is not None:
             h_slots = self._tul_cond_apply(
                 h_slots, n_slots=layout.slot_index.shape[1],
-                m_cells=int(self.cfg.tul.slot_cells))
+                m_cells=self._cells_of(layout))
         # ── the discrete thought (tul.vq_codes) ──────────────────────────────────
         # THE INSTRUMENT'S DEFINITION ON A VQ MODEL, stated because it is a choice: the
         # rank is read over the K LIFTED CODES, which are exactly what the coda's prefix
@@ -17069,7 +17133,7 @@ class MORPHTransformer(nn.Module):
         # run's reading moves.
         if self.tul_center is not None:
             h_slots = self.tul_center(h_slots, layout.slot_valid,
-                                      m_cells=int(self.cfg.tul.slot_cells))
+                                      m_cells=self._cells_of(layout))
         z = self._readout(h_slots).float()                     # [B, S, C] or [B, S*M, C]
         valid = layout.slot_valid
         # ── the Thought Register (tul.slot_cells) ────────────────────────────────
@@ -17082,7 +17146,7 @@ class MORPHTransformer(nn.Module):
         # one no earlier arm could have: the rank WITHIN a slot, across its own M cells.
         # A register whose cells collapse onto each other reads ~1 there and has bought
         # nothing, whatever the row number says.
-        _m = _vq_k if _vq_k else int(self.cfg.tul.slot_cells)
+        _m = _vq_k if _vq_k else self._cells_of(layout)
         within: dict[str, float] = {}
         if _m > 1:
             # Vectorised on the DEVICE, no eigendecomposition. The first version moved
@@ -17417,7 +17481,7 @@ class MORPHTransformer(nn.Module):
         if self.tul_cond is not None:
             # Once per REAL slot — and once per CELL of a real slot on a register model,
             # where the stack's compact axis is S*M, not S.
-            passes = passes + (len(self.tul_cond) * int(cfg.tul.slot_cells)
+            passes = passes + (len(self.tul_cond) * self._cells_of(layout)
                                * layout.slot_valid.sum())
         if self.tul_spandec is not None:
             # The span decoder runs its blocks over EVERY slot cell of the fixed-shape

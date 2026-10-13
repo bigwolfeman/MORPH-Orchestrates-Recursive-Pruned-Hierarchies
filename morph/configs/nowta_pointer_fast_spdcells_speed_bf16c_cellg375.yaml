@@ -1,0 +1,18 @@
+# The speed base (nowta_pointer_fast_spdcells_speed_bf16c) with a VARIABLE CELL COUNT, the milder
+# law Wolfe asked for on 2026-10-12 (the Poisson draw was too aggressive): M = 3 with probability
+# 0.25, M = 4 with 0.75 (mean 3.75), and the M cells are a uniformly random subset of the four
+# roles, kept in ascending order, so every cell role trains equally (tul.cell_count_subset:
+# random). One CUDA graph per (kind, hinge pass, M); the roles are a device tensor in the batch,
+# so a different subset replays the same graph. Design:
+# .agents/notes/proposed/architecture/2026-10-12-fan-variable-cell-count-design.md
+defaults:
+  - nowta_pointer_fast_spdcells_speed_bf16c
+  - _self_
+
+tul:
+  cell_count: categorical
+  cell_count_probs: [0.0, 0.0, 0.25, 0.75]
+  cell_count_subset: random
+
+wandb:
+  name: fan-cellg375

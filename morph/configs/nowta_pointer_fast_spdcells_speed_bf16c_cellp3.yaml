@@ -1,0 +1,18 @@
+# The speed base (nowta_pointer_fast_spdcells_speed_bf16c) with a VARIABLE CELL COUNT: each batch
+# draws M ~ Poisson(3.5) clamped to [1, 4] (masses 0.136 / 0.185 / 0.216 / 0.463, mean 3.0) and
+# the cells are roles 0 .. M-1 (tul.cell_count_subset: prefix). fan_k stays 4 = the role table.
+# One CUDA graph per (kind, hinge pass, M). Design and acceptance:
+# .agents/notes/proposed/architecture/2026-10-12-fan-variable-cell-count-design.md
+defaults:
+  - nowta_pointer_fast_spdcells_speed_bf16c
+  - _self_
+
+tul:
+  cell_count: poisson
+  cell_count_mean: 3.5
+  cell_count_min: 1
+  cell_count_max: 4
+  cell_count_subset: prefix
+
+wandb:
+  name: fan-cellp3
