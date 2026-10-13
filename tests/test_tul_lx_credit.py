@@ -396,15 +396,19 @@ M = 4
 # backward accumulates in a different order. tests/test_tul_wta_fused_ce.py pins the
 # tolerance this needed against the old path. "lxfan4" (wta_lambda=0, no WTA pass) is
 # untouched.
+# a2 grad sums re-pinned 2026-10-13: 42044e87 (train-speed lever E, one tied head / int-N
+# quantisation per forward) moved ONE of 179 grads, embed.hybrid.lor_embed.space_embed.weight,
+# by 3.9e-8 relative (fp32 summation order); losses and logit sums are bit-identical.
+# 8d489734 re-pinned the same value in tests/test_tul_lxfan.py::HEAD_PINS["fan4"] and missed this table.
 FAN_PINS = {
     ("lxfan4", 0.0): (5.077616214752197, -64528.78620353341, 5.130616188049316,
                       710.712064732762, 180),
     ("lxfan4", 0.1): (5.025187015533447, -64528.78620353341, 5.130616188049316,
                       708.4147908984702, 180),
     ("a2", 0.0): (10.31538200378418, 1358.1454057991505, 5.132460117340088,
-                  1436.3044122054762, 179),
+                  1436.304412149524, 179),
     ("a2", 0.1): (10.261831283569336, 1358.1454057991505, 5.132460117340088,
-                  1443.9956036514868, 179),
+                  1443.9956037048305, 179),
 }
 
 

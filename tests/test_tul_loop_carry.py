@@ -565,7 +565,7 @@ def test_persist_exit_is_the_raw_exit_plus_the_rms_matched_sum_of_reads(depth):
     # production add goes through `_apply_injection`, which broadcasts the single-stream
     # `[B, S, C]` term onto the stream axis — a raw `+` would try to broadcast on the
     # wrong axis.
-    expected = MORPHTransformer._apply_injection(
+    expected = m_none._apply_injection(      # instance method since 1a294303
         h_none, carry_rms_match(total_accum, h_none))
     assert torch.allclose(h_persist, expected, atol=1e-5), \
         f"depth {depth}: persist's exit != h_none + carry_rms_match(sum reads, h_none)"

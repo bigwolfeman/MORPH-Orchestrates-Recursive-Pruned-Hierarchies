@@ -797,9 +797,13 @@ def test_c1b_knob_off_is_bit_identical_to_the_pre_c1b_tree(tmp_path):
         assert float(a["pen"]) > 0.0, "the hinge must be active for the grads to cover it"
         for k in ("loss", "gain_est", "pen", "logits"):
             assert torch.equal(a[k], b[k]), (renorm, k)
-        # `enum_win_entropy` (LX, 2026-09-26, tests/test_tul_lx_credit.py) is a detached
-        # instrument added after the base: the one key the base cannot have.
-        assert a["keys"] == [k for k in b["keys"] if k != "enum_win_entropy"], renorm
+        # Output keys added AFTER the base, all detached readouts of values the loss already
+        # holds (the byte-identical loss/grads below prove they change nothing):
+        # `enum_win_entropy` (LX, 2026-09-26, tests/test_tul_lx_credit.py); `gain_pen` and
+        # `gain_active` (42044e87, 2026-10-11, the hinge's penalty and its "some term is
+        # charged" device flag, read by the CUDA-graph step). Any OTHER new key still fails.
+        _POST_BASE_KEYS = {"enum_win_entropy", "gain_pen", "gain_active"}
+        assert a["keys"] == [k for k in b["keys"] if k not in _POST_BASE_KEYS], renorm
         assert a["params"].keys() == b["params"].keys()
         assert a["grads"].keys() == b["grads"].keys() and len(b["grads"]) > 50
         for n in a["params"]:
