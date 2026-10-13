@@ -1,6 +1,6 @@
 # Does a variable cell count train a cheaper fan with a working cell-count knob?
 
-Status: planned
+Status: success
 
 Design note: `.agents/notes/proposed/architecture/2026-10-12-fan-variable-cell-count-design.md`.
 Code: `tul.cell_count` (merge 33113fb6, default `fixed`).
@@ -112,3 +112,72 @@ P(any arm's gap(8, cyclic) <= -0.002 with both seeds' paired 95 % CI below 0) = 
    2, 3 forced on it with `+tul.cell_count=categorical` and one-hot `+tul.cell_count_probs`.
    Weighted wall = sum over M of P(M) x ms(M) / ms(control).
 5. Fill Results, Verdict and Updated hypothesis; move the file to `successes/` or `failures/`.
+
+## Results
+
+Log `abq/chain-cc.log`, tree `abq/tree-cc` (master 6b833a5b). Byte gate on that tree (S5 and the
+cell count both off): `4a73ebf5`, match. Every M = 4 sweep point equals that run's
+`core_depth_sweep` CE@6 at the printed 4 decimals, so the cell sweep is read.
+
+**Quality at M = 4** (480 rows):
+
+| Arm | Seed | CE@1 | CE@6 | K1-K6 [95 % CI] | grad-norm max/median | gain_est 1000-5000 |
+|---|---|---|---|---|---|---|
+| fixed four cells (filed) | 1 | 3.9118 | 3.9060 | +0.0058 [+0.0053, +0.0062] | 6.6 | 0.889-0.902 |
+| fixed four cells (filed) | 2 | 3.9093 | 3.9040 | +0.0052 [+0.0048, +0.0057] | 7.8 | 0.890-0.902 |
+| gentle cell drop | 1 | 3.8951 | 3.8899 | +0.0051 [+0.0047, +0.0056] | 8.9 | 0.885-0.903 |
+| gentle cell drop | 2 | 3.9222 | 3.9166 | +0.0056 [+0.0052, +0.0060] | 6.6 | 0.885-0.903 |
+| Poisson cell drop | 1 | 3.9166 | 3.9117 | +0.0049 [+0.0044, +0.0053] | 7.4 | 0.881-0.904 |
+| Poisson cell drop | 2 | 3.9043 | 3.8987 | +0.0056 [+0.0051, +0.0060] | 7.8 | 0.875-0.905 |
+
+- Means: control 3.9050 / +0.00550; gentle 3.9033 / +0.00535 (CE@6 -0.0018, K1-K6 97 %);
+  Poisson 3.9052 / +0.00525 (CE@6 +0.0002, K1-K6 95.5 %).
+- The gentle seeds spread 0.027 on CE@6 (3.8899 and 3.9166), 8x the control seeds' spread
+  (0.0032). Its mean passes, but this arm's draw spread is wide.
+
+**Cost** (pinned bench on the bf16c base without S5, 2 repeats; ms/step and ratio to the control):
+control 174.94; M = 1 132.57 (0.758); M = 2 146.85 (0.839); M = 3 161.82 (0.925).
+Weighted wall: gentle 0.981x, Poisson 0.921x. Expected TFLOP (builder G5 per-M FLOPs): Poisson
+13.00 (-9.6 %), gentle 14.04 (-2.4 %). Trainer tok/s: control 31.6k, gentle about 37k, Poisson 38-40k
+(the control ran without S1 + S2; sanity check only).
+
+**gap(M) = CE@6(M) - CE@6(4)**, mean of the two seeds (per-seed paired 95 % CIs in
+`abq/cc-cells-d6.json`):
+
+| M | fixed four cells | gentle cell drop | Poisson cell drop |
+|---|---|---|---|
+| 1 | +0.1346 | +0.0899 | +0.0051 |
+| 2 | +0.0708 | +0.0252 | +0.0002 |
+| 3 | +0.0252 | +0.0004 | -0.0001 |
+| 8, cyclic | +0.0657 | +0.0635 | +0.0589 (+0.0137 / +0.1041) |
+| 16, cyclic | +0.1191 | +0.1048 | +0.1363 |
+| 8, fresh | +0.0530 | +0.0585 | +0.0600 (+0.0110 / +0.1089) |
+
+- Poisson at M = 1: CE@6 3.9103 (control at M = 4: 3.9050, +0.0053); K1-K6 at M = 1 +0.0037 (67 %
+  of the control's). At M = 2: CE@6 3.9054 (+0.0004), K1-K6 +0.00515 (94 %).
+- Gentle at M = 3: CE@6 3.9036 (control at M = 4: 3.9050), K1-K6 at M = 3 +0.0054.
+- No arm gains at any M > 4. Every M > 4 CI lies above 0.
+
+## Verdict
+
+Success. The predictions held on every decision rule; the downward curve came out far flatter
+than predicted for the Poisson arm (gap(1) +0.005 against a guess of +0.035).
+
+1. Gentle cell drop passes rule 1 (CE@6 -0.0018, K1-K6 97 %, stable) and its gap(3) is +0.0004:
+   M = 3 at inference is free on it.
+2. Poisson cell drop passes rule 2: CE@6 +0.0002, K1-K6 95.5 % (0.00002 over the line, so n = 2
+   cannot separate it from a 5 % loss), weighted wall 0.921x, stable. It becomes the loop recipe's
+   speed base, deployed at M = 4.
+3. The downward knob is live on the Poisson arm (rule 4): gap(1) +0.0051, 0.130 below the control.
+   M = 2 at inference is within 0.0004 CE of M = 4.
+4. The upward knob fails on every arm (rule 5): more cells than trained cost +0.05 to +0.14 at
+   M = 8-16, cyclic or fresh. v1 does not extend past training.
+
+## Updated hypothesis
+
+Trained with a random cell count, the fan learns cells that each carry nearly the whole read:
+the coda loses 0.005 nats going from 4 cells to 1. So at 5k the extra cells are worth about 0.005
+nats at eval, and the fixed-four fan's 0.135 at M = 1 is co-dependence of its cells, not value.
+Whether the extra cells' value grows with training (Wolfe's crossover hypothesis, about 2B
+tokens) is open. "Train at 4, infer at 128" needs exchangeable cells and a pooled coda read
+(design note v2); v1's role-indexed cells and the coda's position range do not extend.

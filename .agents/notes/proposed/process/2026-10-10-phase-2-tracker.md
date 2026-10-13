@@ -92,7 +92,9 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   [x] S5 5k 2-seed check: CE@6 -0.0047, K1-K6 102 %, stable; S5 ON in speed_bf16c (`successes/2026-10-13-s5-custom-ops-5k.md`).
   NOTE: the byte gate SHA of speed_bf16c moves with S5 on; the 45-step gate config (`nowta_pointer_fast_spdcells`) does not use S5, so 4a73ebf5 stands.
   [x] v1 variable cell count MERGED (33113fb6, `tul.cell_count`, default fixed; gates 4a73ebf5 and bf16c 666ac56a
-  match). [ ] 5k run, gentle and Poisson draws, 2 seeds each: `lab/experiments/planned/2026-10-13-fan-variable-cell-count-v1.md`.
+  match). [x] 5k, 2 seeds each (`successes/2026-10-13-fan-variable-cell-count-v1.md`): Poisson draw CE@6 +0.0002, K1-K6
+  95.5 %, wall 0.921x, gap(1) +0.0051 (control +0.135), M = 2 within 0.0004; gentle draw CE@6 -0.0018, K1-K6 97 %, gap(3)
+  +0.0004; no arm gains above M = 4 (v2 needed). [ ] Poisson arm into the speed base after an S5 + cell-count smoke.
   [x] bf16 carrier IN the speed base: matched controls CE@6 +0.0005, K1-K6 105 % (successes/2026-10-12-bf16-carrier-matched-controls.md).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,

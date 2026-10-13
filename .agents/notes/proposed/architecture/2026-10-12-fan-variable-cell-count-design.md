@@ -358,3 +358,12 @@ modules: `FanRouter` bias `[M]`, `FanOPF` factors, history split).
 - **Decode.** The cached generator reads `spec.prefix_k` per run and refuses
   `hc_carrier_bf16`; a per-call M there is follow-up work, so v1 measures eval-forward tok/s, not
   decode tok/s.
+
+## Status 2026-10-13: v1 measured at 5k
+
+v1 is merged (33113fb6) and run, 2 seeds per draw: `lab/experiments/successes/2026-10-13-fan-variable-cell-count-v1.md`.
+The Poisson draw holds CE@6 (+0.0002) and K1-K6 (95.5 %) at M = 4 for 0.921x the step wall, and its
+model loses only 0.005 nats at M = 1 (the fixed-four model loses 0.135). The gentle draw holds too,
+and runs free at M = 3. No arm gains above M = 4, cyclic or fresh. So v1 is a FLOP lever and a
+downward inference knob; the upward question needs v2 (exchangeable cells, pooled coda read).
+
