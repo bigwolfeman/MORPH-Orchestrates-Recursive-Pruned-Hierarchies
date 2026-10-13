@@ -74,8 +74,9 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   Fixed on the way: test_tul_lxfan pins moved by lever E (one embedding grad, 3.9e-8 rel), re-pinned 8d489734.
   **Core-pass plan (Opus design, c85cd646, `2026-10-12-core-pass-megakernel-design.md`):** fresh profile 202.4 ms/step,
   core passes 62.5 ms (floor ~17-23). No megakernel yet; stages S1-S7 ~-25 to -30 ms. [~] S1 hinge stream + S2 wgrad
-  stream + idle gap (perf/streams, exact). [~] S4 HC exit+entry fusion (perf/hc-exit-entry, rounding only).
-  bf16 carrier ON HOLD: second run CE@6 3.9060 (failures/2026-10-12-bf16-carrier-second-run.md); [~] matched controls running.
+  stream + idle gap (perf/streams, exact). [x] S4 HC exit+entry fusion: exact but 0.975x
+  (213.8 -> 219.3 ms), parked on perf/hc-exit-entry 1c220f33 for a re-bench at larger width (Wolfe 2026-10-12).
+  [x] bf16 carrier IN the speed base: matched controls CE@6 +0.0005, K1-K6 105 % (successes/2026-10-12-bf16-carrier-matched-controls.md).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
   2026-10-08 flame ledger). 9.1 is the analytic LXTUL step: three times the decode forward,

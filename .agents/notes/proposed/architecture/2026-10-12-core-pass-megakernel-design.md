@@ -188,6 +188,11 @@ serves a stale latent.
 
 ### S4. HC boundary fusion
 
+Measured 2026-10-12: built and exact, but SLOWER (bench 213.8 -> 219.3 ms, HC kernels 18.26 -> 21.62
+ms; the projection's weight reads and the lost per-token parallelism cost more than the warm-L2
+carrier read saves). Parked on `perf/hc-exit-entry` (1c220f33) to re-bench at larger width:
+its note `.agents/notes/proposed/architecture/2026-10-12-hc-boundary-fusion.md` lives on that branch.
+
 What: in a block chain, the exit of sublayer i writes the carrier and the entry of sublayer i+1
 reads it back at once (projection partials, then mapping, `x_bar`). One kernel that does the
 exit and the next entry's projection partials removes one carrier read per boundary; the
