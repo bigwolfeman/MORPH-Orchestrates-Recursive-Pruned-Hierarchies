@@ -81,6 +81,10 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   Bench drift (2026-10-12 evening): the bf16c off arm reads 213-215 ms vs 198.9 this morning. Same code (24b5077c
   tree) reads 212.9 now, so it is the environment (desktop GPU/CPU load, a game), not the code; core pinning (213.1 vs
   214.5) and the eval keys (1.0007) do not move it. Interleaved ratios stand; take absolute ms only on a quiet desktop.
+  [x] S5 block custom ops MERGED (33e52957, `model.block_custom_ops`, key off): kernels/step 14,728 -> 13,968,
+  cold compile +46 s; masks change (new philox seeds per merged graph), so not exact. Stacking check 2026-10-13: S5-only and
+  S5 + S1 + S2 gates both 3381bc7e (S1/S2 stay exact on S5); bench speed_bf16c 171.70 -> +S5 167.85 ms (1.0229, 2 repeats
+  interleaved). [ ] 2-seed 5k quality check before S5 goes ON (one package with S3/S6 if they pass).
   [x] bf16 carrier IN the speed base: matched controls CE@6 +0.0005, K1-K6 105 % (successes/2026-10-12-bf16-carrier-matched-controls.md).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
