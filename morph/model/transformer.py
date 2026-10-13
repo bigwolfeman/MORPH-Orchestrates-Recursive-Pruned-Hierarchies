@@ -58,6 +58,7 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
 from .loop_glue import compile_rms_norm
+from .split_wgrad import as_bf16, split_active, split_swiglu_mlp
 from .streams import record_on, side_stream
 from .slot_compact import (compact_attn_input, compact_order, put_rows, slot_depth_capacity,
                            stratified_slot_depths, take_rows, validate_slot_compact)
@@ -884,6 +885,12 @@ class MORPHConfig:
     # rounds to bf16 and adds into the fp32 sum (no scratch, no cast or add kernel). Rounding
     # only (cuBLAS accumulates in another order). Needs split_wgrad. False = cuBLAS.
     split_wgrad_triton: bool = False
+    # gemm_epilogue_fusion — the dense MLP runs as ONE split op whose GEMMs carry the SwiGLU: the
+    # gate_up forward writes silu(gate) * up next to the pre-activation, and the down data-grad
+    # GEMM writes d_gate and d_up (no [M, d_ff] dh, no separate elementwise kernels). Same tile
+    # grid, elementwise epilogue work only. Rounding only. Needs split_wgrad_triton; refuses a
+    # ReMoE router (morph/kernels/triton/split_gemm.py). False = the unfused MLP.
+    gemm_epilogue_fusion: bool = False
     # slot_gain_reuse_f0 — the hinge's f(h) IS the loop's own step output at the sampled
     # pass, and f(h + d) runs under that step's dropout masks (the RNG state before the
     # step is replayed for it). Saves one of the hinge's two core applications. NOT exact:
@@ -1299,6 +1306,9 @@ class _SwiGLUMortar(nn.Module):
         self.d_ff = d_ff
         # ReMoE routing (Phase C) — built lazily by enable_routing(). router=None → plain SwiGLU.
         self.router: nn.Module | None = None
+        # model.gemm_epilogue_fusion (bind_split_wgrad sets it): the whole MLP is one split op
+        # with the SwiGLU in its GEMMs' epilogues. Read only where the split op runs.
+        self._swiglu_fused = False
         self._last_aux_loss: Tensor | None = None
         self._aux_detach_input = True   # detach router input → no routing-grad into the carrier
 
@@ -1328,6 +1338,9 @@ class _SwiGLUMortar(nn.Module):
         while keeping the router trained. (Standard MoE practice: the load-balance aux shapes the
         gate, not the backbone representation.)
         """
+        if self._swiglu_fused:
+            raise ValueError("model.gemm_epilogue_fusion: the fused MLP op has no gate between "
+                             "the SwiGLU and down; enable_routing would be ignored by it")
         self._aux_detach_input = bool(detach_input)
         from .routing import TileRouter
 
@@ -1361,6 +1374,12 @@ class _SwiGLUMortar(nn.Module):
         self.register_buffer("hidden_to_cluster", h2c.to(dev))
 
     def forward(self, x: Tensor, iter_idx: int = 0) -> Tensor:
+        if self._swiglu_fused and split_active(self.gate_up._cms._split) \
+                and split_active(self.down._cms._split):
+            # model.gemm_epilogue_fusion: gate_up + SwiGLU + down as one split op (the SwiGLU in
+            # the GEMMs' epilogues). Outside the training step the plain path below runs.
+            return split_swiglu_mlp(as_bf16(x), self.gate_up._cms._split,
+                                     self.down._cms._split)
         gu = self.gate_up(x)
         gate, up = gu.chunk(2, dim=-1)
         h = F.silu(gate) * up                         # [B, T, d_ff] hidden neuron bank
@@ -4006,6 +4025,9 @@ class MORPHTransformer(nn.Module):
         if cfg.split_wgrad_triton and not cfg.split_wgrad:
             raise ValueError("model.split_wgrad_triton needs model.split_wgrad=true: the Triton "
                              "GEMMs live inside the split op.")
+        if cfg.gemm_epilogue_fusion and not cfg.split_wgrad_triton:
+            raise ValueError("model.gemm_epilogue_fusion needs model.split_wgrad_triton=true: "
+                             "the SwiGLU epilogues live in the Triton split GEMMs.")
         if cfg.split_wgrad:
             if not cfg.ternary_step_cache:
                 raise ValueError("model.split_wgrad needs model.ternary_step_cache=true: the "

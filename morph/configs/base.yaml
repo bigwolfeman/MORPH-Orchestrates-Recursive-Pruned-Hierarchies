@@ -183,6 +183,13 @@ model:
   #   accumulation order than cuBLAS); needs the fixed-weight readout and a 5k check. Needs
   #   split_wgrad. false = cuBLAS.
   split_wgrad_triton: false
+  # gemm_epilogue_fusion: the dense MLP is ONE split op with the SwiGLU in its GEMMs' epilogues: the
+  #   gate_up forward writes h = silu(gate) * up beside the pre-activation (one kernel less per MLP
+  #   forward), and the down data-grad GEMM forms d_gate and d_up from the saved pre-activation (the
+  #   [M, d_ff] dh and its elementwise kernel are gone). Same tile grid per GEMM, elementwise work
+  #   only; the saved tensors are the unfused path's. Rounding only (the GEMM rounding, then fp32).
+  #   Needs split_wgrad_triton; refuses a ReMoE router (route_start beyond the run). false = unfused.
+  gemm_epilogue_fusion: false
   # slot_gain_reuse_f0: the hinge's f(h) is the loop's own step output at the sampled pass and
   #   f(h + d) replays that step's RNG state (one core application saved). NOT exact: the
   #   hinge's gradient through f(h) also reaches earlier passes and the prelude. false = two

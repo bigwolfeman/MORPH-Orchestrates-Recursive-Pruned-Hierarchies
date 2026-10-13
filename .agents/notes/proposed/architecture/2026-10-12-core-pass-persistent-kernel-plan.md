@@ -355,3 +355,14 @@ mean and on three of four reads, and misses it by 0.04 ms on one session's media
 it default off and decide on the next bench. Not verified: PDL under an eval forward in the trainer (the eval after
 step 290 ran on a PDL-off build only), the 5k quality (PDL cannot change math, and the byte gate agrees), memory with the key on (not measured), and whether
 inductor's early `gdc_launch_dependents` helps or hurts on its own (it is on whenever the key is on).
+
+## Status 2026-10-13: F1 built (`model.gemm_epilogue_fusion`, key off, 5k check owed)
+
+Scratch: `/home/wolfe/morph-scratch/abq/epi/`. Speed base `nowta_pointer_fast_spdcells_speed_bf16c` (S1, S2, S5, G1 on;
+K1 and P0 off), `model.slot_gain_pass_force=3`. The MLP is one split op: SwiGLU in the `gate_up` forward epilogue
+(two accumulators per tile, writes `gu` and `h`) and the SwiGLU backward in the `down` dgrad epilogue (reads saved `gu`,
+writes `d_gu`). Saved tensors equal the unfused path's. The residual alpha scale sits inside `_hc_post_fwd_kernel`, not on a
+GEMM output, so it was not touched; the dropout after `down` (0.38 ms) stays out (torch RNG). The new kernels take no PDL code.
+Kill test (profile, steps 160-164, keys off): SwiGLU forward kernel 0.64 ms, backward 2.15 ms (sum 2.79 ms, 3.2 ms with the
+fused-variant kernels) against the 1.5 ms rule. Pinned bench, 3 repeats: 164.28 ms off vs 162.83 ms on (-1.45 ms).
+Not verified: 5k quality (2 seeds), the model's backward against a per-tensor fp64 gradient.
