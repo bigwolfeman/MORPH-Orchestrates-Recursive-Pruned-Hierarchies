@@ -2,6 +2,11 @@
 
 Status: proposed
 
+Update 2026-10-12 evening: S1 + S2 are ON in the speed base (177.2 vs 199.3 ms), S4 measured slower and parked.
+The follow-up plan measured kernel boundaries (0.70 us), grid barriers (0.69-1.75 us) and Triton vs cuBLAS GEMMs
+at the core shapes, and finds that a persistent kernel does not pay on this card:
+[`2026-10-12-core-pass-persistent-kernel-plan.md`](2026-10-12-core-pass-persistent-kernel-plan.md).
+
 ## Problem
 
 Wolfe's target (2026-10-12): 9.1 TFLOP/step for everything except the training-only span
