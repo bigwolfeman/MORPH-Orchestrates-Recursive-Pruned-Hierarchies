@@ -1,6 +1,6 @@
 # S5 block custom ops at 5k against matched bf16 controls
 
-Status: planned
+Status: success
 
 ## Question
 
@@ -49,3 +49,31 @@ Master at the commit adding this file, copied with `git archive` to
 steps with `training.seed=<s> model.block_custom_ops=true`, one at a time under `gpu.lock`, then
 `lab/divergence/core_depth_sweep.py --depths 1,6 --rows 480 --batch 3` on the final checkpoint and
 `abq/r2bench/stab.keep.py` on the wandb file (same as `chain-bf16ctl.sh`).
+
+## Results
+
+Log `abq/chain-s5.log`, tree `abq/tree-s5` (master 08b2d966). Sweep: 480 rows, batch 3.
+
+| Arm | Seed | CE@1 | CE@6 | K1-K6 [95 % CI] | grad-norm max/median | gain_est 1000-5000 |
+|---|---|---|---|---|---|---|
+| bf16 control (filed) | 1 | 3.9118 | 3.9060 | +0.0058 [+0.0053, +0.0062] | 6.6 | 0.889-0.902 |
+| bf16 control (filed) | 2 | 3.9093 | 3.9040 | +0.0052 [+0.0048, +0.0057] | 7.8 | 0.890-0.902 |
+| S5 custom ops | 1 | 3.9024 | 3.8973 | +0.0051 [+0.0046, +0.0055] | 7.8 | 0.886-0.901 |
+| S5 custom ops | 2 | 3.9094 | 3.9033 | +0.0061 [+0.0056, +0.0066] | 7.4 | 0.890-0.902 |
+
+- Means: S5 CE@6 3.9003, K1-K6 +0.0056; control 3.9050, +0.00550.
+- S5 - control CE@6: -0.0047 (rule <= +0.003: held). K1-K6 ratio 102 % (rule >= 95 %: held).
+- Stability held on both runs.
+- Trainer tok/s 36.8k / 36.7k (controls 31.6k, but they ran before S1 + S2 were on; the trainer
+  rate is a sanity check, the bench is the speed number: 1.0229).
+- The seed-1 S5 run reads 0.0087 below its control on CE@6. A mask redraw is a seed change, so this
+  is draw spread, not a gain from S5.
+
+## Verdict
+
+Success: the predictions held. S5 goes ON in `nowta_pointer_fast_spdcells_speed_bf16c`.
+
+## Updated hypothesis
+
+S5 trains the same function as the base at 5k (a mask redraw, inside the seed spread) and saves
+2.2 % of the step.

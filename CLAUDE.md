@@ -114,7 +114,7 @@ Speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed.yaml` = the recipe +
 compiled loop glue: 213.5 ms/step wall (+7.1 %), K1-K6 held, CE@6 +0.003 on one run (`lab/experiments/failures/2026-10-12-fan-speed-package.md`).
 Current speed base (2026-10-12): `nowta_pointer_fast_spdcells_speed_bf16c.yaml` = the above + the HC carrier stored in bf16
 (`model.hc_carrier_bf16`): 198.9 ms/step wall (1.15x the locked recipe). Since 2026-10-12 evening it also runs S1 + S2
-(`model.slot_gain_stream`, `model.split_wgrad`, exact): 177.2 vs 199.3 ms on the same bench (1.124x); eval has ~0.34 GiB free, so desktop GPU load can OOM it. Free at 5k against matched fp32 controls (2 seeds
+(`model.slot_gain_stream`, `model.split_wgrad`, exact): 177.2 vs 199.3 ms on the same bench (1.124x); eval has ~0.34 GiB free, so desktop GPU load can OOM it. Since 2026-10-13 it also runs S5 (`model.block_custom_ops`, one compiled graph per block; masks redrawn, 5k 2 seeds CE@6 -0.0047, K1-K6 102 %): 167.85 vs 171.70 ms (1.0229), `lab/experiments/successes/2026-10-13-s5-custom-ops-5k.md`. Free at 5k against matched fp32 controls (2 seeds
 each: CE@6 +0.0005, K1-K6 105 %): `lab/experiments/successes/2026-10-12-bf16-carrier-matched-controls.md`. READ THAT FILE before
 judging any 5k speed check: K1-K6 spreads 0.0023 between two seeds (44 % of its mean), so one run cannot test the 5 % rule. Fresh 5k draws of the speed recipe read CE@6
 3.903-3.908 (5 runs); the earlier seed-1 3.895-3.900 family is NOT the typical value (`lab/experiments/successes/2026-10-12-eval-regime-check.md`). FP8 forward is

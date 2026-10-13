@@ -15,6 +15,11 @@ model:
   # eval with ~4.5 GB of desktop VRAM in use; a game on the desktop can OOM the eval.
   slot_gain_stream: true
   split_wgrad: true
+  # S5 (2026-10-13): each block compiles as one graph (HC entry/exit, CCA conv, segment conv, tiled
+  # prologue as torch.library custom ops). Not exact: each merged graph draws its own dropout seed.
+  # Bench 171.70 -> 167.85 ms/step (1.0229); 5k, 2 seeds vs matched controls: CE@6 -0.0047, K1-K6
+  # 102 % (lab/experiments/successes/2026-10-13-s5-custom-ops-5k.md). Cold compile +46 s.
+  block_custom_ops: true
 
 # Eval beside the held CUDA-graph pool (no release / re-record): the training trace and every
 # val key are bit-identical to false (graph-step-survives-eval note); 23.2 -> 16.3 s per eval.
