@@ -23,8 +23,7 @@ order). ``swiglu_fwd``: the ``gate_up`` GEMM computes the gate tile and the up t
 hidden columns in two accumulators, writes both pre-activations (the backward needs them) and
 ``h = silu(gate) * up``. ``swiglu_bwd``: the ``down`` data-grad GEMM ``dh = dy @ W_down`` reads the
 saved gate and up tiles in its epilogue and writes ``d_gate`` and ``d_up`` (the SwiGLU backward),
-so ``dh`` never reaches memory. These two kernels take no PDL wait and no ``pdl_opts``: they
-launch in stream order. Both round the accumulator to bf16 first (the GEMM output's
+so ``dh`` never reaches memory. Both round the accumulator to bf16 first (the GEMM output's
 rounding) and compute in fp32 from there, as the inductor kernels they replace do.
 
 TUNING. ``tuned_mm`` times every config of ``CONFIGS`` once per key ``(mode, M, N, K, strides)`` and
@@ -38,7 +37,6 @@ in a capture never compiles. Every config accumulates K in the same sequential o
 """
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 import contextlib
 
@@ -77,9 +75,7 @@ _TUNE_REPS = 3                            # timed launches per config; the faste
 @triton.jit
 def _mm_kernel(a, b, c, M, N, K, sam, sak, sbk, sbn, scm, scn,
                BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr, GM: tl.constexpr,
-               MODE: tl.constexpr, PDL: tl.constexpr = False):
-    if PDL:
-        tl.extra.cuda.gdc_wait()
+               MODE: tl.constexpr):
     pid = tl.program_id(0)
     npm = tl.cdiv(M, BM)
     npn = tl.cdiv(N, BN)
@@ -233,7 +229,7 @@ def _launch(a: Tensor, b: Tensor, c: Tensor, mode: int, cfg: tuple, aux: Tensor 
     grid = (triton.cdiv(M, bm) * triton.cdiv(N, bn),)
     _mm_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
                      c.stride(0), c.stride(1), BM=bm, BN=bn, BK=bk, GM=_GM, MODE=mode,
-                     num_warps=nw, num_stages=ns, **pdl_opts())
+                     num_warps=nw, num_stages=ns)
 
 
 def _tune(a: Tensor, b: Tensor, c: Tensor, mode: int, aux: Tensor | None = None) -> tuple:

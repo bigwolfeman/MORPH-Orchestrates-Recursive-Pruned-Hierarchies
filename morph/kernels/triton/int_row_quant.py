@@ -22,7 +22,6 @@ for bit the eager result (pinned in tests/test_int_row_quant.py):
 """
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 import numpy as np
 import torch
@@ -33,9 +32,7 @@ from triton.language.extra import libdevice
 
 @triton.jit
 def _int_row_quant_kernel(w_ptr, out_ptr, n_rows, D, inv_hi, lo, hi,
-                          BLOCK_D: tl.constexpr, ROWS: tl.constexpr, PDL: tl.constexpr = False):
-    if PDL:
-        tl.extra.cuda.gdc_wait()
+                          BLOCK_D: tl.constexpr, ROWS: tl.constexpr):
     pid = tl.program_id(0)
     rows = (pid * ROWS + tl.arange(0, ROWS))[:, None]
     cols = tl.arange(0, BLOCK_D)[None, :]
@@ -68,7 +65,7 @@ def int_row_quant(w: torch.Tensor, lo: int, hi: int) -> torch.Tensor:
     inv_hi = float(np.float32(1.0) / np.float32(hi))
     _int_row_quant_kernel[(triton.cdiv(V, ROWS),)](
         w, out, V, D, inv_hi, float(lo), float(hi), BLOCK_D=BLOCK_D, ROWS=ROWS,
-        num_warps=4 if BLOCK_D <= 1024 else 8, enable_fp_fusion=False, **pdl_opts())
+        num_warps=4 if BLOCK_D <= 1024 else 8, enable_fp_fusion=False)
     return out
 
 

@@ -30,7 +30,6 @@ clamp), and a NaN in an fp32 optimizer state is already a dead run.
 """
 from __future__ import annotations
 
-from morph.kernels.triton._pdl import pdl_opts
 
 import torch
 import triton
@@ -57,10 +56,7 @@ def _ademamix_fp32_kernel(
     HAS_CAP: tl.constexpr, HAS_CLIP: tl.constexpr, HAS_WD: tl.constexpr,
     WRITE_G: tl.constexpr, LOAD_SCHED: tl.constexpr, HAS_SKIP: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
-    PDL: tl.constexpr = False,
 ):
-    if PDL:
-        tl.extra.cuda.gdc_wait()
     if LOAD_SCHED:
         # The capturable optimizer's per-group schedule vector (AdEMAMixB1Zero,
         # `_SCHED_*` slots): the step-varying scalars are read from device memory, so a
@@ -171,5 +167,5 @@ def ademamix_fp32_step(p, g, m2, nu, *, beta3, beta2, bc2, eps, eps_inside, g_sn
         EPS_INSIDE=bool(eps_inside), HAS_GATE=has_gate, HAS_GCOEF=(g_coef != 1.0),
         HAS_CAP=stale_push_cap_coord > 0.0, HAS_CLIP=update_clip > 0.0, HAS_WD=wd != 0.0,
         WRITE_G=bool(write_g), LOAD_SCHED=sched is not None, HAS_SKIP=skip is not None,
-        BLOCK_SIZE=BLOCK, enable_fp_fusion=False, **pdl_opts(),
+        BLOCK_SIZE=BLOCK, enable_fp_fusion=False,
     )

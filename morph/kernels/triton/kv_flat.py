@@ -25,7 +25,6 @@ an fp64 reference.
 """
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 import torch
 from torch import Tensor
@@ -53,10 +52,7 @@ if TRITON_AVAILABLE:
         go_ptr, w_ptr, x_ptr, dx_ptr, part_ptr,
         B, C, S, n_dx, n_chunks, tiles_per_chunk,
         CG: tl.constexpr, K: tl.constexpr, BT_DX: tl.constexpr, BT_W: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         G = C // CG
         p = K - 1
@@ -117,10 +113,7 @@ if TRITON_AVAILABLE:
         go_ptr, w_ptr, x_ptr, dx_ptr, part_ptr,
         B, C, S,
         K: tl.constexpr, BT: tl.constexpr, CB: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         n_tt = (S + BT - 1) // BT
         n_cb = C // CB
@@ -177,10 +170,7 @@ if TRITON_AVAILABLE:
         p1, o1, M1, n1, K1, nb1,
         p2, o2, M2, n2, K2,
         BLK: tl.constexpr, NB: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         offs = tl.arange(0, BLK)
         if pid < nb0:
@@ -221,7 +211,7 @@ def _sum_partials(bufs: list[tuple[Tensor, Tensor, int]]) -> None:
         args[0], args[1], args[2], args[3], args[4], nbs[0],
         args[5], args[6], args[7], args[8], args[9], nbs[1] if len(nbs) > 1 else 0,
         args[10], args[11], args[12], args[13], args[14],
-        BLK=_SUM_BLK, NB=_SUM_NB, num_warps=4, **pdl_opts(),
+        BLK=_SUM_BLK, NB=_SUM_NB, num_warps=4,
     )
 
 
@@ -252,13 +242,13 @@ def cca_conv_bwd_flat(grad_out: Tensor, x: Tensor, y_dw: Tensor, w_dw2: Tensor, 
     part_gp = torch.empty(n_chunks, K * C * CG, device=dev, dtype=torch.float32)
     _kvf_gp_bwd_kernel[(n_dx + G * n_chunks * K,)](
         grad_out, w_gp, y_dw, d_ydw, part_gp, B, C, S, n_dx, n_chunks, _GP_TILES_PER_CHUNK,
-        CG=CG, K=K, BT_DX=_GP_BT_DX, BT_W=_GP_BT_W, **_GP_LAUNCH, **pdl_opts(),
+        CG=CG, K=K, BT_DX=_GP_BT_DX, BT_W=_GP_BT_W, **_GP_LAUNCH,
     )
     n_tt = triton.cdiv(S, _DW_BT)
     dx = torch.empty_like(grad_out)
     part_dw = torch.empty(B * n_tt, K * C, device=dev, dtype=torch.float32)
     _kvf_dw_bwd_kernel[(B * (C // _DW_CB) * n_tt,)](
-        d_ydw, w_dw2, x, dx, part_dw, B, C, S, K=K, BT=_DW_BT, CB=_DW_CB, **_DW_LAUNCH, **pdl_opts(),
+        d_ydw, w_dw2, x, dx, part_dw, B, C, S, K=K, BT=_DW_BT, CB=_DW_CB, **_DW_LAUNCH,
     )
     dw_gp = torch.empty_like(w_gp)
     dw_dw = torch.empty_like(w_dw2)

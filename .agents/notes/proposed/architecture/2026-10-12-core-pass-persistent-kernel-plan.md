@@ -330,6 +330,8 @@ all 8 passes" idea was NOT built: after the re-tile the per-pass partials cost 0
 Not verified for K1: a 5k run (CE@6 and K1-K6 against matched controls, 2 seeds) is owed to the orchestrator. The
 fp32 vector grads (`wq`, `wk`, `temp`) sum in another order; no run longer than 600 steps used the key.
 
+**P0 REJECTED 2026-10-13; its code is removed (`_pdl.py`, `tests/test_pdl.py`, the `PDL` kernel parameters, `model.pdl`). It broke training on the speed base past the byte gate: [`lab/experiments/failures/2026-10-13-k1-p0-5k.md`](../../../../lab/experiments/failures/2026-10-13-k1-p0-5k.md). The text below is the history.**
+
 **P0 (`model.pdl`).** Triton 3.6.0 and torch 2.11.0 support it: `launch_pdl` is a launch option,
 `tl.extra.cuda.gdc_wait` emits `griddepcontrol.wait`, and `torch._inductor.config.triton.enable_pdl` exists (the key
 sets it; inductor then inserts its own waits). 35 custom kernels got `PDL: tl.constexpr = False`,

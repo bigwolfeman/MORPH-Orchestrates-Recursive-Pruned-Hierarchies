@@ -49,7 +49,6 @@ Date:   2026-05-31
 
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 import math
 from typing import Optional
@@ -630,10 +629,7 @@ if TRITON_AVAILABLE:
         H: tl.constexpr, Hkv: tl.constexpr, D: tl.constexpr,
         N_REP: tl.constexpr, EPS: tl.constexpr, VHALF: tl.constexpr,
         BR: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         r = pid * BR + tl.arange(0, BR)
         rmask = r < n_rows
@@ -734,10 +730,7 @@ if TRITON_AVAILABLE:
         H: tl.constexpr, Hkv: tl.constexpr, D: tl.constexpr,
         N_REP: tl.constexpr, EPS: tl.constexpr, VHALF: tl.constexpr,
         BR: tl.constexpr, KV_N: tl.constexpr,
-        PDL: tl.constexpr = False,
     ):
-        if PDL:
-            tl.extra.cuda.gdc_wait()
         pid = tl.program_id(0)
         r = pid * BR + tl.arange(0, BR)
         rmask = r < n_rows
@@ -866,7 +859,7 @@ def _rows_fwd_impl(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, c
         *_strides3(q_lat), *_strides3(k_lat), *_strides3(q_conv), *_strides3(k_conv),
         *_strides3(v_curr), *_strides3(v_prev),
         H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=_ROWS_BR,
-        **_ROWS_LAUNCH, **pdl_opts(),
+        **_ROWS_LAUNCH,
     )
     return out_q, out_k, out_v
 
@@ -904,7 +897,7 @@ def _rows_bwd_impl(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk,
         *_strides3(d_ql), *_strides3(d_kl), *_strides3(d_qc), *_strides3(d_kc),
         *_strides3(d_vc), *_strides3(d_vp),
         H=H, Hkv=Hkv, D=D, N_REP=n_rep, EPS=eps, VHALF=vhalf, BR=br, KV_N=Hkv // ny,
-        **launch, **pdl_opts())
+        **launch)
     if flat:
         d_wq, d_wk, d_temp = torch.empty_like(wq), torch.empty_like(wk), torch.empty_like(temp)
         _sum_partials([(dwq_part, d_wq, 1), (dwk_part, d_wk, 1), (dtemp_part, d_temp, 1)])

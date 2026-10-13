@@ -21,7 +21,6 @@ Pinned bit for bit against the eager ops in tests/test_graph_safe_exact.py.
 """
 from __future__ import annotations
 
-from ._pdl import pdl_opts
 
 import torch
 import triton
@@ -48,11 +47,8 @@ def _lane_tree(v, scratch, lane, width, LANES: tl.constexpr):
 
 
 @triton.jit
-def _mean1d_kernel(x_ptr, n_ptr, scratch_ptr, out_ptr, LANES: tl.constexpr,
-                   PDL: tl.constexpr = False):
+def _mean1d_kernel(x_ptr, n_ptr, scratch_ptr, out_ptr, LANES: tl.constexpr):
     """``x[:n].mean()``, fp32, one output: Reduce.cuh's one-output configuration."""
-    if PDL:
-        tl.extra.cuda.gdc_wait()
     n = tl.load(n_ptr).to(tl.int32)
     lane = tl.arange(0, LANES)
     a0 = tl.zeros([LANES], tl.float32)
@@ -99,18 +95,15 @@ def mean1d_aten_order(buf: torch.Tensor, n: torch.Tensor) -> torch.Tensor:
     values at ``n`` and beyond are never read. Forward only."""
     out = torch.empty((), device=buf.device, dtype=torch.float32)
     scratch = torch.empty(_LANES, device=buf.device, dtype=torch.float32)
-    _mean1d_kernel[(1,)](buf, n, scratch, out, LANES=_LANES, num_warps=4, **pdl_opts())
+    _mean1d_kernel[(1,)](buf, n, scratch, out, LANES=_LANES, num_warps=4)
     return out
 
 
 @triton.jit
-def _rowsum_kernel(x_ptr, width_ptr, scratch_ptr, out_ptr, n_cols, LANES: tl.constexpr,
-                   PDL: tl.constexpr = False):
+def _rowsum_kernel(x_ptr, width_ptr, scratch_ptr, out_ptr, n_cols, LANES: tl.constexpr):
     """``x[r].sum()`` for one fp32 row of ``n_cols`` (a multiple of 4) with the row's own
     thread count ``width[r]``: thread t adds the 4-wide vectors t, t + width, ... into four
     lane accumulators."""
-    if PDL:
-        tl.extra.cuda.gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     width = tl.load(width_ptr + row)
     lane = tl.arange(0, LANES)
@@ -138,7 +131,7 @@ def rowsum_aten_order(x: torch.Tensor, width: torch.Tensor) -> torch.Tensor:
     R, F = x.shape
     out = torch.empty(R, device=x.device, dtype=torch.float32)
     scratch = torch.empty(R, _LANES, device=x.device, dtype=torch.float32)
-    _rowsum_kernel[(R,)](x, width, scratch, out, F, LANES=_LANES, num_warps=4, **pdl_opts())
+    _rowsum_kernel[(R,)](x, width, scratch, out, F, LANES=_LANES, num_warps=4)
     return out
 
 

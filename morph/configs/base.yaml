@@ -485,12 +485,6 @@ model:
                            # math; the sums run in another order, so NOT bit-identical. Needs
                            # block_custom_ops (raises otherwise). tests/test_kv_flat.py.
                            # .agents/notes/proposed/architecture/2026-10-12-core-pass-persistent-kernel-plan.md (K1)
-  pdl: false               # true ⇒ programmatic dependent launch: each custom Triton kernel on the step
-                           # path launches with launch_pdl and calls gdc_wait before its first load
-                           # (no early trigger), and inductor's kernels take enable_pdl. A kernel may
-                           # then start launching while its predecessor drains. Timing only: the byte
-                           # gate prints the same hash on and off. Needs compute capability 9.0+.
-                           # tests/test_pdl.py. .agents/notes/proposed/architecture/2026-10-12-core-pass-persistent-kernel-plan.md (P0)
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
