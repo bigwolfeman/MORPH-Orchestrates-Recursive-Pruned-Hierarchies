@@ -75,8 +75,8 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   **Core-pass plan (Opus design, c85cd646, `2026-10-12-core-pass-megakernel-design.md`):** fresh profile 202.4 ms/step,
   core passes 62.5 ms (floor ~17-23). No megakernel yet; stages S1-S7 ~-25 to -30 ms. [x] S1 hinge stream + S2 wgrad
   stream MERGED (9a4bcb3a, keys default off; bench off 215.05 -> both 196.80 ms, 1.093x; graph pool +1.15 GiB,
-  0.34 GiB free after eval). [ ] both-keys byte gate after the buffer change + a quiet-desktop bench, then ON in
-  speed_bf16c. [ ] idle gap (3.8-5.4 ms, cause not found). [x] S4 HC exit+entry fusion: exact but 0.975x
+  0.34 GiB free after eval). [x] both-keys byte gate after the buffer change (4a73ebf5, match) + quiet-desktop bench
+  off 199.26 -> both 177.22 ms (1.124x): ON in speed_bf16c. [ ] idle gap (3.8-5.4 ms, cause not found). [x] S4 HC exit+entry fusion: exact but 0.975x
   (213.8 -> 219.3 ms), parked on perf/hc-exit-entry 1c220f33 for a re-bench at larger width (Wolfe 2026-10-12).
   Bench drift (2026-10-12 evening): the bf16c off arm reads 213-215 ms vs 198.9 this morning. Same code (24b5077c
   tree) reads 212.9 now, so it is the environment (desktop GPU/CPU load, a game), not the code; core pinning (213.1 vs

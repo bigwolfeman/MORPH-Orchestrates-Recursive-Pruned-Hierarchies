@@ -1,14 +1,20 @@
 # The speed base (nowta_pointer_fast_spdcells_speed) + the HC carrier stored in bf16 with fp32
 # math and an fp32 carrier for the gain hinge (model.hc_carrier_bf16). 5k, 480 rows, one run:
 # CE@6 3.8996, K1-K6 +0.0052 (speed base 3.8985 / +0.0053):
-# lab/experiments/failures/2026-10-12-fan-speed-lever-split.md. Generation and other
-# no-autocast paths raise with this key (open item in the phase-2 tracker).
+# lab/experiments/failures/2026-10-12-fan-speed-lever-split.md; free against matched fp32
+# controls (2 seeds each): lab/experiments/successes/2026-10-12-bf16-carrier-matched-controls.md.
 defaults:
   - nowta_pointer_fast_spdcells_speed
   - _self_
 
 model:
   hc_carrier_bf16: true
+  # S1 + S2 (2026-10-12, exact: byte gate FINAL_SHA256 unchanged with both on): the gain hinge on
+  # its own stream, the block linears' weight grads on a second stream. Bench off 199.26 -> 177.22
+  # ms/step (1.124x, interleaved, 2 repeats). Cost: graph pool +1.15 GiB, about 0.34 GiB free after
+  # eval with ~4.5 GB of desktop VRAM in use; a game on the desktop can OOM the eval.
+  slot_gain_stream: true
+  split_wgrad: true
 
 # Eval beside the held CUDA-graph pool (no release / re-record): the training trace and every
 # val key are bit-identical to false (graph-step-survives-eval note); 23.2 -> 16.3 s per eval.
