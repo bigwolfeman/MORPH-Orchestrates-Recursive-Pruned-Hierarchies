@@ -90,6 +90,8 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   d7c05458, not merged. S3's GEMM saving (-2.7 ms) is eaten by slower cuBLAS picks and 1,200 merge launches; S6's by
   padded rows in HC/norm/copy. Unpinned benches of this recipe swing 5 % between repeats of one arm (hinge pass draw).
   [ ] S5 5k 2-seed check: `lab/experiments/planned/2026-10-13-s5-custom-ops-5k.md`.
+  [x] v1 variable cell count MERGED (33113fb6, `tul.cell_count`, default fixed; gates 4a73ebf5 and bf16c 666ac56a
+  match). [ ] 5k run, gentle and Poisson draws, 2 seeds each: `lab/experiments/planned/2026-10-13-fan-variable-cell-count-v1.md`.
   [x] bf16 carrier IN the speed base: matched controls CE@6 +0.0005, K1-K6 105 % (successes/2026-10-12-bf16-carrier-matched-controls.md).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
