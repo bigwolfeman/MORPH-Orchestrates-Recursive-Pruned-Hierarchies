@@ -86,6 +86,7 @@ import wandb
 
 from morph.model.transformer import MORPHConfig, MORPHTransformer
 from morph.model.split_wgrad import train_backward_scope
+from morph.kernels.triton import split_gemm
 from morph.model.routing import collect_routing_aux_losses, collect_routing_stats
 from morph.training.divergence_guard import BlockGainGuard, CoreShareGuard
 from morph.training.code_eval import code_marginal_ce
@@ -816,6 +817,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_no_ckpt=bool(getattr(m, "slot_gain_no_ckpt", False)),
         slot_gain_stream=bool(getattr(m, "slot_gain_stream", False)),
         split_wgrad=bool(getattr(m, "split_wgrad", False)),
+        split_wgrad_triton=bool(getattr(m, "split_wgrad_triton", False)),
         slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
         # MORPHConfig.slot_gain_pass_force: -1 = a fresh hinge pass per step (2026-10-10)
         slot_gain_pass_force=int(getattr(m, "slot_gain_pass_force", -1)),
@@ -2733,7 +2735,7 @@ def main(cfg: DictConfig) -> None:
                              "GEMM weight it reads is the step cache's bf16 buffer")
         from morph.model.split_wgrad import bind_split_wgrad
         getattr(model, "_orig_mod", model).__dict__["_split_wgrad_stream"] = \
-            bind_split_wgrad(model)
+            bind_split_wgrad(model, triton=bool(model.cfg.split_wgrad_triton))
 
     def _compile_block(layer, dyn):
         """training.compile_blocks' compile of ONE MORPHBlock (the GLA retention branch
@@ -3598,7 +3600,10 @@ def main(cfg: DictConfig) -> None:
                 "set_variant": _mdl0.pin_gain_pass}),
             **({} if _gs_cells == (None,) else
                {"shapes": _gs_cells, "shape_of": lambda _l: int(_l.prefix_k),
-                "shape_batch": _gs_cell_batch}))
+                "shape_batch": _gs_cell_batch}),
+            # model.split_wgrad_triton: the recordings tune the GEMM keys the warm-up missed
+            **({} if not bool(_mdl0.cfg.split_wgrad_triton) else
+               {"capture_tuner": split_gemm.CAPTURE_TUNER}))
         # Eval and generation do not fit beside the graphs' pool on 32 GB: they run with the
         # graphs released, and the next step records them again (GraphStep.released).
         _gs_release = _gs.released

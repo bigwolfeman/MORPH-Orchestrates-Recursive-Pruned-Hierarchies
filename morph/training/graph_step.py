@@ -435,7 +435,8 @@ class GraphStep:
                  shapes: tuple = (None,),
                  shape_of: Optional[Callable[[Optional[SlotLayout]], Any]] = None,
                  shape_batch: Optional[Callable[[Any, torch.Tensor, torch.Tensor,
-                                                 Optional[SlotLayout]], tuple]] = None):
+                                                 Optional[SlotLayout]], tuple]] = None,
+                 capture_tuner: Any = None):
         if not getattr(optimizer, "capturable", False):
             raise ValueError("GraphStep needs a capturable optimizer "
                              "(training.capturable_optimizer)")
@@ -455,6 +456,7 @@ class GraphStep:
         if len(shapes) > 1 and shape_batch is None:
             raise ValueError(f"GraphStep: {len(shapes)} shapes need shape_batch (the capture "
                              f"batch laid out at each other shape)")
+        self.capture_tuner = capture_tuner
         self.shapes = shapes
         self.shape_of = shape_of
         self.shape_batch = shape_batch
@@ -702,39 +704,36 @@ class GraphStep:
             self._grad_bufs = [torch.empty_like(p) for p in self.params]
         n_graphs = self._dynamo_graphs()
         cpu_rng = torch.get_rng_state()
+        tuner = self.capture_tuner
         try:
-            for k in self.kinds:
-                self.set_kind(k)
-                keep = k in self.keep_grads
-                for var, sh in itertools.product(self.variants, self.shapes):
-                    if self.set_variant is not None:
-                        self.set_variant(var)
-                    sb = self.static[sh]
-                    py_before = self._python_state()
-                    with set_stance("fail_on_recompile"):
-                        rec = self._record(sb.x, sb.y, sb.layout, keep)
-                    py_after = self._python_state()
-                    changed = sorted(n for n in py_before.keys() | py_after.keys()
-                                     if py_before.get(n) != py_after.get(n))
-                    if changed:
-                        raise RuntimeError(f"graph_step: a training step of kind {k!r} "
-                                           f"(variant {var!r}, shape {sh!r}) changes module "
-                                           f"attributes a replay would freeze: {changed[:12]}")
-                    if not torch.equal(torch.get_rng_state(), cpu_rng):
-                        raise RuntimeError("graph_step: the step consumes the CPU generator (a "
-                                           "draw with no restore); a replay cannot reproduce "
-                                           "that")
-                    # A kept kind's gradients were copied into `_grad_bufs` by the recording;
-                    # its own buffers, like every other kind's, go back to the pool so the
-                    # next recording may reuse them.
-                    present = [p.grad is not None for p in self.params] if keep else None
-                    self.optimizer.zero_grad(set_to_none=True)
-                    c_out, c_loss, c_gnorm = rec.pop("out"), rec.pop("loss"), rec.pop("gnorm")
-                    self.graphs[self._key(k, var, sh)] = _Captured(
-                        **rec, out=self._detached(c_out), loss=c_loss.detach(),
-                        gnorm=c_gnorm.detach(), present=present, context=context)
-                    del c_out, c_loss, c_gnorm, rec
-                    self.stats.captures += 1
+            if tuner is None:
+                self._record_pass(context, cpu_rng)
+            else:
+                # model.split_wgrad_triton: a recording reaches GEMM shapes the eager warm-up
+                # never ran (another hinge pass, another cell count). Pass one collects the
+                # untuned keys (their GEMMs run the cuBLAS equivalent so the recording ends),
+                # the keys are tuned on synthetic tensors, the graphs are thrown away and
+                # recorded again: the final graphs are all tuned.
+                with tuner.recording():
+                    self._record_pass(context, cpu_rng)
+                n_pending = tuner.pending()
+                if n_pending:
+                    t1 = time.perf_counter()
+                    # A recording moves the CUDA generator's offset; the second pass must leave
+                    # it where one pass would have, or the re-record would change the draws of
+                    # every later step.
+                    cuda_rng = torch.cuda.get_rng_state()
+                    self._discard_graphs()
+                    n_tuned = tuner.tune()
+                    with tuner.recording():
+                        self._record_pass(context, cpu_rng)
+                    torch.cuda.set_rng_state(cuda_rng)
+                    if tuner.pending():
+                        raise RuntimeError(f"graph_step: {tuner.pending()} GEMM key(s) still "
+                                           f"untuned after the re-record")
+                    print(f"  [graph-step] re-record: tuned {n_tuned} GEMM key(s) on synthetic "
+                          f"tensors and recorded again in {time.perf_counter() - t1:.1f} s",
+                          flush=True)
         finally:
             self.set_kind(kind)
             if self.set_variant is not None:
@@ -750,6 +749,53 @@ class GraphStep:
               f"hinge branch) in "
               f"{time.perf_counter() - t0:.1f} s; "
               f"{torch.cuda.memory_reserved() / 2**30:.2f} GiB reserved", flush=True)
+
+    def _record_pass(self, context, cpu_rng) -> None:
+        """Record every (kind, variant, shape) once into ``self.graphs``."""
+        from torch.compiler import set_stance
+        for k in self.kinds:
+            self.set_kind(k)
+            keep = k in self.keep_grads
+            for var, sh in itertools.product(self.variants, self.shapes):
+                if self.set_variant is not None:
+                    self.set_variant(var)
+                sb = self.static[sh]
+                py_before = self._python_state()
+                with set_stance("fail_on_recompile"):
+                    rec = self._record(sb.x, sb.y, sb.layout, keep)
+                py_after = self._python_state()
+                changed = sorted(n for n in py_before.keys() | py_after.keys()
+                                 if py_before.get(n) != py_after.get(n))
+                if changed:
+                    raise RuntimeError(f"graph_step: a training step of kind {k!r} "
+                                       f"(variant {var!r}, shape {sh!r}) changes module "
+                                       f"attributes a replay would freeze: {changed[:12]}")
+                if not torch.equal(torch.get_rng_state(), cpu_rng):
+                    raise RuntimeError("graph_step: the step consumes the CPU generator (a "
+                                       "draw with no restore); a replay cannot reproduce "
+                                       "that")
+                # A kept kind's gradients were copied into `_grad_bufs` by the recording;
+                # its own buffers, like every other kind's, go back to the pool so the
+                # next recording may reuse them.
+                present = [p.grad is not None for p in self.params] if keep else None
+                self.optimizer.zero_grad(set_to_none=True)
+                c_out, c_loss, c_gnorm = rec.pop("out"), rec.pop("loss"), rec.pop("gnorm")
+                self.graphs[self._key(k, var, sh)] = _Captured(
+                    **rec, out=self._detached(c_out), loss=c_loss.detach(),
+                    gnorm=c_gnorm.detach(), present=present, context=context)
+                del c_out, c_loss, c_gnorm, rec
+                self.stats.captures += 1
+
+    def _discard_graphs(self) -> None:
+        """Drop the graphs of a recording pass and their pool (the re-record)."""
+        torch.cuda.synchronize()
+        n = len(self.graphs)
+        _close_branches(self.graphs)
+        self.graphs = {}
+        self.stats.captures -= n
+        self.mempool = torch.cuda.MemPool()
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def _graph(self, keep_graph: bool = False):
         """A recording context on the capture stream, in the graphs' pool."""

@@ -176,6 +176,13 @@ model:
   #   +1.15 GiB with slot_gain_stream (0.34 GiB free after eval). Needs ternary_step_cache and
   #   grad_accum 1. false = autograd forms every weight grad inline.
   split_wgrad: false
+  # split_wgrad_triton: split_wgrad's forward, data-grad and weight-grad matmuls run as Triton GEMMs
+  #   (morph/kernels/triton/split_gemm.py), each (M, N, K) tuned once in the eager warm-up; a shape
+  #   not tuned when the CUDA graph is captured RAISES. The weight-grad epilogue rounds to bf16 and
+  #   adds into the fp32 sum (no scratch, no cast or add kernel). NOT bit-exact (another
+  #   accumulation order than cuBLAS); needs the fixed-weight readout and a 5k check. Needs
+  #   split_wgrad. false = cuBLAS.
+  split_wgrad_triton: false
   # slot_gain_reuse_f0: the hinge's f(h) is the loop's own step output at the sampled pass and
   #   f(h + d) replays that step's RNG state (one core application saved). NOT exact: the
   #   hinge's gradient through f(h) also reaches earlier passes and the prelude. false = two

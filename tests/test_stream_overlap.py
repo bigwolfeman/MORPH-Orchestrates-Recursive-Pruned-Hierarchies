@@ -71,7 +71,8 @@ def _build(cfg, rt, seed=0, *, strict=False):
     from test_graph_step import _build as _base_build
     m, opt = _base_build(cfg, rt, seed)
     bind_ternary_step_cache(m, None)
-    mgr = bind_split_wgrad(m, strict=strict) if bool(m.cfg.split_wgrad) else None
+    mgr = (bind_split_wgrad(m, strict=strict, triton=bool(m.cfg.split_wgrad_triton))
+           if bool(m.cfg.split_wgrad) else None)
     return m, opt, mgr
 
 
@@ -454,3 +455,263 @@ def test_a_read_allocates_nothing_on_the_side_stream():
     # backward: 8); an [N,K] GEMM output per read (the sabotage) makes it 7.
     assert per_read_split <= 6.0 and per_read_split < per_read_plain, (per_read_split,
                                                                        per_read_plain)
+
+
+# ── 7. model.split_wgrad_triton: Triton GEMMs inside the split op ───────────────────────
+#
+# NOT bit-exact against cuBLAS (another accumulation order), so the contracts are: each GEMM
+# is as close to an fp64 reference as cuBLAS is; the wgrad epilogue equals "bf16 round, then
+# copy / fp32 add" of the same kernel's plain output, bit for bit; every config gives the same
+# bits; an untuned shape under capture raises; the op's gradients match the cuBLAS split op;
+# the captured replay of the Triton arm equals its eager run bit for bit.
+# Sabotage checks, run and reverted (session report): (a) MODE_ADD stores without the old value
+# -> test_wgrad_epilogue; (b) the tuned-key lookup is skipped inside a capture -> the raise
+# test; (c) a config with a K block that skips the tail mask -> the parity test.
+
+_REAL_SHAPES = [(1536, 5632, 1024), (1104, 1024, 2816), (408, 1280, 1024), (1464, 1024, 2816)]
+
+
+def _ref64(a, b):
+    return a.double() @ b.double()
+
+
+@cuda
+@pytest.mark.parametrize("m,n,k", _REAL_SHAPES, ids=lambda v: str(v))
+def test_triton_gemms_are_as_close_to_fp64_as_cublas(m, n, k):
+    from morph.kernels.triton import split_gemm as sg
+    torch.manual_seed(0)
+    x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
+    w = (torch.randn(n, k, device="cuda") * 0.03).to(torch.bfloat16)
+    dy = torch.randn(m, n, device="cuda", dtype=torch.bfloat16)
+    cases = {
+        "fwd": (sg.linear_fwd(x, w), x @ w.t(), _ref64(x, w.t())),
+        "dgrad": (sg.linear_dgrad(dy, w), dy @ w, _ref64(dy, w)),
+    }
+    buf = torch.empty(n, k, device="cuda")
+    sg.linear_wgrad(dy, x, buf, add=False)
+    cases["wgrad"] = (buf, (dy.t() @ x).float(), _ref64(dy.t(), x))
+    for name, (tri, cub, ref) in cases.items():
+        e_tri = (tri.double() - ref).abs().mean().item()
+        e_cub = (cub.double() - ref).abs().mean().item()
+        scale = ref.abs().mean().item()
+        assert e_tri <= e_cub * 1.05 + 1e-6 * scale, (name, e_tri, e_cub)
+        assert e_tri < 0.01 * scale, (name, e_tri, scale)       # not just "no worse": close
+
+
+@cuda
+def test_wgrad_epilogue_is_round_to_bf16_then_copy_then_fp32_add():
+    from morph.kernels.triton import split_gemm as sg
+    torch.manual_seed(1)
+    n, k = 1024, 2816
+    xs = [torch.randn(m, k, device="cuda", dtype=torch.bfloat16) * s
+          for m, s in ((408, 1e3), (624, 1.0), (33, 1e-3))]
+    dys = [torch.randn(x.shape[0], n, device="cuda", dtype=torch.bfloat16) for x in xs]
+    plain = []
+    for dy, x in zip(dys, xs):
+        g = torch.empty(n, k, device="cuda", dtype=torch.bfloat16)
+        sg.tuned_mm(dy.t(), x, g)                       # the same kernel, no epilogue
+        plain.append(g)
+    buf = torch.full((n, k), float("nan"), device="cuda")      # the first read must overwrite it
+    expect = None
+    for i, (dy, x) in enumerate(zip(dys, xs)):
+        sg.linear_wgrad(dy, x, buf, add=i > 0)
+        expect = plain[0].float() if i == 0 else expect + plain[i].float()
+        assert torch.equal(buf, expect), i
+
+
+@cuda
+def test_every_config_gives_the_same_bits():
+    from morph.kernels.triton import split_gemm as sg
+    torch.manual_seed(2)
+    a = torch.randn(1104, 2816, device="cuda", dtype=torch.bfloat16)
+    b = torch.randn(2816, 1024, device="cuda", dtype=torch.bfloat16)
+    outs = []
+    for cfg in sg.CONFIGS:
+        c = torch.empty(1104, 1024, device="cuda", dtype=torch.bfloat16)
+        sg._launch(a, b, c, sg.MODE_PLAIN, cfg)
+        outs.append(c)
+    assert all(torch.equal(outs[0], o) for o in outs[1:])
+
+
+@cuda
+def test_an_untuned_shape_under_capture_raises_and_a_tuned_one_replays():
+    from morph.kernels.triton import split_gemm as sg
+    x = torch.randn(520, 1024, device="cuda", dtype=torch.bfloat16)
+    w = torch.randn(1280, 1024, device="cuda", dtype=torch.bfloat16)
+    xo = torch.randn(528, 1024, device="cuda", dtype=torch.bfloat16)       # never tuned
+    ref = sg.linear_fwd(x, w)                                              # tunes (eager)
+    torch.cuda.synchronize()
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        y = sg.linear_fwd(x, w)                    # tuned: allowed
+    g.replay()
+    torch.cuda.synchronize()
+    assert torch.equal(y, ref)
+    g2 = torch.cuda.CUDAGraph()
+    with pytest.raises(RuntimeError, match="not tuned"):
+        with torch.cuda.graph(g2):
+            sg.linear_fwd(xo, w)
+    torch.cuda.synchronize()
+    sg.linear_fwd(xo, w)                           # the capture failure left the process usable
+
+
+def _triton_mgr():
+    from morph.model.split_wgrad import WgradStream
+    from morph.model.streams import side_stream
+    return WgradStream(side_stream("wgrad-test-triton"), strict=True, triton=True)
+
+
+@cuda
+def test_the_split_op_with_triton_matches_the_cublas_op():
+    """Three reads of one weight through the Triton op: dx and the summed weight grad are close
+    to the cuBLAS split op's, and the Triton arm allocates no GEMM scratch."""
+    from morph.model.split_wgrad import SplitWeight, as_bf16, split_linear
+    torch.manual_seed(3)
+    w0 = torch.randn(1280, 1024, device="cuda")
+    xs = [torch.randn(m, 1024, device="cuda") for m in (408, 520, 33)]
+    res = {}
+    for name, mgr in (("cublas", _SlowWgrad.make(1000)), ("triton", _triton_mgr())):
+        w = w0.clone().requires_grad_()
+        sw = SplitWeight(mgr, name, [w], [(0, 1280)], 1024, kind="callable",
+                         source=lambda w=w: w.detach().to(torch.bfloat16))
+        xr = [x.clone().requires_grad_() for x in xs]
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            loss = sum((split_linear(as_bf16(x), sw).float() ** 2).sum() for x in xr)
+        loss.backward()
+        res[name] = (loss.item(), [x.grad.float() for x in xr], w.grad.clone(), mgr)
+    assert not res["triton"][3]._scratch and res["cublas"][3]._scratch
+    assert abs(res["triton"][0] - res["cublas"][0]) < 2e-2 * abs(res["cublas"][0])
+    for gt, gc in zip(res["triton"][1], res["cublas"][1]):
+        assert (gt - gc).abs().max() < 3e-2 * gc.abs().max()
+    wt, wc = res["triton"][2], res["cublas"][2]
+    assert (wt - wc).abs().max() < 3e-2 * wc.abs().max()
+
+
+@cuda
+def test_triton_key_refuses_without_split_wgrad(monkeypatch):
+    from test_graph_step import _build as _base_build
+    cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *_PLAIN,
+                       "model.split_wgrad_triton=true")
+    with pytest.raises(ValueError, match="needs model.split_wgrad=true"):
+        _base_build(cfg, rt)
+
+
+@cuda
+def test_triton_arm_close_to_cublas_arm_and_graph_replay_equals_its_eager(monkeypatch,
+                                                                          deterministic):
+    """The whole tiny model: three eager steps of split_wgrad+triton track the cuBLAS split arm
+    (loss and every gradient close), and a captured-and-replayed Triton run equals the eager
+    Triton run bit for bit (the tuning ran in the eager steps)."""
+    from morph.training.graph_step import GraphStep
+    plan = [(True, "eager"), (False, "eager"), (False, "capture"), (False, "replay"),
+            (True, "replay"), (False, "replay")]
+    arm_t = _SPLIT + ("model.split_wgrad_triton=true",)
+    cfg_c, rt_c = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *_PLAIN, *_HINGE_ON, *_SPLIT)
+    cfg_t, rt_t = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *_PLAIN, *_HINGE_ON, *arm_t)
+    batches = _batches(rt_c, len(plan))
+    with monkeypatch.context() as mp:
+        _explicit_up(mp)
+        _mc, _gc, ref_c = _run_eager(cfg_c, rt_c, batches, len(plan), kinds=[k for k, _ in plan])
+        _mt, mgr_t, ref_t = _run_eager(cfg_t, rt_t, batches, len(plan), strict=True,
+                                       kinds=[k for k, _ in plan])
+    assert mgr_t.triton and mgr_t.deferred > 0
+    # step 0 starts from equal weights: loss and the per-parameter grads are close
+    assert abs(ref_t[0]["loss"].item() - ref_c[0]["loss"].item()) < 1e-2 * abs(ref_c[0]["loss"].item())
+    for a, b in zip(ref_c[0]["grads"], ref_t[0]["grads"]):
+        if a is None:
+            assert b is None
+            continue
+        assert (a.float() - b.float()).abs().max() <= 5e-2 * a.float().abs().max() + 1e-8
+    del _mc, _mt
+
+    mb, ob, mgr = _build(cfg_t, rt_t)
+    clip = float(cfg_t.training.grad_clip)
+    gs = GraphStep(mb, ob, grad_clip=clip, forward=_fwd(mb), kinds=(False, True),
+                   set_kind=lambda k: setattr(mb, "_train_instruments", k),
+                   loss_terms=_zero_pen, after_step=mb.tul_fan_after_step, first_capture=2,
+                   keep_grads=(True, False), compiled=False, **_variants(mb))
+    torch.manual_seed(1234)
+    with monkeypatch.context() as mp:
+        _explicit_up(mp)
+        for s, ((kind, how), (x, y, lay)) in enumerate(zip(plan, batches)):
+            mb._train_instruments = kind
+            for g in ob.param_groups:
+                g["lr"] = 1e-3 * (1 + 0.1 * s)
+            ob.write_step_scalars()
+            ob.zero_grad(set_to_none=True)
+            out, loss, gn, mode = gs.step(s, kind, x, y, lay, context="tul")
+            assert mode == how, (s, mode, how)
+            _same(ref_t[s], _snap(mb, ob, out, loss, gn, [p.grad for p in mb.parameters()]),
+                  f"triton step {s} ({how})")
+            mb._gain_pass_last = None
+    assert gs.stats.replayed == 4
+
+
+@cuda
+def test_the_recording_tunes_the_keys_the_warm_up_never_ran(monkeypatch, deterministic):
+    """GraphStep records every variant on one step, but the eager warm-up ran only the one the
+    first draws picked. The other variant's GEMM shapes are untuned when the recording reaches
+    them: collect mode lets pass one finish, the keys are tuned on synthetic tensors, the
+    graphs are recorded again, and every replay equals the eager run bit for bit."""
+    from morph.kernels.triton import split_gemm as sg
+    from morph.training.graph_step import GraphStep
+    plan = [(True, "eager"), (False, "eager"), (False, "capture"), (False, "replay"),
+            (True, "replay"), (False, "replay")]
+    over = _ON + _PLAIN + _HINGE_ON + _SPLIT + ("model.split_wgrad_triton=true",)
+    cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *over)
+    batches = _batches(rt, len(plan))
+    sg.clear_tuned()
+    with monkeypatch.context() as mp:
+        _explicit_up(mp)
+        # eager reference: the pass pinned to the first choice, the way the replays draw it
+        m0, opt0, _ = _build(cfg, rt)
+        choices = m0.gain_pass_choices()
+        if len(choices) < 2:                   # the fixture's hinge reads a drawn pass
+            cfg2, rt2 = _compose(monkeypatch, "lxtul_pointer_ditto", *over)
+            m0, opt0, _ = _build(cfg2, rt2)
+            choices = m0.gain_pass_choices()
+        assert len(choices) >= 2, choices
+        v0, v1 = choices[0], choices[-1]
+        m0.pin_gain_pass(v0)
+        torch.manual_seed(1234)
+        clip = float(cfg.training.grad_clip)
+        ref = []
+        for s in range(len(plan)):
+            m0._train_instruments = bool(plan[s][0])
+            for g in opt0.param_groups:
+                g["lr"] = 1e-3 * (1 + 0.1 * s)
+            opt0.write_step_scalars()
+            out, loss, gn = _eager_step(m0, opt0, *batches[s], clip)
+            ref.append(_snap(m0, opt0, out, loss, gn, [p.grad for p in m0.parameters()]))
+        del m0, opt0
+        sg.clear_tuned()                       # the reference run's tuning is not the test's
+        mb, ob, _mgr = _build(cfg, rt)
+        tuned_n = []
+        real_tune = sg.CAPTURE_TUNER.tune
+        mp.setattr(sg.CAPTURE_TUNER, "tune",
+                   lambda: tuned_n.append(real_tune()) or tuned_n[-1], raising=False)
+        gs = GraphStep(mb, ob, grad_clip=clip, forward=_fwd(mb), kinds=(False, True),
+                       set_kind=lambda k: setattr(mb, "_train_instruments", k),
+                       loss_terms=_zero_pen, after_step=mb.tul_fan_after_step, first_capture=2,
+                       keep_grads=(True, False), compiled=False, variants=(v0, v1),
+                       draw_variant=lambda: v0, set_variant=mb.pin_gain_pass,
+                       capture_tuner=sg.CAPTURE_TUNER)
+        torch.manual_seed(1234)
+        for s, ((kind, how), (x, y, lay)) in enumerate(zip(plan, batches)):
+            mb._train_instruments = kind
+            for g in ob.param_groups:
+                g["lr"] = 1e-3 * (1 + 0.1 * s)
+            ob.write_step_scalars()
+            ob.zero_grad(set_to_none=True)
+            if how == "capture":
+                # The fixture's two passes have the same GEMM shapes, so "the warm-up never ran
+                # these keys" is forced: the tuned cache is emptied before the recording.
+                sg.clear_tuned()
+            out, loss, gn, mode = gs.step(s, kind, x, y, lay, context="tul")
+            assert mode == how, (s, mode, how)
+            _same(ref[s], _snap(mb, ob, out, loss, gn, [p.grad for p in mb.parameters()]),
+                  f"retuned step {s} ({how})")
+            mb._gain_pass_last = None
+    assert tuned_n and tuned_n[0] > 0, tuned_n     # the recording did meet untuned keys
+    assert sg.CAPTURE_TUNER.pending() == 0
+    assert gs.stats.replayed == 4 and len(gs.graphs) == 4
