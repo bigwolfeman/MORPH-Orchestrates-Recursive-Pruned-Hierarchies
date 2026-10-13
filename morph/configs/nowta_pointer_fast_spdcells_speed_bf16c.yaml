@@ -29,6 +29,11 @@ model:
   # CE@6 +0.0003, K1-K6 87.7 % (paired -0.0003 +- 0.0005); Wolfe accepted it on 2026-10-13 because
   # the 95 % rule is tighter than the seed noise (lab/experiments/failures/2026-10-13-k1-5k.md).
   kv_flat_kernels: true
+  # F1 (2026-10-13): the SwiGLU in the split GEMMs' epilogues (needs split_wgrad_triton; refuses a
+  # ReMoE router). Pinned bench 164.28 -> 162.83 ms/step, +0.10 GiB. 5k, 3 seeds: CE@6 -0.0018,
+  # K1-K6 94.4 % (paired -0.0003 +- 0.0012); on under the K1 paired reading
+  # (lab/experiments/failures/2026-10-13-f1-epilogue-5k.md).
+  gemm_epilogue_fusion: true
 
 # Eval beside the held CUDA-graph pool (no release / re-record): the training trace and every
 # val key are bit-identical to false (graph-step-survives-eval note); 23.2 -> 16.3 s per eval.
