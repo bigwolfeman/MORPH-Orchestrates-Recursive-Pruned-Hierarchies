@@ -245,3 +245,46 @@ Exposure to the S4 lesson (small-M fusion loses parallelism or re-reads weights)
 - The hinge FLOP figure (0.8 TFLOP) is inferred from its GEMM time share, not counted.
 - All per-stage savings are estimates except the microbenchmark inputs listed in Q1 and Q2.
   The 4-step flame3 profile mixes hinge-active and hinge-inactive steps.
+
+## Status 2026-10-13: G0 passed, G1 built (key off, 5k check owed)
+
+Scratch, logs and scripts: `/home/wolfe/morph-scratch/abq/gemm/`. Speed base
+`nowta_pointer_fast_spdcells_speed_bf16c`, `model.slot_gain_pass_force=3` on every arm, 300 steps, skip 100,
+2 interleaved repeats, shared GPU.
+
+**G0 (inductor `max_autotune_gemm`, Triton backend only, S2 off).** Env
+`TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_BACKENDS=TRITON`.
+Step: 186.20 ms (186.27, 186.08) to 175.49 ms (174.18, 175.79), -10.7 ms (-5.7 %).
+Kineto window, steps 160-164: GEMM kernel time per step 95.99 to 84.48 ms (-12.0 %). The sum counts every GEMM
+kernel in the step, not only the core's; the profile has no per-region labels in graph replay, so the core-only
+share is not separated. Kill rule (< 10 %) not met, so G1 was built.
+
+**G1 (`model.split_wgrad_triton`, default off, needs `split_wgrad`).** Triton GEMMs for forward, dgrad and wgrad
+inside `split_linear` (`morph/kernels/triton/split_gemm.py`). The wgrad epilogue rounds to bf16 and copies or adds
+into the fp32 sum. Tuning runs once per (mode, M, N, K, strides) in the eager warm-up; an untuned shape under
+capture raises.
+
+| check | result |
+|---|---|
+| byte gate, key off | `FINAL_SHA256 4a73ebf5426b9dfa889c81a8608a23d23a6785bb225ff32e2d5dd03476bd70d7` (matches) |
+| pinned bench, S2 on, key off vs on | 174.81 ms (174.77, 174.86) vs 168.10 ms (168.09, 168.20): -6.7 ms (-3.8 %). Kill rule (< 2 ms) not met |
+| profile GEMM time per step, S2 on | 103.60 to 91.45 ms (-11.7 %) |
+| kernel launches per step | 14,322 to 13,976 (-346): the cast and add kernels go; no launch increase |
+| fixed-weight readout through the split op's forward (train scope), 480 rows, step_5000 of `ab-bf16b` | CE@1 3.9118 vs 3.9118, CE@6 3.9059 vs 3.9060, K1-K6 +0.0058 vs +0.0058 (cuBLAS vs Triton forward) |
+| memory, 135-step run with one eval | graph reserved 19.69 vs 19.63 GiB (key off vs on); device free after eval 6.93 vs 6.99 GiB on this run |
+| tests (`tests/test_stream_overlap.py`) | 36 passed, 10 of them new; three sabotage edits each fail their test |
+
+Not verified: the readout covers the forward GEMMs only (it has no backward); the backward is covered by the
+Triton arm versus cuBLAS arm test on a tiny model (loss and grads close) and by the fp64 parity tests. No 5k
+run: the quality check (2 seeds, CE@6 and K1-K6 within 5 %) is owed to the orchestrator. The 0.34 GiB free
+figure of S1 + S2 was not reproduced by this run (desktop load differs); the on-versus-off difference is the
+number to trust (+0.06 GiB). The G0 and G1 savings do not add: both replace the same cuBLAS GEMMs.
+
+**G1 follow-up 2026-10-13.** `GraphStep` takes an optional `capture_tuner` (wired only under
+`model.split_wgrad_triton`). A recording that meets an untuned GEMM key collects it and runs the cuBLAS
+equivalent; the keys are tuned on synthetic tensors, the graphs are dropped, and the step is recorded again
+(the CUDA generator state is restored, or the re-record would shift later draws). A second pass with a
+pending key raises. Test: `test_the_recording_tunes_the_keys_the_warm_up_never_ran`. On the speed base with
+`block_custom_ops` (S5), pinned bench: base 171.07 ms vs G1 164.21 ms, -6.9 ms (-4.0 %). Unpinned 300-step
+runs of the speed base and of the `cellp3` config (64 graphs) both finished with no re-record, because the
+warm-up had already tuned every key those recordings reach.

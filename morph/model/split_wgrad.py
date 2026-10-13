@@ -64,6 +64,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from morph.kernels.triton.split_gemm import linear_dgrad, linear_fwd, linear_wgrad
+
 from .streams import side_stream
 
 __all__ = ["SplitWeight", "WgradStream", "as_bf16", "bind_split_wgrad", "split_active",
@@ -84,12 +86,14 @@ class WgradStream:
     (the side stream is ahead by then, so the wait costs nothing). The held bytes stay at
     about three groups' worth instead of the whole backward's."""
 
-    def __init__(self, stream: torch.cuda.Stream, strict: bool = False, group_reads: int = 8):
+    def __init__(self, stream: torch.cuda.Stream, strict: bool = False, group_reads: int = 8,
+                 triton: bool = False):
         if group_reads < 1:
             raise ValueError(f"split_wgrad: group_reads must be >= 1, got {group_reads}")
         self.stream = stream
         self.strict = strict                  # tests: raise on a covered p.grad set before a join
         self.group_reads = group_reads
+        self.triton = triton                  # model.split_wgrad_triton: Triton GEMMs, no scratch
         # the open group: (dy, x) pairs and the streams that produced them
         self._held: list[tuple[Tensor, Tensor]] = []
         self._streams: dict[int, torch.cuda.Stream] = {}
@@ -115,14 +119,18 @@ class WgradStream:
         cur = torch.cuda.current_stream()
         self.stream.wait_event(ready)
         with torch.cuda.stream(self.stream):
-            # No allocation here: the GEMM lands in the shared scratch, and the fp32 sum in
-            # the weight's own persistent buffer (cast on the fly by copy_ / add_, exact).
-            torch.mm(dy.reshape(-1, sw.n_out).t(), x.reshape(-1, sw.n_in), out=sw.scratch)
-            if sw.started:
-                sw.buf.add_(sw.scratch)
+            if self.triton:
+                # one kernel: the GEMM, the bf16 rounding and the copy / fp32 add into the sum
+                linear_wgrad(dy.reshape(-1, sw.n_out), x.reshape(-1, sw.n_in), sw.buf, sw.started)
             else:
-                sw.buf.copy_(sw.scratch)
-                sw.started = True
+                # No allocation here: the GEMM lands in the shared scratch, and the fp32 sum in
+                # the weight's own persistent buffer (cast on the fly by copy_ / add_, exact).
+                torch.mm(dy.reshape(-1, sw.n_out).t(), x.reshape(-1, sw.n_in), out=sw.scratch)
+                if sw.started:
+                    sw.buf.add_(sw.scratch)
+                else:
+                    sw.buf.copy_(sw.scratch)
+            sw.started = True
         self._held.append((dy, x))
         self._touched.setdefault(id(sw), sw)
         self._streams[cur.cuda_stream] = cur
@@ -205,7 +213,7 @@ class SplitWeight:
         # parameters' ``.grad`` are views of it) and the bf16 GEMM scratch (one per shape,
         # shared: the side stream runs the reads one after the other).
         self.buf = torch.empty(self.n_out, self.n_in, dtype=self.dtype, device=params[0].device)
-        self.scratch = mgr.scratch(self.n_out, self.n_in, params[0].device)
+        self.scratch = None if mgr.triton else mgr.scratch(self.n_out, self.n_in, params[0].device)
         self.started = False                  # the first read of a backward copies, later ones add
 
     def weight(self) -> Tensor:
@@ -277,6 +285,8 @@ def split_active(sw: SplitWeight | None) -> bool:
 @torch.library.custom_op("morph::split_linear", mutates_args=())
 def _split_linear(x: Tensor, w: Tensor, sid: int) -> Tensor:
     """``F.linear(x, w)``; its backward (below) sends the weight grad to the side stream."""
+    if _REGISTRY[sid].mgr.triton:
+        return linear_fwd(x.reshape(-1, w.shape[1]), w).reshape(*x.shape[:-1], w.shape[0])
     return F.linear(x, w)
 
 
@@ -293,7 +303,10 @@ def _split_linear_bwd(dy: Tensor, x: Tensor, w: Tensor, sid: int) -> Tensor:
     sw = _REGISTRY[sid]
     ready = torch.cuda.Event()
     ready.record()
-    dx = dy.reshape(-1, sw.n_out).mm(w).reshape(x.shape)
+    if sw.mgr.triton:
+        dx = linear_dgrad(dy.reshape(-1, sw.n_out), w).reshape(x.shape)
+    else:
+        dx = dy.reshape(-1, sw.n_out).mm(w).reshape(x.shape)
     sw.mgr.defer(sw, dy, x, ready)
     return dx
 
@@ -328,7 +341,8 @@ def split_linear(x: Tensor, sw: SplitWeight) -> Tensor:
     return torch.ops.morph.split_linear(x, sw.weight(), sw.sid)
 
 
-def bind_split_wgrad(model: nn.Module, *, strict: bool = False) -> WgradStream:
+def bind_split_wgrad(model: nn.Module, *, strict: bool = False,
+                     triton: bool = False) -> WgradStream:
     """Cover every linear named in the module notes. Call AFTER ``bind_ternary_step_cache`` and
     BEFORE the compile warm-up. Raises when it covers nothing, when a covered module is not
     one the op reproduces exactly (a bias, a parametrization other than the cached ternary
@@ -340,7 +354,7 @@ def bind_split_wgrad(model: nn.Module, *, strict: bool = False) -> WgradStream:
     from .layers.block_sparse import CMSBlockLinear
     from .ternary_qat import TernarySTE
 
-    mgr = WgradStream(side_stream("wgrad"), strict=strict)
+    mgr = WgradStream(side_stream("wgrad"), strict=strict, triton=triton)
     n = {"mlp": 0, "attn_in": 0, "attn_up": 0}
 
     def plain_param(name: str, mod: nn.Module) -> nn.Parameter:
@@ -398,5 +412,6 @@ def bind_split_wgrad(model: nn.Module, *, strict: bool = False) -> WgradStream:
     if not any(n.values()):
         raise ValueError("model.split_wgrad: the model has no covered linear")
     print(f"  [split-wgrad] ON: {n['mlp']} ternary MLP linears, {n['attn_in']} fused attention "
-          f"input projections, {n['attn_up']} W_up; weight grads on a side stream", flush=True)
+          f"input projections, {n['attn_up']} W_up; weight grads on a side stream"
+          f"{', Triton GEMMs' if triton else ''}", flush=True)
     return mgr

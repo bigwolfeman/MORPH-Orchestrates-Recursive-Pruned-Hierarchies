@@ -868,6 +868,11 @@ class MORPHConfig:
     # Needs ternary_step_cache and CUDA; holds the covered linears' dy and x until the backward
     # ends. False = autograd forms every weight grad inline (morph/model/split_wgrad.py).
     split_wgrad: bool = False
+    # split_wgrad_triton — the three matmuls of split_wgrad's op (forward, data grad, weight
+    # grad) are Triton GEMMs tuned per shape in the eager warm-up; the weight-grad epilogue
+    # rounds to bf16 and adds into the fp32 sum (no scratch, no cast or add kernel). Rounding
+    # only (cuBLAS accumulates in another order). Needs split_wgrad. False = cuBLAS.
+    split_wgrad_triton: bool = False
     # slot_gain_reuse_f0 — the hinge's f(h) IS the loop's own step output at the sampled
     # pass, and f(h + d) runs under that step's dropout masks (the RNG state before the
     # step is replayed for it). Saves one of the hinge's two core applications. NOT exact:
@@ -3982,6 +3987,9 @@ class MORPHTransformer(nn.Module):
         if (cfg.slot_gain_no_ckpt or cfg.slot_gain_reuse_f0) and cfg.slot_gain_lambda <= 0.0:
             raise ValueError("model.slot_gain_no_ckpt / slot_gain_reuse_f0 need "
                              "model.slot_gain_lambda > 0: they change how the hinge runs.")
+        if cfg.split_wgrad_triton and not cfg.split_wgrad:
+            raise ValueError("model.split_wgrad_triton needs model.split_wgrad=true: the Triton "
+                             "GEMMs live inside the split op.")
         if cfg.split_wgrad:
             if not cfg.ternary_step_cache:
                 raise ValueError("model.split_wgrad needs model.ternary_step_cache=true: the "
