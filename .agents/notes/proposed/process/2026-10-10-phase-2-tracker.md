@@ -76,6 +76,9 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   core passes 62.5 ms (floor ~17-23). No megakernel yet; stages S1-S7 ~-25 to -30 ms. [~] S1 hinge stream + S2 wgrad
   stream + idle gap (perf/streams, exact). [x] S4 HC exit+entry fusion: exact but 0.975x
   (213.8 -> 219.3 ms), parked on perf/hc-exit-entry 1c220f33 for a re-bench at larger width (Wolfe 2026-10-12).
+  Bench drift (2026-10-12 evening): the bf16c off arm reads 213-215 ms vs 198.9 this morning. Same code (24b5077c
+  tree) reads 212.9 now, so it is the environment (desktop GPU/CPU load, a game), not the code; core pinning (213.1 vs
+  214.5) and the eval keys (1.0007) do not move it. Interleaved ratios stand; take absolute ms only on a quiet desktop.
   [x] bf16 carrier IN the speed base: matched controls CE@6 +0.0005, K1-K6 105 % (successes/2026-10-12-bf16-carrier-matched-controls.md).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
