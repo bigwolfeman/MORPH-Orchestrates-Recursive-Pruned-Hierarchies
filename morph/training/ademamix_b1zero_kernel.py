@@ -38,6 +38,8 @@ Compute fp32; params loaded/stored native dtype (bf16).
 """
 from __future__ import annotations
 
+from morph.kernels.triton._pdl import pdl_opts
+
 import triton
 import triton.language as tl
 from triton.language.extra import libdevice
@@ -83,7 +85,10 @@ def _ademamix_b1zero_fused_kernel(
                                   # capturable optimizer's skip of a non-finite step, decided
                                   # on the device with no host read. A clear flag leaves every
                                   # mask as it was, so the written values are unchanged.
+    PDL: tl.constexpr = False,
 ):
+    if PDL:
+        tl.extra.cuda.gdc_wait()
     if LOAD_SCHED:
         lr = tl.load(sched_ptr + 0)
         beta2 = tl.load(sched_ptr + 1)
@@ -296,5 +301,5 @@ def fused_ademamix_b1zero_step(
         DYNAMIC_QMAP=bool(dynamic_qmap),
         NU_FLOOR=bool(nu_floor),
         LOAD_SCHED=(sched is not None),
-        HAS_SKIP=(skip is not None),
+        HAS_SKIP=(skip is not None), **pdl_opts(),
     )

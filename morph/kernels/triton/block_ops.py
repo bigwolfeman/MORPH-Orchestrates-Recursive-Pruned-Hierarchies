@@ -50,35 +50,35 @@ __all__ = ["cca_conv_op", "cca_prologue_rows_op", "hc_region_entry_ops", "hc_reg
 # ===========================================================================
 
 @torch.library.custom_op("morph::cca_conv_fwd", mutates_args=())
-def _cca_conv_fwd(x: Tensor, w_dw2: Tensor, w_gp: Tensor, CG: int, K: int
+def _cca_conv_fwd(x: Tensor, w_dw2: Tensor, w_gp: Tensor, CG: int, K: int, flat: bool = False
                   ) -> tuple[Tensor, Tensor]:
     y_gp, y_dw, _, _ = _cca_conv_fwd_impl(x, w_dw2, w_gp, CG, K)
     return y_gp, y_dw
 
 
 @_cca_conv_fwd.register_fake
-def _cca_conv_fwd_fake(x, w_dw2, w_gp, CG, K):
+def _cca_conv_fwd_fake(x, w_dw2, w_gp, CG, K, flat=False):
     return torch.empty_like(x, memory_format=torch.contiguous_format), torch.empty_like(
         x, memory_format=torch.contiguous_format)
 
 
 @torch.library.custom_op("morph::cca_conv_bwd", mutates_args=())
 def _cca_conv_bwd(grad_out: Tensor, x: Tensor, y_dw: Tensor, w_dw2: Tensor, w_gp: Tensor,
-                  CG: int, K: int) -> tuple[Tensor, Tensor, Tensor]:
-    return _cca_conv_bwd_impl(grad_out, x, y_dw, w_dw2, w_gp, CG, K)
+                  CG: int, K: int, flat: bool = False) -> tuple[Tensor, Tensor, Tensor]:
+    return _cca_conv_bwd_impl(grad_out, x, y_dw, w_dw2, w_gp, CG, K, flat)
 
 
 @_cca_conv_bwd.register_fake
-def _cca_conv_bwd_fake(grad_out, x, y_dw, w_dw2, w_gp, CG, K):
+def _cca_conv_bwd_fake(grad_out, x, y_dw, w_dw2, w_gp, CG, K, flat=False):
     return (torch.empty_like(x, memory_format=torch.contiguous_format),
             torch.empty_like(w_dw2, memory_format=torch.contiguous_format),
             torch.empty_like(w_gp, memory_format=torch.contiguous_format))
 
 
 def _cca_conv_setup(ctx, inputs, output):
-    x, w_dw2, w_gp, CG, K = inputs
+    x, w_dw2, w_gp, CG, K, flat = inputs
     ctx.save_for_backward(x, output[1], w_dw2, w_gp)
-    ctx.meta = (CG, K)
+    ctx.meta = (CG, K, flat)
     ctx.set_materialize_grads(False)
     ctx.mark_non_differentiable(output[1])          # y_dw: the backward's saved intermediate
 
@@ -86,19 +86,20 @@ def _cca_conv_setup(ctx, inputs, output):
 def _cca_conv_backward(ctx, g_y, g_ydw):
     x, y_dw, w_dw2, w_gp = ctx.saved_tensors
     dx, dw_dw, dw_gp = _cca_conv_bwd(g_y, x, y_dw, w_dw2, w_gp, *ctx.meta)
-    return dx, dw_dw, dw_gp, None, None
+    return dx, dw_dw, dw_gp, None, None, None
 
 
 _cca_conv_fwd.register_autograd(_cca_conv_backward, setup_context=_cca_conv_setup)
 
 
-def cca_conv_op(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, CG: int, K: int) -> Tensor:
+def cca_conv_op(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, CG: int, K: int,
+                flat: bool = False) -> Tensor:
     """``_FusedCCAConv.apply`` as an op. The operands are made contiguous HERE, outside the op,
     so inductor fuses the copy with the producer (the ``[B, S, C]`` -> ``[B, C, S]`` transpose)
     and the op saves the very tensor it read."""
     x = x_BCS.contiguous()
     w_dw2 = w_dw.reshape(w_dw.shape[0], K).contiguous()
-    return _cca_conv_fwd(x, w_dw2, w_gp.contiguous(), CG, K)[0]
+    return _cca_conv_fwd(x, w_dw2, w_gp.contiguous(), CG, K, flat)[0]
 
 
 # ===========================================================================
@@ -173,15 +174,15 @@ def seg_conv_op(x_BCS: Tensor, w_dw: Tensor, w_gp: Tensor, seg: Tensor) -> Tenso
 @torch.library.custom_op("morph::cca_prologue_rows_fwd", mutates_args=())
 def _rows_fwd(q_lat: Tensor, k_lat: Tensor, q_conv: Tensor, k_conv: Tensor, v_curr: Tensor,
               v_prev: Tensor, wq: Tensor, wk: Tensor, temp: Tensor, cos: Tensor, sin: Tensor,
-              H: int, Hkv: int, D: int, n_rep: int, n_skip_rope: int, eps: float
-              ) -> tuple[Tensor, Tensor, Tensor]:
+              H: int, Hkv: int, D: int, n_rep: int, n_skip_rope: int, eps: float,
+              flat: bool = False) -> tuple[Tensor, Tensor, Tensor]:
     return _rows_fwd_impl(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin,
                           H, Hkv, D, n_rep, n_skip_rope, eps)
 
 
 @_rows_fwd.register_fake
 def _rows_fwd_fake(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin,
-                   H, Hkv, D, n_rep, n_skip_rope, eps):
+                   H, Hkv, D, n_rep, n_skip_rope, eps, flat=False):
     B, S, _ = q_lat.shape
     return tuple(q_lat.new_empty(B, H, S, D) for _ in range(3))
 
@@ -190,15 +191,15 @@ def _rows_fwd_fake(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, c
 def _rows_bwd(grad_q: Tensor, grad_k: Tensor, grad_v: Tensor, q_lat: Tensor, k_lat: Tensor,
               q_conv: Tensor, k_conv: Tensor, wq: Tensor, wk: Tensor, temp: Tensor, cos: Tensor,
               sin: Tensor, H: int, Hkv: int, D: int, n_rep: int, n_skip_rope: int, eps: float,
-              vhalf: int) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
-                                   Tensor]:
+              vhalf: int, flat: bool = False
+              ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     return _rows_bwd_impl(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk, temp,
-                          cos, sin, H, Hkv, D, n_rep, n_skip_rope, eps, vhalf)
+                          cos, sin, H, Hkv, D, n_rep, n_skip_rope, eps, vhalf, flat)
 
 
 @_rows_bwd.register_fake
 def _rows_bwd_fake(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin,
-                   H, Hkv, D, n_rep, n_skip_rope, eps, vhalf):
+                   H, Hkv, D, n_rep, n_skip_rope, eps, vhalf, flat=False):
     B, S, _ = q_lat.shape
     # the same layouts as the kernel wrapper: each grad takes its input's (empty_like).
     return (torch.empty_like(q_lat), torch.empty_like(k_lat), torch.empty_like(q_conv),
@@ -208,27 +209,27 @@ def _rows_bwd_fake(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk,
 
 def _rows_setup(ctx, inputs, output):
     (q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin, H, Hkv, D, n_rep,
-     n_skip_rope, eps) = inputs
+     n_skip_rope, eps, flat) = inputs
     ctx.save_for_backward(q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin)
-    ctx.dims = (H, Hkv, D, n_rep, n_skip_rope, eps, v_curr.shape[-1])
+    ctx.dims = (H, Hkv, D, n_rep, n_skip_rope, eps, v_curr.shape[-1], flat)
 
 
 def _rows_backward(ctx, grad_q, grad_k, grad_v):
     q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos, sin = ctx.saved_tensors
     grads = _rows_bwd(grad_q, grad_k, grad_v, q_lat, k_lat, q_conv, k_conv, wq, wk, temp, cos,
                       sin, *ctx.dims)
-    return (*grads, None, None, None, None, None, None, None, None)
+    return (*grads, None, None, None, None, None, None, None, None, None)
 
 
 _rows_fwd.register_autograd(_rows_backward, setup_context=_rows_setup)
 
 
 def cca_prologue_rows_op(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin,
-                         H, Hkv, D, n_rep, n_skip_rope, eps):
+                         H, Hkv, D, n_rep, n_skip_rope, eps, flat=False):
     """``_FusedCCAPrologueRows.apply`` as an op (the arguments of ``fused_cca_prologue``'s
-    dispatchers: ``cos`` / ``sin`` already ``[S, D]``)."""
+    dispatchers: ``cos`` / ``sin`` already ``[S, D]``). ``flat``: model.kv_flat_kernels."""
     return _rows_fwd(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, temp, cos, sin,
-                     H, Hkv, D, n_rep, n_skip_rope, eps)
+                     H, Hkv, D, n_rep, n_skip_rope, eps, flat)
 
 
 # ===========================================================================

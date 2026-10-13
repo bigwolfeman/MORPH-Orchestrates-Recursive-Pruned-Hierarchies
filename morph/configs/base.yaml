@@ -470,6 +470,20 @@ model:
                            # Needs hc_use_kernel, hc_region_fused, cca_prologue_tiled
                            # (raises otherwise). tests/test_block_custom_ops.py.
                            # .agents/notes/proposed/architecture/2026-10-12-core-pass-megakernel-design.md (S5)
+  kv_flat_kernels: false   # true ⇒ the K/V side of a core pass runs re-tiled for parallelism: the
+                           # CCA conv backward (grouped dx + dw in one launch, dw split over taps and
+                           # position chunks, depthwise on channel tiles) and the prologue rows
+                           # backward (kv groups split across programs), with every weight-grad
+                           # partial summed by ONE fixed-order Triton kernel (no atomics). Same
+                           # math; the sums run in another order, so NOT bit-identical. Needs
+                           # block_custom_ops (raises otherwise). tests/test_kv_flat.py.
+                           # .agents/notes/proposed/architecture/2026-10-12-core-pass-persistent-kernel-plan.md (K1)
+  pdl: false               # true ⇒ programmatic dependent launch: each custom Triton kernel on the step
+                           # path launches with launch_pdl and calls gdc_wait before its first load
+                           # (no early trigger), and inductor's kernels take enable_pdl. A kernel may
+                           # then start launching while its predecessor drains. Timing only: the byte
+                           # gate prints the same hash on and off. Needs compute capability 9.0+.
+                           # tests/test_pdl.py. .agents/notes/proposed/architecture/2026-10-12-core-pass-persistent-kernel-plan.md (P0)
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.
