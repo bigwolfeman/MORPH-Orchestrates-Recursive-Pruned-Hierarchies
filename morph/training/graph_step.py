@@ -62,6 +62,17 @@ What a replay relies on, and where each is kept:
     recording set again (``_Captured.rebind``, 2026-10-10), so a reader sees that replay's
     values and not those of the last recording or eager step.
 
+SHAPES (2026-10-12, ``tul.cell_count``). A batch's SHAPE is a host property of the batch itself,
+not a choice the step makes: the fan's cell count M changes the row length and so every tensor
+shape in the step. ``shape_of(layout)`` reads it (``layout.prefix_k``); ONE graph is recorded per
+(kind, variant, shape), each shape with its own ``StaticBatch``, all in the same pool. At the
+recording ``shape_batch(shape, x, y, layout)`` gives the capture batch's rows laid out at each
+other shape (the recording runs no kernel, so only the shapes and the layout structure matter,
+not the values). With the default ``shape_of=None`` there is one shape and the graph key is
+(kind, variant), as before. The roles of ``tul.cell_count_subset: random`` ride in the layout
+(``cell_roles``, a device tensor gathered inside the graph), so a different subset replays the
+same recording.
+
 Order: every step runs eager, on the capture side stream (the PyTorch recipe's warm-up),
 until ``first_capture`` and until every kind has run once. On the next step every (kind,
 variant) is recorded on that step's batch, then that step's (kind, variant) is REPLAYED (a
@@ -118,6 +129,7 @@ either way.
 from __future__ import annotations
 
 import gc
+import itertools
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -135,7 +147,7 @@ __all__ = ["GraphStep", "StaticBatch", "graph_step_refusals"]
 # SlotLayout's tensor fields, in declaration order. A field added to SlotLayout that is not
 # listed here raises in StaticBatch rather than being silently left at its capture value.
 _LAYOUT_TENSORS = ("slot_mask", "bag_id", "slot_index", "slot_valid", "span_len",
-                   "len_supervised", "ditto_prev")
+                   "len_supervised", "ditto_prev", "cell_roles")
 _LAYOUT_HOST = ("prefix_k", "stats")
 
 
@@ -419,7 +431,11 @@ class GraphStep:
                  first_capture: int = 3, keep_grads: tuple = (True,),
                  compiled: bool = True, variants: tuple = (None,),
                  draw_variant: Optional[Callable[[], Any]] = None,
-                 set_variant: Optional[Callable[[Any], None]] = None):
+                 set_variant: Optional[Callable[[Any], None]] = None,
+                 shapes: tuple = (None,),
+                 shape_of: Optional[Callable[[Optional[SlotLayout]], Any]] = None,
+                 shape_batch: Optional[Callable[[Any, torch.Tensor, torch.Tensor,
+                                                 Optional[SlotLayout]], tuple]] = None):
         if not getattr(optimizer, "capturable", False):
             raise ValueError("GraphStep needs a capturable optimizer "
                              "(training.capturable_optimizer)")
@@ -431,6 +447,17 @@ class GraphStep:
                              f"set_variant (which one a step runs is a host draw)")
         if variants != (None,) and set_variant is None:
             raise ValueError("GraphStep: a variant other than None needs set_variant")
+        shapes = tuple(shapes)
+        if not shapes:
+            raise ValueError("GraphStep: shapes must hold at least one value")
+        if shape_of is None and shapes != (None,):
+            raise ValueError("GraphStep: shapes other than (None,) need shape_of")
+        if len(shapes) > 1 and shape_batch is None:
+            raise ValueError(f"GraphStep: {len(shapes)} shapes need shape_batch (the capture "
+                             f"batch laid out at each other shape)")
+        self.shapes = shapes
+        self.shape_of = shape_of
+        self.shape_batch = shape_batch
         self.model = model
         self.root = getattr(model, "_orig_mod", model)
         self.optimizer = optimizer
@@ -450,8 +477,8 @@ class GraphStep:
         self.stream = torch.cuda.Stream()
         # The graphs' private pool (a fresh one after every `released`).
         self.mempool = torch.cuda.MemPool()
-        self.static: Optional[StaticBatch] = None
-        self.graphs: dict[Any, _Captured] = {}    # keyed (kind, variant)
+        self.static: dict[Any, StaticBatch] = {}   # keyed by shape
+        self.graphs: dict[Any, _Captured] = {}    # keyed (kind, variant), or (.., shape)
         self.stats = GraphStepStats()
         self._warm: set = set()               # kinds that have run eager on the stream
         self._addresses: Optional[list] = None
@@ -462,6 +489,18 @@ class GraphStep:
         # Whether an eager step's backward moved the CUDA generator (None: no eager step
         # yet). The hinge branch needs False (module notes, THE HINGE BRANCH).
         self._eager_bwd_draws: Optional[bool] = None
+
+    # ── the shape (module notes, SHAPES) ────────────────────────────────────────────────
+    def _shape(self, layout):
+        sh = self.shape_of(layout) if self.shape_of is not None else None
+        if sh not in self.shapes:
+            raise RuntimeError(f"graph_step: the batch has shape {sh!r}, not one of the "
+                               f"recorded {self.shapes}")
+        return sh
+
+    def _key(self, kind, variant, shape):
+        """The graph key: (kind, variant), plus the shape when shapes are in use."""
+        return (kind, variant) if self.shape_of is None else (kind, variant, shape)
 
     # ── the variant (module notes, VARIANTS) ────────────────────────────────────────────
     def _next_variant(self):
@@ -596,7 +635,7 @@ class GraphStep:
         # that `empty_cache` could not return, and the eval's pointer mixture ran out of memory).
         _close_branches(self.graphs)
         self.graphs = {}
-        self.static = None
+        self.static = {}
         self._addresses = None
         for p in self.params:                     # a replay's bound gradient buffers
             p.grad = None
@@ -627,21 +666,23 @@ class GraphStep:
             raise ValueError(f"graph_step: kind {kind!r} is not one of {self.kinds}")
         v = self._next_variant()
         try:
+            shape = self._shape(layout)
             mode = "replay"
             if not self.graphs:
                 if step < self.first_capture or set(self.kinds) - self._warm:
                     self._warm.add(kind)
                     return (*self._eager(x, y, layout), "eager")
-                self._capture_all(kind, v, x, y, layout, context)
+                self._capture_all(kind, v, shape, x, y, layout, context)
                 mode = "capture"
-            return (*self._replay(self.graphs[(kind, v)], kind, v, x, y, layout, context),
-                    mode)
+            return (*self._replay(self.graphs[self._key(kind, v, shape)], kind, v, shape,
+                                  x, y, layout, context), mode)
         finally:
             self._end_variant()
 
-    def _capture_all(self, kind, variant, x, y, layout, context):
-        """Record every (kind, variant)'s step on this step's batch. Recording executes no
-        kernel; the caller replays this step's (kind, variant) right after."""
+    def _capture_all(self, kind, variant, shape, x, y, layout, context):
+        """Record every (kind, variant, shape)'s step on this step's batch (laid out at each
+        shape by ``shape_batch``). Recording executes no kernel; the caller replays this step's
+        (kind, variant, shape) right after."""
         from torch.compiler import set_stance
         t0 = time.perf_counter()
         # The eager warm-up steps leave their allocator cache behind (28 GB reserved on the
@@ -649,9 +690,11 @@ class GraphStep:
         # instantiated graphs (cuGraphInstantiate) need that room. Values are untouched.
         gc.collect()
         torch.cuda.empty_cache()
-        self.static = StaticBatch(x, y, layout)
-        self.static.load(x, y, layout)
-        sx, sy, sl = self.static.x, self.static.y, self.static.layout
+        self.static = {}
+        for sh in self.shapes:
+            bx, by, bl = (x, y, layout) if sh == shape else self.shape_batch(sh, x, y, layout)
+            self.static[sh] = StaticBatch(bx, by, bl)
+            self.static[sh].load(bx, by, bl)
         # Lazy optimizer state must exist BEFORE a recording (its zero fill would otherwise
         # be recorded and replayed every step); every kind has stepped once, so it does.
         self.optimizer.init_state()
@@ -663,19 +706,20 @@ class GraphStep:
             for k in self.kinds:
                 self.set_kind(k)
                 keep = k in self.keep_grads
-                for var in self.variants:
+                for var, sh in itertools.product(self.variants, self.shapes):
                     if self.set_variant is not None:
                         self.set_variant(var)
+                    sb = self.static[sh]
                     py_before = self._python_state()
                     with set_stance("fail_on_recompile"):
-                        rec = self._record(sx, sy, sl, keep)
+                        rec = self._record(sb.x, sb.y, sb.layout, keep)
                     py_after = self._python_state()
                     changed = sorted(n for n in py_before.keys() | py_after.keys()
                                      if py_before.get(n) != py_after.get(n))
                     if changed:
                         raise RuntimeError(f"graph_step: a training step of kind {k!r} "
-                                           f"(variant {var!r}) changes module attributes a "
-                                           f"replay would freeze: {changed[:12]}")
+                                           f"(variant {var!r}, shape {sh!r}) changes module "
+                                           f"attributes a replay would freeze: {changed[:12]}")
                     if not torch.equal(torch.get_rng_state(), cpu_rng):
                         raise RuntimeError("graph_step: the step consumes the CPU generator (a "
                                            "draw with no restore); a replay cannot reproduce "
@@ -686,7 +730,7 @@ class GraphStep:
                     present = [p.grad is not None for p in self.params] if keep else None
                     self.optimizer.zero_grad(set_to_none=True)
                     c_out, c_loss, c_gnorm = rec.pop("out"), rec.pop("loss"), rec.pop("gnorm")
-                    self.graphs[(k, var)] = _Captured(
+                    self.graphs[self._key(k, var, sh)] = _Captured(
                         **rec, out=self._detached(c_out), loss=c_loss.detach(),
                         gnorm=c_gnorm.detach(), present=present, context=context)
                     del c_out, c_loss, c_gnorm, rec
@@ -702,7 +746,8 @@ class GraphStep:
         self._dirty = False
         n_br = sum(c.branch is not None for c in self.graphs.values())
         print(f"  [graph-step] recorded {len(self.graphs)} graph(s) (kinds {list(self.kinds)} x "
-              f"{len(self.variants)} variant(s); {n_br} with the hinge branch) in "
+              f"{len(self.variants)} variant(s) x {len(self.shapes)} shape(s); {n_br} with the "
+              f"hinge branch) in "
               f"{time.perf_counter() - t0:.1f} s; "
               f"{torch.cuda.memory_reserved() / 2**30:.2f} GiB reserved", flush=True)
 
@@ -785,13 +830,13 @@ class GraphStep:
     def _attr_owners(self) -> list:
         return [self.root] + [m for _n, m in self._hidden_modules()]
 
-    def _replay(self, cap: _Captured, kind, variant, x, y, layout, context):
+    def _replay(self, cap: _Captured, kind, variant, shape, x, y, layout, context):
         if context != cap.context:
             raise RuntimeError(f"graph_step: kind {kind!r} was captured under {cap.context!r}, "
                                f"this step runs under {context!r}")
         if self._dirty:
             self._check_addresses()
-        self.static.load(x, y, layout)
+        self.static[shape].load(x, y, layout)
         cap.graph.replay()
         if cap.branch is None:
             cap.rest.replay()

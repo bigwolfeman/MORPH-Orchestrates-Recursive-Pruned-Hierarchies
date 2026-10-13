@@ -169,7 +169,14 @@ The hinge figure is the active-step value, an upper bound.
 | 8 (eval) | 9.40 | +0.89 | 19.38 | n/a |
 
 Expected training step under the recommended law: **12.50 TFLOP** (-9.4 %), non-decoder
-**9.81** (target 9.1). These are estimates. The flame2 ledger must measure them per M (gate G5).
+**9.81** (target 9.1). These are estimates.
+
+Measured (G5, 2026-10-13, builder cellcount): flame_flops.py, eager, one counted step, fixed
+slot depth 6, `slot_compact` off, `split_wgrad` off (the custom op is not counted). Step TFLOP
+at M = 1, 2, 3, 4: **10.20, 11.57, 13.01, 14.38**; ratio to M = 4: 0.710, 0.805, 0.905 (the
+estimate gave 0.717, 0.811, 0.906). Each point is +3.2 % to +4.3 % over the table, inside the
+10 % gate. M = 4 under the variable-count build equals the fixed fan to the digit (14.377).
+The table's absolute level is for a different depth and compaction setting. The ratios hold.
 
 Options weighed (details in Alternatives):
 
@@ -218,10 +225,12 @@ manifest):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `tul.cell_count` | `fixed` | `fixed`: M = `fan_k` on every batch, today's path. `poisson`: per-batch draw. |
+| `tul.cell_count` | `fixed` | `fixed`: M = `fan_k` on every batch, today's path. `poisson`: per-batch draw. `categorical` (Wolfe, 2026-10-12): per-batch draw from `cell_count_probs`. |
 | `tul.cell_count_mean` | `3.5` | Poisson mean (read only under `poisson`) |
-| `tul.cell_count_min` / `_max` | `1` / `fan_k` | clamp; `_max <= fan_k` enforced |
-| `tul.cell_count_eval` | `fan_k` | M of the trainer's own val pass |
+| `tul.cell_count_min` / `_max` | `1` / `0` (= `fan_k`) | clamp; `_max <= fan_k` enforced |
+| `tul.cell_count_probs` | none | `categorical` only: P(M = m) for m = 1..`fan_k`, summing to 1 within 1e-6 or it raises |
+| `tul.cell_count_subset` | `prefix` | `prefix`: the cells are roles 0..M-1. `random`: a uniformly random ascending subset of M roles per batch (every role trains), carried as `layout.cell_roles`, a device tensor gathered in the graph |
+| `tul.cell_count_eval` | `0` (= `fan_k`) | M of the trainer's own val pass |
 
 Refusals (`TULConfig`, near the top of `__post_init__`): `cell_count != fixed` with `fan_k == 0`,
 `fan_mix != all`, `fan_loop_select != off`, `fan_route != none`, `fan_opf`, `prefix_per_cell > 1`,
@@ -301,8 +310,11 @@ modules: `FanRouter` bias `[M]`, `FanOPF` factors, history split).
   in distribution. Rejected for the 5090: memory (section 4) and the byte gate (extra rows move
   the optimizer state). Viable on the Spark.
 - **Random role subsets at train** (M sorted roles drawn from {0..3}, placed at offsets
-  0..M-1). Trains every role equally and decouples role from offset. Not chosen: it adds a draw,
-  and at M = 1 it would often drop cell 0, the copy cell. Cheap follow-up.
+  0..M-1). Trains every role equally and decouples role from offset. First not chosen (it adds
+  a draw, and at M = 1 it would often drop cell 0, the copy cell). Built as
+  `tul.cell_count_subset: random` on Wolfe's 2026-10-12 call that every cell role must train
+  equally; `prefix` stays the default. The role indices ride in the batch as a device tensor, so
+  one recording per (kind, pass, M) still serves every subset.
 - **Index-free exchangeable cells** (shared query and write, identity from a frozen random code
   `r_i ~ N(0, I)` through a learned map, fresh codes per forward). In distribution at any M,
   because training already sees new codes. Rejected for v1: no byte gate, it discards the roles

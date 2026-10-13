@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from typing import Generator, Tuple
 
-from morph.model.tul_layout import TulDataConfig, pack_tul_batch
+from morph.model.tul_layout import TulDataConfig, pack_tul_batch, relayout_batch
 
 __all__ = ["create_dataloader"]
 
@@ -146,6 +146,7 @@ def create_dataloader(
               + (f" gate_truncate_p={tul.gate.truncate_p} seed={tul.seed}"
                  if tul.gate is not None else ""), flush=True)
 
+    n_batches = 0                 # batches yielded: the counter of tul.cell_count's draw
     while True:
         if is_local_arrow:
             ds = load_dataset("arrow", data_files=_expanded,
@@ -180,9 +181,21 @@ def create_dataloader(
                 if tul_spec is not None:
                     # Consumes only what the rows actually use (token count varies per
                     # row) and leaves the remainder — including the label peek — in buf.
-                    yield pack_tul_batch(buf, tul.rule, tul_spec, batch_size,
+                    out = pack_tul_batch(buf, tul.rule, tul_spec, batch_size,
                                          gate=tul.gate, rng=tul_rng,
                                          ditto_rows=tul.ditto_rows, ditto_rng=ditto_rng)
+                    if tul.cell_law is not None or tul.eval_cells:
+                        # tul.cell_count: the rows were packed at the reference width; this
+                        # batch's cell count is drawn from its own counter (the batch index
+                        # of THIS stream, so a fast-forwarded resume replays it) and the rows
+                        # are re-laid out to it. The val loader has a fixed count instead.
+                        if tul.cell_law is not None:
+                            m_b, roles = tul.cell_law.draw(n_batches)
+                        else:
+                            m_b, roles = tul.eval_cells, None
+                        out = relayout_batch(*out, m_b, tul_spec, tul.rule.span_cap, roles)
+                    n_batches += 1
+                    yield out
                     continue
                 chunk = buf[:chunk_len]
                 buf = buf[chunk_len:]

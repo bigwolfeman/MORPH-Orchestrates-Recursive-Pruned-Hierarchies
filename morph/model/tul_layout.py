@@ -43,14 +43,21 @@ __all__ = [
     "BOUNDARY_SUFFIX_CHARS",
     "BOUNDARY_SUBSTRINGS",
     "BoundaryRule",
+    "CellCountLaw",
     "SlotLayout",
     "TulDataConfig",
     "TulGateSpec",
     "TulLayoutSpec",
     "boundary_lut_from_strings",
     "boundary_lut_from_tokenizer",
+    "categorical_cell_probs",
+    "cell_l_total",
+    "cell_slots_lower_bound",
     "pack_tul_batch",
     "pack_tul_row",
+    "poisson_cell_probs",
+    "relayout_batch",
+    "relayout_cells",
     "slot_layout_from_ids",
     "span_allow_mask",
     "span_reach_allow",
@@ -562,6 +569,12 @@ class SlotLayout:
                     2206.02369): on a pseudo-repetition row, the row position whose label
                     is the SAME token one repetition earlier; -1 everywhere else (real
                     rows, the prefix, the first copy, slots). None ⇒ no DITTO row.
+        cell_roles: ``[B, M]`` int64 — ``tul.cell_count_subset: random`` only: the fan role
+                    (row of ``Q`` / ``P_cell`` / ``W_prefix``) of the cell at position ``i``
+                    of every slot, ascending, the same for every row of the batch (it is
+                    drawn per batch). A device tensor on purpose: the roles are gathered
+                    INSIDE the training graph, so a different subset replays the same
+                    recording. None ⇒ the cells are roles ``0 .. prefix_k - 1``.
     """
 
     slot_mask: Tensor
@@ -573,6 +586,7 @@ class SlotLayout:
     span_len: Tensor | None = None           # gate §3.3
     len_supervised: Tensor | None = None     # gate §3.3
     ditto_prev: Tensor | None = None         # tul.ditto_rows
+    cell_roles: Tensor | None = None         # tul.cell_count_subset: random
 
     def __post_init__(self) -> None:
         B, L = self.slot_mask.shape
@@ -591,6 +605,9 @@ class SlotLayout:
             raise ValueError("span_len and len_supervised must both be set or both None")
         if self.ditto_prev is not None and self.ditto_prev.shape != (B, L):
             raise ValueError(f"ditto_prev {tuple(self.ditto_prev.shape)} != slot_mask {(B, L)}")
+        if self.cell_roles is not None and self.cell_roles.shape != (B, self.prefix_k):
+            raise ValueError(f"cell_roles {tuple(self.cell_roles.shape)} != "
+                             f"(batch, prefix_k) {(B, self.prefix_k)}")
 
     @property
     def max_slots(self) -> int:
@@ -605,7 +622,7 @@ class SlotLayout:
                           slot_index=_r(self.slot_index), slot_valid=_r(self.slot_valid),
                           prefix_k=self.prefix_k, stats=self.stats,
                           span_len=_r(self.span_len), len_supervised=_r(self.len_supervised),
-                          ditto_prev=_r(self.ditto_prev))
+                          ditto_prev=_r(self.ditto_prev), cell_roles=_r(self.cell_roles))
 
     def head_rows(self, n: int) -> "SlotLayout":
         """The first ``n`` rows (the base batch of a :meth:`repeat_rows` layout)."""
@@ -615,7 +632,7 @@ class SlotLayout:
                           slot_index=_h(self.slot_index), slot_valid=_h(self.slot_valid),
                           prefix_k=self.prefix_k, stats=self.stats,
                           span_len=_h(self.span_len), len_supervised=_h(self.len_supervised),
-                          ditto_prev=_h(self.ditto_prev))
+                          ditto_prev=_h(self.ditto_prev), cell_roles=_h(self.cell_roles))
 
     @property
     def l_total(self) -> int:
@@ -631,7 +648,7 @@ class SlotLayout:
                           prefix_k=self.prefix_k, stats=self.stats,
                           span_len=_pm(self.span_len),
                           len_supervised=_pm(self.len_supervised),
-                          ditto_prev=_pm(self.ditto_prev))
+                          ditto_prev=_pm(self.ditto_prev), cell_roles=_pm(self.cell_roles))
 
     def to(self, device) -> "SlotLayout":
         _mv = lambda t: None if t is None else t.to(device, non_blocking=True)
@@ -648,6 +665,7 @@ class SlotLayout:
             span_len=_mv(self.span_len),
             len_supervised=_mv(self.len_supervised),
             ditto_prev=_mv(self.ditto_prev),
+            cell_roles=_mv(self.cell_roles),
         )
 
     @staticmethod
@@ -1078,6 +1096,14 @@ class TulDataConfig:
     # (:func:`pack_ditto_row`). 0 ⇒ no row is rebuilt and no random number is drawn. The
     # VAL loader always gets 0 (`TulRuntime.val_data_cfg`).
     ditto_rows: int = 0
+    # tul.cell_count != fixed: the per-batch law of the fan's cell count (:class:`CellCountLaw`).
+    # None ⇒ every batch keeps the packed layout at ``prefix_k`` cells, and no random number is
+    # drawn. ``prefix_k`` stays the REFERENCE width the rows are packed at; a batch is re-laid
+    # out to its drawn M after the packer (:func:`relayout_batch`), so the token stream does
+    # not depend on the law. ``eval_cells`` (> 0): a loader with no law that lays every batch
+    # out at that fixed M (the val loader, ``tul.cell_count_eval``).
+    cell_law: "CellCountLaw | None" = None
+    eval_cells: int = 0
 
     def spec_for(self, seq_len: int) -> TulLayoutSpec:
         """The fixed-shape budget for a stage of ``seq_len`` tokens."""
@@ -1221,3 +1247,206 @@ def slot_layout_from_ids(
         SlotLayout.from_rows(rows, spec.prefix_k),
         stats,
     )
+
+
+# ── Variable cell count (tul.cell_count): the law and the re-layout ───────────
+#
+# Design: .agents/notes/proposed/architecture/2026-10-12-fan-variable-cell-count-design.md.
+# A row is packed ONCE at the reference width K = ``spec.prefix_k`` (the fan's ``fan_k``), so the
+# token stream, the boundaries and the labels do not depend on the law. ``relayout_cells`` then
+# gives every slot M positions instead of K. Each M has its own fixed row length ``L(M)``.
+
+
+def poisson_cell_probs(mean: float, lo: int, hi: int) -> tuple[float, ...]:
+    """P(M = m) for m = 1 .. hi of ``Poisson(mean)`` clamped to ``[lo, hi]`` (the mass below
+    ``lo`` lands on ``lo``, the mass above ``hi`` on ``hi``)."""
+    import math
+    if not (mean > 0.0 and 1 <= lo <= hi):
+        raise ValueError(f"poisson cell law needs mean > 0 and 1 <= min <= max, got "
+                         f"mean={mean}, min={lo}, max={hi}")
+    pmf = [math.exp(-mean) * mean ** k / math.factorial(k) for k in range(hi + 1)]
+    out = [0.0] * hi
+    if hi == lo:
+        out[lo - 1] = 1.0
+        return tuple(out)
+    out[lo - 1] = sum(pmf[:lo + 1])
+    for m in range(lo + 1, hi):
+        out[m - 1] = pmf[m]
+    out[hi - 1] = 1.0 - sum(pmf[:hi])
+    return tuple(out)
+
+
+def categorical_cell_probs(probs, fan_k: int) -> tuple[float, ...]:
+    """The validated ``tul.cell_count_probs``: ``fan_k`` probabilities for M = 1 .. fan_k,
+    each in [0, 1], summing to 1 within 1e-6. Raises otherwise."""
+    p = tuple(float(x) for x in probs)
+    if len(p) != fan_k:
+        raise ValueError(f"tul.cell_count_probs needs {fan_k} entries (M = 1..{fan_k}), "
+                         f"got {len(p)}: {list(p)}")
+    if any(not 0.0 <= x <= 1.0 for x in p):
+        raise ValueError(f"tul.cell_count_probs entries must lie in [0, 1], got {list(p)}")
+    if abs(sum(p) - 1.0) > 1e-6:
+        raise ValueError(f"tul.cell_count_probs must sum to 1 within 1e-6, got sum "
+                         f"{sum(p)!r}: {list(p)}")
+    return p
+
+
+@dataclass(frozen=True)
+class CellCountLaw:
+    """The per-batch law of the cell count M (and, under ``subset == "random"``, of which
+    roles the M cells are).
+
+    ``probs[m - 1]`` is P(M = m). The draw is COUNTER-BASED: batch ``i`` of a run draws from a
+    generator seeded ``[seed, 0xCE11, i]`` (the roles from ``[seed, 0xCE12, i]``), so a resume
+    that fast-forwards the loader replays the same sequence and no global random stream is
+    read or moved. ``subset == "prefix"``: the cells are roles ``0 .. M-1``. ``"random"``: a
+    uniformly random subset of M of the ``len(probs)`` roles, kept in ascending order; cell
+    position ``i`` of every slot then uses role ``roles[i]``.
+    """
+
+    probs: tuple[float, ...]
+    subset: str = "prefix"
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.subset not in ("prefix", "random"):
+            raise ValueError(f"CellCountLaw.subset must be 'prefix' or 'random', got "
+                             f"{self.subset!r}")
+        categorical_cell_probs(self.probs, len(self.probs))
+
+    @property
+    def fan_k(self) -> int:
+        return len(self.probs)
+
+    def draw(self, batch_index: int) -> tuple[int, np.ndarray]:
+        """``(M, roles)`` for batch ``batch_index``: ``roles`` is ``[M]`` int64, ascending."""
+        u = np.random.default_rng([int(self.seed), 0xCE11, int(batch_index)]).random()
+        m = int(np.searchsorted(np.cumsum(self.probs), u, side="right")) + 1
+        m = min(m, self.fan_k)
+        if self.subset == "prefix":
+            return m, np.arange(m, dtype=np.int64)
+        r = np.random.default_rng([int(self.seed), 0xCE12, int(batch_index)])
+        return m, np.sort(r.choice(self.fan_k, size=m, replace=False)).astype(np.int64)
+
+
+def cell_slots_lower_bound(spec_ref: TulLayoutSpec, span_cap: int) -> int:
+    """``S_lo``: the fewest slots a row packed at ``spec_ref`` can hold (gate truncation off).
+
+    A row that stopped before its slot budget is full to within ``K`` positions:
+    ``n_tok + K n >= L - K``. Every span, and the open tail, holds at most ``span_cap``
+    tokens: ``n_tok <= span_cap (n + 1)``. So ``n >= (L - K - span_cap) / (span_cap + K)``. A row
+    that hit ``max_slots`` has ``n = max_slots``, which is larger (checked, not assumed:
+    ``relayout_cells`` raises on any row that does not fit)."""
+    L, K = spec_ref.l_total, spec_ref.prefix_k
+    n = -(-(L - K - int(span_cap)) // (int(span_cap) + K))
+    return max(1, min(n, spec_ref.max_slots))
+
+
+def cell_l_total(spec_ref: TulLayoutSpec, m: int, span_cap: int) -> int:
+    """The row length at ``m`` cells per slot. ``m >= K``: ``L + (m - K) * max_slots`` (room for
+    a full slot budget). ``m < K``: ``L - (K - m) * S_lo`` (every row has at least ``S_lo``
+    slots, so the cells it drops free at least that many positions)."""
+    K = spec_ref.prefix_k
+    if m < 1:
+        raise ValueError(f"cell count must be >= 1, got {m}")
+    if m >= K:
+        return spec_ref.l_total + (m - K) * spec_ref.max_slots
+    return spec_ref.l_total - (K - m) * cell_slots_lower_bound(spec_ref, span_cap)
+
+
+_ROW_PER_POS = ("input_ids", "labels", "slot_mask", "bag_id")
+_ROW_PER_SLOT = ("slot_index", "slot_valid", "span_len", "len_supervised")
+
+
+def relayout_cells(row: dict[str, np.ndarray], m: int, spec_ref: TulLayoutSpec, span_cap: int,
+                   m_from: int | None = None) -> dict[str, np.ndarray]:
+    """One packed row re-laid out from ``m_from`` (default ``spec_ref.prefix_k``) to ``m``
+    positions per slot: the same tokens, labels, boundaries and spans, a different number of
+    cell positions after every boundary.
+
+    Token ``p`` moves to ``p + (m - m_from) * (slots whose first cell lies before p)``; slot
+    ``s`` owns ``slot_first[s] + (m - m_from) * s`` .. ``+ m - 1`` and its emit label sits on
+    the LAST cell. The new row is ``L(m)`` long (:func:`cell_l_total`), padded at the tail
+    with ``slot_id`` inputs, label -100, ``slot_mask`` True and the dump bin. At ``m == m_from``
+    the arrays are returned unchanged (same objects). A row whose content does not fit raises;
+    a token or a cell is never dropped."""
+    m_from = spec_ref.prefix_k if m_from is None else int(m_from)
+    if "ditto_prev" in row:
+        raise ValueError("relayout_cells: a DITTO row (ditto_prev) is not supported")
+    if m == m_from:
+        return row
+    S = spec_ref.max_slots
+    L_to = cell_l_total(spec_ref, m, span_cap)
+    mask = row["slot_mask"]
+    n_slots = int(row["slot_valid"].sum())
+    first = row["slot_index"][:n_slots].astype(np.int64)
+    # the layout's invariants: valid slots lead, first cells ascend, K cells each
+    tok_pos = np.flatnonzero(~mask)
+    shift = (m - m_from) * np.searchsorted(first, tok_pos, side="left")
+    new_tok = tok_pos + shift
+    new_first = first + (m - m_from) * np.arange(n_slots, dtype=np.int64)
+    top = max(int(new_tok.max()) if new_tok.size else -1,
+              int(new_first[-1]) + m - 1 if n_slots else -1)
+    if top >= L_to:
+        raise ValueError(
+            f"relayout_cells: the row needs {top + 1} positions at m={m} but L({m})={L_to} "
+            f"({tok_pos.size} tokens, {n_slots} slots, packed at m={m_from}); a row is never "
+            f"truncated")
+    ids = np.full(L_to, spec_ref.slot_id, dtype=row["input_ids"].dtype)
+    lab = np.full(L_to, -100, dtype=row["labels"].dtype)
+    smask = np.ones(L_to, dtype=bool)
+    bag = np.full(L_to, S, dtype=row["bag_id"].dtype)
+    ids[new_tok] = row["input_ids"][tok_pos]
+    lab[new_tok] = row["labels"][tok_pos]
+    smask[new_tok] = False
+    bag[new_tok] = row["bag_id"][tok_pos]
+    if n_slots:
+        sidx = np.arange(n_slots, dtype=np.int64)
+        for j in range(m):
+            bag[new_first + j] = sidx
+        lab[new_first + (m - 1)] = row["labels"][first + (m_from - 1)]
+    out = {"input_ids": ids, "labels": lab, "slot_mask": smask, "bag_id": bag}
+    slot_index = np.zeros_like(row["slot_index"])
+    slot_index[:n_slots] = new_first
+    out["slot_index"] = slot_index
+    for k in ("slot_valid", "span_len", "len_supervised"):
+        if k in row:
+            out[k] = row[k]
+    return out
+
+
+def relayout_batch(x: Tensor, y: Tensor, layout: SlotLayout, m: int, spec_ref: TulLayoutSpec,
+                   span_cap: int, roles: np.ndarray | None = None
+                   ) -> tuple[Tensor, Tensor, SlotLayout]:
+    """A batch re-laid out from ``layout.prefix_k`` to ``m`` cells per slot, with
+    ``cell_roles`` set from ``roles`` (``[m]``, tiled over the rows; None ⇒ no field).
+    ``stats`` carry over. The result is on the CPU (a device batch is read back); at
+    ``m == layout.prefix_k`` the tensors are returned as they are and only the roles are
+    attached."""
+    B = x.shape[0]
+    m_from = int(layout.prefix_k)
+    if roles is not None and len(roles) != m:
+        raise ValueError(f"relayout_batch: {len(roles)} roles for m={m}")
+    cr = (None if roles is None else
+          torch.from_numpy(np.tile(np.asarray(roles, dtype=np.int64), (B, 1))))
+    if m == m_from:
+        return x, y, SlotLayout(
+            slot_mask=layout.slot_mask, bag_id=layout.bag_id, slot_index=layout.slot_index,
+            slot_valid=layout.slot_valid, prefix_k=m_from, stats=layout.stats,
+            span_len=layout.span_len, len_supervised=layout.len_supervised,
+            ditto_prev=layout.ditto_prev, cell_roles=cr)
+    keys = ("slot_mask", "bag_id", "slot_index", "slot_valid", "span_len", "len_supervised")
+    _np = lambda t: t.detach().cpu().numpy()          # noqa: E731  (a device batch is read back)
+    rows = []
+    for r in range(B):
+        row = {"input_ids": _np(x[r]), "labels": _np(y[r])}
+        row.update({k: _np(getattr(layout, k)[r]) for k in keys
+                    if getattr(layout, k) is not None})
+        if layout.ditto_prev is not None:
+            row["ditto_prev"] = _np(layout.ditto_prev[r])
+        rows.append(relayout_cells(row, m, spec_ref, span_cap, m_from=m_from))
+    new = SlotLayout.from_rows(rows, m)
+    new.stats = layout.stats
+    new.cell_roles = cr
+    return (torch.from_numpy(np.stack([r["input_ids"] for r in rows])),
+            torch.from_numpy(np.stack([r["labels"] for r in rows])), new)

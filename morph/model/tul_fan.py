@@ -262,8 +262,14 @@ class TULFanMix(nn.Module):
     caller charges (``MORPHTransformer._tul_fan_all``).
     """
 
-    def __init__(self, d_model: int, k: int, mode: str = "mean"):
+    def __init__(self, d_model: int, k: int, mode: str = "mean", cell_var: bool = False):
         super().__init__()
+        # tul.cell_count: ``k`` is then the role table's size and a forward carries any M <= k
+        # (or more, at eval). Only ``all`` (no parameter indexed by stream) is built that way.
+        if cell_var and mode != "all":
+            raise ValueError(f"TULFanMix at a variable cell count needs fan_mix='all', got "
+                             f"{mode!r}")
+        self.cell_var = bool(cell_var)
         if k < 2:
             raise ValueError(f"TULFanMix needs k >= 2 streams, got {k}")
         if mode not in ("mean", "softmax", "select", "all"):
@@ -302,7 +308,7 @@ class TULFanMix(nn.Module):
         gate's argmax (the eval write). ``weights`` is still the gate's softmax so
         ``fan/mix_entropy`` keeps its meaning (a gate that has not chosen reads ``ln K``).
         """
-        if cells.shape[2] != self.k:
+        if cells.shape[2] != self.k and not self.cell_var:
             raise ValueError(
                 f"TULFanMix built for k={self.k} got {cells.shape[2]} streams "
                 f"({tuple(cells.shape)})")

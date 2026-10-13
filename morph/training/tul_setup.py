@@ -20,9 +20,12 @@ from morph.model.tul_layout import (
     BOUNDARY_SUBSTRINGS,
     BOUNDARY_SUFFIX_CHARS,
     BoundaryRule,
+    CellCountLaw,
     TulDataConfig,
     TulGateSpec,
     boundary_lut_from_tokenizer,
+    categorical_cell_probs,
+    poisson_cell_probs,
 )
 
 __all__ = ["TulRuntime", "build_tul_runtime", "build_boundary_rule",
@@ -95,6 +98,9 @@ KNOWN_TUL_KEYS = frozenset({
     "disco", "disco_bridge", "disco_topk", "disco_tau", "disco_gate", "disco_gate_bias",
     "disco_alpha", "disco_detach_table",
     "fan_select_write", "fan_select_write_anneal",
+    # a variable cell count on the fan (2026-10-12): morph/model/tul_layout.py CellCountLaw
+    "cell_count", "cell_count_mean", "cell_count_min", "cell_count_max", "cell_count_probs",
+    "cell_count_subset", "cell_count_eval",
     "fan_trigger_every_pass", "fan_seed_noise", "fan_lineage", "fan_history_streams",
     "recur_gate_noise", "recur_gate_tau", "set_lambda", "sigreg_activate_at", "sigreg_lambda",
     "sigreg_slices", "slot_cells", "slot_cell_init", "slot_pool_heads", "slot_chain",
@@ -230,11 +236,25 @@ class TulRuntime:
         with the seed. Val therefore always scores the data's own segmentation — which is
         also the segmentation the generation metrics are checked against.
         """
-        # tul.ditto_rows is a training augmentation too: val never rebuilds a row.
+        # tul.ditto_rows is a training augmentation too: val never rebuilds a row. Nor does
+        # val draw a cell count: tul.cell_count_eval fixes it (0 = the reference width).
+        _ev = int(self.model_cfg.cell_count_eval)
+        _kw = dict(ditto_rows=0, cell_law=None,
+                   eval_cells=_ev if _ev and _ev != self.data_cfg.prefix_k else 0)
         if self.data_cfg.gate is None:
-            return _dc_replace(self.data_cfg, ditto_rows=0)
-        return _dc_replace(self.data_cfg, ditto_rows=0,
+            return _dc_replace(self.data_cfg, **_kw)
+        return _dc_replace(self.data_cfg, **_kw,
                            gate=_dc_replace(self.data_cfg.gate, truncate_p=0.0))
+
+    @property
+    def cell_shapes(self) -> tuple:
+        """The cell counts a train batch can have under ``tul.cell_count``: every M whose
+        probability is above 0, ascending. ``(None,)`` for a fixed fan, whose one shape needs
+        no key."""
+        law = self.data_cfg.cell_law
+        if law is None:
+            return (None,)
+        return tuple(m for m, p in enumerate(law.probs, start=1) if p > 0.0)
 
     def activation_step(self, total_steps: int) -> int:
         """Step at which the layout switches on (spec §5). 0 → active from step 0."""
@@ -330,6 +350,7 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
                              max_slots=int(tc.get("max_slots", 0)),
                              gate=gate_spec, seed=int(tc.get("gate_seed", 0)),
                              ditto_rows=int(tc.get("ditto_rows", 0)))
+    cell_count = str(tc.get("cell_count", "fixed"))
     model_cfg = TULConfig(
         gate=gate_cfg,
         prefix_k=prefix_k,
@@ -481,6 +502,14 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         pointer_coverage_lambda=float(tc.get("pointer_coverage_lambda", 0.0)),
         ditto_rows=int(tc.get("ditto_rows", 0)),
         ditto_lambda=float(tc.get("ditto_lambda", 0.5)),
+        cell_count=cell_count,
+        cell_count_mean=float(tc.get("cell_count_mean", 3.5)),
+        cell_count_min=int(tc.get("cell_count_min", 1)),
+        cell_count_max=int(tc.get("cell_count_max", 0)),
+        cell_count_probs=(None if tc.get("cell_count_probs", None) is None
+                          else tuple(float(x) for x in tc.get("cell_count_probs"))),
+        cell_count_subset=str(tc.get("cell_count_subset", "prefix")),
+        cell_count_eval=int(tc.get("cell_count_eval", 0)),
         disco=bool(tc.get("disco", False)),
         disco_bridge=str(tc.get("disco_bridge", "topk")),
         disco_topk=int(tc.get("disco_topk", 128)),
@@ -651,6 +680,18 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
     )
     seq_len = int(cfg.data.seq_len)
     spec = data_cfg.spec_for(seq_len)
+    # tul.cell_count: the law the loader draws each batch's cell count from (None = fixed).
+    cell_law = None
+    if model_cfg.cell_count != "fixed":
+        _probs = (poisson_cell_probs(model_cfg.cell_count_mean, model_cfg.cell_count_min,
+                                     model_cfg.cell_count_max or model_cfg.fan_k)
+                  if model_cfg.cell_count == "poisson"
+                  else categorical_cell_probs(model_cfg.cell_count_probs, model_cfg.fan_k))
+        # a Poisson clamped below fan_k has no mass above its max: pad to the table size
+        _probs = _probs + (0.0,) * (model_cfg.fan_k - len(_probs))
+        cell_law = CellCountLaw(_probs, subset=model_cfg.cell_count_subset,
+                                seed=int(data_cfg.seed))
+        data_cfg = _dc_replace(data_cfg, cell_law=cell_law)
     # `tul.spandec_target_offset` against the DERIVED slot budget. Slot s is graded on span
     # s+k, so k at or past max_slots leaves every slot in every row unsupervised and the
     # term is identically zero. `span_slots` raises on the same condition at the layout,
@@ -817,6 +858,15 @@ def build_tul_runtime(cfg, cache_dir: str = "ignore/tul_cache") -> TulRuntime | 
         "pointer_coverage_lambda": model_cfg.pointer_coverage_lambda,
         "ditto_rows": model_cfg.ditto_rows,
         "ditto_lambda": model_cfg.ditto_lambda,
+        "cell_count": model_cfg.cell_count,
+        "cell_count_mean": model_cfg.cell_count_mean,
+        "cell_count_min": model_cfg.cell_count_min,
+        "cell_count_max": model_cfg.cell_count_max,
+        "cell_count_probs": (None if model_cfg.cell_count_probs is None
+                             else list(model_cfg.cell_count_probs)),
+        "cell_count_subset": model_cfg.cell_count_subset,
+        "cell_count_eval": model_cfg.cell_count_eval,
+        "cell_count_law": None if cell_law is None else list(cell_law.probs),
         "disco": model_cfg.disco,
         "disco_bridge": model_cfg.disco_bridge,
         "disco_topk": model_cfg.disco_topk,

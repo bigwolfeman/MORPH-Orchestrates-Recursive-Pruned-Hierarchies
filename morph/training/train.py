@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import itertools
 import math
 import random as _random
 import json
@@ -37,6 +38,7 @@ if os.environ.get("MORPH_FAULT_TIMEOUT"):
 # donated buffers below avoids buffer-aliasing conflicts under compile.
 os.environ.setdefault("TORCH_COMPILE_DEBUG", "0")
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -909,6 +911,13 @@ def save_checkpoint(
         ckpt["tul"] = {"prefix_k": _mm.cfg.tul.prefix_k, "slot_id": _mm.cfg.tul.slot_id,
                        "coda_sees_slots": _mm.cfg.tul.coda_sees_slots,
                        "tokens_through_core": _mm.cfg.tul.tokens_through_core}
+        if _mm.cfg.tul.cell_count != "fixed":
+            # tul.cell_count: the law this checkpoint's cells were trained under (fan_k is the
+            # role-table size; prefix_k above is the reference packing width).
+            _tc = _mm.cfg.tul
+            ckpt["tul"].update({k: getattr(_tc, k) for k in (
+                "cell_count", "cell_count_mean", "cell_count_min", "cell_count_max",
+                "cell_count_probs", "cell_count_subset", "cell_count_eval", "fan_k")})
     if pruning is not None:
         # Both topology-phase flags are needed to RECONSTRUCT module structure (carve +
         # routers) before load_state_dict on resume. _is_compact alone is insufficient:
@@ -2168,7 +2177,7 @@ def warmup_compile_all_shapes(
     if getattr(model, "_tg_restrict", False):
         if tul_rt is None:
             raise RuntimeError("warmup for a tg_restrict model needs tul_rt (its packer)")
-        from morph.model.tul_layout import pack_tul_batch
+        from morph.model.tul_layout import pack_tul_batch, relayout_batch
         spec = tul_rt.data_cfg.spec_for(seq_len)
         rule = tul_rt.data_cfg.rule
         # The gain hinge's passes (model.slot_gain_pass_force): every pass the hinge can read
@@ -2180,8 +2189,13 @@ def warmup_compile_all_shapes(
         # the run after the warm-up does not depend on how many passes it compiled.
         _root = getattr(model, "_orig_mod", model)
         _passes = _root.gain_pass_choices() if hasattr(_root, "gain_pass_choices") else ()
+        # tul.cell_count: every cell count a train batch can have gets its own frames (its row
+        # length differs), each with every hinge pass. (None,) = the one fixed layout.
+        _cell_shapes = tul_rt.cell_shapes
+        _cell_roles = tul_rt.model_cfg.cell_count_subset == "random"
         n_fwd = max(passes_per_size, len(_passes))
         print(f"  Warmup compile [{tag}] (TG path, {n_fwd} packed TUL passes"
+              + (f" x cell counts {list(_cell_shapes)}" if _cell_shapes != (None,) else "")
               + (f", gain-hinge passes {list(_passes)}" if _passes else "") + ")...",
               flush=True)
         t0 = time.perf_counter()
@@ -2192,7 +2206,7 @@ def warmup_compile_all_shapes(
         # discarded; a no-op on every model without the key.
         try:
             with model.loop_attn_center_frozen():
-                for i in range(n_fwd):
+                for sh, i in itertools.product(_cell_shapes, range(n_fwd)):
                     extra = i >= passes_per_size
                     need = batch_size * (spec.l_total + 1)
                     buf = torch.randint(0, model.cfg.vocab_size, (need + 8,),
@@ -2204,6 +2218,10 @@ def warmup_compile_all_shapes(
                     buf = [(t + 1) % model.cfg.vocab_size if t == spec.slot_id else t
                            for t in buf]
                     ids, labs, layout = pack_tul_batch(buf, rule, spec, batch_size)
+                    if sh is not None:
+                        ids, labs, layout = relayout_batch(
+                            ids, labs, layout, sh, spec, rule.span_cap,
+                            np.arange(sh) if _cell_roles else None)
                     ids, labs, layout = ids.to(device), labs.to(device), layout.to(device)
                     if _passes:
                         _root.pin_gain_pass(_passes[i % len(_passes)])
@@ -2231,7 +2249,7 @@ def warmup_compile_all_shapes(
                 _root.pin_gain_pass(None)
         torch.cuda.synchronize()
         print(f"  Warmup compile [{tag}] done in {time.perf_counter()-t0:.1f}s "
-              f"({n_fwd} TG passes)", flush=True)
+              f"({n_fwd * len(_cell_shapes)} TG passes)", flush=True)
         return
 
     mx = int(model.cfg.max_depth)
@@ -2799,6 +2817,9 @@ def main(cfg: DictConfig) -> None:
         # mlp}: about 120 for the core alone. At 64 the excess ran EAGER (bench 2026-10-08:
         # `recompile_limit (64)` hit in the warm-up). The limit is raised for that key only.
         _dyn_lim = 256 if str(getattr(model.cfg, "slot_compact", "off")) == "gather" else 64
+        # tul.cell_count: every compiled frame exists once per cell count (the row length and the
+        # cell axis differ), so the limit scales with the number of counts.
+        _dyn_lim *= len(tul_rt.cell_shapes) if tul_rt is not None else 1
         _dynamo.config.cache_size_limit = max(getattr(_dynamo.config, "cache_size_limit", 8),
                                               _dyn_lim)
         _dynamo.config.accumulated_cache_size_limit = max(
@@ -3517,6 +3538,7 @@ def main(cfg: DictConfig) -> None:
     _gs = None
     _gs_release = contextlib.nullcontext
     if bool(getattr(tr, "graph_step", False)):
+        from morph.model.tul_layout import relayout_batch
         from morph.training.graph_step import GraphStep, graph_step_refusals
         from morph.training.pruning import _find_cms_layers
         _why = graph_step_refusals(cfg, total_steps=total_steps, curriculum=curriculum_enabled)
@@ -3549,6 +3571,18 @@ def main(cfg: DictConfig) -> None:
         # The gain hinge's pass is a VARIANT (graph_step.py module notes): one graph per
         # (kind, pass), the pass drawn on the host each step by the model's own draw.
         _gs_pass = _mdl0.gain_pass_choices()
+        # tul.cell_count: the batch's cell count is a SHAPE (graph_step.py module notes): one
+        # graph per (kind, pass, cell count), the other counts' capture batches made by
+        # re-laying the capture batch out.
+        _gs_cells = tul_rt.cell_shapes if tul_rt is not None else (None,)
+        _gs_spec = tul_rt.data_cfg.spec_for(seq_len) if tul_rt is not None else None
+
+        def _gs_cell_batch(_m, _x, _y, _lay):
+            _bx, _by, _bl = relayout_batch(
+                _x, _y, _lay, _m, _gs_spec, tul_rt.data_cfg.rule.span_cap,
+                np.arange(_m) if _lay.cell_roles is not None else None)
+            return _bx.to(device), _by.to(device), _bl.to(device)
+
         _gs = GraphStep(
             model, optimizer, grad_clip=grad_clip,
             forward=lambda _x, _y, _l: model(_x, labels=_y, bag_size=phase.bag_size,
@@ -3560,7 +3594,10 @@ def main(cfg: DictConfig) -> None:
             keep_grads=(True,), compiled=use_compile,
             **({} if not _gs_pass else
                {"variants": _gs_pass, "draw_variant": _mdl0.draw_gain_pass,
-                "set_variant": _mdl0.pin_gain_pass}))
+                "set_variant": _mdl0.pin_gain_pass}),
+            **({} if _gs_cells == (None,) else
+               {"shapes": _gs_cells, "shape_of": lambda _l: int(_l.prefix_k),
+                "shape_batch": _gs_cell_batch}))
         # Eval and generation do not fit beside the graphs' pool on 32 GB: they run with the
         # graphs released, and the next step records them again (GraphStep.released).
         _gs_release = _gs.released
@@ -4568,6 +4605,8 @@ def main(cfg: DictConfig) -> None:
                 if _layout is not None and _layout.stats:
                     for _k, _v in _layout.stats.items():
                         log[f"tul/{_k}"] = _v
+                if _layout is not None and tul_rt.model_cfg.cell_count != "fixed":
+                    log["tul/cell_count"] = float(_layout.prefix_k)   # split per-M series on it
                 if "layer_passes" in out and out["layer_passes"] is not None:
                     _npos = float(out["n_tokens"])
                     log["tul/layer_passes_per_token"] = float(out["layer_passes"]) / max(_npos, 1.0)

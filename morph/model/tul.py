@@ -444,6 +444,26 @@ class TULConfig:
     # no defined meaning on a mixing or selecting fan, which writes ONE state through the
     # single-source `prefix_project` (no `cells=` argument at all).
     prefix_per_cell: int = 1             # m coda positions per fan cell (fan_mix=all only)
+    # ── tul.cell_count (2026-10-12): a variable cell count M on the write-all fan ──────────
+    # Design: .agents/notes/proposed/architecture/2026-10-12-fan-variable-cell-count-design.md.
+    # `fixed` (default) is today's fan: M = fan_k on every batch, and nothing below is read.
+    # Otherwise `fan_k` is the SIZE OF THE ROLE TABLE (`Q`, `P_cell`, `W_prefix` have fan_k
+    # rows) and every batch carries its own M in `layout.prefix_k`, drawn on the host by
+    # `CellCountLaw` (morph/model/tul_layout.py) and re-laid out from the reference packing:
+    #   `poisson`:     M ~ Poisson(cell_count_mean) clamped to [cell_count_min, cell_count_max]
+    #                  (max 0 = fan_k).
+    #   `categorical`: P(M = m) = cell_count_probs[m - 1], fan_k entries summing to 1 within 1e-6.
+    # `cell_count_subset`: `prefix` = the cells are roles 0 .. M-1; `random` = a uniformly random
+    # subset of M roles per batch, ascending, so every role is trained (`layout.cell_roles`).
+    # `cell_count_eval` (0 = fan_k): the M of the trainer's own val pass. One graph is recorded
+    # per (kind, hinge pass, M). The knobs below are refused unless the law they belong to is on.
+    cell_count: str = "fixed"            # "fixed" | "poisson" | "categorical"
+    cell_count_mean: float = 3.5         # poisson only
+    cell_count_min: int = 1              # poisson only
+    cell_count_max: int = 0              # poisson only; 0 = fan_k
+    cell_count_probs: tuple | None = None   # categorical only: P(M = 1 .. fan_k)
+    cell_count_subset: str = "prefix"    # "prefix" | "random"
+    cell_count_eval: int = 0             # 0 = fan_k
     # `tul.pseudo_k` (2026-10-05, the trace-free pseudo-token carrier, arm "snap" —
     # `lxtul_snap.yaml`, one factor off `lxtul.yaml`): fills up to `pseudo_k` of the
     # `fan_k - 1` prefix positions `_fan_route_cells` leaves EXACTLY zero on the latent-
@@ -2758,6 +2778,7 @@ class TULConfig:
         self._check_loop_attn()
         self._check_pointer()
         self._check_ditto()
+        self._check_cell_count()
         # DiscoLoop re-embedding (2026-10-10): the same rule, near the top and unconditional.
         self._check_disco()
         # ── tul.coda_logit_l2 (spectral decoupling, Pezeshki et al. 2011.09468) ──────
@@ -5285,6 +5306,90 @@ class TULConfig:
             raise ValueError("tul.ditto_rows with tul.gate: the gate's truncation re-cuts "
                              "spans and breaks the copy alignment")
 
+    def _check_cell_count(self) -> None:
+        """``tul.cell_count``: the variable cell count. Refuses a knob that nothing would read,
+        a law that does not define a distribution, and every feature whose per-cell state is
+        indexed by position in a way the role table does not follow."""
+        _laws = ("fixed", "poisson", "categorical")
+        if self.cell_count not in _laws:
+            raise ValueError(f"tul.cell_count must be one of {_laws}, got {self.cell_count!r}")
+        if self.cell_count_subset not in ("prefix", "random"):
+            raise ValueError(f"tul.cell_count_subset must be 'prefix' or 'random', got "
+                             f"{self.cell_count_subset!r}")
+        if self.cell_count == "fixed":
+            _set = [n for n, v in (
+                ("cell_count_mean", self.cell_count_mean != 3.5),
+                ("cell_count_min", self.cell_count_min != 1),
+                ("cell_count_max", self.cell_count_max != 0),
+                ("cell_count_probs", self.cell_count_probs is not None),
+                ("cell_count_subset", self.cell_count_subset != "prefix"),
+                ("cell_count_eval", self.cell_count_eval != 0)) if v]
+            if _set:
+                raise ValueError(f"{_set} set with tul.cell_count='fixed': the knobs would be "
+                                 f"silently ignored. Set tul.cell_count or drop them.")
+            return
+        if self.fan_k < 2:
+            raise ValueError(f"tul.cell_count={self.cell_count!r} needs tul.fan_k >= 2 (the "
+                             f"role table's size), got {self.fan_k}")
+        _own = {"poisson": ("cell_count_mean", "cell_count_min", "cell_count_max"),
+                "categorical": ("cell_count_probs",)}
+        _wrong = [n for n, v in (
+            ("cell_count_mean", self.cell_count_mean != 3.5),
+            ("cell_count_min", self.cell_count_min != 1),
+            ("cell_count_max", self.cell_count_max != 0),
+            ("cell_count_probs", self.cell_count_probs is not None))
+            if v and n not in _own[self.cell_count]]
+        if _wrong:
+            raise ValueError(f"{_wrong} set with tul.cell_count={self.cell_count!r}: they "
+                             f"belong to the other law and would be silently ignored.")
+        if self.cell_count == "poisson":
+            hi = self.cell_count_max or self.fan_k
+            if not (self.cell_count_mean > 0.0 and 1 <= self.cell_count_min <= hi <= self.fan_k):
+                raise ValueError(
+                    f"tul.cell_count='poisson' needs cell_count_mean > 0 and 1 <= "
+                    f"cell_count_min <= cell_count_max <= fan_k={self.fan_k}; got mean="
+                    f"{self.cell_count_mean}, min={self.cell_count_min}, max={hi}")
+        else:
+            from morph.model.tul_layout import categorical_cell_probs
+            if self.cell_count_probs is None:
+                raise ValueError("tul.cell_count='categorical' needs tul.cell_count_probs")
+            categorical_cell_probs(self.cell_count_probs, self.fan_k)
+        if not 0 <= self.cell_count_eval <= self.fan_k:
+            raise ValueError(f"tul.cell_count_eval must be in [0, fan_k={self.fan_k}], got "
+                             f"{self.cell_count_eval}")
+        _refused = [n for n, bad in (
+            ("fan_mix != 'all' (a select/mix fan has no per-cell write)",
+             self.fan_mix != "all"),
+            ("fan_loop_select (a router bias is [M])", self.fan_loop_select != "off"),
+            ("fan_route (a router bias is [M])", self.fan_route != "none"),
+            ("fan_opf (per-index factors)", self.fan_opf),
+            ("prefix_per_cell > 1 (a wider write is W_prefix[i*m+j])", self.prefix_per_cell > 1),
+            ("prefix_source != 'exit'", self.prefix_source != "exit"),
+            ("code_enum_k > 1", self.code_enum_k > 1),
+            ("fan_lineage (per-index channel)", self.fan_lineage != "off"),
+            ("fan_history_streams > 0 (the history split is per index)",
+             self.fan_history_streams > 0),
+            ("fan_trigger_every_pass", self.fan_trigger_every_pass),
+            ("fan_seed_noise > 0", self.fan_seed_noise > 0.0),
+            ("fan_all_wta_lambda > 0 (the WTA responsibility is untested at variable M)",
+             self.fan_all_wta_lambda > 0.0),
+            ("pseudo_k > 0 (pseudo positions are fan_k - 1)", self.pseudo_k > 0),
+            ("disco (untested at variable M)", self.disco),
+            ("xhc_streams > 0", self.xhc_streams > 0),
+            ("loop_denoise", self.loop_denoise),
+            ("latent_pre_target", self.latent_pre_target != "off"),
+            ("vq_codes > 0", self.vq_codes > 0),
+            ("center_exit", self.center_exit),
+            ("cond_layers > 0", self.cond_layers > 0),
+            ("ditto_rows > 0 (untested pairing)", self.ditto_rows > 0),
+            ("gate (the gate's truncation re-cuts spans)", self.gate is not None),
+        ) if bad]
+        if _refused:
+            raise NotImplementedError(
+                f"tul.cell_count={self.cell_count!r} with {_refused}: each of these keeps "
+                f"per-cell state indexed by the cell's position, which the role table does "
+                f"not follow, or has not been run at a variable cell count.")
+
     def _check_disco(self) -> None:
         """``tul.disco``: DiscoLoop re-embedding between slot-loop passes
         (``morph/model/tul_disco.py``). Refuses a ``disco_*`` knob that nothing would read
@@ -6372,6 +6477,31 @@ def next_span_pool(tok_states: Tensor, layout: SlotLayout) -> tuple[Tensor, Tens
     return pool, ok
 
 
+def select_cell_rows(table: Tensor, m: int, roles: Tensor | None, extend: str = "refuse",
+                     fresh=None) -> Tensor:
+    """The rows of a per-role table (``Q``, ``P_cell``, ``W_prefix``) for the ``m`` cells of a
+    forward (``tul.cell_count``; design note 2026-10-12-fan-variable-cell-count-design.md).
+
+    ``roles`` (``layout.cell_roles``, ``[B, m]`` on the device): cell ``i`` uses row
+    ``roles[0, i]``, gathered inside the graph (``tul.cell_count_subset: random``). None: cell
+    ``i`` uses row ``i``. ``m`` above the table (eval only) follows ``extend``: ``cyclic`` uses
+    row ``i mod rows``; ``fresh`` appends ``fresh(m - rows)`` rows of the table's own
+    initial law; ``refuse`` raises."""
+    k = int(table.shape[0])
+    if roles is not None:
+        if m > k:
+            raise ValueError(f"cell_roles with m={m} > the {k}-row role table")
+        return table.index_select(0, roles[0])
+    if m <= k:
+        return table[:m]
+    if extend == "cyclic":
+        return table[torch.arange(m, device=table.device) % k]
+    if extend == "fresh":
+        return torch.cat([table, fresh(m - k).to(device=table.device, dtype=table.dtype)], dim=0)
+    raise ValueError(f"{m} cells over a {k}-row role table needs cell_extend 'cyclic' or "
+                     f"'fresh', got {extend!r}")
+
+
 class TULSlotRegister(nn.Module):
     """``tul.slot_cells`` — M MUTABLE CELLS per span instead of one (the Thought Register).
 
@@ -6419,10 +6549,16 @@ class TULSlotRegister(nn.Module):
     Record: lab/experiments/planned/2026-09-13-arc-thought-register.md
     """
 
-    def __init__(self, d_model: int, m_cells: int, distinct: bool = True, n_heads: int = 1):
+    cell_extend: str = "refuse"       # tul.cell_count, eval only: MORPHTransformer.cell_extend
+
+    def __init__(self, d_model: int, m_cells: int, distinct: bool = True, n_heads: int = 1,
+                 cell_var: bool = False):
         super().__init__()
         if m_cells < 2:
             raise ValueError(f"TULSlotRegister needs m_cells >= 2, got {m_cells}")
+        # tul.cell_count: ``m_cells`` is then the role table's size and the forward's cell
+        # count is ``layout.prefix_k``.
+        self.cell_var = bool(cell_var)
         if d_model % n_heads:
             raise ValueError(
                 f"tul.slot_pool_heads={n_heads} must divide d_model={d_model}")
@@ -6469,13 +6605,15 @@ class TULSlotRegister(nn.Module):
         """
         B, L, C = xn.shape
         S = layout.slot_index.shape[1]
-        M = self.m
+        M = int(layout.prefix_k) if self.cell_var else self.m
         H, Dh = self.n_heads, self.d_head
         # keys/values over TOKEN positions only, restricted to the querying slot's span.
         # Split into H heads of Dh = C / H each — at H=1, Dh=C and this view is a no-op.
         k = self.W_k(xn).view(B, L, H, Dh)                                # [B, L, H, Dh]
         v = self.W_v(xn).view(B, L, H, Dh)
-        q = self.Q if self.distinct else self.Q.expand(M, C)              # [M, C]
+        q = self.Q if self.distinct else self.Q.expand(self.m, C)         # [M, C]
+        if self.cell_var:                          # this forward's M roles of the table
+            q = select_cell_rows(q, M, layout.cell_roles, self.cell_extend, self._fresh_q)
         q = q.view(M, H, Dh)
         # [B, H, M, L] scores, then masked per slot: a slot's keys are its own span's tokens.
         sc = torch.einsum("mhd,blhd->bhml", q.to(xn.dtype), k) * self.scale
@@ -6503,9 +6641,18 @@ class TULSlotRegister(nn.Module):
         # (`o.transpose(1, 2).reshape(...)`) — before W_o's [d, d] projection. At H=1 this
         # permute+reshape is the identity view and the result is the single-head formula.
         pooled = pooled.permute(0, 1, 3, 2, 4).reshape(B, S, M, C)
-        out = self.W_o(pooled) + self.P_cell.to(xn.dtype).view(1, 1, M, C)
+        p_cell = (select_cell_rows(self.P_cell, M, layout.cell_roles, self.cell_extend,
+                                   lambda n: self.P_cell.new_zeros(n, C))
+                  if self.cell_var else self.P_cell)
+        out = self.W_o(pooled) + p_cell.to(xn.dtype).view(1, 1, M, C)
         out = out * layout.slot_valid.view(B, S, 1, 1).to(out.dtype)
         return out.reshape(B, S * M, C)
+
+    def _fresh_q(self, n: int) -> Tensor:
+        """``cell_extend='fresh'``: ``n`` query rows from the init law (std 0.02), drawn from a
+        private generator so the call moves no random stream and repeats exactly."""
+        g = torch.Generator(device="cpu").manual_seed(0x5E64)
+        return torch.empty(n, self.Q.shape[1]).normal_(mean=0.0, std=0.02, generator=g)
 
 
 class TULSlotChain(nn.Module):
@@ -6824,6 +6971,8 @@ class TULSlots(nn.Module):
     same way in ``tests/test_slot_seed_modes.py``).
     """
 
+    cell_extend: str = "refuse"       # tul.cell_count, eval only: MORPHTransformer.cell_extend
+
     def __init__(self, d_model: int, tul: TULConfig, with_prefix: bool = True,
                  n_coda: int = 0):
         super().__init__()
@@ -7056,7 +7205,8 @@ class TULSlots(nn.Module):
         ``i*m .. i*m+m-1`` through ``W_prefix[i*m] .. W_prefix[i*m+m-1]`` — see the
         expansion's own comment, a few lines below.
         """
-        K = self.tul.prefix_k
+        var = self.tul.cell_count != "fixed"           # tul.cell_count: K is this batch's M
+        K = int(layout.prefix_k) if var else self.tul.prefix_k
         B, S = layout.slot_index.shape
         C = h_slots.shape[-1]
         mid = h_slots.shape[2:-1]                      # () plain carrier, (n,) HC carrier
@@ -7065,7 +7215,12 @@ class TULSlots(nn.Module):
                 "TULSlots.prefix_project needs W_prefix, which is built only for a slot-loop "
                 "model or an FM planner (TULSlots(with_prefix=True)); the paid loop "
                 "(tul.tokens_through_core) has no projection to write through.")
-        w = self.W_prefix.to(h_slots.dtype)
+        if var:
+            w = select_cell_rows(self.W_prefix, K, layout.cell_roles, self.cell_extend,
+                                 lambda n: torch.eye(C).unsqueeze(0).repeat(n, 1, 1)
+                                 ).to(h_slots.dtype)
+        else:
+            w = self.W_prefix.to(h_slots.dtype)
         m = int(self.tul.prefix_per_cell)
         if cells is not None and m > 1 and cells.shape[2] != K:
             # tul.prefix_per_cell (2026-10-05, the "wider write" arm): every caller under
@@ -7123,7 +7278,8 @@ class TULSlots(nn.Module):
         (bit-identical) so a writer that does NOT project — TUL-Code's cells are the code
         itself — can land its values on the same positions.
         """
-        K = self.tul.prefix_k
+        K = (int(layout.prefix_k) if self.tul.cell_count != "fixed"
+             else self.tul.prefix_k)
         B, S = layout.slot_index.shape
         offs = torch.arange(K, device=layout.slot_index.device)
         pos = layout.slot_index.unsqueeze(-1) + offs                      # [B, S, K]

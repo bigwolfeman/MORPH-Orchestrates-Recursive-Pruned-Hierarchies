@@ -4,7 +4,8 @@
 morph/training/graph_step.py records the training step (forward, backward, clip, found-inf
 flag, optimizer step, the fan's post-step update) as a CUDA graph per step kind and replays it.
 
-What each test pins:
+What each test pins (the last test adds a variable cell count, `tul.cell_count`: one graph per
+(kind, pass, M), and a random role subset rides in the batch as a device tensor):
   1. THE REPLAY IS THE EAGER STEP, BIT FOR BIT. A tiny winner (`lxtul_pointer_ditto`
      composed by Hydra: LXTUL fan, latent-selected loop, pointer heads, DITTO rows, gain
      hinge, fixed-point term, ternary STE, the EMA twin; `model.graph_safe`,
@@ -99,7 +100,7 @@ def _build(cfg, rt, seed=0):
     m = MORPHTransformer(mc).cuda()
     apply_quantization(m, cfg)
     m.tul_fan_target_build()
-    if hasattr(m, "tul_fan_target_sync"):
+    if m.__dict__.get("_fan_target") is not None:      # the EMA twin: lxtul_* only
         m.tul_fan_target_sync()
     m.train()
     return m, create_optimizer(m, cfg)
@@ -283,11 +284,21 @@ _HINGE_OFF = ("model.slot_gain_target=100.0",)
                          ids=["winner", "coreloop_keys", "slot_compact", "blockfuse_keys",
                               "hinge_active", "hinge_inactive", "gain_rows"])
 def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra):
+    _replay_is_the_eager_step(monkeypatch, "lxtul_pointer_ditto", extra)
+
+
+def _replay_is_the_eager_step(monkeypatch, name, extra, make_batches=None, cell_shapes=None):
+    """The replay-equals-eager contract over ``_PLAN`` (module notes, test 1) for config
+    ``name``. ``make_batches(rt, n)``: the n batches (default: ``_batches``). ``cell_shapes``:
+    the cell counts a batch can have (``tul.cell_count``): GraphStep then records one graph per
+    (kind, pass, cell count) and keys it by the batch's own ``prefix_k``."""
     from morph.training.graph_step import GraphStep
-    cfg, rt = _compose(monkeypatch, "lxtul_pointer_ditto", *_ON, *extra)
+    cfg, rt = _compose(monkeypatch, name, *_ON, *extra)
     clip = float(cfg.training.grad_clip)
-    batches = _batches(rt, len(_PLAN))
+    batches = (make_batches or _batches)(rt, len(_PLAN))
     lr = [1e-3 * (1 + 0.1 * s) for s in range(len(_PLAN))]
+    shape_kw = {} if cell_shapes is None else _cell_shape_kw(rt, cell_shapes)
+    n_shape = 1 if cell_shapes is None else len(cell_shapes)
 
     # ── reference: all eager ───────────────────────────────────────────────────────
     ma, oa = _build(cfg, rt)
@@ -323,7 +334,7 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
     gs = GraphStep(mb, ob, grad_clip=clip, forward=_fwd(mb), kinds=(False, True),
                    set_kind=lambda k: setattr(mb, "_train_instruments", k),
                    loss_terms=_zero_pen, after_step=mb.tul_fan_after_step, first_capture=2,
-                   keep_grads=(True, False), compiled=False, **_variants(mb))
+                   keep_grads=(True, False), compiled=False, **_variants(mb), **shape_kw)
     n_var = len(gs.variants)
     assert n_var == int(mb.cfg.max_depth) > 1, gs.variants
     torch.manual_seed(1234)
@@ -353,7 +364,8 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
                 assert gs.graphs == {}
                 ev = _eval_forward(mb, x, y, lay)
             assert _eq(ev, ref_eval)
-    assert gs.stats.replayed == 8 and gs.stats.captures == 4 * n_var and gs.stats.eager == 4
+    assert (gs.stats.replayed == 8 and gs.stats.captures == 4 * n_var * n_shape
+            and gs.stats.eager == 4)
     # every recording took the hinge branch (the forward reports the hinge), and its B body
     # (no penalty edge) is a smaller graph than A: the hinge's backward is not in it
     from morph.training.graph_cond import graph_node_count
@@ -364,7 +376,8 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
     assert ref[0]["cot_ref"] is not None                      # the hook ran (slot_cot_clip)
     assert gs.stats.releases == 1
     # the replays since the re-recording, per (kind, pass): exactly the steps' own draws
-    after = [(k, ref[s]["pass"]) for s, (k, how) in enumerate(_PLAN)
+    after = [(k, ref[s]["pass"]) + (() if cell_shapes is None else (batches[s][2].prefix_k,))
+             for s, (k, how) in enumerate(_PLAN)
              if s > _EVAL_AFTER and how in ("capture", "replay")]
     want = {}
     for key in after:
@@ -373,6 +386,66 @@ def test_replay_is_the_eager_step_bit_for_bit(monkeypatch, deterministic, extra)
     replayed = [ref[s]["pass"] for s, (_k, how) in enumerate(_PLAN)
                 if how in ("capture", "replay")]
     assert len(set(replayed)) >= 2, f"the fixture replayed one pass only: {replayed}"
+
+
+def _cell_spec(rt) -> TulLayoutSpec:
+    """The reference packing of the cell-count batches: the tiny slot budget (10), not the
+    recipe's 64, so the rows stay small."""
+    return TulLayoutSpec(seq_len=SEQ, prefix_k=rt.data_cfg.prefix_k, max_slots=10,
+                         slot_id=rt.data_cfg.slot_id)
+
+
+def _cell_shape_kw(rt, cell_shapes) -> dict:
+    """train.py's wiring of the batch's cell count as GraphStep's shape."""
+    from morph.model.tul_layout import relayout_batch
+    spec = _cell_spec(rt)
+    span_cap = rt.data_cfg.rule.span_cap
+
+    def shape_batch(m, x, y, lay):
+        bx, by, bl = relayout_batch(x, y, lay, m, spec, span_cap,
+                                    np.arange(m) if lay.cell_roles is not None else None)
+        return bx.cuda(), by.cuda(), bl.to("cuda")
+    return {"shapes": tuple(cell_shapes), "shape_of": lambda lay: int(lay.prefix_k),
+            "shape_batch": shape_batch}
+
+
+# The cell count and the roles of each _PLAN step: M = 3 twice in a row with different roles
+# (steps 3 and 4: a replay must read the roles of ITS batch, not the capture batch's), and
+# M = 3 / 4 alternating elsewhere.
+_CELL_PLAN = [(4, None), (3, (0, 1, 3)), (4, None), (3, (0, 1, 3)), (3, (1, 2, 3)), (4, None),
+              (3, (0, 2, 3)), (3, (1, 2, 3)), (4, None), (3, (0, 1, 2)), (3, (0, 2, 3)),
+              (4, None)]
+
+
+def _cell_batches(rt, n: int):
+    """``n`` batches packed at the reference width and re-laid out to ``_CELL_PLAN``'s counts,
+    each carrying its random-subset roles. Slot counts differ between batches."""
+    from morph.model.tul_layout import relayout_batch
+    spec = _cell_spec(rt)
+    out = []
+    for i in range(n):
+        buf = _stream(B * 400, seed=100 + i, p_boundary=(0.06, 0.12, 0.2)[i % 3])
+        x, y, lay = pack_tul_batch(buf, _rule(), spec, B)
+        m, roles = _CELL_PLAN[i]
+        x, y, lay = relayout_batch(x, y, lay, m, spec, rt.data_cfg.rule.span_cap,
+                                   np.arange(m) if roles is None else np.array(roles))
+        out.append((x.cuda(), y.cuda(), lay.to("cuda")))
+    assert len({int(b[2].slot_valid.sum()) for b in out}) >= 3
+    # two consecutive batches at the same M with different roles (steps 3 and 4)
+    assert out[3][2].prefix_k == out[4][2].prefix_k == 3
+    assert not torch.equal(out[3][2].cell_roles, out[4][2].cell_roles)
+    return out
+
+
+@cuda
+@pytest.mark.parametrize("extra", [(), _HINGE_ON], ids=["recipe", "hinge_active"])
+def test_replay_is_the_eager_step_at_a_variable_cell_count(monkeypatch, deterministic, extra):
+    """tul.cell_count (categorical [0, 0, .25, .75], random roles): one graph per (kind, pass,
+    cell count); a replay equals the eager step for each M, and a different role subset at the
+    same M (steps 3 and 4) replays the SAME graph on the new roles."""
+    name = "nowta_pointer_fast_spdcells_speed_bf16c_cellg375"
+    _replay_is_the_eager_step(monkeypatch, name, extra, make_batches=_cell_batches,
+                              cell_shapes=(3, 4))
 
 
 def _captured(monkeypatch, variants=None, holder=None):
