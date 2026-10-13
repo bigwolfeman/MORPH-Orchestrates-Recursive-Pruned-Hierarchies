@@ -820,6 +820,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_stream=bool(getattr(m, "slot_gain_stream", False)),
         split_wgrad=bool(getattr(m, "split_wgrad", False)),
         split_wgrad_triton=bool(getattr(m, "split_wgrad_triton", False)),
+        gemm_epilogue_fusion=bool(getattr(m, "gemm_epilogue_fusion", False)),   # model.gemm_epilogue_fusion
         slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
         # MORPHConfig.slot_gain_pass_force: -1 = a fresh hinge pass per step (2026-10-10)
         slot_gain_pass_force=int(getattr(m, "slot_gain_pass_force", -1)),
@@ -2737,7 +2738,8 @@ def main(cfg: DictConfig) -> None:
                              "GEMM weight it reads is the step cache's bf16 buffer")
         from morph.model.split_wgrad import bind_split_wgrad
         getattr(model, "_orig_mod", model).__dict__["_split_wgrad_stream"] = \
-            bind_split_wgrad(model, triton=bool(model.cfg.split_wgrad_triton))
+            bind_split_wgrad(model, triton=bool(model.cfg.split_wgrad_triton),
+                             epilogue=bool(model.cfg.gemm_epilogue_fusion))
 
     def _compile_block(layer, dyn):
         """training.compile_blocks' compile of ONE MORPHBlock (the GLA retention branch

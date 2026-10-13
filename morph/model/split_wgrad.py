@@ -64,13 +64,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from morph.kernels.triton.split_gemm import linear_dgrad, linear_fwd, linear_wgrad
+from morph.kernels.triton.split_gemm import (linear_dgrad, linear_fwd, linear_wgrad, swiglu_bwd,
+                                             swiglu_fwd)
 
 from .streams import side_stream
 
 __all__ = ["SplitWeight", "WgradStream", "as_bf16", "bind_split_wgrad", "split_active",
            "train_backward_scope",
-           "split_linear"]
+           "split_linear", "split_swiglu_mlp"]
 
 
 def _autocast_bf16() -> bool:
@@ -341,12 +342,102 @@ def split_linear(x: Tensor, sw: SplitWeight) -> Tensor:
     return torch.ops.morph.split_linear(x, sw.weight(), sw.sid)
 
 
-def bind_split_wgrad(model: nn.Module, *, strict: bool = False,
-                     triton: bool = False) -> WgradStream:
+# ── model.gemm_epilogue_fusion: the whole SwiGLU MLP as ONE op ────────────────────────────
+#
+# ``down(silu(gate) * up)`` with ``[gate, up] = gate_up(x)``: the forward writes ``h`` in the
+# ``gate_up`` GEMM's epilogue, the backward forms ``d_gate`` and ``d_up`` in the ``down`` data-grad
+# GEMM's epilogue. The op returns ``h`` and ``gu`` next to ``y`` only so autograd can save them
+# (a custom op saves its inputs and outputs, not its internals); nothing reads them. The saved set
+# is what the unfused path saves too (``gu`` for the activation backward, ``h`` for ``down``'s weight
+# grad). The backward is the two linears' nodes in the order the unfused path runs them, down
+# first, so each weight's reads reach the side stream in the same order.
+
+@torch.library.custom_op("morph::split_swiglu_mlp", mutates_args=())
+def _split_swiglu_mlp(x: Tensor, w_gu: Tensor, w_dn: Tensor, sid_gu: int, sid_dn: int
+                      ) -> tuple[Tensor, Tensor, Tensor]:
+    """``(y, h, gu)``: ``y = down(h)``, ``h = silu(gate) * up``, ``gu = gate_up(x)``."""
+    lead = x.shape[:-1]
+    gu, h = swiglu_fwd(x.reshape(-1, w_gu.shape[1]), w_gu)
+    y = linear_fwd(h, w_dn)
+    return (y.reshape(*lead, w_dn.shape[0]), h.reshape(*lead, w_dn.shape[1]),
+            gu.reshape(*lead, w_gu.shape[0]))
+
+
+@_split_swiglu_mlp.register_fake
+def _(x: Tensor, w_gu: Tensor, w_dn: Tensor, sid_gu: int, sid_dn: int):
+    lead = x.shape[:-1]
+    return (x.new_empty(*lead, w_dn.shape[0]), x.new_empty(*lead, w_dn.shape[1]),
+            x.new_empty(*lead, w_gu.shape[0]))
+
+
+@torch.library.custom_op("morph::split_swiglu_mlp_bwd", mutates_args=())
+def _split_swiglu_mlp_bwd(dy: Tensor, x: Tensor, h: Tensor, gu: Tensor, w_gu: Tensor,
+                          w_dn: Tensor, sid_gu: int, sid_dn: int) -> Tensor:
+    """``dx`` on the node's stream; both weight grads on the side stream (``down``'s first)."""
+    sw_gu, sw_dn = _REGISTRY[sid_gu], _REGISTRY[sid_dn]
+    ready = torch.cuda.Event()
+    ready.record()
+    dgu = swiglu_bwd(dy.reshape(-1, sw_dn.n_out), w_dn, gu.reshape(-1, sw_gu.n_out))
+    sw_dn.mgr.defer(sw_dn, dy, h, ready)
+    ready = torch.cuda.Event()
+    ready.record()                                   # dgu is complete past this point
+    dx = linear_dgrad(dgu, w_gu).reshape(x.shape)
+    sw_gu.mgr.defer(sw_gu, dgu, x, ready)
+    return dx
+
+
+@_split_swiglu_mlp_bwd.register_fake
+def _(dy: Tensor, x: Tensor, h: Tensor, gu: Tensor, w_gu: Tensor, w_dn: Tensor, sid_gu: int,
+      sid_dn: int) -> Tensor:
+    return x.new_empty(x.shape)
+
+
+def _swiglu_setup(ctx, inputs, output) -> None:
+    x, w_gu, w_dn, sid_gu, sid_dn = inputs
+    _y, h, gu = output
+    ctx.save_for_backward(x, h, gu, w_gu, w_dn)
+    ctx.sids = (sid_gu, sid_dn)
+    ctx.set_materialize_grads(False)                 # h and gu carry no gradient
+
+
+def _swiglu_backward(ctx, dy: Tensor, _dh, _dgu):
+    x, h, gu, w_gu, w_dn = ctx.saved_tensors
+    dx = torch.ops.morph.split_swiglu_mlp_bwd(dy, x, h, gu, w_gu, w_dn, *ctx.sids)
+    return dx, None, None, None, None
+
+
+_split_swiglu_mlp.register_autograd(_swiglu_backward, setup_context=_swiglu_setup)
+
+
+def split_swiglu_mlp(x: Tensor, sw_gu: SplitWeight, sw_dn: SplitWeight) -> Tensor:
+    """``down(silu(gate) * up)`` of ``[gate, up] = gate_up(x)`` for the covered weights, with the
+    SwiGLU in the two GEMMs' epilogues (``model.gemm_epilogue_fusion``). Same contract as
+    ``split_linear``: ``x`` is bf16 and carries a gradient."""
+    if not (sw_gu.mgr.triton and sw_dn.mgr.triton):
+        raise RuntimeError("model.gemm_epilogue_fusion needs the Triton split GEMMs "
+                           "(model.split_wgrad_triton)")
+    if sw_gu.n_out != 2 * sw_dn.n_in or sw_gu.n_in != sw_dn.n_out:
+        raise ValueError(f"split_swiglu_mlp: {sw_gu.name} ({sw_gu.n_out} x {sw_gu.n_in}) and "
+                         f"{sw_dn.name} ({sw_dn.n_out} x {sw_dn.n_in}) are not one SwiGLU MLP")
+    if not x.requires_grad:
+        raise RuntimeError(f"split_wgrad: {sw_gu.name} is read by an input that carries no "
+                           f"gradient while the weight trains; its weight grad would be lost")
+    return torch.ops.morph.split_swiglu_mlp(x, sw_gu.weight(), sw_dn.weight(), sw_gu.sid,
+                                            sw_dn.sid)[0]
+
+
+def bind_split_wgrad(model: nn.Module, *, strict: bool = False, triton: bool = False,
+                     epilogue: bool = False) -> WgradStream:
     """Cover every linear named in the module notes. Call AFTER ``bind_ternary_step_cache`` and
     BEFORE the compile warm-up. Raises when it covers nothing, when a covered module is not
     one the op reproduces exactly (a bias, a parametrization other than the cached ternary
-    STE, a carved or FP8 layer), or when the attention input fusion is off."""
+    STE, a carved or FP8 layer), or when the attention input fusion is off. ``epilogue``
+    (``model.gemm_epilogue_fusion``): every covered SwiGLU MLP runs as ONE op with the SwiGLU in
+    its GEMMs' epilogues; needs ``triton``, and an MLP with a router or a missing covered linear
+    is refused."""
+    if epilogue and not triton:
+        raise ValueError("model.gemm_epilogue_fusion needs model.split_wgrad_triton=true: the "
+                         "SwiGLU epilogues live in the Triton split GEMMs.")
     import torch.nn.utils.parametrize as parametrize
 
     from . import attention
@@ -356,6 +447,7 @@ def bind_split_wgrad(model: nn.Module, *, strict: bool = False,
 
     mgr = WgradStream(side_stream("wgrad"), strict=strict, triton=triton)
     n = {"mlp": 0, "attn_in": 0, "attn_up": 0}
+    fused_mlps = []
 
     def plain_param(name: str, mod: nn.Module) -> nn.Parameter:
         """The fp32 parameter of a linear that nothing parametrizes (attention projections)."""
@@ -409,9 +501,25 @@ def bind_split_wgrad(model: nn.Module, *, strict: bool = False,
                 mgr, f"{name}.W_up", [p], [(0, mod.W_up.out_features)], mod.W_up.in_features,
                 kind="plain", mods=(mod.W_up,))
             n["attn_up"] += 1
+    if epilogue:
+        from .transformer import _SwiGLUMortar
+        for name, mod in model.named_modules():
+            if isinstance(mod, _SwiGLUMortar):
+                if mod.router is not None:
+                    raise ValueError(f"model.gemm_epilogue_fusion: {name} has a ReMoE router; "
+                                     f"the fused MLP op has no gate between the SwiGLU and "
+                                     f"down (route_start must stay beyond the run)")
+                if mod.gate_up._cms._split is None or mod.down._cms._split is None:
+                    raise ValueError(f"model.gemm_epilogue_fusion: {name} has an MLP linear the "
+                                     f"split op does not cover")
+                mod._swiglu_fused = True
+                fused_mlps.append(name)
+        if not fused_mlps:
+            raise ValueError("model.gemm_epilogue_fusion: the model has no SwiGLU MLP to fuse")
     if not any(n.values()):
         raise ValueError("model.split_wgrad: the model has no covered linear")
     print(f"  [split-wgrad] ON: {n['mlp']} ternary MLP linears, {n['attn_in']} fused attention "
           f"input projections, {n['attn_up']} W_up; weight grads on a side stream"
-          f"{', Triton GEMMs' if triton else ''}", flush=True)
+          f"{', Triton GEMMs' if triton else ''}"
+          f"{f', SwiGLU epilogues in {len(fused_mlps)} MLPs' if epilogue else ''}", flush=True)
     return mgr

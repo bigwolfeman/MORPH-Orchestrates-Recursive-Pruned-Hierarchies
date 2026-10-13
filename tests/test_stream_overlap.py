@@ -71,7 +71,8 @@ def _build(cfg, rt, seed=0, *, strict=False):
     from test_graph_step import _build as _base_build
     m, opt = _base_build(cfg, rt, seed)
     bind_ternary_step_cache(m, None)
-    mgr = (bind_split_wgrad(m, strict=strict, triton=bool(m.cfg.split_wgrad_triton))
+    mgr = (bind_split_wgrad(m, strict=strict, triton=bool(m.cfg.split_wgrad_triton),
+                            epilogue=bool(m.cfg.gemm_epilogue_fusion))
            if bool(m.cfg.split_wgrad) else None)
     return m, opt, mgr
 
