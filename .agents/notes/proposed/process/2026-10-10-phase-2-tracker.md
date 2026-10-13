@@ -95,6 +95,10 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   match). [x] 5k, 2 seeds each (`successes/2026-10-13-fan-variable-cell-count-v1.md`): Poisson draw CE@6 +0.0002, K1-K6
   95.5 %, wall 0.921x, gap(1) +0.0051 (control +0.135), M = 2 within 0.0004; gentle draw CE@6 -0.0018, K1-K6 97 %, gap(3)
   +0.0004; no arm gains above M = 4 (v2 needed). [x] Poisson arm IS the speed base (`..._bf16c_cellp3`), smoke with S5: 297/300 replays, 64 graphs, eval 2.44 GiB free (quiet desktop).
+  [x] G0 (max-autotune GEMMs -12 % GEMM time) + G1 `model.split_wgrad_triton` MERGED b4810c99 (key off): pinned bench on S5
+  171.07 -> 164.21 ms (-6.9); readout CE@6 3.9059 vs 3.9060; untuned-shape-at-recording now collects, tunes on synthetic
+  tensors and re-records (unit-tested; no real run needed it). [ ] 5k 2-seed package on the Poisson base:
+  `lab/experiments/planned/2026-10-13-g1-triton-gemm-5k.md`.
   [x] bf16 carrier IN the speed base: matched controls CE@6 +0.0005, K1-K6 105 % (successes/2026-10-12-bf16-carrier-matched-controls.md).
 
 - **Training: 9.1 TFLOP per step** for `lxtul_pointer` at batch 6 x 1024 (today 21.67 TFLOP,
