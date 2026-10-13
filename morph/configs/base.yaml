@@ -160,6 +160,22 @@ model:
   #   running under torch.utils.checkpoint (no backward recompute; +1.54 GB peak on the
   #   lxtul_pointer FAST step). EXACT: loss and grads bit-identical. false = checkpointed.
   slot_gain_no_ckpt: false
+  # slot_gain_stream: the hinge's two core applications run on their own CUDA stream, overlapping
+  #   the main loop's later passes and the coda; autograd runs their backward on that stream too.
+  #   EXACT (same kernels, RNG offsets and summation order; byte gate FINAL_SHA256 unchanged).
+  #   Holds the hinge's and the loop's activations at once (more peak memory). Needs
+  #   slot_gain_lambda > 0 and slot_gain_no_ckpt. false = the hinge runs inline.
+  slot_gain_stream: false
+  # split_wgrad: the weight grads of the block linears (ternary MLP, the attention's fused input
+  #   projection, W_up; prelude, core, coda and the gain hinge) are formed and summed on a second CUDA
+  #   stream, off the backward's critical path. EXACT (same GEMM, same cast, same summation order:
+  #   byte gate FINAL_SHA256 unchanged). A torch.library custom op, so no graph break. Persistent fp32
+  #   sum buffers (p.grad views) and bf16 GEMM scratch are allocated at bind; dy and x are held in
+  #   groups until the side stream passes them. Only inside split_wgrad.train_backward_scope() (the
+  #   trainer's step); probes outside it take ordinary autograd. Cost on speed_bf16c: graph pool
+  #   +1.15 GiB with slot_gain_stream (0.34 GiB free after eval). Needs ternary_step_cache and
+  #   grad_accum 1. false = autograd forms every weight grad inline.
+  split_wgrad: false
   # slot_gain_reuse_f0: the hinge's f(h) is the loop's own step output at the sampled pass and
   #   f(h + d) replays that step's RNG state (one core application saved). NOT exact: the
   #   hinge's gradient through f(h) also reaches earlier passes and the prelude. false = two

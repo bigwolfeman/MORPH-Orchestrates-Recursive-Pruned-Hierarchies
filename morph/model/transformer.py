@@ -57,6 +57,7 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
 from .loop_glue import compile_rms_norm
+from .streams import record_on, side_stream
 from .slot_compact import (compact_attn_input, compact_order, put_rows, slot_depth_capacity,
                            stratified_slot_depths, take_rows, validate_slot_compact)
 from .tul_ditto import ditto_loss
@@ -846,6 +847,19 @@ class MORPHConfig:
     # a checkpoint recomputes with the RNG state it saved, so the loss and every gradient
     # are bit-identical (tests/test_slot_gain_reg.py). False = checkpointed, as before.
     slot_gain_no_ckpt: bool = False
+    # slot_gain_stream — the hinge's two core applications run on their own CUDA stream while
+    # the main loop goes on with the later passes and the coda; the main stream waits for them
+    # just before the hinge terms are reduced, and autograd runs the hinge's backward on the
+    # same side stream. EXACT: the same kernels, the same RNG offsets, the same gradient
+    # summation order. Costs the activations of both loops being live at once. False = the
+    # hinge runs inline on the main stream, as before (morph/model/streams.py).
+    slot_gain_stream: bool = False
+    # split_wgrad — the weight grads of the block linears (the ternary MLP, the attention's
+    # fused input projection and W_up; prelude, core, coda and the hinge) run on a second CUDA
+    # stream, off the backward's critical path, summed in the same order (bit-identical).
+    # Needs ternary_step_cache and CUDA; holds the covered linears' dy and x until the backward
+    # ends. False = autograd forms every weight grad inline (morph/model/split_wgrad.py).
+    split_wgrad: bool = False
     # slot_gain_reuse_f0 — the hinge's f(h) IS the loop's own step output at the sampled
     # pass, and f(h + d) runs under that step's dropout masks (the RNG state before the
     # step is replayed for it). Saves one of the hinge's two core applications. NOT exact:
@@ -3940,6 +3954,25 @@ class MORPHTransformer(nn.Module):
         if (cfg.slot_gain_no_ckpt or cfg.slot_gain_reuse_f0) and cfg.slot_gain_lambda <= 0.0:
             raise ValueError("model.slot_gain_no_ckpt / slot_gain_reuse_f0 need "
                              "model.slot_gain_lambda > 0: they change how the hinge runs.")
+        if cfg.split_wgrad:
+            if not cfg.ternary_step_cache:
+                raise ValueError("model.split_wgrad needs model.ternary_step_cache=true: the "
+                                 "MLP GEMM weight it reads is the step cache's bf16 buffer.")
+            if not torch.cuda.is_available():
+                raise ValueError("model.split_wgrad needs CUDA: a side stream has nothing to "
+                                 "overlap with on this machine.")
+        if cfg.slot_gain_stream:
+            if cfg.slot_gain_lambda <= 0.0:
+                raise ValueError("model.slot_gain_stream needs model.slot_gain_lambda > 0: "
+                                 "it moves the hinge onto its own stream.")
+            if not torch.cuda.is_available():
+                raise ValueError("model.slot_gain_stream needs CUDA: a side stream has "
+                                 "nothing to overlap with on this machine.")
+            if not cfg.slot_gain_no_ckpt:
+                raise NotImplementedError(
+                    "model.slot_gain_stream with the checkpointed hinge: the recompute of a "
+                    "checkpoint runs inside the backward on whatever stream the engine "
+                    "picks; set model.slot_gain_no_ckpt=true.")
         # model.slot_depth_stratified / model.slot_compact: refused outside the recipe they
         # were built for (morph/model/slot_compact.py).
         validate_slot_compact(cfg)
@@ -7164,6 +7197,13 @@ class MORPHTransformer(nn.Module):
         if _gain_on and n_grad_iters > 0 and not _gain_all:
             _t_gain = self._gain_pass_for_step(n_nograd, n_grad_iters)
         _gain_terms: list[dict] = []
+        # model.slot_gain_stream: the side stream (made in the first eager forward, never
+        # inside a capture) and one event per hinge call, waited on before the reduce.
+        _gain_side = (side_stream("slot_gain", h.device)
+                      if _gain_on and self.cfg.slot_gain_stream else None)
+        _gain_events: list[torch.cuda.Event] = []
+        if _gain_side is not None and not h.is_cuda:
+            raise RuntimeError("model.slot_gain_stream: the loop state is not on a CUDA device")
         _ck = self.cfg.ckpt_grad_iters
         n_ckpt = n_grad_iters if _ck < 0 else max(0, min(_ck, n_grad_iters))
 
@@ -7892,21 +7932,34 @@ class MORPHTransformer(nn.Module):
                 if _prog:
                     _gm = _gm & ~_pfx
                 if (not _prog) or bool(_gm.any()):
-                    _gain_terms.append(self._slot_gain_penalty(
-                        _core_step, _h_in, _e_step, _inj_arg, ret_state, t, _sc,
-                        _gm, _gain_lambda, carry=_cy,
-                        # keyword passed only when on: the knob-off call is the old call
-                        **({} if _gain_renorm_to is None
-                           else {"renorm_to": _gain_renorm_to}),
-                        # `model.slot_gain_reuse_f0`: the step's RAW output (before the
-                        # progressive cut, the renorm and the cell norm) is f(h).
-                        **({} if _f0_rng is None
-                           else {"f0": _step_out[0], "f0_rng": _f0_rng}),
-                        # model.slot_compact: the map of THIS pass, frozen cells served
-                        # from the caches it read, detached like every other source.
-                        **({} if _cpt_plans is None
-                           else {"compact": (*_cpt_plans[t], None if _xa_in is None
-                                             else tuple(c.detach() for c in _xa_in))})))
+                    if _gain_side is not None:
+                        # model.slot_gain_stream: fork the side stream here. It waits for
+                        # everything the main stream has queued (the pass inputs), and the
+                        # allocator keeps each input the hinge reads until it is done.
+                        _gain_side.wait_stream(torch.cuda.current_stream())
+                        record_on(_gain_side, _h_in, _e_step, _inj_arg, ret_state, _sc, _gm,
+                                  _cy, None if _cpt_plans is None else _cpt_plans[t], _xa_in)
+                    with (nullcontext() if _gain_side is None
+                          else torch.cuda.stream(_gain_side)):
+                        _gain_terms.append(self._slot_gain_penalty(
+                            _core_step, _h_in, _e_step, _inj_arg, ret_state, t, _sc,
+                            _gm, _gain_lambda, carry=_cy,
+                            # keyword passed only when on: the knob-off call is the old call
+                            **({} if _gain_renorm_to is None
+                               else {"renorm_to": _gain_renorm_to}),
+                            # `model.slot_gain_reuse_f0`: the step's RAW output (before the
+                            # progressive cut, the renorm and the cell norm) is f(h).
+                            **({} if _f0_rng is None
+                               else {"f0": _step_out[0], "f0_rng": _f0_rng}),
+                            # model.slot_compact: the map of THIS pass, frozen cells served
+                            # from the caches it read, detached like every other source.
+                            **({} if _cpt_plans is None
+                               else {"compact": (*_cpt_plans[t], None if _xa_in is None
+                                                 else tuple(c.detach() for c in _xa_in))})))
+                    if _gain_side is not None:
+                        _gev = torch.cuda.Event()
+                        _gev.record(_gain_side)
+                        _gain_events.append(_gev)
             if _renorm:
                 # Direction preserved, per-slot norm pinned to the entry norm. Runs on the
                 # raw step output, BEFORE the gain governor and the recurrence gate, so it is
@@ -8347,6 +8400,13 @@ class MORPHTransformer(nn.Module):
             # One sampled iteration: its dict as before. Every iteration: the hinges SUM
             # (each iteration's map is held under the target), the gains report mean / max
             # (`_slot_gain_reduce`).
+            if _gain_events:
+                # model.slot_gain_stream: join. The main stream waits for the hinge's
+                # forward, and the allocator keeps its outputs until the main stream is done.
+                _cur = torch.cuda.current_stream()
+                for _gev in _gain_events:
+                    _cur.wait_event(_gev)
+                record_on(_cur, _gain_terms)
             _gain_reg = self._slot_gain_reduce(_gain_terms)
         return xn, h, depths, g_traj, _db_traj, _gain_reg, _mep_keep
 
