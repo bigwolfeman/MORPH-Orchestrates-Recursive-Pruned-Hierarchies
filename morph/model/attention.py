@@ -42,6 +42,7 @@ except ImportError:
 # reference when Triton is unavailable, so a direct import is always safe.
 from morph.kernels.triton.fused_cca_prologue import fused_cca_prologue
 from morph.model.host_shadow import shadow as _host_shadow
+from morph.model.split_wgrad import SplitWeight, as_bf16, split_active, split_linear
 # Fused causal conv pair (depthwise + head-grouped), replacing the cuDNN convs
 # whose grouped wgrad backward is slow on sm_120. Verified fwd/grad-exact.
 from morph.kernels.triton.fused_cca_conv import fused_cca_conv
@@ -120,7 +121,8 @@ def set_rope_cast_cache(value: bool) -> None:
     _ROPE_CAST_CACHE = bool(value)
 
 
-def _fused_x_proj(x: Tensor, mods: tuple[nn.Linear, ...]) -> tuple[Tensor, tuple[Tensor, ...]]:
+def _fused_x_proj(x: Tensor, mods: tuple[nn.Linear, ...],
+                  split: SplitWeight | None = None) -> tuple[Tensor, tuple[Tensor, ...]]:
     """One GEMM for every K=d_model projection of x.
 
     Returns (Y, splits) where Y = x @ cat(weights)^T is [B, S, ΣN_i] and the
@@ -131,8 +133,13 @@ def _fused_x_proj(x: Tensor, mods: tuple[nn.Linear, ...]) -> tuple[Tensor, tuple
     per-mod dX contributions — same summands, different association; the delta
     is measured (not assumed) in the parity script.
     """
-    w = torch.cat([m.weight for m in mods], dim=0)
-    y = F.linear(x, w.to(x.dtype))
+    if split_active(split):
+        # model.split_wgrad: the same GEMM, its weight grad on the side stream
+        # (morph/model/split_wgrad.py); the parameters are not in the autograd graph.
+        y = split_linear(as_bf16(x), split)
+    else:
+        w = torch.cat([m.weight for m in mods], dim=0)
+        y = F.linear(x, w.to(x.dtype))
     return y, y.split([m.weight.shape[0] for m in mods], dim=-1)
 
 
@@ -899,6 +906,15 @@ class _CCABase(nn.Module):
         # Python constant per instance, so the call below traces out.
         self.prologue_tiled = False
 
+        # model.split_wgrad: the covered W_up (bind_split_wgrad sets it); None = the plain read.
+        self._split_up: SplitWeight | None = None
+
+    def _up(self, z: Tensor) -> Tensor:
+        """``W_up(z)``; under ``model.split_wgrad`` the weight grad goes to the side stream."""
+        if split_active(self._split_up):
+            return split_linear(as_bf16(z), self._split_up)
+        return self.W_up(z)
+
     def _causal_conv(self, x_t: Tensor,
                      conv_dw: nn.Module, conv_gp: nn.Module) -> Tensor:
         # Fused depthwise+grouped causal conv (one Triton kernel, sm_120).
@@ -1099,7 +1115,7 @@ class _CCABase(nn.Module):
         combined = g[..., 0:1] * out_comp + g[..., 1:2] * out_win
 
         if win_capture is not None:
-            win_capture["win"] = self.W_up(
+            win_capture["win"] = self._up(
                 (g[..., 1:2] * out_win).transpose(1, 2).reshape(B, S, self.latent_q_dim))
 
         if q_lat is None:
@@ -1107,7 +1123,7 @@ class _CCABase(nn.Module):
         x_res = q_lat.reshape(B, S, H, D).transpose(1, 2)
         out = combined + self.alpha * x_res
 
-        return self.W_up(out.transpose(1, 2).reshape(B, S, self.latent_q_dim))
+        return self._up(out.transpose(1, 2).reshape(B, S, self.latent_q_dim))
 
 
 # ─── CCA + CSA ────────────────────────────────────────────────────────────────
@@ -1132,6 +1148,7 @@ class _CCACSAAttention(nn.Module):
         self.top_k = top_k
         self.compress_ratio = csa_compress_ratio
         self.tg_restrict = tg_restrict
+        self._split_in: SplitWeight | None = None     # model.split_wgrad (bind_split_wgrad)
         self.graph_safe = graph_safe          # model.graph_safe (see _tg_slot_attention)
 
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
@@ -1228,7 +1245,7 @@ class _CCACSAAttention(nn.Module):
             pre_cca = gate_pre = None
             if _FUSED_ATTN_PROJ:
                 y, (q_lat_p, k_lat_p, v_curr_p, v_prev_p, gate_pre) = _fused_x_proj(
-                    x, self._fuse_mods)
+                    x, self._fuse_mods, self._split_in)
                 qk_pair = y[..., : self.cca.latent_q_dim + self.cca.latent_k_dim]
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
@@ -1273,7 +1290,7 @@ class _CCACSAAttention(nn.Module):
         pre_cca = pre_comp = pre_idx = gate_pre = None
         if _FUSED_ATTN_PROJ:
             y, (q_lat_p, k_lat_p, v_curr_p, v_prev_p, gate_pre,
-                c_aKV, c_aZ, c_bKV, c_bZ) = _fused_x_proj(x, self._fuse_mods)
+                c_aKV, c_aZ, c_bKV, c_bZ) = _fused_x_proj(x, self._fuse_mods, self._split_in)
             qk_pair = y[..., : self.cca.latent_q_dim + self.cca.latent_k_dim]
             pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             pre_comp = (c_aKV, c_aZ, c_bKV, c_bZ)
@@ -1345,6 +1362,7 @@ class _CCAHCAAttention(nn.Module):
         super().__init__()
         self.compress_ratio = hca_compress_ratio
         self.tg_restrict = tg_restrict
+        self._split_in: SplitWeight | None = None     # model.split_wgrad (bind_split_wgrad)
         self.graph_safe = graph_safe          # model.graph_safe (see _tg_slot_attention)
 
         self.cca = _CCABase(d_model, n_heads, n_kv_heads, compression,
@@ -1417,7 +1435,7 @@ class _CCAHCAAttention(nn.Module):
             pre_cca = gate_pre = None
             if _FUSED_ATTN_PROJ:
                 y, (q_lat_p, k_lat_p, v_curr_p, v_prev_p, gate_pre) = _fused_x_proj(
-                    x, self._fuse_mods)
+                    x, self._fuse_mods, self._split_in)
                 qk_pair = y[..., : self.cca.latent_q_dim + self.cca.latent_k_dim]
                 pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             q, k, v, q_lat, k_lat = self.cca._cca_project(
@@ -1458,7 +1476,7 @@ class _CCAHCAAttention(nn.Module):
         pre_cca = pre_comp = gate_pre = None
         if _FUSED_ATTN_PROJ:
             y, (q_lat_p, k_lat_p, v_curr_p, v_prev_p, gate_pre,
-                c_aKV, c_aZ) = _fused_x_proj(x, self._fuse_mods)
+                c_aKV, c_aZ) = _fused_x_proj(x, self._fuse_mods, self._split_in)
             qk_pair = y[..., : self.cca.latent_q_dim + self.cca.latent_k_dim]
             pre_cca = (q_lat_p, k_lat_p, v_curr_p, v_prev_p, qk_pair)
             pre_comp = (c_aKV, c_aZ)

@@ -83,6 +83,7 @@ _MORPH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."
 import wandb
 
 from morph.model.transformer import MORPHConfig, MORPHTransformer
+from morph.model.split_wgrad import train_backward_scope
 from morph.model.routing import collect_routing_aux_losses, collect_routing_stats
 from morph.training.divergence_guard import BlockGainGuard, CoreShareGuard
 from morph.training.code_eval import code_marginal_ce
@@ -810,6 +811,8 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         slot_gain_floor_target=float(getattr(m, "slot_gain_floor_target", 0.95)),
         slot_gain_renorm=bool(getattr(m, "slot_gain_renorm", False)),
         slot_gain_no_ckpt=bool(getattr(m, "slot_gain_no_ckpt", False)),
+        slot_gain_stream=bool(getattr(m, "slot_gain_stream", False)),
+        split_wgrad=bool(getattr(m, "split_wgrad", False)),
         slot_gain_reuse_f0=bool(getattr(m, "slot_gain_reuse_f0", False)),
         # MORPHConfig.slot_gain_pass_force: -1 = a fresh hinge pass per step (2026-10-10)
         slot_gain_pass_force=int(getattr(m, "slot_gain_pass_force", -1)),
@@ -2208,7 +2211,8 @@ def warmup_compile_all_shapes(
                              if extra else [])
                     with (torch.random.fork_rng(devices=[device]) if extra
                           else contextlib.nullcontext()):
-                        with torch.autocast("cuda", dtype=torch.bfloat16):
+                        with torch.autocast("cuda", dtype=torch.bfloat16), \
+                                train_backward_scope():
                             out = model(ids, labels=labs, slot_layout=layout)
                         out["loss"].backward()
                     model.zero_grad(set_to_none=True)
@@ -2257,7 +2261,7 @@ def warmup_compile_all_shapes(
             for _ in range(passes_per_size):
                 ids = torch.randint(0, model.cfg.vocab_size, (batch_size, seq_len),
                                     device=device)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+                with torch.autocast("cuda", dtype=torch.bfloat16), train_backward_scope():
                     out = model(ids, labels=ids)
                 out["loss"].backward()
                 model.zero_grad(set_to_none=True)
@@ -2700,6 +2704,18 @@ def main(cfg: DictConfig) -> None:
         print(f"  [ternary-step-cache] ON: {_tsc.summary()}, refreshed once per forward",
               flush=True)
 
+    def _bind_split_wgrad() -> None:
+        """model.split_wgrad: weight grads on a side stream. After the step cache is bound
+        (the MLP weights it reads) and before the warm-up compile (the op is a graph break)."""
+        if not bool(model.cfg.split_wgrad):
+            return
+        if not bool(model.cfg.ternary_step_cache):
+            raise ValueError("model.split_wgrad needs model.ternary_step_cache=true: the MLP "
+                             "GEMM weight it reads is the step cache's bf16 buffer")
+        from morph.model.split_wgrad import bind_split_wgrad
+        getattr(model, "_orig_mod", model).__dict__["_split_wgrad_stream"] = \
+            bind_split_wgrad(model)
+
     def _compile_block(layer, dyn):
         """training.compile_blocks' compile of ONE MORPHBlock (the GLA retention branch
         stays a graph break, see the comment at the call below)."""
@@ -2759,6 +2775,7 @@ def main(cfg: DictConfig) -> None:
             print(f"  MLPs compiled (mode={compile_mode}, core dynamic-batch)"
                   + (", attention compiled" if compile_attention else ""))
         _bind_ternary_step_cache(compile_mode)
+        _bind_split_wgrad()
 
         # ── Warmup compile — runs in the THREAD-FREE window (pre-wandb, pre-dataloader) ──
         # Two compilation systems fork subprocesses here and must finish before any thread
@@ -2818,6 +2835,7 @@ def main(cfg: DictConfig) -> None:
         print("  torch.compiler stance = eager_on_recompile (rare uncovered shapes run eager, never recompile/fork)", flush=True)
     else:
         _bind_ternary_step_cache(None)
+        _bind_split_wgrad()
 
     # ── W&B init — log FULL config dict ──────────────────────────────────
     # DEFERRED until AFTER the warmup: the compile/gcc-fork window above must be
@@ -3915,6 +3933,9 @@ def main(cfg: DictConfig) -> None:
         # → byte-identical to the single fwd/bwd path (loss/1 == loss). The curriculum uses it to
         # hold a constant effective batch as the per-stage micro-batch drops with context length.
         _ga = cur_grad_accum if curriculum_enabled else 1
+        if _ga != 1 and bool(model.cfg.split_wgrad):
+            raise ValueError("model.split_wgrad needs grad_accum 1: its per-weight buffer is "
+                             "overwritten by the first read of every backward")
         # The spectral penalty's value at this step, so train/loss can report the MODEL's
         # loss and train/loss_total the full objective. 0.0 when no penalty is built.
         _sp_value = 0.0
@@ -4003,7 +4024,7 @@ def main(cfg: DictConfig) -> None:
                         context=(phase.bag_size, phase.tul_on))
                 continue        # grad_accum is 1 under the key: this ends the micro loop
             with _rt.region("fwd"):
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+                with torch.autocast("cuda", dtype=torch.bfloat16), train_backward_scope():
                     out = model(x, labels=y, bag_size=phase.bag_size,
                                 slot_layout=_layout, tul_step_mode=_tsm)
                     loss = out["loss"]

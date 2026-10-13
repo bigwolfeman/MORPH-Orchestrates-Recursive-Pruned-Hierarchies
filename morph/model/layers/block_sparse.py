@@ -24,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..split_wgrad import SplitWeight, as_bf16, split_active, split_linear
 from .topology_scorer import TopologyScorer, compute_gradient_frobenius_norms
 
 
@@ -321,6 +322,8 @@ class CMSBlockLinear(nn.Module):
         self._fp8_weight_version = -1     # last weight._version we cast for
         # model.fp8_ternary_fwd: the forward GEMM on e4m3 ternary codes (enable_fp8_ternary_fwd).
         self._fp8_tfwd = False
+        # model.split_wgrad: the covered weight (bind_split_wgrad sets it); None = the plain read.
+        self._split: SplitWeight | None = None
 
         # Dense weight parameter — same as nn.Linear
         self.weight = nn.Parameter(
@@ -529,6 +532,10 @@ class CMSBlockLinear(nn.Module):
             return _FP8DenseMatmul.apply(
                 x, self.weight, w_fp8, w_dequant, self.bias
             )
+        if split_active(self._split):
+            # model.split_wgrad: the same GEMM on the step cache's bf16 weight, its weight grad
+            # on the side stream; the shadow weight is not in the autograd graph.
+            return split_linear(as_bf16(x), self._split)
         w = self._ternary_ste(self.weight) if self._ternary_mode else self.weight
         if self._fp8_tfwd:
             return self._forward_fp8_ternary(x, w)

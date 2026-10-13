@@ -126,6 +126,7 @@ from typing import Any, Callable, Optional
 import torch
 import torch.nn as nn
 
+from morph.model.split_wgrad import train_backward_scope
 from morph.model.tul_layout import SlotLayout
 from morph.training.graph_cond import CondBranch
 
@@ -497,7 +498,7 @@ class GraphStep:
     def _forward_loss(self, x, y, layout):
         """The body up to the loss: zero_grad, the forward under autocast, the loss terms."""
         self.optimizer.zero_grad(set_to_none=True)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.autocast("cuda", dtype=torch.bfloat16), train_backward_scope():
             out = self.forward(x, y, layout)
             loss = out["loss"]
             if self.loss_terms is not None:
@@ -643,6 +644,11 @@ class GraphStep:
         kernel; the caller replays this step's (kind, variant) right after."""
         from torch.compiler import set_stance
         t0 = time.perf_counter()
+        # The eager warm-up steps leave their allocator cache behind (28 GB reserved on the
+        # speed base); the recordings' pool and the driver's own allocations for the
+        # instantiated graphs (cuGraphInstantiate) need that room. Values are untouched.
+        gc.collect()
+        torch.cuda.empty_cache()
         self.static = StaticBatch(x, y, layout)
         self.static.load(x, y, layout)
         sx, sy, sl = self.static.x, self.static.y, self.static.layout

@@ -141,8 +141,9 @@ def _zero_pen():
 def _eager_step(m, opt, x, y, lay, clip):
     """train.py's eager sequence under capturable_optimizer (disabled GradScaler), written
     out independently of GraphStep._body."""
+    from morph.model.split_wgrad import train_backward_scope
     opt.zero_grad(set_to_none=True)
-    with torch.autocast("cuda", dtype=torch.bfloat16):
+    with torch.autocast("cuda", dtype=torch.bfloat16), train_backward_scope():
         out = m(x, labels=y, bag_size=0, slot_layout=lay, tul_step_mode=None)
         loss = out["loss"]
         loss = loss + _zero_pen().to(loss.dtype)
