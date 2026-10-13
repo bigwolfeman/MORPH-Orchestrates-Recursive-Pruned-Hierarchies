@@ -39,6 +39,13 @@ Status keys: [ ] open, [~] in progress, [x] done (with the commit or filing), [-
   about -1.6, no build. [ ] T4 hinge on a row subsample about -0.35. [ ] T5 pad slots out of prelude, coda,
   head about -0.3. [ ] T6 GPU-time ledger (time, not FLOPs: 33 % MFU is the larger lever). Quality: one
   package run per class against the locked recipe (CE@6 3.8952, K1-K6 +0.0054).
+  [x] Flame4 ledger 2026-10-13 (`/home/wolfe/morph-scratch/perf/flame4/LEDGER.md`, master c1de243d, speed base
+  bf16c with S1 S2 S5 G1 K1 F1, M = 4, hinge pass pinned): 14.244 TFLOP/step (M = 1..4: 10.17 / 11.51 / 12.92 /
+  14.24), 162 ms wall under the profiler (bench 158.1), 159.1 ms busy, 3.0 ms idle (1.6 ms is ONE host wait
+  between the forward graph and the hinge branch launch), 12,678 kernels, 89.5 TFLOPS on busy (flame2: 60).
+  GEMMs 91 ms kernel-sum at about 140 TFLOPS; non-GEMM kernels 93 ms (ATen elementwise 18.5 in 3,433 kernels, HC
+  18.4, other Triton 11.5, inductor 10.5, copies 9.8, attention 9.0, optimizer 7.8). Ideal at 219 TFLOPS: 65 ms.
+  P0 (PDL) rejected 2026-10-13 (`lab/experiments/failures/2026-10-13-k1-p0-5k.md`).
   [x] T6 GPU-time ledger 2026-10-11 (`/home/wolfe/morph-scratch/perf/flame2/LEDGER.md`, flame PNGs in
   `flame2/png/`): graph replay 253 ms busy under the profiler (trainer step about 210 ms), 14750 kernels, 58
   TFLOPS. Ms over ideal: core passes 54.8, coda 22.0, prelude 21.1, span decoder 16.9, core glue 15.9, hinge
