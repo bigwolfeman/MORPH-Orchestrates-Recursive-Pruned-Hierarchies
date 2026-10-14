@@ -1,6 +1,6 @@
 # FLOP diet round 2 at 5k: hinge cadence on the stack, and a half-slot decoder
 
-Status: planned
+Status: failure
 
 ## Question
 
@@ -70,8 +70,35 @@ stack + hinge every 4 123.91, cell mean 2 + half-slot decoder 123.05.
 K1-K6 +0.0104 (200 %); half-slot decoder +0.0062 (FAIL by the letter), +0.0049. Seed-paired
 against the stack (round 1, same seeds): hinge every 4 costs +0.0094 and +0.0089 CE@6, and moves
 K1-K6 by +0.0067 and -0.0007. The half-slot decoder arm reads +0.0084 and +0.0128 against the
-stack. Seed 3 of hinge every 4: pending.
+stack.
+
+Seed 3 of hinge every 4: CE@6 3.9009, K1-K6 +0.0042, M1-M4 -0.0001, M2-M4 -0.0003, gain_est max
+0.9098, grad-norm max/median 8.2. Against the stack's seed 3 (3.9058): -0.0049.
+
+| Arm | Seeds | CE@6 mean (vs 3.9013) | K1-K6 mean | paired vs stack, CE@6 | bench ms |
+|---|---|---|---|---|---|
+| stack + hinge every 4 | 1-3 | 3.9043 (+0.0030) | +0.0083 (160 %) | +0.0045 (+0.0094, +0.0089, -0.0049) | 123.9 |
+| cell mean 2 + half-slot decoder | 1-2 | 3.9075 (+0.0062) | +0.0049 (94 %) | +0.0106 | 123.1 |
 
 ## Verdict
 
+Neither arm passes. Both are faster than predicted (123.9 and 123.1 ms against 133 and 136
+predicted) and both cost more CE@6 than predicted (3.904 and 3.908 against 3.902 and 3.903).
+
+Hinge every 4 stays GREY at 3 seeds: +0.00303, over the +0.003 line by 0.00003. That is a tie
+with the line, not a measured difference, so the call goes to Wolfe. What it buys: 6.0 ms (4.6 %)
+against the stack, and K1-K6 +0.0083 against the stack's +0.0064. What it costs: +0.0045 CE@6
+paired against the stack, with one seed of three going the other way. It does not go into the
+speed base without Wolfe's call.
+
+The half-slot decoder FAILS (+0.0062). It also reads 0.011 worse than the stack, which reaches a
+similar speed (130 ms) by the one-block decoder instead.
+
 ## Updated hypothesis
+
+The hinge's cadence moves two things against each other: a lighter hinge lets the loop use depth
+more (K1-K6 up on 2 of 3 seeds) and costs token CE. This matches the older reading that the
+loop-holding terms (fixed-point term, gain hinge) hold the loop still
+(`.agents/notes/implemented/architecture/2026-09-07-fixed-point-objective-as-the-loop-stability-term.md`).
+The decoder needs every slot's target each step; a slot subsample costs as much as a block, and
+the block cut is the cheaper of the two at equal speed.
