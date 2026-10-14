@@ -78,7 +78,7 @@ about 11 steps under any rounding change, so a seed pair shares its data order a
 A paired difference then has the spread of two independent runs: about sqrt(2) x 0.0036 = 0.005
 per seed, 0.003 for a 3-seed mean. +0.0034 is about one such standard deviation. The pooled
 reading (+0.0020 against the 9-run family) is inside the line. The stack's own seed 2 (3.8939)
-is the second-lowest CE@6 of the 17 diet-family runs of 2026-10-13/14 (the lowest is cell mean 2
+is the second-lowest CE@6 of the 16 diet-family runs of 2026-10-13/14 (the lowest is cell mean 2
 seed 3, 3.8883), which inflates the paired differences.
 So the data neither shows a cost nor rules out one of about 0.003. Same situation as K1
 (2026-10-13), which Wolfe accepted under his paired reading. The keys stay default off and the

@@ -296,7 +296,7 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
         fails (`lab/experiments/failures/2026-10-14-flop-diet-round-2-5k.md`).
       - Merged, default off: `model.hc_bwd_fused` (9e0e8517, -1.5 ms) and `model.glue_fold`
         (e4b5d738, -9.1 ms on the parent). Together on the stack: 129.0 -> 122.1 ms; 5k check
-        `lab/experiments/planned/2026-10-14-speed-base-v2-levers-5k.md`.
+        `lab/experiments/failures/2026-10-14-speed-base-v2-levers-5k.md` (paired CE@6 +0.0034, over the +0.003 line by 0.0004, inside seed noise; Wolfe's call).
       - Parked, not merged (no gain on a saturated GPU): `training.opt_overlap` (branch
         perf/optlap, -0.6 ms; its speed gates crashed on a shared Inductor cache, not rerun) and
         `model.wgrad_defer` (branch perf/wgrad1, 159.89 ms both arms). Overlap only fills idle SMs, and the
