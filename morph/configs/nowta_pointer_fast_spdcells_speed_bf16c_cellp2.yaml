@@ -1,0 +1,12 @@
+# FLOP diet arm (2026-10-13): the speed base with the cell count drawn from Poisson(2.0) clamped to
+# [1, 4] instead of Poisson(3.5): mean M about 2.06 instead of 3.0 (about 11.6 vs 12.9 TFLOP).
+# Prereg: lab/experiments/planned/2026-10-13-flop-diet-5k.md
+defaults:
+  - nowta_pointer_fast_spdcells_speed_bf16c_cellp3
+  - _self_
+
+tul:
+  cell_count_mean: 2.0
+
+wandb:
+  name: nowta-pointer-fast-spdcells-speed-bf16c-cellp2

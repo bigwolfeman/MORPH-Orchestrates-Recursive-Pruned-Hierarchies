@@ -1,0 +1,12 @@
+# FLOP diet arm (2026-10-13): the speed base with a ONE-block span decoder (tul.spandec_layers 1,
+# default 2). Same full-span target; the decoder is 2.775 of 14.24 TFLOP at M = 4 (flame4 ledger).
+# Prereg: lab/experiments/planned/2026-10-13-flop-diet-5k.md
+defaults:
+  - nowta_pointer_fast_spdcells_speed_bf16c_cellp3
+  - _self_
+
+tul:
+  spandec_layers: 1
+
+wandb:
+  name: nowta-pointer-fast-spdcells-speed-bf16c-cellp3-dec1
