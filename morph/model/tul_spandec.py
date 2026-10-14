@@ -270,6 +270,59 @@ def pack_spans(ids: Tensor, valid: Tensor, cap: int) -> PackedSpans:
         ids=put(ids), prev=put(prev), ok=put(valid), over=(end[:, -1] > cap).any())
 
 
+KEEP_RES = 1024          # `tul.spandec_slot_keep` is used as round(keep * 1024) / 1024
+_M31 = 0x7FFFFFFF
+
+
+def keep_q_of(keep: float) -> int:
+    """``tul.spandec_slot_keep`` as an integer numerator over :data:`KEEP_RES`: the host cap
+    and the device budget use the SAME integer arithmetic, so the cap is a proven bound."""
+    return int(round(float(keep) * KEEP_RES))
+
+
+def keep_scaled(n, keep_q: int):
+    """``round(n * keep_q / KEEP_RES)`` in integers (ties up); ``n`` an int or an int tensor."""
+    return (n * keep_q + KEEP_RES // 2) // KEEP_RES
+
+
+def _mix31(x: Tensor) -> Tensor:
+    """A 31-bit integer hash (lowbias32 on 31 bits), int64 in and out. Every product stays
+    under 2^62, so nothing wraps and CPU and CUDA agree bit for bit."""
+    x = x & _M31
+    x = x ^ (x >> 15)
+    x = (x * 739982445) & _M31
+    x = x ^ (x >> 12)
+    x = (x * 696884537) & _M31
+    return x ^ (x >> 15)
+
+
+def slot_keep_mask(valid: Tensor, keep_q: int, seed: int, ctr: Tensor) -> Tensor:
+    """The slots the packed span decoder trains on this step, ``[B, S]`` bool
+    (``tul.spandec_slot_keep``).
+
+    ``valid`` ``[B, S, J]`` is the span decoder's label mask. Per row the budget is
+    ``keep_scaled(valid tokens of the row, keep_q)``. The row's slots are put in a random order
+    (an integer hash of ``seed``, the 0-dim int64 device counter ``ctr``, row and slot) and the
+    longest prefix of that order whose spans fit the budget is kept, each kept slot whole. A
+    row's kept tokens are therefore at most its budget, which ``keep_scaled(cap, keep_q)``
+    bounds from the row cap ``cap`` alone: the packed capacity shrinks by ``keep``. Pure device
+    ops on fixed shapes (no host read, no RNG state), so a CUDA graph that records it replays
+    a new subset each step as ``ctr`` advances.
+    """
+    B, S, _J = valid.shape
+    dev = valid.device
+    n = valid.sum(-1).to(torch.int64)                                  # [B, S] tokens per slot
+    budget = keep_scaled(n.sum(-1), keep_q)                            # [B]
+    cell = (torch.arange(B, device=dev).view(B, 1) * S + torch.arange(S, device=dev).view(1, S))
+    score = _mix31(_mix31(cell + int(seed)) ^ _mix31(ctr.to(torch.int64) + 0x2545F491))
+    idx = torch.arange(S, device=dev)
+    # first[b, i, j] = slot j comes at or before slot i in the row's random order (ties by index)
+    first = (score.unsqueeze(1) < score.unsqueeze(2)) | (
+        (score.unsqueeze(1) == score.unsqueeze(2)) & (idx.view(1, 1, S) <= idx.view(1, S, 1)))
+    cum = (first * n.unsqueeze(1)).sum(-1)                             # [B, S] tokens up to and incl. slot i
+    return (n > 0) & (cum <= budget.unsqueeze(-1))
+
+
 def chunk_segment_mask(seg: Tensor, chunk: int) -> Tensor:
     """``[B * nc, 1, chunk, 2 * chunk]`` bool for :meth:`PackedCtx.attend`, ``seg`` ``[B, P]``
     segment ids with ``P = nc * chunk``.
