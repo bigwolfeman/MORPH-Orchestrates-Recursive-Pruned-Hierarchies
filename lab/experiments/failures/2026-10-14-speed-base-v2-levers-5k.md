@@ -1,6 +1,6 @@
 # Speed base v2 at 5k: diet stack + HC backward on tensor cores + glue folds
 
-Status: planned
+Status: failure
 
 ## Question
 
@@ -54,6 +54,42 @@ stack + both keys, `model.slot_gain_pass_force=3`, 300 steps, skip 100, 2 repeat
 
 ## Results
 
+Key-off byte gate on this tree: 4a73ebf5 (match). Bench, 2 repeats, pinned pass 3: stack 129.01 ms
+(129.29, 128.73), stack + both keys 122.13 ms (122.14, 122.13), 1.056x. flame5 (M pinned to 2):
+119.86 ms, 90.6 TFLOPS achieved (`morph-scratch/perf/flame5/LEDGER.md`).
+
+| Seed | CE@6 | vs stack | K1-K6 | vs stack | M1-M4 | M2-M4 | gain_est max | grad-norm max/median |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 3.9006 | +0.0007 | +0.0072 | +0.0021 | +0.0004 | -0.0001 | 0.9021 | 7.5 |
+| 2 | 3.8998 | +0.0059 | +0.0061 | -0.0035 | +0.0000 | -0.0004 | 0.9116 | 16.5 |
+| 3 | 3.9094 | +0.0036 | +0.0055 | +0.0011 | +0.0003 | -0.0000 | 0.9037 | 7.6 |
+
+Mean seed-paired CE@6 difference +0.0034 (sd 0.0026). Mean K1-K6 difference -0.0001, 95 %
+t-interval [-0.0075, +0.0073], which includes zero. 3-seed means: CE@6 3.9033, K1-K6 +0.0063.
+Against the 9-run pooled control of the parent family (3.9013): +0.0020.
+
 ## Verdict
 
+FAIL by the letter: the CE@6 line is +0.003 and the mean paired difference is +0.0034. K1-K6
+and stability pass.
+
+What the rule can see here. Both keys change rounding only, and MORPH runs decorrelate within
+about 11 steps under any rounding change, so a seed pair shares its data order and nothing else.
+A paired difference then has the spread of two independent runs: about sqrt(2) x 0.0036 = 0.005
+per seed, 0.003 for a 3-seed mean. +0.0034 is about one such standard deviation. The pooled
+reading (+0.0020 against the 9-run family) is inside the line. The stack's own seed 2 (3.8939)
+is the second-lowest CE@6 of the 17 diet-family runs of 2026-10-13/14 (the lowest is cell mean 2
+seed 3, 3.8883), which inflates the paired differences.
+So the data neither shows a cost nor rules out one of about 0.003. Same situation as K1
+(2026-10-13), which Wolfe accepted under his paired reading. The keys stay default off and the
+speed base stays the stack until Wolfe calls it.
+
+Prediction check: CE@6 3.900 predicted, 3.903 measured; K1-K6 +0.0062 predicted, +0.0063
+measured; 121 ms predicted, 122.1 ms measured.
+
 ## Updated hypothesis
+
+The keys are rounding-only (each bounded against fp64 in its tests), so the expected cost is zero.
+A 3-seed paired test cannot resolve a 0.003 effect on this family. If Wolfe wants a firmer
+reading, the efficient test is more seeds on both arms (6 per arm gives a mean-difference sd near
+0.002), not a different gate.
