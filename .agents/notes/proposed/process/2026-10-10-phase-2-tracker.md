@@ -288,6 +288,20 @@ run, chosen by the seed (`transformer.py` `_t_gain`; filing
       nowta_pointer_fast_spdcells / _spdbest / lxtul_pointer_fast pass validation (~24.9 GiB free).
 - [ ] C5 The 4-stream HC carrier: 1 stream was worth 60 ms per step at FAST. An architecture
       change, so it needs a quality arm, not only a speed bench.
+- [ ] C6 Night push 2026-10-13/14 (fan speed base, bench_step pinned pass 3, interleaved medians).
+      - FLOP diet round 1 PASSES: the stack (`..._cellp2_dec1`, one-block decoder + cell mean 2),
+        3 seeds, CE@6 -0.0014, K1-K6 123 % of control, 0.887x step
+        (`lab/experiments/successes/2026-10-13-flop-diet-5k.md`). Round 2 FAILS: hinge every 4 is
+        GREY at the line (-6 ms, K1-K6 up, CE +0.0045 vs stack; Wolfe's call), the half-slot decoder
+        fails (`lab/experiments/failures/2026-10-14-flop-diet-round-2-5k.md`).
+      - Merged, default off: `model.hc_bwd_fused` (9e0e8517, -1.5 ms) and `model.glue_fold`
+        (e4b5d738, -9.1 ms on the parent). Together on the stack: 129.0 -> 122.1 ms; 5k check
+        `lab/experiments/planned/2026-10-14-speed-base-v2-levers-5k.md`.
+      - Parked, not merged (no gain on a saturated GPU): `training.opt_overlap` (branch
+        perf/optlap, -0.6 ms; its speed gates crashed on a shared Inductor cache, not rerun) and
+        `model.wgrad_defer` (branch perf/wgrad1, 159.89 ms both arms). Overlap only fills idle SMs, and the
+        step has few: batch 8 gave +5.8 % tok/s for +33 % tokens. Bytes and FLOPs are the levers.
+      - Dropped: batch 8 (above). Ledger of the new base: `morph-scratch/perf/flame5/LEDGER.md`.
 
 ### D. Literature: JEPA-Anything (arXiv 2609.20800)
 
