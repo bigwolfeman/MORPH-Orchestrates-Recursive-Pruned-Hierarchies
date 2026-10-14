@@ -237,14 +237,14 @@ def cca_prologue_rows_op(q_lat, k_lat, q_conv, k_conv, v_curr, v_prev, wq, wk, t
 # ===========================================================================
 
 @torch.library.custom_op("morph::hc_region_entry_fwd", mutates_args=())
-def _entry_fwd(h: Tensor, proj_w: Tensor, proj_b: Tensor, tau: float, alpha: float, eps: float
-               ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+def _entry_fwd(h: Tensor, proj_w: Tensor, proj_b: Tensor, tau: float, alpha: float, eps: float,
+               bwd_fused: bool = False) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     xbar, hres, hpr, raw, rms, h, _, _ = _hcr_entry_fwd_impl(h, proj_w, proj_b, tau, alpha, eps)
     return xbar, hres, hpr, raw, rms, torch.empty_like(h)         # the last: the link (module doc)
 
 
 @_entry_fwd.register_fake
-def _entry_fwd_fake(h, proj_w, proj_b, tau, alpha, eps):
+def _entry_fwd_fake(h, proj_w, proj_b, tau, alpha, eps, bwd_fused=False):
     B, S, N, C = h.shape
     f32 = torch.float32
     return (h.new_empty(B, S, C), h.new_empty(B, S, N, N, dtype=f32),
@@ -255,22 +255,23 @@ def _entry_fwd_fake(h, proj_w, proj_b, tau, alpha, eps):
 @torch.library.custom_op("morph::hc_region_entry_bwd", mutates_args=())
 def _entry_bwd(g_xbar: Tensor | None, g_hpr: Tensor | None, g_link: Tensor | None, h: Tensor,
                proj_w: Tensor, proj_b: Tensor, raw: Tensor, rms: Tensor, tau: float,
-               alpha: float) -> tuple[Tensor, Tensor, Tensor]:
+               alpha: float, bwd_fused: bool = False) -> tuple[Tensor, Tensor, Tensor]:
     return _hcr_entry_bwd_impl(g_xbar, g_hpr, g_link, h, proj_w.contiguous(),
                                proj_b.float().contiguous(), raw, rms, tau, alpha, proj_w.dtype,
-                               proj_b.dtype)
+                               proj_b.dtype, bwd_fused)
 
 
 @_entry_bwd.register_fake
-def _entry_bwd_fake(g_xbar, g_hpr, g_link, h, proj_w, proj_b, raw, rms, tau, alpha):
+def _entry_bwd_fake(g_xbar, g_hpr, g_link, h, proj_w, proj_b, raw, rms, tau, alpha,
+                    bwd_fused=False):
     return torch.empty_like(h), torch.empty_like(proj_w), torch.empty_like(proj_b)
 
 
 def _entry_setup(ctx, inputs, output):
-    h, proj_w, proj_b, tau, alpha, eps = inputs
+    h, proj_w, proj_b, tau, alpha, eps, bwd_fused = inputs
     _, _, _, raw, rms, _ = output
     ctx.save_for_backward(h, proj_w, proj_b, raw, rms)
-    ctx.cfg = (float(tau), float(alpha))
+    ctx.cfg = (float(tau), float(alpha), bool(bwd_fused))
     ctx.set_materialize_grads(False)
     ctx.mark_non_differentiable(raw, rms)
 
@@ -279,7 +280,7 @@ def _entry_backward(ctx, g_xbar, g_hres, g_hpr, g_raw, g_rms, g_link):
     # g_hres is None (the exit forms no grad for it; the backward kernel computes it).
     h, proj_w, proj_b, raw, rms = ctx.saved_tensors
     gh, grad_w, grad_b = _entry_bwd(g_xbar, g_hpr, g_link, h, proj_w, proj_b, raw, rms, *ctx.cfg)
-    return gh, grad_w, grad_b, None, None, None
+    return gh, grad_w, grad_b, None, None, None, None
 
 
 _entry_fwd.register_autograd(_entry_backward, setup_context=_entry_setup)
@@ -333,17 +334,18 @@ _exit_fwd.register_autograd(_exit_backward, setup_context=_exit_setup)
 
 
 def hc_region_entry_ops(h: Tensor, proj_w: Tensor, proj_b: Tensor, tau: float, alpha: float,
-                        iters: int, eps: float, carrier_bf16: bool = False):
+                        iters: int, eps: float, carrier_bf16: bool = False,
+                        bwd_fused: bool = False):
     """``hc_region_entry`` on the custom ops: ``(x_bar, Hres, Hpost_row, h_link)``. Where the
     region kernels do not apply (``_hc_region_active``) it IS ``hc_region_entry``; otherwise
     ``h_link`` is the pair ``(h, link)`` that :func:`hc_region_exit_ops` takes."""
     if int(iters) != 3:
         raise ValueError("model.hc_region_fused needs hc_cayley_iters=3")
     if not _hc_region_active(h, carrier_bf16):
-        return hc_region_entry(h, proj_w, proj_b, tau, alpha, iters, eps, carrier_bf16)
+        return hc_region_entry(h, proj_w, proj_b, tau, alpha, iters, eps, carrier_bf16, bwd_fused)
     h = h.contiguous()
     x_bar, hres, hpr, _, _, link = _entry_fwd(h, proj_w, proj_b, float(tau), float(alpha),
-                                              float(eps))
+                                              float(eps), bool(bwd_fused))
     return x_bar, hres, hpr, (h, link)
 
 

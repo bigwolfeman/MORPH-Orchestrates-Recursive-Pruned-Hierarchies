@@ -1719,6 +1719,89 @@ if TRITON_AVAILABLE:
                 tl.store(gh_ptr + off + j * C, gh.to(gh_ptr.dtype.element_ty), mask=m2)
 
 
+    # -----------------------------------------------------------------------
+    # model.hc_bwd_fused: the carrier-grad kernel with its projection term on tensor cores.
+    # Measured 2026-10-13 (5090, bf16 carrier): the kernel above spends 28 of its 35.6 us at
+    # 1536 rows (and 55 of 175 us at 7680) in the fp32-FMA `tl.dot(graw, W)`; with the dot
+    # removed it runs at 7.2 / 119 us, at the memory floor. Here the dot is a bf16 tensor-core
+    # product: W is the bf16 copy the forward projection used (so this is the exact VJP of the
+    # projection the forward ran), and graw (fp32) is split into bf16 hi + lo parts, two MMAs
+    # with an fp32 accumulator, so the graw side keeps ~2^-17 relative accuracy. Everything else
+    # (the 4x4 mixing, the cm / scale terms) is the old kernel's math. ACC folds the mixing
+    # terms into the first MMA's accumulator (one layout conversion instead of two, a win at
+    # small token counts); both orders are rounding-only different from the old kernel.
+    # -----------------------------------------------------------------------
+    @triton.jit
+    def _hcr_bwd_carrier_tc_kernel(
+        gx_ptr,           # [T, C]
+        go_ptr,           # [T, N*C]
+        h_ptr,            # [T, N*C]
+        wb_ptr,           # [48, N*C] proj weight, bf16
+        graw_ptr,         # [T, 48]
+        coef_ptr,         # [T, 24]
+        gh_ptr,           # [T, N*C] out: the carrier grad
+        T,
+        N: tl.constexpr, C: tl.constexpr, BT: tl.constexpr, BC: tl.constexpr,
+        CS: tl.constexpr,   # columns per program along C (grid axis 1)
+        ACC: tl.constexpr,  # 1: the mixing terms are the MMA accumulator's initial value
+    ):
+        NC: tl.constexpr = N * C
+        t = tl.program_id(0) * BT + tl.arange(0, BT)
+        tmask = t < T
+        m2 = tmask[:, None]
+        cc = tl.arange(0, BC)
+        kc = tl.arange(0, 64)
+        gt = tl.load(graw_ptr + t[:, None] * 48 + kc[None, :],
+                     mask=m2 & (kc < 48)[None, :], other=0.0)          # [BT, 64] fp32
+        gt_hi = gt.to(tl.bfloat16)
+        gt_lo = (gt - gt_hi.to(tl.float32)).to(tl.bfloat16)
+        cb = coef_ptr + t * 24
+        y00 = tl.load(cb + 0, mask=tmask, other=0.0); y01 = tl.load(cb + 1, mask=tmask, other=0.0)
+        y02 = tl.load(cb + 2, mask=tmask, other=0.0); y03 = tl.load(cb + 3, mask=tmask, other=0.0)
+        y10 = tl.load(cb + 4, mask=tmask, other=0.0); y11 = tl.load(cb + 5, mask=tmask, other=0.0)
+        y12 = tl.load(cb + 6, mask=tmask, other=0.0); y13 = tl.load(cb + 7, mask=tmask, other=0.0)
+        y20 = tl.load(cb + 8, mask=tmask, other=0.0); y21 = tl.load(cb + 9, mask=tmask, other=0.0)
+        y22 = tl.load(cb + 10, mask=tmask, other=0.0); y23 = tl.load(cb + 11, mask=tmask, other=0.0)
+        y30 = tl.load(cb + 12, mask=tmask, other=0.0); y31 = tl.load(cb + 13, mask=tmask, other=0.0)
+        y32 = tl.load(cb + 14, mask=tmask, other=0.0); y33 = tl.load(cb + 15, mask=tmask, other=0.0)
+        cm0 = tl.load(cb + 16, mask=tmask, other=0.0); cm1 = tl.load(cb + 17, mask=tmask, other=0.0)
+        cm2 = tl.load(cb + 18, mask=tmask, other=0.0); cm3 = tl.load(cb + 19, mask=tmask, other=0.0)
+        scale = tl.load(cb + 20, mask=tmask, other=0.0)[:, None]
+        c_lo = tl.program_id(1) * CS
+        for c0 in range(c_lo, c_lo + CS, BC):
+            off = t[:, None] * NC + c0 + cc[None, :]
+            gx = tl.load(gx_ptr + t[:, None] * C + c0 + cc[None, :], mask=m2,
+                         other=0.0).to(tl.float32)
+            g0 = tl.load(go_ptr + off + 0 * C, mask=m2, other=0.0).to(tl.float32)
+            g1 = tl.load(go_ptr + off + 1 * C, mask=m2, other=0.0).to(tl.float32)
+            g2 = tl.load(go_ptr + off + 2 * C, mask=m2, other=0.0).to(tl.float32)
+            g3 = tl.load(go_ptr + off + 3 * C, mask=m2, other=0.0).to(tl.float32)
+            for j in tl.static_range(4):
+                hj = tl.load(h_ptr + off + j * C, mask=m2, other=0.0).to(tl.float32)
+                if j == 0:
+                    gpost = y00[:, None] * g0 + y10[:, None] * g1 + y20[:, None] * g2 + y30[:, None] * g3
+                    cmj = cm0[:, None]
+                elif j == 1:
+                    gpost = y01[:, None] * g0 + y11[:, None] * g1 + y21[:, None] * g2 + y31[:, None] * g3
+                    cmj = cm1[:, None]
+                elif j == 2:
+                    gpost = y02[:, None] * g0 + y12[:, None] * g1 + y22[:, None] * g2 + y32[:, None] * g3
+                    cmj = cm2[:, None]
+                else:
+                    gpost = y03[:, None] * g0 + y13[:, None] * g1 + y23[:, None] * g2 + y33[:, None] * g3
+                    cmj = cm3[:, None]
+                wt = tl.load(wb_ptr + kc[:, None] * NC + (j * C + c0 + cc)[None, :],
+                             mask=(kc < 48)[:, None], other=0.0)       # [64, BC] bf16
+                if ACC:
+                    gh = tl.dot(gt_hi, wt, gpost + (cmj * gx + scale * hj))
+                    gh = tl.dot(gt_lo, wt, gh)
+                else:
+                    proj = tl.dot(gt_hi, wt)
+                    proj = tl.dot(gt_lo, wt, proj)
+                    gh = gpost + ((cmj * gx + scale * hj) + proj)
+                tl.store(gh_ptr + off + j * C, gh.to(gh_ptr.dtype.element_ty), mask=m2)
+
+
 # ===========================================================================
 # autograd.Function — PRE (x_bar contraction)
 # ===========================================================================
@@ -2084,6 +2167,8 @@ _HCR_TUNE = dict(bc=64,
                  red_launch_bt=16,   # token tile of the launch; `red_bt` only feeds the split rule
                  map_bt=32, map_warps=2,
                  car_bc=128, car_warps=8, car_stages=1, car_max_split=8,
+                 # model.hc_bwd_fused carrier kernel (bench: perf/hcbwd, 2026-10-13)
+                 tc_bt=32, tc_bc=128, tc_warps=8, tc_stages=2, tc_max_split=2, tc_acc=0,
                  post_warps=8)
 
 
@@ -2093,7 +2178,8 @@ def _hcr_tune(T: int) -> dict:
     tu["post_warps"] = 16        # one token per program: 16 warps keep more bytes in flight
     if T < 4096:                 # the core's late passes: small tiles, more programs
         tu.update(fmap_bt=8, fmap_bc=128, fmap_warps=2, fmap_max_split=8, red_launch_bt=8,
-                  red_warps=4)
+                  red_warps=4, tc_bt=16, tc_bc=64, tc_warps=4, tc_stages=1, tc_max_split=16,
+                  tc_acc=1)
     if T <= 1024:                # a narrower token tile shortens the C loop's serial chain
         tu.update(fsp_bt=16)
     return tu
@@ -2152,7 +2238,7 @@ def _hcr_entry_fwd_impl(h, proj_w, proj_b, tau, alpha, eps):
 
 
 def _hcr_entry_bwd_impl(g_xbar, g_hpr, g_link, h, w, pb, raw, rms, tau, alpha, w_dtype,
-                        b_dtype):
+                        b_dtype, bwd_fused=False):
     """The entry backward: ``(gh, grad_w, grad_b)``; shared with the custom op."""
     # g_hres is None (the exit forms no grad for it; this kernel computes it).
     B, S, N, C = h.shape
@@ -2186,16 +2272,30 @@ def _hcr_entry_bwd_impl(g_xbar, g_hpr, g_link, h, w, pb, raw, rms, tau, alpha, w
         TAU=tau, ALPHA=alpha, N=N, C=C, BT=tu["map_bt"], NSPLIT=nsplit,
         num_warps=tu["map_warps"], num_stages=1,
     )
-    cbc = min(tu["car_bc"], C)
-    csplit = 1
-    while (triton.cdiv(T, 16) * csplit < 2 * sms and C % (2 * csplit * cbc) == 0
-           and csplit < tu["car_max_split"]):
-        csplit *= 2
-    _hcr_bwd_carrier_kernel[(triton.cdiv(T, 16), csplit)](
-        g_xbar, g_link, h, w, graw, coef, gh, T,
-        N=N, C=C, BT=16, BC=cbc, CS=C // csplit,
-        num_warps=tu["car_warps"], num_stages=tu["car_stages"],
-    )
+    if bwd_fused:
+        # model.hc_bwd_fused: the projection term on tensor cores (see the kernel's header).
+        # The bf16 weight is the one the forward projection used.
+        tbt, tbc = tu["tc_bt"], min(tu["tc_bc"], C)
+        csplit = 1
+        while (triton.cdiv(T, tbt) * csplit < 2 * sms and C % (2 * csplit * tbc) == 0
+               and csplit < tu["tc_max_split"]):
+            csplit *= 2
+        _hcr_bwd_carrier_tc_kernel[(triton.cdiv(T, tbt), csplit)](
+            g_xbar, g_link, h, w.to(torch.bfloat16), graw, coef, gh, T,
+            N=N, C=C, BT=tbt, BC=tbc, CS=C // csplit, ACC=tu["tc_acc"],
+            num_warps=tu["tc_warps"], num_stages=tu["tc_stages"],
+        )
+    else:
+        cbc = min(tu["car_bc"], C)
+        csplit = 1
+        while (triton.cdiv(T, 16) * csplit < 2 * sms and C % (2 * csplit * cbc) == 0
+               and csplit < tu["car_max_split"]):
+            csplit *= 2
+        _hcr_bwd_carrier_kernel[(triton.cdiv(T, 16), csplit)](
+            g_xbar, g_link, h, w, graw, coef, gh, T,
+            N=N, C=C, BT=16, BC=cbc, CS=C // csplit,
+            num_warps=tu["car_warps"], num_stages=tu["car_stages"],
+        )
     # grad_w / grad_b exactly as _FusedHCPreMap.backward (fp32 GEMM over the carrier).
     graw2 = graw.reshape(T, 48)
     x_flat = h.reshape(T, N * C)
@@ -2213,11 +2313,11 @@ class _HCRegionEntry(torch.autograd.Function):
     """HC entry (rms + projection + mapping + x_bar) from one carrier read."""
 
     @staticmethod
-    def forward(ctx, h, proj_w, proj_b, tau, alpha, eps):
+    def forward(ctx, h, proj_w, proj_b, tau, alpha, eps, bwd_fused=False):
         xbar, hres, hpr, raw, rms, h, w, pb = _hcr_entry_fwd_impl(h, proj_w, proj_b, tau, alpha,
                                                                   eps)
         ctx.save_for_backward(h, w, pb, raw, rms)
-        ctx.cfg = (float(tau), float(alpha), proj_w.dtype, proj_b.dtype)
+        ctx.cfg = (float(tau), float(alpha), proj_w.dtype, proj_b.dtype, bool(bwd_fused))
         ctx.set_materialize_grads(False)
         return xbar, hres, hpr, h.view_as(h)
 
@@ -2225,10 +2325,10 @@ class _HCRegionEntry(torch.autograd.Function):
     def backward(ctx, g_xbar, g_hres, g_hpr, g_link):
         # g_hres is None (the exit forms no grad for it; this kernel computes it).
         h, w, pb, raw, rms = ctx.saved_tensors
-        tau, alpha, w_dtype, b_dtype = ctx.cfg
+        tau, alpha, w_dtype, b_dtype, bwd_fused = ctx.cfg
         gh, grad_w, grad_b = _hcr_entry_bwd_impl(g_xbar, g_hpr, g_link, h, w, pb, raw, rms, tau,
-                                                 alpha, w_dtype, b_dtype)
-        return gh, grad_w, grad_b, None, None, None
+                                                 alpha, w_dtype, b_dtype, bwd_fused)
+        return gh, grad_w, grad_b, None, None, None, None
 
 
 def _hcr_exit_fwd_impl(hres, hpost_row, h_link, y, term):
@@ -2329,8 +2429,8 @@ def _hc_pre_map_fold_dispatch(h: Tensor, proj_w: Tensor, proj_b: Tensor,
 
 @kernel_fence
 def _hc_region_entry_dispatch(h: Tensor, proj_w: Tensor, proj_b: Tensor, tau: float,
-                              alpha: float, eps: float):
-    return _HCRegionEntry.apply(h, proj_w, proj_b, tau, alpha, eps)
+                              alpha: float, eps: float, bwd_fused: bool = False):
+    return _HCRegionEntry.apply(h, proj_w, proj_b, tau, alpha, eps, bwd_fused)
 
 
 @kernel_fence
@@ -2480,7 +2580,7 @@ def _hc_region_active(h: Tensor, carrier_bf16: bool = False) -> bool:
 
 def hc_region_entry(
     h: Tensor, proj_w: Tensor, proj_b: Tensor, tau: float, alpha: float, iters: int, eps: float,
-    carrier_bf16: bool = False,
+    carrier_bf16: bool = False, bwd_fused: bool = False,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """model.hc_region_fused entry: ``(x_bar, Hres, Hpost_row, h_link)``.
 
@@ -2495,9 +2595,14 @@ def hc_region_entry(
         # exit's test has no `iters`. HyperConnectionResidual refuses this at build.
         raise ValueError("model.hc_region_fused needs hc_cayley_iters=3")
     if not _hc_region_active(h, carrier_bf16):
+        if bwd_fused:
+            raise RuntimeError(
+                "model.hc_bwd_fused needs the HC region kernels: CUDA + Triton, n=4, an fp32 "
+                "carrier (or model.hc_carrier_bf16) and bf16 autocast on; the reference path "
+                "has no fused backward")
         x_bar, Hres, Hpost_row = hc_pre_map(h, proj_w, proj_b, tau, alpha, iters, eps)
         return x_bar, Hres.to(h.dtype), Hpost_row.to(h.dtype), h
-    return _hc_region_entry_dispatch(h, proj_w, proj_b, tau, alpha, eps)
+    return _hc_region_entry_dispatch(h, proj_w, proj_b, tau, alpha, eps, bwd_fused)
 
 
 def hc_region_exit(hres: Tensor, hpost_row: Tensor, h_link: Tensor, y: Tensor,

@@ -54,14 +54,15 @@ def make_inputs(T, dtype, dev="cuda"):
     return h, w, b, y, term, gout, gx
 
 
-def one_step(K, h0, w0, b0, y0, term0, gout, gx):
+def one_step(K, h0, w0, b0, y0, term0, gout, gx, fused=False):
     """entry fwd -> exit fwd -> exit bwd -> entry bwd. Returns outputs and grads."""
     h = h0.clone().requires_grad_(True)
     w = w0.clone().requires_grad_(True)
     b = b0.clone().requires_grad_(True)
     y = y0.clone().requires_grad_(True)
     term = term0.clone().requires_grad_(True)
-    xbar, hres, hpr, link = K._HCRegionEntry.apply(h, w, b, 1.0, 1.0, 1e-6)
+    xbar, hres, hpr, link = K._HCRegionEntry.apply(
+        h, w, b, 1.0, 1.0, 1e-6, *((True,) if fused else ()))
     out = K._HCRegionExit.apply(hres, hpr, link, y, term)
     # one backward over both outputs: autograd hands gout to the entry as link's grad
     torch.autograd.backward([out, xbar], [gout, gx])
@@ -87,14 +88,14 @@ def kernel_bytes(name, T, e):
     return None
 
 
-def profile_kernels(K, T, dtype, iters=20):
+def profile_kernels(K, T, dtype, iters=20, fused=False):
     args = make_inputs(T, dtype)
     for _ in range(5):
-        one_step(K, *args)
+        one_step(K, *args, fused=fused)
     torch.cuda.synchronize()
     with profile(activities=[ProfilerActivity.CUDA]) as p:
         for _ in range(iters):
-            one_step(K, *args)
+            one_step(K, *args, fused=fused)
         torch.cuda.synchronize()
     agg = collections.defaultdict(float)
     cnt = collections.Counter()
@@ -154,6 +155,7 @@ def main():
     ap.add_argument("--dtype", default="float32", choices=["float32", "bfloat16"])
     ap.add_argument("--rows", type=int, nargs="*", default=ROWS)
     ap.add_argument("--no-check", action="store_true")
+    ap.add_argument("--bwd-fused", action="store_true", help="model.hc_bwd_fused: the tensor-core carrier-grad kernel")
     a = ap.parse_args()
     dtype = getattr(torch, a.dtype)
     e = torch.tensor([], dtype=dtype).element_size()
@@ -165,7 +167,7 @@ def main():
         if R:
             new, old = ab_times(K, R, T, dtype)
         else:
-            new = {k: v[0] for k, v in profile_kernels(K, T, dtype).items()}
+            new = {k: v[0] for k, v in profile_kernels(K, T, dtype, fused=a.bwd_fused).items()}
             old = {}
         print(f"\nrows {T}  grids {grids(K, T)}" + (f"  (before grids {grids(R, T)})" if R else ""))
         tn = to = 0.0
