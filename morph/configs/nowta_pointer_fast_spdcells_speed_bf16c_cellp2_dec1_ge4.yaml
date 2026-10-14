@@ -1,0 +1,12 @@
+# FLOP diet round 2 (2026-10-13): the diet stack (Poisson(2.0) cells + one-block span decoder) with
+# the gain hinge on every 4th step at 4x lambda (model.slot_gain_every 4).
+# Prereg: lab/experiments/planned/2026-10-14-flop-diet-round-2-5k.md
+defaults:
+  - nowta_pointer_fast_spdcells_speed_bf16c_cellp2_dec1
+  - _self_
+
+model:
+  slot_gain_every: 4
+
+wandb:
+  name: nowta-pointer-fast-spdcells-speed-bf16c-cellp2-dec1-ge4

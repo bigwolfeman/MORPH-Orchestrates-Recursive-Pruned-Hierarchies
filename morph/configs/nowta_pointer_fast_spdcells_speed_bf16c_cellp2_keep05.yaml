@@ -1,0 +1,12 @@
+# FLOP diet round 2 (2026-10-13): Poisson(2.0) cells with the TWO-block span decoder trained on a
+# random half (token budget) of each row's slots, full span targets (tul.spandec_slot_keep 0.5).
+# Prereg: lab/experiments/planned/2026-10-14-flop-diet-round-2-5k.md
+defaults:
+  - nowta_pointer_fast_spdcells_speed_bf16c_cellp2
+  - _self_
+
+tul:
+  spandec_slot_keep: 0.5
+
+wandb:
+  name: nowta-pointer-fast-spdcells-speed-bf16c-cellp2-keep05
