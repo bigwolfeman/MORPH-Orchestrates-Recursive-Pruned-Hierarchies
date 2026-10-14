@@ -75,8 +75,9 @@ from .tul_fan_route import (FanLatentHead, FanOPF, FanRouter, FanTargetFront, Fa
                             pooled_span_states, reset_to_winner)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
-from .tul_spandec import (SpanDecoder, horizon_span_slots, next_span_slots,
-                          own_span_slots, span_slots)
+from .tul_spandec import (KEEP_RES, SpanDecoder, horizon_span_slots, keep_q_of,
+                          keep_scaled, next_span_slots, own_span_slots, slot_keep_mask,
+                          span_slots)
 from .tul_snap import TULPseudoSnap
 from .tul_disco import TULDisco
 from .tul_spandec_parallel import ParallelSpanHead, code_usage_stats, mixture_span_nll
@@ -115,6 +116,10 @@ from morph.kernels.triton.tg_strict_attention import tg_strict_index
 # A module constant so the map is reproducible from the config alone: the buffer is not
 # persisted and an offline probe rebuilds it by calling `frozen_code_expansion` with this.
 _SONAR_LIFT_SEED = 0x50FA
+# The gain hinge's pass when `model.slot_gain_every` skips the hinge on a step: no pass (a real
+# pass index is >= 0). `gain_pass_choices` ends with it, `pin_gain_pass` takes it.
+GAIN_OFF = -1
+
 # Salt of the gain hinge's private pass generator (`MORPHTransformer._gain_pass_gen`): its
 # seed is torch.initial_seed() (the run seed) plus this, so the pass sequence depends on the
 # run seed without being a copy of the global CPU stream's first draws.
@@ -913,6 +918,16 @@ class MORPHConfig:
     # model.slot_compact != "off" (its guard is what makes the step row-sliceable) and
     # 0 < k < the batch size (raises at the first hinge otherwise).
     slot_gain_rows: int = 0
+    # slot_gain_every — the one-pass gain hinge runs on every k-th training step only, with
+    # lambda (and the tail / floor lambdas) times k on those steps, so the hinge's expected
+    # weight is unchanged. On the other steps the hinge's forward and backward do not run at
+    # all (a FLOP cut, and a change to the objective on purpose: the gain is held on 1/k of
+    # the steps, with k times the push). The cadence is a host count of training steps
+    # (`_gain_cadence_on`); under training.graph_step the off step is one more VARIANT, a
+    # recording with no hinge in it (`gain_pass_choices` ends with -1), so no work is
+    # replayed for it. The count restarts at a resume. 1 = every step, the tree before the
+    # key. Needs the one-pass hinge (slot_gain_lambda > 0, slot_gain_all_iters false).
+    slot_gain_every: int = 1
     # slot_depth_stratified — the slot loop's training depth draw is, per row, a SYSTEMATIC
     # sample of clamp(Poisson(mean), 1, max) randomly permuted over the slots: each slot's
     # marginal law is unchanged, the joint law is not (a row cannot draw many deep slots at
@@ -3784,6 +3799,23 @@ class MORPHTransformer(nn.Module):
                     "reader (horizon 1, offset 1, spandec_read mean) without the per-pass "
                     f"target, the oracle-z teacher or K-fold rollouts; refused with: "
                     f"{', '.join(_why)}.")
+        # tul.spandec_slot_keep: the packed decoder trains on a random token-budget subset of
+        # each row's slots (training forwards). 1024 = every slot: no buffer, no branch.
+        self._spandec_keep_q: int = (keep_q_of(cfg.tul.spandec_slot_keep)
+                                     if cfg.tul is not None else KEEP_RES)
+        if self._spandec_keep_q != KEEP_RES:
+            if not self._spandec_packed:
+                raise ValueError(
+                    "tul.spandec_slot_keep < 1 needs model.spandec_packed: true. Only the "
+                    "packed decoder runs on fewer rows when slots are dropped; the per-slot "
+                    "decoder would compute the same FLOPs and the key would only change "
+                    "which tokens the loss reads.")
+            self._spandec_keep_seed: int = int(torch.initial_seed()) & 0x7FFFFFFF
+            # Device-side, so a CUDA-graph replay advances it (a host int would freeze into
+            # the graph; the `_gain_rows_ctr` precedent). Not persistent: a resume restarts
+            # the sequence of draws, which is a choice of slots and not training state.
+            self.register_buffer("_spandec_keep_ctr", torch.zeros((), dtype=torch.long),
+                                 persistent=False)
         # ── arm B: the code policy (tul.code_policy_k; tul_code_policy.py) ──────────
         # LX's codes, ONE rollout, one code PER SLOT chosen by a policy head on the slot's
         # detached loop-entry state and trained by REINFORCE on the span's own CE. `None`
@@ -4043,6 +4075,15 @@ class MORPHTransformer(nn.Module):
         # model.slot_depth_stratified / model.slot_compact: refused outside the recipe they
         # were built for (morph/model/slot_compact.py).
         validate_slot_compact(cfg)
+        if int(cfg.slot_gain_every) < 1:
+            raise ValueError(f"model.slot_gain_every must be >= 1 (1 = every step), "
+                             f"got {cfg.slot_gain_every}")
+        if int(cfg.slot_gain_every) > 1 and not (cfg.slot_gain_lambda > 0.0
+                                                 and not cfg.slot_gain_all_iters):
+            raise ValueError(
+                "model.slot_gain_every > 1 needs model.slot_gain_lambda > 0 and "
+                "model.slot_gain_all_iters: false: it is the cadence of the ONE-pass hinge, "
+                "and a knob that does nothing raises.")
         if int(cfg.slot_gain_rows) < 0:
             raise ValueError(f"model.slot_gain_rows must be >= 0 (0 = every row), "
                              f"got {cfg.slot_gain_rows}")
@@ -4125,6 +4166,9 @@ class MORPHTransformer(nn.Module):
         # The pass the last draw (or the force key) chose, for the trainer's `loop/gain_pass`.
         # Host-side, so logging it costs no device sync. The trainer clears it every step.
         self._gain_pass_last: int | None = None
+        # model.slot_gain_every: the count of training steps that have asked whether the hinge
+        # runs (a host int, advanced once per step by `_gain_cadence_on`).
+        self._gain_cad_ctr: int = 0
         # model.slot_gain_rows: the hinge's call counter, ON THE DEVICE so a CUDA-graph replay
         # advances it (a host int would be frozen into the graph). Not persistent: a resume
         # restarts the rotation, which is a choice of rows and not training state.
@@ -7083,7 +7127,8 @@ class MORPHTransformer(nn.Module):
         # Detached (a constant target); pads enter at 0 and stay there.
         _renorm = bool(self.cfg.slot_state_renorm)
         _n0 = h.detach().flatten(2).float().norm(dim=2) if _renorm else None      # [B, S]
-        _gain_lambda = float(self.cfg.slot_gain_lambda)
+        # model.slot_gain_every: on the steps the hinge runs it is charged k times over.
+        _gain_lambda = float(self.cfg.slot_gain_lambda) * int(self.cfg.slot_gain_every)
         _gain_on = _gain_lambda > 0.0 and torch.is_grad_enabled() and self.training
         # slot_gain_renorm (plan C1b): the hinge differences R(f(h)), the map the loop
         # applies under the renorm, instead of f(h). None = the raw step, as before.
@@ -8632,6 +8677,11 @@ class MORPHTransformer(nn.Module):
         pin, force = self._gain_pass_pin, int(self.cfg.slot_gain_pass_force)
         if pin is not None:
             t = int(pin)
+            if t == GAIN_OFF:
+                return t                      # model.slot_gain_every: a step with no hinge
+        elif int(self.cfg.slot_gain_every) > 1 and not self._gain_cadence_on():
+            self._gain_pass_last = GAIN_OFF
+            return GAIN_OFF
         elif force >= 0:
             t = force
             self._gain_pass_last = t
@@ -8663,12 +8713,22 @@ class MORPHTransformer(nn.Module):
         if not (cfg.slot_gain_lambda > 0.0 and not cfg.slot_gain_all_iters
                 and (self._gain_pass_gen is not None or int(cfg.slot_gain_pass_force) >= 0)):
             return ()
+        # model.slot_gain_every > 1: the step with no hinge is the LAST choice (GAIN_OFF)
+        off = (GAIN_OFF,) if int(cfg.slot_gain_every) > 1 else ()
         if int(cfg.slot_gain_pass_force) >= 0:
-            return (int(cfg.slot_gain_pass_force),)
+            return (int(cfg.slot_gain_pass_force),) + off
         tc = cfg.tul
         total = (int(tc.slot_depth_fixed) or int(tc.slot_max_depth or 0) or int(cfg.max_depth))
         n_nograd = 0 if bool(tc.db_loop) else max(0, total - int(cfg.bptt_depth))
-        return tuple(range(n_nograd, total))
+        return tuple(range(n_nograd, total)) + off
+
+    def _gain_cadence_on(self) -> bool:
+        """Whether the hinge runs on this training step (``model.slot_gain_every``): true on
+        the steps whose count is a multiple of k, the first one included. Advances the count;
+        call it once per training step (the eager forward, or GraphStep's host draw)."""
+        hit = self._gain_cad_ctr % int(self.cfg.slot_gain_every) == 0
+        self._gain_cad_ctr += 1
+        return hit
 
     def draw_gain_pass(self) -> int | None:
         """GraphStep's host draw, once per training step whether the step then runs eager or
@@ -8679,6 +8739,11 @@ class MORPHTransformer(nn.Module):
         ch = self.gain_pass_choices()
         if not ch:
             return None
+        if int(self.cfg.slot_gain_every) > 1:
+            if not self._gain_cadence_on():
+                self._gain_pass_last = GAIN_OFF
+                return GAIN_OFF
+            ch = ch[:-1]                    # the passes, without the no-hinge choice
         t = ch[0] if len(ch) == 1 else ch[int(self._gain_pass_u() * len(ch))]
         self._gain_pass_last = t
         return t
@@ -8926,7 +8991,7 @@ class MORPHTransformer(nn.Module):
         # quantiles in `_slot_gain_reduce` skip them. With the tail off the readings come
         # from a detached difference, so they add no node to the graph and nothing to the
         # loss: the instruments are free and the default is the function before them.
-        tail_lam = float(self.cfg.slot_gain_tail_lambda)
+        tail_lam = float(self.cfg.slot_gain_tail_lambda) * int(self.cfg.slot_gain_every)
         valid = mask.to(torch.bool)
         n_valid = valid.sum()
         g_slot = ((df if tail_lam > 0.0 else df.detach()).float().flatten(2).norm(dim=2)
@@ -8940,7 +9005,7 @@ class MORPHTransformer(nn.Module):
         # allowed there. Off, nothing is computed and the penalty is the one above. A row
         # with no active slot at this pass (its depth ran out) reads gain 0 and is not a
         # map below the floor: it is left out of the mean.
-        floor_lam = float(self.cfg.slot_gain_floor_lambda)
+        floor_lam = float(self.cfg.slot_gain_floor_lambda) * int(self.cfg.slot_gain_every)
         if floor_lam > 0.0:
             row_ok = valid.flatten(1).any(dim=1)                                    # [B]
             fl = torch.relu(float(self.cfg.slot_gain_floor_target) - gain) * row_ok
@@ -12613,9 +12678,22 @@ class MORPHTransformer(nn.Module):
         # from — the feedback loop `TULConfig.mux_detach_head` records. `SpanDecoder.tok_in`
         # is the learnable map that lets the decoder adapt without writing into the table.
         if self._spandec_packed:
+            _cap = self._spandec_packed_cap(input_ids.shape[1], layout, dec)
+            _over_rows = None
+            if self._spandec_keep_q != KEEP_RES and self.training and torch.is_grad_enabled():
+                # tul.spandec_slot_keep: drop slots (whole spans) to a per-row token budget,
+                # so the packed capacity is the budget's bound. The row cap's own proof is
+                # still checked: a row over it is a NaN loss, as without the key.
+                _over_rows = (valid.sum((1, 2)) > _cap).any()
+                _keep = slot_keep_mask(valid, self._spandec_keep_q, self._spandec_keep_seed,
+                                       self._spandec_keep_ctr)
+                self._spandec_keep_ctr.add_(1)
+                valid = valid & _keep.unsqueeze(-1)
+                _cap = int(keep_scaled(_cap, self._spandec_keep_q))
             st, lab, _over = dec.decode_packed(
-                z, ids, valid, w_tied.detach(),
-                self._spandec_packed_cap(input_ids.shape[1], layout, dec), mem=mem)
+                z, ids, valid, w_tied.detach(), _cap, mem=mem)
+            if _over_rows is not None:
+                _over = _over | _over_rows
             C = st.shape[-1]
             # The pack is the row cap: nearly every packed row carries a label.
             loss = fused_linear_cross_entropy(

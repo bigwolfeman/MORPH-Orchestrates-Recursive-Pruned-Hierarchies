@@ -824,6 +824,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         # MORPHConfig.slot_gain_pass_force: -1 = a fresh hinge pass per step (2026-10-10)
         slot_gain_pass_force=int(getattr(m, "slot_gain_pass_force", -1)),
         slot_gain_rows=int(getattr(m, "slot_gain_rows", 0)),
+        slot_gain_every=int(getattr(m, "slot_gain_every", 1)),
         # MORPHConfig.slot_depth_stratified / slot_compact (morph/model/slot_compact.py)
         slot_depth_stratified=bool(getattr(m, "slot_depth_stratified", False)),
         slot_compact=str(getattr(m, "slot_compact", "off")),

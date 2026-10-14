@@ -131,6 +131,13 @@ model:
   #   slot_gain_lambda > 0 and slot_compact != off; 0 < k < B or the first hinge raises.
   #   CHANGES THE TRAINING FUNCTION (a noisier gain estimate for ~k/B of the hinge's cost).
   slot_gain_rows: 0
+  # slot_gain_every: the one-pass hinge runs on every k-th training step only, with slot_gain_lambda
+  #   (and the tail / floor lambdas) times k on those steps. On the other steps its forward and
+  #   backward do not run (under graph_step that step is its own recording with no hinge: one more
+  #   variant, so cells x passes x 2 recordings). A FLOP cut that changes the objective on purpose.
+  #   1 = every step, bit-identical. Needs slot_gain_lambda > 0 and slot_gain_all_iters false. The
+  #   step count restarts at a resume.
+  slot_gain_every: 1
   # slot_gain_tail_lambda: a second hinge on the PER-SLOT gain g_s of the same finite
   #   difference, lambda_tail * mean over valid slots of relu(g_s - slot_gain_tail_target)^2,
   #   added to the row hinge. The row hinge holds the typical gain; the tail bounds ONE
@@ -944,6 +951,13 @@ tul:
   # think-once design that lab/divergence/BREAK-GLASS-IN-CASE-OF-DIVERGENCE-THE-SLOT-LOOP-GAIN-CONSTRAINT.md
   # constrains; every slot-loop config sets it false through tul_short.yaml.
   tokens_through_core: true
+  # spandec_slot_keep: the PACKED span decoder (model.spandec_packed) trains on a random subset of
+  #   each row's slots per training step: whole spans (every kept slot keeps its full next-span
+  #   target), up to a token budget of keep x the row's graded tokens. The packed capacity shrinks
+  #   by keep, so the decoder blocks and the vocab CE run on that many rows. Loss = mean over the
+  #   kept tokens. Eval grades every slot. 1.0 = every slot, bit-identical. Needs tul.spandec and
+  #   model.spandec_packed; used at 1/1024 resolution.
+  spandec_slot_keep: 1.0
 
 data:
   # datasets>=4.x dropped script datasets; load from locally-cached OWT arrow shards instead.

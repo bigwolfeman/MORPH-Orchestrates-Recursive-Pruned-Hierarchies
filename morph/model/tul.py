@@ -1297,6 +1297,18 @@ class TULConfig:
     # mean does not already give) and with `spandec: false` (no decoder is built).
     # Record: lab/experiments/planned/2026-09-13-arc-register-reader-and-downstream-target.md
     spandec_reads_cells: bool = False
+    # spandec_slot_keep (2026-10-13, a FLOP cut that changes the objective on purpose): the
+    # PACKED span decoder (model.spandec_packed) trains on a random subset of each row's slots
+    # per step. Every kept slot keeps its FULL next-span target (no token cap). The subset is a
+    # per-row TOKEN BUDGET, round(keep x the row's graded tokens): slots are put in a random
+    # order and the longest prefix that fits the budget is kept. A slot COUNT cannot cut the
+    # decoder: its proven position bound is set by the longest spans, so it stays ~the same.
+    # The budget makes the packed capacity keep x today's, so the blocks and the vocab CE run
+    # on that many rows. The loss is the mean over the kept tokens. Training forwards only (eval
+    # grades every slot). The draw is an integer hash of (training seed, a device step counter,
+    # row, slot): reproducible, no RNG stream moves, and a CUDA-graph replay draws a new subset.
+    # keep is used at 1/1024 resolution. 1.0 = every slot, bit-identical to the tree before.
+    spandec_slot_keep: float = 1.0
     # ── WHICH STATE THE SPAN DECODER GRADES (arm "spdwin", 2026-10-10) ────────────
     # spandec_read: "mean" (default; today's forward, bit-identical) | "winner" | "each" | "best".
     # "each" (2026-10-10): the decoder grades EACH of the M exit cells alone (cell axis folded
@@ -3407,6 +3419,14 @@ class TULConfig:
                 raise ValueError(
                     f"tul.spandec_heads must be >= 0 (0 = the model's), got "
                     f"{self.spandec_heads}")
+            if not 0.0 < self.spandec_slot_keep <= 1.0:
+                raise ValueError(
+                    f"tul.spandec_slot_keep must be in (0, 1] (1 = every slot), got "
+                    f"{self.spandec_slot_keep}")
+            if self.spandec_slot_keep < 1.0 and round(self.spandec_slot_keep * 1024) >= 1024:
+                raise ValueError(
+                    f"tul.spandec_slot_keep {self.spandec_slot_keep} rounds to 1.0 at the "
+                    f"1/1024 resolution the budget uses: set 1.0 or a value <= 0.9995.")
             # ── WHICH SPAN (tul.spandec_target_offset) ────────────────────────
             if self.spandec_target_offset < 1:
                 raise ValueError(
@@ -3494,7 +3514,7 @@ class TULConfig:
                 or self.spandec_weight != 1.0
                 or self.spandec_horizon != 1 or self.spandec_pass_horizon_max != 6
                 or self.spandec_pass_weight != 1.0 or self.spandec_pass_tokens != 8
-                or self.spandec_reads_cells):
+                or self.spandec_reads_cells or self.spandec_slot_keep != 1.0):
             # With the parallel head on and the decoder off, the head reads the decoder's
             # four GEOMETRY keys (layers, heads, J, target offset) itself, so only those
             # are allowed; every other decoder knob would still be silently ignored.
