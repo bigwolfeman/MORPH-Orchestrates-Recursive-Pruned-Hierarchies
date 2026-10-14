@@ -83,6 +83,14 @@ def _log_map_origin(x: Tensor) -> Tensor:
     return coeff * xs
 
 
+def lm_table(euc_w: Tensor, space_w: Tensor) -> Tensor:
+    """The tied head's table ``[V, d_model]``: the euclidean weight concatenated with the
+    Lorentz tangent weight (``space_w`` projected to the hyperboloid and log-mapped). One home
+    for the ops; ``model.glue_fold`` runs this through ``torch.compile`` (one fused forward
+    kernel over the ``[V, d_model]`` table instead of seven)."""
+    return torch.cat([euc_w, _log_map_origin(_project_to_hyperboloid(space_w))], dim=-1)
+
+
 # ── LorentzEmbedding ──────────────────────────────────────────────────────────
 
 class LorentzEmbedding(nn.Module):
@@ -159,6 +167,12 @@ class HybridEmbedding(nn.Module):
         # before and after a step).
         self._cache_depth = 0
         self._lm_w = None
+        self._lm_table_fn = lm_table       # fold_glue (model.glue_fold) swaps in the compiled one
+
+    def fold_glue(self, table_fn) -> None:
+        """``model.glue_fold``: build the tied head's table through ``table_fn`` (the compiled
+        :func:`lm_table`)."""
+        self._lm_table_fn = table_fn
 
     def forward(self, input_ids: Tensor) -> Tensor:
         """Return [euclidean || lorentz] embedding, shape [..., d_model]."""
@@ -182,11 +196,8 @@ class HybridEmbedding(nn.Module):
         """
         if self._cache_depth and self._lm_w is not None:
             return self._lm_w
-        euc_w = self.euc_embed.weight                                       # [V, euc_dim]
-        lor_w = _log_map_origin(
-            _project_to_hyperboloid(self.lor_embed.space_embed.weight)     # [V, lor_dim]
-        )
-        w = torch.cat([euc_w, lor_w], dim=-1)                               # [V, d_model]
+        w = self._lm_table_fn(self.euc_embed.weight,                        # [V, euc_dim]
+                              self.lor_embed.space_embed.weight)            # [V, lor_dim]
         if self._cache_depth:
             self._lm_w = w
         return w

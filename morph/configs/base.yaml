@@ -485,6 +485,10 @@ model:
                            # math; the sums run in another order, so NOT bit-identical. Needs
                            # block_custom_ops (raises otherwise). tests/test_kv_flat.py.
                            # .agents/notes/proposed/architecture/2026-10-12-core-pass-persistent-kernel-plan.md (K1)
+  glue_fold: false         # true ⇒ the small elementwise / copy kernels around the custom ops are folded
+                           # (census: abq/gluefold/REPORT.md). Each fold is exact or rounding-only
+                           # (the list is in MORPHConfig.glue_fold): the LM head's padded bf16 weight
+                           # is written in one pass instead of fill + copy + cast. tests/test_glue_fold.py.
 
   # Sparse MLP backbone: prelude+core+coda all use MortarLinear (CMS-prunable +
   # MORTAR 128×128 BCSR via morph/sparse/stk) — always on, no scope knob.

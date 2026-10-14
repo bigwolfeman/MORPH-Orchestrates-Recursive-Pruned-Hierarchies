@@ -85,7 +85,37 @@ def mix_target(logp_model: Tensor, gate_logits: Tensor, p: Tensor, null: Tensor)
     return torch.logaddexp(torch.log(w0.clamp_min(1e-30)) + logp_model.float(), lc)
 
 
+def pointer_mass(q: Tensor, k: Tensor, cand: Tensor, n_tok: Tensor, scale: Tensor,
+                 null_k: Tensor) -> tuple[Tensor, Tensor]:
+    """The pointer's training read of :meth:`TULPointer.attend`: ``(p, null)`` and nothing
+    else. ``q`` / ``k`` ``[B, H, N, dh]`` (the head projections of the token-ordered states,
+    before the norm), ``cand`` ``[B, N]`` (token order, -1 = not a candidate), ``n_tok``
+    ``[B]`` (token positions per row), ``scale`` ``[H]`` fp32, ``null_k`` ``[H, dh]``.
+    ``p`` ``[B, N, H]`` is the attention mass each query puts on the earlier keys that carry
+    ITS OWN candidate id (``same``), ``null`` ``[B, H, N]`` the abstain mass: the two things
+    :meth:`TULPointer.target_logprob` reads of the ``[B, H, N, N]`` attention matrix, so the
+    matrix itself (157 MB fp32 at batch 6, 1280 positions) never needs to leave one fused
+    kernel. The same ops as ``attend`` (no coverage, no cell key), in the same order.
+    ``model.glue_fold`` runs this through ``torch.compile``."""
+    N = q.shape[2]
+    q = _rms(q).float()
+    k = _rms(k).float()
+    ar = torch.arange(N, device=q.device)
+    ok = cand >= 0
+    allow = ((ar[None, :, None] > ar[None, None, :]) & (ar[None] < n_tok[:, None])[:, :, None]
+             & ok[:, None, :])
+    same = (cand[:, :, None] == cand[:, None, :]) & ok[:, :, None]
+    s = torch.einsum("bhid,bhjd->bhij", q, k) * scale[None, :, None, None]
+    s = s.masked_fill(~allow[:, None], float("-inf"))
+    s_null = torch.einsum("bhid,hd->bhi", q, _rms(null_k).float()) * scale[None, :, None]
+    pr = torch.softmax(torch.cat([s, s_null[..., None]], -1), -1)
+    p = (pr[..., :-1] * same[:, None].to(pr.dtype)).sum(-1).transpose(1, 2)
+    return p, pr[..., -1]
+
+
 class TULPointer(nn.Module):
+    _mass_fn = None            # fold_glue (model.glue_fold): the compiled `pointer_mass`
+
     def __init__(self, d: int, heads: int, dh: int = 64, cell_key: bool = False,
                  coverage: bool = False):
         super().__init__()
@@ -111,6 +141,18 @@ class TULPointer(nn.Module):
         self._ternary_exclude = True
         for m in self.modules():
             m._ternary_exclude = True
+
+    def fold_glue(self, mass_fn) -> None:
+        """``model.glue_fold``: :meth:`target_logprob` reads ``p`` and ``null`` through
+        ``mass_fn`` (the compiled :func:`pointer_mass`) instead of building the ``[B, H, N, N]``
+        attention matrix op by op. The coverage term and the cell key read the matrix itself,
+        so they refuse the fold."""
+        if self.coverage or self.cell_key:
+            raise ValueError("model.glue_fold: the pointer head's folded read returns the "
+                             "target mass only; tul.pointer_coverage_lambda and "
+                             "tul.pointer_cell_key read the attention matrix. Turn the fold "
+                             "off or those knobs off.")
+        self._mass_fn = mass_fn
 
     def attend(self, h: Tensor, cand: Tensor, slot_mask: Tensor, layout=None):
         """h [B, L, C] packed order; cand [B, L] token order (-1 = not a candidate).
@@ -167,9 +209,18 @@ class TULPointer(nn.Module):
         order = token_order(slot_mask)
         inv = torch.argsort(order, dim=1)
         cand = candidates_from_labels(labels, slot_mask)                       # token order
-        alpha, null, gl, cov = self.attend(h, cand, slot_mask, layout)
-        same = (cand[:, :, None] == cand[:, None, :]) & (cand[:, :, None] >= 0)  # y_i = c_i
-        p = (alpha * same[:, None].to(alpha.dtype)).sum(-1).transpose(1, 2)      # [B, N, H]
+        if self._mass_fn is None:
+            alpha, null, gl, cov = self.attend(h, cand, slot_mask, layout)
+            same = (cand[:, :, None] == cand[:, None, :]) & (cand[:, :, None] >= 0)  # y_i = c_i
+            p = (alpha * same[:, None].to(alpha.dtype)).sum(-1).transpose(1, 2)      # [B, N, H]
+        else:
+            B, L, C = h.shape
+            ht = h.gather(1, order[..., None].expand(-1, -1, C))
+            q = self.q(ht).view(B, L, self.h, self.dh).transpose(1, 2)
+            k = self.k(ht).view(B, L, self.h, self.dh).transpose(1, 2)
+            scale = (self.log_scale_bias.exp() / math.sqrt(self.dh)).float()
+            p, null = self._mass_fn(q, k, cand, (~slot_mask).sum(1), scale, self.null_k_bias)
+            gl, cov = self.gate_norm_head(h), None
         g = inv[..., None].expand(-1, -1, self.h)
         lp = mix_target(logp_model, gl, p.gather(1, g), null.transpose(1, 2).gather(1, g))
         is_tok_lab = ~slot_mask & (labels >= 0)
