@@ -789,6 +789,7 @@ def build_morph_config(cfg: DictConfig, tul=None, fm=None) -> MORPHConfig:
         hc_bwd_fused=bool(getattr(m, "hc_bwd_fused", False)),          # model.hc_bwd_fused
         block_custom_ops=bool(getattr(m, "block_custom_ops", False)),  # model.block_custom_ops
         kv_flat_kernels=bool(getattr(m, "kv_flat_kernels", False)),    # model.kv_flat_kernels
+        glue_fold=bool(getattr(m, "glue_fold", False)),                # model.glue_fold
         l2_persist=bool(getattr(m, "l2_persist", False)),
         retention=bool(getattr(m, "retention", True)),
         retention_layers=tuple(int(x) for x in getattr(m, "retention_layers", (1,))),

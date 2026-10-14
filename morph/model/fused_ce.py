@@ -57,6 +57,24 @@ def _pad_vocab(w_cast: Tensor) -> tuple[Tensor, int, int]:
     return F.pad(w_cast, (0, 0, 0, V_pad - V)), V, V_pad
 
 
+def _pad_cast(w: Tensor, dtype: torch.dtype) -> tuple[Tensor, int, int]:
+    """``_pad_vocab(w)`` cast to ``dtype``, in ONE write (``model.glue_fold``).
+
+    The unfused chain is ``F.pad(w)`` (a fill of the whole padded matrix, then a copy of the
+    rows), then ``.to(dtype)`` (a third pass). Here the destination is allocated in ``dtype``,
+    the real rows are copied in (the cast happens in that copy) and only the pad rows are
+    zeroed. A cast and a zero pad commute element by element, so the bits are those of the
+    chain."""
+    V = w.shape[0]
+    if V % 64 == 0:
+        return w.to(dtype), V, V
+    V_pad = ((V + 127) // 128) * 128
+    out = w.new_empty((V_pad, w.shape[1]), dtype=dtype)
+    out[:V].copy_(w)
+    out[V:].zero_()
+    return out, V, V_pad
+
+
 def static_row_pack(keep: Tensor, cap: int) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Pack the ``keep`` rows of an ``[N]`` row set, in order, to the front of a FIXED
     ``[cap]`` buffer, with no host sync (a CUDA-graph-captured step needs one shape for every
@@ -181,7 +199,8 @@ class _FusedLinearCE(torch.autograd.Function):
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor,
                 ignore_index: int, chunk_size: int, mask_token_id: int = -1,
                 weights: Tensor | None = None, softmax_kernel: bool = False,
-                compact_rows: bool = False, row_cap: int = 0) -> Tensor:
+                compact_rows: bool = False, row_cap: int = 0,
+                fold_head: bool = False) -> Tensor:
         # x: [N, d], w: [V, d], labels: [N]
         N, d = x.shape
         x_full = x
@@ -257,7 +276,8 @@ class _FusedLinearCE(torch.autograd.Function):
         # forward — costly for our hybrid weight-tied head), pass w_cast.t() and let cuBLAS
         # transpose via strides for free. Bit-identical: cast-then-transpose == transpose-
         # then-cast (cast is per-element, transpose only reindexes).
-        w_cast, V, V_pad = _pad_vocab(w.to(compute_dtype))  # [V′, d]
+        if not fold_head:
+            w_cast, V, V_pad = _pad_vocab(w.to(compute_dtype))  # [V′, d]
         neg_inf = torch.finfo(torch.float32).min
         # The GEMM operands, cast ONCE (2026-10-04). Under CUDA autocast every chunk's three
         # matmuls cast their fp32 operands to the autocast dtype again: the [V′, d] weight
@@ -266,7 +286,11 @@ class _FusedLinearCE(torch.autograd.Function):
         # bit-identical; without autocast both are `compute_dtype` and nothing changes.
         gemm_dtype = (torch.get_autocast_dtype("cuda")
                       if x.is_cuda and torch.is_autocast_enabled("cuda") else compute_dtype)
-        w_g = w_cast.to(gemm_dtype)
+        if fold_head:
+            # model.glue_fold: pad and cast in one write (`_pad_cast`), bit-identical
+            w_g, V, V_pad = _pad_cast(w.to(compute_dtype), gemm_dtype)
+        else:
+            w_g = w_cast.to(gemm_dtype)
         x_g = x.to(gemm_dtype)
         # `softmax_kernel` (model.ce_softmax_kernel): the chunk's elementwise body runs as
         # ONE Triton kernel over the low-precision logits tile (morph/kernels/triton/
@@ -365,7 +389,7 @@ class _FusedLinearCE(torch.autograd.Function):
         go = grad_output  # scalar
         gx = (grad_x * go).to(ctx.x_dtype)
         gw = None if grad_w is None else (grad_w * go).to(ctx.w_dtype)
-        return gx, gw, None, None, None, None, None, None, None, None
+        return gx, gw, None, None, None, None, None, None, None, None, None
 
 
 def fused_linear_cross_entropy(
@@ -379,6 +403,7 @@ def fused_linear_cross_entropy(
     softmax_kernel: bool = False,
     compact_rows: bool = False,
     row_cap: int = 0,
+    fold_head: bool = False,
 ) -> Tensor:
     """Memory-efficient ``mean`` cross-entropy of a weight-tied linear head.
 
@@ -404,10 +429,14 @@ def fused_linear_cross_entropy(
     ``[row_cap]`` buffer (CUDA-graph safe). The caller must prove no batch carries more than
     ``row_cap`` rows with loss; a batch that does returns a NaN loss. Not bit-identical.
 
+    ``fold_head`` (default False = pad, then cast, as before): the GEMM weight is padded and
+    cast in one write (``model.glue_fold``; :func:`_pad_cast`). Bit-identical.
+
     A ``w`` that does not require grad gets no ``grad_w`` (the third GEMM is skipped).
     """
     return _FusedLinearCE.apply(x, w, labels, ignore_index, chunk_size, mask_token_id,
-                                weights, softmax_kernel, compact_rows, int(row_cap))
+                                weights, softmax_kernel, compact_rows, int(row_cap),
+                                bool(fold_head))
 
 
 # ── Spectral decoupling: an L2 penalty on the coda's TOKEN logits ───────────
@@ -598,10 +627,15 @@ def fused_linear_cross_entropy_logit_l2(
 # same operands as the eager path and the tile is the same bf16 tile; only the fp32 arithmetic
 # on it differs (online log-sum-exp, exp2), a few fp32 ulps before the gradient's bf16 rounding.
 # This is the pointer / DITTO token loss of `_tul_group_losses`: there it is the whole LM head.
-def _gemm_operands(x: Tensor, w: Tensor) -> tuple[Tensor, Tensor, int, int]:
-    """``(x_g, w_g [V', d], V, V')`` cast once to the dtype the eager GEMM runs in."""
+def _gemm_operands(x: Tensor, w: Tensor, fold: bool = False
+                   ) -> tuple[Tensor, Tensor, int, int]:
+    """``(x_g, w_g [V', d], V, V')`` cast once to the dtype the eager GEMM runs in. ``fold``
+    (``model.glue_fold``): pad and cast the weight in one write, same bits."""
     gemm_dtype = (torch.get_autocast_dtype("cuda")
                   if x.is_cuda and torch.is_autocast_enabled("cuda") else x.dtype)
+    if fold:
+        w_g, V, V_pad = _pad_cast(w.to(x.dtype), gemm_dtype)
+        return x.to(gemm_dtype), w_g, V, V_pad
     w_cast, V, V_pad = _pad_vocab(w.to(x.dtype))
     return x.to(gemm_dtype), w_cast.to(gemm_dtype), V, V_pad
 
@@ -616,7 +650,7 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: Tensor, w: Tensor, labels: Tensor, ignore_index: int,
                 chunk_size: int, mask_token_id: int, softmax_kernel: bool = False,
-                keep_logits: bool = False) -> Tensor:
+                keep_logits: bool = False, fold_head: bool = False) -> Tensor:
         N, _d = x.shape
         dev = x.device.type
         ctx.ac_enabled = torch.is_autocast_enabled(dev)
@@ -624,6 +658,7 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
         ctx.use_kernel = _kernel_ok(x, softmax_kernel)
         ctx.ignore_index, ctx.chunk_size = ignore_index, chunk_size
         ctx.mask_token_id = mask_token_id
+        ctx.fold_head = fold_head
         # `keep_logits` (the call site's choice, block comment above `fused_linear_label_
         # logprob`): every chunk's logits tile is written into ONE [N, V'] buffer that the
         # backward reads instead of recomputing it. Only when a backward can run: the wrapper
@@ -635,7 +670,7 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
         ctx.kept_used = False
         if ctx.use_kernel:
             from morph.kernels.triton.ce_softmax_grad import ce_row_lse
-            x_g, w_g, V, V_pad = _gemm_operands(x, w)
+            x_g, w_g, V, V_pad = _gemm_operands(x, w, fold_head)
             valid = labels != ignore_index
             lab_safe = labels.clamp(min=0)
             out = torch.empty(N, device=x.device, dtype=torch.float32)
@@ -705,7 +740,7 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
             from morph.kernels.triton.ce_softmax_grad import ce_logprob_grad_
             with torch.autocast(device_type=dev, dtype=ctx.ac_dtype or torch.bfloat16,
                                 enabled=ctx.ac_enabled):
-                x_g, w_g, V, V_pad = _gemm_operands(x, w)
+                x_g, w_g, V, V_pad = _gemm_operands(x, w, ctx.fold_head)
             g = torch.where(labels != ctx.ignore_index, grad_out.float(),
                             torch.zeros_like(lse))
             lab_safe = labels.clamp(min=0)
@@ -725,7 +760,7 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
                 del dl, tile
             if need_w:
                 grad_w = (grad_w[:V] if V_pad != V else grad_w).to(w.dtype)
-            return grad_x, grad_w, None, None, None, None, None, None
+            return grad_x, grad_w, None, None, None, None, None, None, None
         with torch.autocast(device_type=dev, dtype=ctx.ac_dtype or torch.bfloat16,
                             enabled=ctx.ac_enabled):
             w_cast, V, V_pad = _pad_vocab(w.to(x.dtype))
@@ -762,13 +797,13 @@ class _FusedLinearLabelLogProb(torch.autograd.Function):
                 del dl_c
         if need_w:
             grad_w = (grad_w[:V] if V_pad != V else grad_w).to(w.dtype)
-        return grad_x, grad_w, None, None, None, None, None, None
+        return grad_x, grad_w, None, None, None, None, None, None, None
 
 
 def fused_linear_label_logprob(
     x: Tensor, w: Tensor, labels: Tensor, ignore_index: int = -100,
     chunk_size: int = 1024, mask_token_id: int = -1, softmax_kernel: bool = False,
-    keep_logits: bool = False,
+    keep_logits: bool = False, fold_head: bool = False,
 ) -> Tensor:
     """``[N]`` fp32 ``log softmax(x @ w.T)[label]`` per row, 0 on ``ignore_index`` rows, with
     an exact gradient to ``x`` and ``w`` for ANY upstream ``[N]`` gradient. Never
@@ -785,10 +820,15 @@ def fused_linear_label_logprob(
     autocast, ``N * V' * 2`` bytes) and the backward reads it, so the backward runs two vocab
     GEMMs instead of three. Bit-identical: the kept tile is the output of the same GEMM on the
     same operands and shape that the backward would run. The buffer serves one backward; a
-    second backward through a retained graph raises. Kept only when a backward can run."""
+    second backward through a retained graph raises. Kept only when a backward can run.
+
+    ``fold_head`` (default False = pad, then cast): the kernel path's GEMM weight is padded
+    and cast in one write (``model.glue_fold``; :func:`_pad_cast`), in the forward and in the
+    backward. Bit-identical. The eager (non-kernel) body is unchanged."""
     return _FusedLinearLabelLogProb.apply(x, w, labels, ignore_index, chunk_size,
                                           mask_token_id, bool(softmax_kernel),
-                                          bool(keep_logits) and torch.is_grad_enabled())
+                                          bool(keep_logits) and torch.is_grad_enabled(),
+                                          bool(fold_head))
 
 
 # ── Multi-hot cross-entropy (MCE) for Token-Superposition Training ──────────

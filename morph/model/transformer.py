@@ -27,7 +27,7 @@ from torch.utils.checkpoint import checkpoint
 
 from .attention import MORPHAttention, RMSNorm
 from .diffusion_blocks import euler_step
-from .embeddings import MORPHEmbedding
+from .embeddings import MORPHEmbedding, lm_table
 from .fused_ce import (
     fused_linear_cross_entropy,
     fused_linear_cross_entropy_logit_l2,
@@ -56,7 +56,8 @@ from .tul_explore import (TULHypMergeGate, TULHypScoreHead, gather_rows, hyp_mer
                           swor_uniform)
 from .rollout_dropout import bypass_rollout_sharing
 from .tul_carry import TULLoopCarry
-from .loop_glue import compile_rms_norm
+from .glue_fold import compile_glue, diag_inject, injection_term, rms_norm_cast, silu_mul
+from .loop_glue import compile_rms_norm, rms_norm_fp32
 from .split_wgrad import as_bf16, split_active, split_swiglu_mlp
 from .streams import record_on, side_stream
 from .slot_compact import (compact_attn_input, compact_order, put_rows, slot_depth_capacity,
@@ -75,7 +76,8 @@ from .tul_fan_route import (FanLatentHead, FanOPF, FanRouter, FanTargetFront, Fa
                             pooled_span_states, reset_to_winner)
 from .tul_egrad import (CriticEnergy, DiscEnergy, ReconEnergy,
                         slot_outcome_labels)
-from .tul_spandec import (KEEP_RES, SpanDecoder, horizon_span_slots, keep_q_of,
+from .tul_pointer import pointer_mass
+from .tul_spandec import (KEEP_RES, SpanDecoder, SpanFold, horizon_span_slots, keep_q_of,
                           keep_scaled, next_span_slots, own_span_slots, slot_keep_mask,
                           span_slots)
 from .tul_snap import TULPseudoSnap
@@ -897,6 +899,11 @@ class MORPHConfig:
     # grid, elementwise epilogue work only. Rounding only. Needs split_wgrad_triton; refuses a
     # ReMoE router (morph/kernels/triton/split_gemm.py). False = the unfused MLP.
     gemm_epilogue_fusion: bool = False
+    # glue_fold — fold the small elementwise / copy kernels around the custom ops. Every fold is
+    # exact or rounding-only, and the list is closed (a new fold names itself here):
+    #   * the CE heads' GEMM weight: pad + cast in one write (fused_ce._pad_cast), bit-identical.
+    # False = the unfolded kernels.
+    glue_fold: bool = False
     # slot_gain_reuse_f0 — the hinge's f(h) IS the loop's own step output at the sampled
     # pass, and f(h + d) runs under that step's dropout masks (the RNG state before the
     # step is replayed for it). Saves one of the hinge's two core applications. NOT exact:
@@ -1008,6 +1015,16 @@ class DiagonalInjection(nn.Module):
             self.log_A = nn.Parameter(init_decay_vec.float().log())
             self.log_dt = nn.Parameter(init_dt_vec.float().log())
 
+    _fold_fn = None            # fold_glue (model.glue_fold): the compiled `diag_inject`
+
+    def fold_glue(self, fn) -> None:
+        """``model.glue_fold``: ``forward`` runs ``fn`` (glue_fold.diag_inject_fn), one kernel
+        over the carrier. Call AFTER ``keep_dtype`` is set: ``fn`` is built for it."""
+        if self.B is not None:
+            raise ValueError("model.glue_fold: the folded injection has no B map "
+                             "(model.injection_B); turn the fold or injection_B off.")
+        self._fold_fn = fn
+
     def source_view(self, e: Tensor) -> Tensor:
         """The channels of ``e`` that ``forward`` reads. A caller that moves ``e`` around
         (the compacted slot loop gathers it once per pass) may hand ``forward`` this view
@@ -1016,6 +1033,9 @@ class DiagonalInjection(nn.Module):
 
     def forward(self, h: Tensor, e: Tensor) -> Tensor:
         """``e`` is the full source or its ``source_view`` (told apart by the last dim)."""
+        if self._fold_fn is not None:
+            e_ctx = e if e.shape[-1] == self.end - self.start else self.source_view(e)
+            return self._fold_fn(h, e_ctx, self.log_A, self.log_dt)
         A = self.log_A.exp().clamp(max=0.9999)
         dt = self.log_dt.exp()
         h_ctx = h[..., self.start:self.end]
@@ -2225,7 +2245,8 @@ class MORPHTransformer(nn.Module):
         # The chunked CE's opt-in speed paths, passed at every `fused_linear_cross_entropy`
         # call of the model (2026-10-04 speed passes; both off = the eager CE body).
         self._ce_kw = dict(softmax_kernel=bool(cfg.ce_softmax_kernel),
-                           compact_rows=bool(cfg.ce_compact_rows))
+                           compact_rows=bool(cfg.ce_compact_rows),
+                           fold_head=bool(cfg.glue_fold))                # model.glue_fold
         if bool(cfg.depth_fixed) and int(cfg.mean_depth) != int(cfg.max_depth):
             raise ValueError(
                 f"model.depth_fixed needs mean_depth == max_depth (got {cfg.mean_depth} / "
@@ -4469,12 +4490,35 @@ class MORPHTransformer(nn.Module):
                   "every position sees the future (runtime-invariants §5 violation; the "
                   "leak that faked the l2cap depth-earning). Load/diagnose pre-2026-08-31 "
                   "checkpoints only; NEVER train new models with it.")
+        self._inj_term_fn = None
+        if cfg.glue_fold:
+            self._apply_glue_fold()
         n_params = sum(p.numel() for p in self.parameters())
         _res = self._residual_mode + (f"(n={self._n_streams})" if self._is_hc else "")
         print(f"MORPHTransformer: {n_params/1e6:.1f}M params, "
               f"loop {cfg.n_prelude}:{cfg.n_core}×{cfg.mean_depth}:{cfg.n_coda} "
               f"(kernels={'fused' if cfg.use_kernels else ('EAGER+TGSCOPED' if cfg.tg_scoped_kernels else 'EAGER')}, "
               f"residual={_res})")
+
+    def _apply_glue_fold(self) -> None:
+        """``model.glue_fold``: hand the compiled forms of the eager glue (glue_fold.py) to the
+        modules that own it. Called once, at the end of ``__init__``, when every module the
+        folds read (the injection's ``keep_dtype``, the span decoder, the pointer head) is
+        built. A fold whose module this model does not have is skipped; one whose module
+        cannot take it raises (``fold_glue``)."""
+        self._inj_term_fn = compile_glue(injection_term(self._ctx_start, self._ctx_end), True)
+        self.embed.hybrid.fold_glue(compile_glue(lm_table, False))
+        self.injection.fold_glue(compile_glue(
+            diag_inject(self.injection.start, self.injection.end,
+                        bool(self.injection.keep_dtype)), True))
+        if self.tul_pointer is not None:
+            self.tul_pointer.fold_glue(compile_glue(pointer_mass, True))
+        fold = SpanFold(rms_cast=compile_glue(rms_norm_cast, True),
+                        rms=compile_glue(rms_norm_fp32, True),
+                        silu_mul=compile_glue(silu_mul, True))
+        for dec in (self.tul_spandec, self.tul_recon):
+            if dec is not None:
+                dec.fold_glue(fold)
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -4533,6 +4577,10 @@ class MORPHTransformer(nn.Module):
             else:
                 signal = self.value_embed_tables[ve_idx](input_ids)
                 ctx = ctx + self.value_embeds[ve_idx].precompute(signal).to(dtype)
+        if self._inj_term_fn is not None and bigram_emb is not None:
+            # model.glue_fold: the cast, multiply, slice add and cat of the lines below as ONE
+            # compiled kernel (glue_fold.injection_term_fn)
+            return self._inj_term_fn(bigram_emb, self.embed.bigram.lambdas[layer_idx], ctx)
         # Drop x0(+ve) into the ctx slice — cat on the small single-stream term only.
         return torch.cat([full[..., :cs], full[..., cs:ce] + ctx, full[..., ce:]], dim=-1)
 
@@ -12788,7 +12836,8 @@ class MORPHTransformer(nn.Module):
         C = st.shape[-1]
         x, labf = st.reshape(-1, C), lab.reshape(-1)
         kw = dict(ignore_index=-100, chunk_size=self.cfg.ce_chunk_size,
-                  mask_token_id=tc.slot_id, softmax_kernel=self._ce_kw["softmax_kernel"])
+                  mask_token_id=tc.slot_id, softmax_kernel=self._ce_kw["softmax_kernel"],
+                  fold_head=self._ce_kw["fold_head"])
         if row_cap > 0:
             lp = label_logprob_static_rows(x, w_head, labf, labf != -100, row_cap, **kw)
         else:
@@ -14053,7 +14102,8 @@ class MORPHTransformer(nn.Module):
             # keep_logits: the forward's logits tiles serve the backward (no recompute GEMM;
             # bit-identical; +B*L*V'*2 bytes, 0.76 GB at batch 6 x 1280; tracker C3)
             _lp_kw = dict(ignore_index=-100, chunk_size=chunk, mask_token_id=mask_id,
-                          softmax_kernel=self._ce_kw["softmax_kernel"], keep_logits=True)
+                          softmax_kernel=self._ce_kw["softmax_kernel"], keep_logits=True,
+                          fold_head=self._ce_kw["fold_head"])
             if self.cfg.lmhead_row_cap:
                 # model.lmhead_row_cap: only the rows a loss reads (labelled TOKEN rows: the
                 # weighted CE, the pointer mixture and DITTO; plus emitting slot rows when

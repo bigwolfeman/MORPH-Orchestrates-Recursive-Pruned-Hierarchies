@@ -85,6 +85,23 @@ from .tul_layout import SlotLayout
 __all__ = ["PackedCtx", "PackedSpans", "SpanDecoder", "horizon_span_slots", "next_span_slots",
            "own_span_slots", "chunk_segment_mask", "pack_spans", "span_slots"]
 
+
+class SpanFold(NamedTuple):
+    """The compiled forms ``model.glue_fold`` swaps into the decoder (morph/model/glue_fold.py):
+    ``rms_cast(x, w, eps)`` is ``RMSNorm(x).to(x.dtype)``, ``rms`` the norm alone, ``silu_mul``
+    the SwiGLU product. ``None`` on every decoder that was not folded: the eager ops run."""
+    rms_cast: object
+    rms: object
+    silu_mul: object
+
+
+def _norm_cast(fold: "SpanFold | None", norm: RMSNorm, x: Tensor) -> Tensor:
+    """``norm(x).to(x.dtype)``, through the compiled form when the decoder is folded."""
+    if fold is None:
+        return norm(x).to(x.dtype)
+    return fold.rms_cast(x, norm.weight, norm.eps)
+
+
 # Private init streams. Two constants, never the global RNG: building the decoder must not
 # shift a single weight of the model it is bolted onto (the `TULSlots.W_sent` rule).
 _SEED_BLOCKS = 0x5DEC
@@ -403,6 +420,8 @@ class _SpanDecCross(nn.Module):
     weight of the decoder it is bolted into, nor of the model around it.
     """
 
+    _fold: "SpanFold | None" = None      # SpanDecoder.fold_glue (model.glue_fold)
+
     def __init__(self, d_model: int, n_heads: int, gen: torch.Generator):
         super().__init__()
         if d_model % n_heads != 0:
@@ -433,8 +452,8 @@ class _SpanDecCross(nn.Module):
             return self._forward_packed(x, mem, slot_oh)
         N, J, C = x.shape
         M = mem.shape[1]
-        q = self.q(self.norm_q(x).to(x.dtype))
-        k, v = self.kv(self.norm_kv(mem).to(x.dtype)).chunk(2, dim=-1)
+        q = self.q(_norm_cast(self._fold, self.norm_q, x))
+        k, v = self.kv(_norm_cast(self._fold, self.norm_kv, mem)).chunk(2, dim=-1)
         q = q.view(N, J, self.n_heads, self.d_head).transpose(1, 2)
         k = k.view(N, M, self.n_heads, self.d_head).transpose(1, 2)
         v = v.view(N, M, self.n_heads, self.d_head).transpose(1, 2)
@@ -450,8 +469,8 @@ class _SpanDecCross(nn.Module):
         B, P, C = x.shape
         S, M = mem.shape[1], mem.shape[2]
         H, dh = self.n_heads, self.d_head
-        q = self.q(self.norm_q(x).to(x.dtype)).view(B, P, H, dh)
-        k, v = self.kv(self.norm_kv(mem).to(x.dtype)).chunk(2, dim=-1)
+        q = self.q(_norm_cast(self._fold, self.norm_q, x)).view(B, P, H, dh)
+        k, v = self.kv(_norm_cast(self._fold, self.norm_kv, mem)).chunk(2, dim=-1)
         k, v = k.reshape(B, S, M, H, dh), v.reshape(B, S, M, H, dh)
         oh = slot_oh.view(B, P, S, 1, 1)
         w = (torch.einsum("bphd,bsmhd->bpshm", q, k) * oh).sum(2)         # [B, P, H, M]
@@ -473,6 +492,8 @@ class _SpanDecBlock(nn.Module):
     self-attention and the MLP. ``None`` — every model before that knob — builds nothing,
     draws nothing and traces the graph it always traced.
     """
+
+    _fold: "SpanFold | None" = None      # SpanDecoder.fold_glue (model.glue_fold)
 
     def __init__(self, d_model: int, n_heads: int, d_ff: int, gen: torch.Generator,
                  gen_cross: torch.Generator | None = None):
@@ -510,7 +531,7 @@ class _SpanDecBlock(nn.Module):
         each position's own slot's cells. ``None`` is the per-slot path, op for op what it
         was before it."""
         B, T, C = x.shape
-        h = self.norm1(x).to(x.dtype)
+        h = _norm_cast(self._fold, self.norm1, x)
         q, k, v = self.qkv(h).chunk(3, dim=-1)
         shp = (B, T, self.n_heads, self.d_head)
         q = q.view(shp).transpose(1, 2)
@@ -526,9 +547,9 @@ class _SpanDecBlock(nn.Module):
         if self.cross is not None:
             x = x + (self.cross(x, mem) if packed is None
                      else self.cross(x, mem, packed.slot_oh))
-        h = self.norm2(x).to(x.dtype)
+        h = _norm_cast(self._fold, self.norm2, x)
         g, u = self.gate_up(h).chunk(2, dim=-1)
-        return x + self.down(F.silu(g) * u)
+        return x + self.down(F.silu(g) * u if self._fold is None else self._fold.silu_mul(g, u))
 
 
 def _init_linear(m: nn.Linear, gen: torch.Generator) -> None:
@@ -546,6 +567,8 @@ class SpanDecoder(nn.Module):
     chunked kernel is what keeps ``[B, S, J, V]`` (2.4 GB fp32 at the panel shape) from
     ever existing.
     """
+
+    _fold: "SpanFold | None" = None      # fold_glue (model.glue_fold)
 
     def __init__(self, d_model: int, n_heads: int, d_ff: int, n_layers: int,
                  max_tokens: int, seed_offset: int = 0, horizon: int = 1,
@@ -625,6 +648,21 @@ class SpanDecoder(nn.Module):
              for _ in range(n_layers)])
         self.out_norm = RMSNorm(d_model)
 
+    def fold_glue(self, fold: SpanFold) -> None:
+        """``model.glue_fold``: run the decoder's RMS norms and SwiGLU products through the
+        compiled forms in ``fold`` (same functions, fused). Called once at model build."""
+        self._fold = fold
+        for blk in self.blocks:
+            blk._fold = fold
+            if blk.cross is not None:
+                blk.cross._fold = fold
+
+    def _out_norm(self, x: Tensor) -> Tensor:
+        """``out_norm(x)`` (fp32: the fp32 weight promotes), compiled when folded."""
+        if self._fold is None:
+            return self.out_norm(x)
+        return self._fold.rms(x, self.out_norm.weight, self.out_norm.eps)
+
     def _check_mem(self, mem: Tensor | None, B: int, S: int, C: int, dtype) -> Tensor | None:
         """Validate the register cells ``mem`` and return them as ``[B, S, M, C]`` in
         ``dtype`` (``None`` stays ``None``)."""
@@ -696,7 +734,7 @@ class SpanDecoder(nn.Module):
         x = x.reshape(B * S, J, C)
         for blk in self.blocks:
             x = blk(x, mem)
-        return self.out_norm(x).reshape(B, S, J, -1)
+        return self._out_norm(x).reshape(B, S, J, -1)
 
     def decode_packed(self, z: Tensor, ids: Tensor, valid: Tensor, emb: Tensor, cap: int,
                       mem: Tensor | None = None, chunk: int = 0
@@ -759,4 +797,4 @@ class SpanDecoder(nn.Module):
         for blk in self.blocks:
             x = blk(x, mem, packed=ctx)
         lab = torch.where(pk.ok, pk.ids, torch.full_like(pk.ids, -100))
-        return self.out_norm(x), lab, pk.over
+        return self._out_norm(x), lab, pk.over
