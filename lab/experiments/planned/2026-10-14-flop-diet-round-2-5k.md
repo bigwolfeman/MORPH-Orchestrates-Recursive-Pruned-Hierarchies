@@ -4,7 +4,7 @@ Status: planned
 
 ## Question
 
-Round 1 (`planned/2026-10-13-flop-diet-5k.md`) tests a one-block span decoder and a Poisson(2.0)
+Round 1 (`successes/2026-10-13-flop-diet-5k.md`) tests a one-block span decoder and a Poisson(2.0)
 cell count. Two new keys (merge 2957ade6, both default off, key-off byte gate 4a73ebf5) cut more:
 
 - hinge cadence: `model.slot_gain_every: 4`. The one-pass gain hinge (1.069 TFLOP, 9.5 ms
