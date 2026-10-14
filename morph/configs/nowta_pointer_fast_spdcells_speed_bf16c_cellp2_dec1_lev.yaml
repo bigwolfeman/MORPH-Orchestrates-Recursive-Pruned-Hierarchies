@@ -1,0 +1,12 @@
+# Speed base candidate (2026-10-14): the FLOP diet stack + the two merged rounding-only keys.
+# Prereg: lab/experiments/planned/2026-10-14-speed-base-v2-levers-5k.md
+defaults:
+  - nowta_pointer_fast_spdcells_speed_bf16c_cellp2_dec1
+  - _self_
+
+model:
+  hc_bwd_fused: true     # HC entry backward, projection term on tensor cores (merge 9e0e8517)
+  glue_fold: true        # compiled glue around the custom ops (merge e4b5d738)
+
+wandb:
+  name: nowta-pointer-fast-spdcells-speed-bf16c-cellp2-dec1-lev
