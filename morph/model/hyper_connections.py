@@ -135,6 +135,8 @@ class HyperConnectionResidual(nn.Module):
         block_custom_ops: model.block_custom_ops. The region entry and exit run as
                        ``torch.library`` ops (``kernels/triton/block_ops.py``), so the block
                        compiles as one graph. Needs ``region_fused``.
+        bwd_fused:     model.hc_bwd_fused. The region entry backward runs its bandwidth-tuned
+                       carrier-grad kernel. Rounding-only. Needs ``region_fused``.
     """
 
     def __init__(
@@ -151,6 +153,7 @@ class HyperConnectionResidual(nn.Module):
         region_fused: bool = False,
         carrier_bf16: bool = False,
         block_custom_ops: bool = False,
+        bwd_fused: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -216,6 +219,10 @@ class HyperConnectionResidual(nn.Module):
         if block_custom_ops and not region_fused:
             raise ValueError("model.block_custom_ops needs model.hc_region_fused=true (only the "
                              "region entry and exit are ops)")
+        self._bwd_fused = bool(bwd_fused)
+        if bwd_fused and not region_fused:
+            raise ValueError("model.hc_bwd_fused needs model.hc_region_fused=true (and so "
+                             "hc_use_kernel=true, hc_streams=4, hc_cayley_iters=3)")
         self._carrier_bf16 = bool(carrier_bf16)
         if carrier_bf16 and not region_fused:
             raise ValueError("model.hc_carrier_bf16 needs model.hc_region_fused=true (and so "
@@ -272,7 +279,7 @@ class HyperConnectionResidual(nn.Module):
             x_bar, Hres, Hpost_row, h_link = self._hc_region_entry(
                 h, self.proj.weight, self.proj.bias,
                 self.tau, self.cayley_alpha, self.cayley_iters, self.eps,
-                self._carrier_bf16,
+                self._carrier_bf16, self._bwd_fused,
             )
             y = sublayer_fn(x_bar, *args, **kwargs)
             return self._hc_region_exit(Hres, Hpost_row, h_link, y, post_inject,

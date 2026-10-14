@@ -468,6 +468,14 @@ model:
                            # hc_use_kernel, hc_region_fused, CUDA and bf16 autocast (raises
                            # otherwise). Rounding change, NOT bit-identical; off = byte-identical.
                            # .agents/notes/proposed/architecture/2026-10-12-hc-carrier-bf16.md
+  hc_bwd_fused: false      # true ⇒ the HC region entry backward runs on bandwidth-tuned kernels: the
+                           # carrier-grad kernel does its projection term (graw @ W) on tensor cores
+                           # (graw split into bf16 hi + lo, two MMAs, fp32 accumulator; W is the bf16
+                           # weight the forward used) instead of CUDA-core fp32 FMAs, which
+                           # is what held it at 40-65 % of memory bandwidth. Rounding-only (the
+                           # projection term's rounding and sum orders), NOT bit-identical. Needs
+                           # hc_region_fused (raises otherwise). Off = byte-identical.
+                           # tests/test_hc_bwd_fused.py.
   block_custom_ops: false  # true ⇒ the HC region entry / exit, the CCA conv and the row-tiled CCA
                            # prologue are torch.library custom ops (kernels/triton/block_ops.py)
                            # instead of autograd Functions behind a dynamo fence: a compiled block

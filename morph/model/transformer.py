@@ -688,6 +688,13 @@ class MORPHConfig:
     # storage rounding would read as gain). Needs hc_use_kernel, hc_region_fused and bf16
     # autocast; refused otherwise. Default off = the fp32 carrier, byte-identical.
     hc_carrier_bf16: bool = False
+    # model.hc_bwd_fused: the HC region entry backward on the bandwidth-tuned kernels
+    # (fused_hyper_connection.py, "_hcr_bwd_carrier_tc_kernel"): the carrier-grad kernel runs its
+    # projection term on tensor cores (graw split into bf16 hi + lo, two MMAs, fp32 accumulator).
+    # The other entry-backward kernels are unchanged. The kernel is n=4 only, like the region
+    # kernels it replaces. Rounding-only (summation order and the projection term's rounding),
+    # not bit-identical. Needs hc_region_fused. Default off = byte-identical.
+    hc_bwd_fused: bool = False
     # model.block_custom_ops: the HC region entry / exit, the CCA conv and the row-tiled CCA
     # prologue run as torch.library custom ops (kernels/triton/block_ops.py) instead of
     # autograd Functions behind a dynamo fence, so each compiled block is ONE graph and inductor
@@ -2405,6 +2412,7 @@ class MORPHTransformer(nn.Module):
             fused_norm=cfg.hc_fused_norm, fused_grad=cfg.hc_fused_grad,
             region_fused=cfg.hc_region_fused,                    # model.hc_region_fused
             carrier_bf16=cfg.hc_carrier_bf16,                    # model.hc_carrier_bf16
+            bwd_fused=cfg.hc_bwd_fused,                          # model.hc_bwd_fused
             block_custom_ops=cfg.block_custom_ops,               # model.block_custom_ops
         )
         if cfg.block_custom_ops and not (cfg.hc_use_kernel and cfg.hc_region_fused
