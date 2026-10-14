@@ -49,7 +49,28 @@ cannot pin a pass on the hinge's off steps, so it runs with the pin too, which p
 `core_depth_sweep.py --depths 1,6 --rows 480 --batch 3`, `stab.keep.py`, and
 `cell_count_sweep.py --cells 1,2,4 --cell-extend cyclic`.
 
+Amendment 2026-10-14 05:20. Hinge every 4 reads GREY on seeds 1-2, so it gets seed 3 as the rule
+says (`abq/chain-diet4.sh`, same tree, with a per-tree Inductor cache dir; the shared cache
+crashed another tree's gates the same night). The half-slot decoder arm fails by the letter and
+gets no third seed.
+
 ## Results
+
+Bench (median of 2 repeats, pinned pass 3, 2026-10-14 03:42): speed base 146.29 ms, stack 129.96,
+stack + hinge every 4 123.91, cell mean 2 + half-slot decoder 123.05.
+
+| Arm | Seed | CE@6 | K1-K6 | M1-M4 | M2-M4 | gain_est max | grad-norm max/median |
+|---|---|---|---|---|---|---|---|
+| stack + hinge every 4 | 1 | 3.9093 | +0.0118 | +0.0006 | -0.0004 | 0.9062 | 7.0 |
+| stack + hinge every 4 | 2 | 3.9028 | +0.0089 | -0.0000 | -0.0001 | 0.9217 | 7.9 |
+| cell mean 2 + half-slot decoder | 1 | 3.9083 | +0.0037 | +0.0007 | -0.0002 | 0.9050 | 9.5 |
+| cell mean 2 + half-slot decoder | 2 | 3.9067 | +0.0061 | -0.0001 | -0.0004 | 0.9035 | 7.5 |
+
+2-seed means against the pooled control (3.9013, +0.00519): hinge every 4 CE@6 +0.0048 (GREY),
+K1-K6 +0.0104 (200 %); half-slot decoder +0.0062 (FAIL by the letter), +0.0049. Seed-paired
+against the stack (round 1, same seeds): hinge every 4 costs +0.0094 and +0.0089 CE@6, and moves
+K1-K6 by +0.0067 and -0.0007. The half-slot decoder arm reads +0.0084 and +0.0128 against the
+stack. Seed 3 of hinge every 4: pending.
 
 ## Verdict
 
