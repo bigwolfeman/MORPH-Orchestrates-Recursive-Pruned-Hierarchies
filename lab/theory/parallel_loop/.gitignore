@@ -1,0 +1,6 @@
+.lake
+.lake/
+lake-packages/
+*.olean
+*.ilean
+*.trace
