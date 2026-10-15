@@ -5,6 +5,15 @@ Status: proposed
 **Wolfe, 2026-09-07: "This is not something for us to be touching right now." Parked. Do not build
 from this note without his say; it records the reading of the paper and nothing more.**
 
+**Un-parked by Wolfe 2026-10-15 for the Parcae testbed ("Spiral former is something we should have
+come back to sooner"), and measured there the same day: failure, 5 of 12.** Parcae branch
+`lxtul/spiral` (e60a071), `docs/experiments/failures/2026-10-15-parcae-spiral-5k.md`. At 5k, 2 seeds:
+the published spiral (chunks 16, 8, 4, 2) reads CE@6 3.6912. That beats gpt8 + pointer (3.6996) and
+plain + pointer (3.7256, at 0.31x its FLOPs). It trails flat14 + pointer (3.6731) at about the same FLOPs.
+The span-level loop this note proposes is depth-flat (K1-K6 +0.0001) and is the worst spiral arm
+(3.7070). Zeroing the span level inside the span-to-pair spiral moves CE by 0.0005. The gain is at
+chunks of 4 and 2. MORPH has not been tested.
+
 Date: 2026-09-07. Wolfe: the TG mask helps loop contribution for the TUL shape, but the loop
 needs full token granularity; SpiralFormer (arXiv 2602.11698, Yu et al.) "seems to solve that
 very literally". Drawing first, build after review.
