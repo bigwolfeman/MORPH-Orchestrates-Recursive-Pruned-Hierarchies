@@ -1,0 +1,4 @@
+# Parcae GPT, 8 layers (= prelude 4 + coda 4), no loop: the per-token depth an LXTUL token
+# gets, with full causal context. Splits the gap: depth cost vs cross-span cost.
+name: gpt8
+kind: gpt

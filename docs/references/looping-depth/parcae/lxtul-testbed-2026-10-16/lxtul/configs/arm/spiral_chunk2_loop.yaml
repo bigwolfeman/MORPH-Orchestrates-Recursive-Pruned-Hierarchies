@@ -1,0 +1,9 @@
+# Chunk-level loop: ONE level of fixed chunks of 2 tokens (offset 1, shift 1), looped with Parcae's Poisson depth
+# (mean 6, truncated at max_depth 8). Anchor topology, coda reads h0 + u. Plain CE through the plain+pointer head.
+name: spiral-chunk2-loop
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_depth: 8
+  levels:
+    - {kind: chunk, size: 2, depth: poisson}

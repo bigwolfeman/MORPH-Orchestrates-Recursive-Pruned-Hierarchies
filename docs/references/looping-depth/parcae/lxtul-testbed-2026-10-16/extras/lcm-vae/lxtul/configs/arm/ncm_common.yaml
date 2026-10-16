@@ -1,0 +1,29 @@
+# Shared keys of the three span-NCM arms (ncm_tok, ncm_plan_gpt8, ncm_pure); composed by their `defaults`.
+# Not an arm itself (no name, no kind). The tokenizer keys (cells, enc_layers, dec_layers, dz, levels, codebook_size,
+# z_norm) must be equal in stage 1 and stage 2: lxtul/ncm.py::load_tokenizer refuses a checkpoint trained with other values.
+ncm:
+  cells: 1                 # prefix_k of the rows: 1 = the minimal-TUL rows (1088 positions); the models never read a slot position
+  enc_layers: 2
+  dec_layers: 2
+  dz: 256                  # per-token latent width
+  levels: [1, 2, 4, 8, 16, 32]
+  codebook_size: 4096
+  ema_decay: 0.99
+  ema_eps: 1.0e-5
+  restart_after: 256       # a code unused this many tokenizer steps is restarted at a random current residual vector
+  beta: 0.25               # commitment weight
+  nested_dropout: 0.5      # P(cutoff uniform in 1..K-1); else all K levels
+  z_norm: true             # RMS-normalise z per token
+  tok_objective: recon     # "recon": reconstruction VQ-VAE (ncm_tok); "repr": the RePR PMI-factorising span code (ncm_repr_tok). Must be equal in stage 1 and 2
+  repr_dim: null           # repr only: width of R_ctx, R_loc and of the codebooks; null = dz
+  pmi_clip: 8.0            # repr only: |PMI| clamp, nats
+  repr_weight: 0.01        # repr only: weight of the PMI regression next to the two LM losses
+  tok_ckpt: ""             # stage 2: the stage-1 run dir
+  gen_levels: 3
+  gen_reads_tokens: true
+  coda_span_local: false
+  m_train: uniform         # "uniform": m_u ~ U{0..gen_levels} per span; "fixed": gen_levels
+  corrupt: [0.5, 0.25, 0.125]
+  pointer_heads: 4
+  min_span: 4
+  eval_seed: 0

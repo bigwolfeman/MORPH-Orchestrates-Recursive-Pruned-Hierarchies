@@ -1,0 +1,5 @@
+# gpt8 + the learned pointer head (lxtul/plain_pointer.py::PlainPointer, the SAME PointerHead, gate and
+# mixture the plain-pointer arm uses): the flat reference for strict LXTUL + pointer.
+name: gpt8-pointer
+kind: gpt
+pointer_heads: 4

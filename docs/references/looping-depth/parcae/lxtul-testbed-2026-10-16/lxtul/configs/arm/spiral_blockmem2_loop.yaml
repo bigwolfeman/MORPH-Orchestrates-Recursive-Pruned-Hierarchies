@@ -1,0 +1,13 @@
+# Block-Parcae with a loop MEMORY (series hierarchy, wider channel): ONE chunk level of 2 tokens (offset 0, shift 2),
+# Parcae's Poisson depth on the chunk sequence. The coda reads the token embeddings + the loop state of the PREVIOUS chunk
+# and attends over its own chunk's tokens plus the loop states of ALL earlier chunks (spiral.block_memory). It sees no
+# earlier token: the loop is still its only route to the past, but the route is G vectors wide, not one.
+name: spiral-blockmem2-loop
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_depth: 8
+  topology: block
+  block_memory: true
+  levels:
+    - {kind: chunk, size: 2, offset: 0, shift: 2, depth: poisson}

@@ -1,0 +1,12 @@
+# Published SpiralFormer (arXiv 2602.11698) on the plain Parcae blocks: chunks of 16, 8, 4, 2 tokens, coarse to
+# fine, half-chunk offset, shift g - 1, ONE core pass per level, learned softmax pool, uniform broadcast with gain
+# sqrt(g), Anchor topology. Loss: plain CE through the plain+pointer head. Fixed depth: no K-curve.
+name: spiral-published
+kind: spiral
+pointer_heads: 4
+spiral:
+  levels:
+    - {kind: chunk, size: 16}
+    - {kind: chunk, size: 8}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2}

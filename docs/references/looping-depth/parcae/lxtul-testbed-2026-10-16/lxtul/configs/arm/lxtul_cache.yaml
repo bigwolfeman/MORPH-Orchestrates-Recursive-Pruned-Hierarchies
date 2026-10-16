@@ -1,0 +1,5 @@
+# Parcae-LXTUL (strict) + the exact-copy cache mixed into the output (lxtul/cache.py)
+name: lxtul-cache
+kind: lxtul
+lxtul:
+  copy_cache: true

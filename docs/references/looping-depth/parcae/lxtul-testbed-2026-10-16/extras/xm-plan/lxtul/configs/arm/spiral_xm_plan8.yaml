@@ -1,0 +1,24 @@
+# XM span plan, phase 1 (design: morph-scratch/abq/drawing-board/xm-span-plan.md). The published spiral (chunks 16, 8, 4, 2,
+# one core pass each) plus a span loop at Parcae's Poisson depth (mean 6, cap max_depth) whose last pass feeds K = 8 plan heads
+# (copies of C + 2 % noise). A parameter-free score through the tied head picks one head per span (argmax; Sinkhorn-balanced in
+# training); the winner is added to the coda input at every position whose label is in the next span. Training CE is the
+# token CE given the winners; plus ln 8 per plan-carrying span it is a valid NLL bound (fixed uniform prior over the index).
+name: spiral-xm-plan8
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_spans: 96
+  max_depth: 8
+  levels:
+    - {kind: chunk, size: 16}
+    - {kind: chunk, size: 8}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2}
+  plan:
+    k: 8
+    score: bag_tied
+    tau: 1.0
+    balance: sinkhorn
+    sinkhorn_iters: 3
+    head_noise: 0.02
+    receive: label_span

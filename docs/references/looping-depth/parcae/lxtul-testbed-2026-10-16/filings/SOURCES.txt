@@ -1,0 +1,22 @@
+2026-10-14-parcae-decode-loop-5k.md <- lxtul/decode-loop:docs/experiments/failures/2026-10-14-parcae-decode-loop-5k.md
+2026-10-14-parcae-epivol-vs-stabilisers-5k.md <- lxtul/block-mem:docs/experiments/successes/2026-10-14-parcae-epivol-vs-stabilisers-5k.md
+2026-10-14-parcae-equal-compute-5k-budget.md <- lxtul/block-mem:docs/experiments/failures/2026-10-14-parcae-equal-compute-5k-budget.md
+2026-10-14-parcae-flat-pointer-references-5k.md <- lxtul/block-mem:docs/experiments/failures/2026-10-14-parcae-flat-pointer-references-5k.md
+2026-10-14-parcae-lcm-noise-repair-5k.md <- lxtul/lcm-vae:docs/experiments/failures/2026-10-14-parcae-lcm-noise-repair-5k.md
+2026-10-14-parcae-lcm-reference-5k.md <- lxtul/lcm:docs/experiments/failures/2026-10-14-parcae-lcm-reference-5k.md
+2026-10-14-parcae-lean-5k.md <- lxtul/bench4:docs/experiments/failures/2026-10-14-parcae-lean-5k.md
+2026-10-14-parcae-minimal-fan-5k.md <- lxtul/block-mem:docs/experiments/failures/2026-10-14-parcae-minimal-fan-5k.md
+2026-10-14-parcae-minimal-slot-loop-5k.md <- lxtul/block-mem:docs/experiments/failures/2026-10-14-parcae-minimal-slot-loop-5k.md
+2026-10-14-parcae-shallow-coda-5k.md <- lxtul/block-mem:docs/experiments/failures/2026-10-14-parcae-shallow-coda-5k.md
+2026-10-14-parcae-span-ncm-5k.md <- lxtul/lcm-vae:docs/experiments/failures/2026-10-14-parcae-span-ncm-5k.md
+2026-10-14-plain-loop-boundary-depth-probe.md <- lxtul/block-mem:docs/experiments/failures/2026-10-14-plain-loop-boundary-depth-probe.md
+2026-10-15-parcae-block-memory-5k.md <- lxtul/block-mem:docs/experiments/failures/2026-10-15-parcae-block-memory-5k.md
+2026-10-15-parcae-block-parcae-5k.md <- lxtul/spiral:docs/experiments/failures/2026-10-15-parcae-block-parcae-5k.md
+2026-10-15-parcae-chunk-loop-5k.md <- lxtul/block-mem:docs/experiments/failures/2026-10-15-parcae-chunk-loop-5k.md
+2026-10-15-parcae-lcm-vae-5k.md <- lxtul/lcm-vae:docs/experiments/successes/2026-10-15-parcae-lcm-vae-5k.md
+2026-10-15-parcae-ncm-repr-5k.md <- lxtul/ncm-repr:docs/experiments/failures/2026-10-15-parcae-ncm-repr-5k.md
+2026-10-15-parcae-spiral-5k.md <- lxtul/block-mem:docs/experiments/failures/2026-10-15-parcae-spiral-5k.md
+2026-10-15-parcae-spiral-poisson-5k.md <- lxtul/spiral:docs/experiments/successes/2026-10-15-parcae-spiral-poisson-5k.md
+2026-10-16-parcae-cycling-spiral-5k.PLANNED.md <- lxtul/cycle (planned, runs in flight)
+2026-10-16-parcae-lcm-vae-token-dropout-5k.md <- lxtul/lcm-vae:docs/experiments/successes/2026-10-16-parcae-lcm-vae-token-dropout-5k.md
+2026-10-16-parcae-xm-span-plan-5k.md <- lxtul/xm-plan:docs/experiments/successes/2026-10-16-parcae-xm-span-plan-5k.md

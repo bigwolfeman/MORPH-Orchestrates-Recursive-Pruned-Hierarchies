@@ -1,0 +1,13 @@
+# Published spiral (chunks 16, 8, 4, 2; one core pass each, Anchor) with the FINEST level (chunks of 2) looped at Parcae's
+# Poisson depth (mean 6, truncated at max_depth 8). The winning spiral plus a K-curve: depth where the chunk-loop batch found
+# it pays most (chunk-2 loop K1-K6 +0.0063). Plain CE through the plain+pointer head.
+name: spiral-pub-poisson2
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_depth: 8
+  levels:
+    - {kind: chunk, size: 16}
+    - {kind: chunk, size: 8}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2, depth: poisson}

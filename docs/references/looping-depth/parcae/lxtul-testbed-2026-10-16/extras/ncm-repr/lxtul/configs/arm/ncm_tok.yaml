@@ -1,0 +1,9 @@
+# NCM stage 1, the span tokenizer: span-local bidirectional encoder (2 blocks) -> 256-wide latent per token ->
+# residual VQ over levels of 1, 2, 4, 8, 16, 32 segment means (capped at the span length), 4096 codes per level,
+# EMA codebooks, dead-code restart, nearest-upsample reconstruction -> span-local bidirectional decoder (2 blocks),
+# nested dropout 0.5. Its run dir is the `ncm.tok_ckpt` of the two stage-2 arms.
+defaults:
+  - ncm_common
+  - _self_
+name: ncm-tok
+kind: ncm_tok

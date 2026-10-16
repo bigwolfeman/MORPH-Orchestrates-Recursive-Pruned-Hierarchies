@@ -1,0 +1,22 @@
+# The minimal slot loop with the ungraded fan put back (2026-10-14). The one-cell minimal arm was flat in
+# depth (K1-K6 0.0000, 3 runs), and so was the one-cell bare arm that still had the hinge, the fixed-point
+# term and the clip (CE 4.0826 at every depth); every 4-cell arm earned (ungraded fan +0.035, LXTUL +0.059,
+# LXTUL with no span decoder +0.133). So the fan is the element that buys depth on Parcae, not the
+# stabilisers. This arm is `minimal` at cells 4: no router, no reset, every cell written to its own prefix
+# position, so the coda reads all 4 (the MORPH fan recipe's structure, without its span decoder).
+name: minimal_fan
+kind: lxtul
+lxtul:
+  cells: 4
+  select: none
+  spandec_weight: 0.0
+  gain_lambda: 0.0
+  fixed_point_lambda: 0.0
+  cot_clip: 0.0
+  repel_lambda: 0.0
+  pointer_heads: 4
+  compact_slots: true
+  compact_bucket_slots: 32      # 128 cells at 4 cells per slot: flex's block size
+  static_depth: true
+  ce_rows: true
+  ckpt_passes: 0

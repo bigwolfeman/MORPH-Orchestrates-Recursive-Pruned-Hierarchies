@@ -1,0 +1,20 @@
+# `minimal_fan` with latent selection back (router-followed reset, winner-only write, EMA twin target).
+# Why: the strongest depth earner on Parcae is LXTUL with no span decoder (K1-K6 +0.133, latent
+# selection on); the ungraded fan with the span decoder earned +0.035. This arm says whether the
+# selection is what buys the large K1-K6 once the span decoder and the stabilisers are gone.
+name: minimal_fan_lsel
+kind: lxtul
+lxtul:
+  cells: 4
+  select: latent
+  spandec_weight: 0.0
+  gain_lambda: 0.0
+  fixed_point_lambda: 0.0
+  cot_clip: 0.0
+  repel_lambda: 0.0
+  pointer_heads: 4
+  compact_slots: true
+  compact_bucket_slots: 32
+  static_depth: true
+  ce_rows: true
+  ckpt_passes: 0

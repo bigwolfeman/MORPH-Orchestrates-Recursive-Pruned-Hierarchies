@@ -1,0 +1,21 @@
+# Control for spiral_xm_plan8: the same arm with k = 1 (one head, no score, no selection; the bound's ln K term is 0). The span
+# loop, the plan vector and its receive map are unchanged, so only the choice among K candidates differs.
+name: spiral-xm-plan1
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_spans: 96
+  max_depth: 8
+  levels:
+    - {kind: chunk, size: 16}
+    - {kind: chunk, size: 8}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2}
+  plan:
+    k: 1
+    score: bag_tied
+    tau: 1.0
+    balance: sinkhorn
+    sinkhorn_iters: 3
+    head_noise: 0.02
+    receive: label_span

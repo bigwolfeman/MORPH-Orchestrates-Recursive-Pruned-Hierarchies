@@ -1,0 +1,38 @@
+# The minimal slot loop WITHOUT the pointer head (minimal.yaml with pointer_heads 0): the output is the plain
+# tied-head softmax. Strict geometry, ONE cell per slot, Parcae's own diagonal injection, token-state dropout. Every MORPH device that
+# solved a MORPH problem (ternary spikes, loop flatness, selection) is off AND skips its compute:
+# no parameters are built for it and no op is run for it.
+#   cells 1             one cell per slot: the packed row is 1024 + 64 = 1088 positions, not 1280 (the
+#                       layout, the block_size and the role tables all follow `cells`; build.py)
+#   select none         no router, no latent head, no EMA twin prelude, no winner reset
+#   spandec_weight 0    no span decoder: no blocks, no decoder forward, no decoder CE (-3.4 TFLOP/step at 4 cells)
+#   gain_lambda 0       no gain hinge: no random-pass pair of checkpointed core steps
+#   fixed_point_lambda 0  no terminal fixed-point residual
+#   cot_clip 0          no cotangent clip: no backward hooks and no clip Functions
+#   repel_lambda 0      no epivol (it has nothing to repel at one cell; the model raises if both are set)
+#   pointer_heads 0     no copy head (minimal.yaml keeps 4)
+#   compact_slots       the loop runs on the batch's valid slots only (pad slots dropped)
+#   compact_bucket_slots 128  packed length in multiples of 128 slots = 128 cells at one cell per slot (flex's
+#                       block size; the default 32 slots would be 32 cells)
+#   static_depth        trip count max_depth, no int(dslot.max()) host sync
+#   ce_rows             token CE on rows packed to a fixed buffer, no nonzero() sync
+#   ckpt_passes 0       no activation checkpointing of the loop passes: no recompute (one cell per slot
+#                       leaves the loop small enough to keep its activations; measured in gpu_todo.sh)
+# token_state_dropout stays at MORPH's 0.15 (free). The init draws differ from the default arm because
+# the span decoder and the router are not constructed (fewer RNG draws); only this arm sees that.
+name: minimal_noptr
+kind: lxtul
+lxtul:
+  cells: 1
+  select: none
+  spandec_weight: 0.0
+  gain_lambda: 0.0
+  fixed_point_lambda: 0.0
+  cot_clip: 0.0
+  repel_lambda: 0.0
+  pointer_heads: 0
+  compact_slots: true
+  compact_bucket_slots: 128
+  static_depth: true
+  ce_rows: true
+  ckpt_passes: 0

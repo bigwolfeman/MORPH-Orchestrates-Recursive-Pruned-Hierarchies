@@ -1,0 +1,11 @@
+# LCM stage 2, One-Tower diffusion LCM: a 2-layer denoiser conditioned on the backbone output at span s
+# predicts the clean concept s+1 from a noised copy (cosine schedule, 100 train timesteps, x0-prediction);
+# DDIM sampler of `lcm.sample_steps` steps. E and D frozen from the stage-1 run `lcm.ae_ckpt`.
+defaults:
+  - lcm_common
+  - _self_
+name: lcm-diff
+kind: lcm
+lcm:
+  loss: diffusion
+  ae_ckpt: /home/wolfe/parcae-runs/lcm-ae-5k

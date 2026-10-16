@@ -1,0 +1,18 @@
+# Shared keys of the three pure-LCM arms (lcm_ae, lcm_mse, lcm_diffusion); composed by their `defaults`.
+# Not an arm itself (no name, no kind). The autoencoder architecture keys must be equal in stage 1 and
+# stage 2: lxtul/lcm.py::load_ae refuses a checkpoint trained with other values.
+lcm:
+  cells: 1               # prefix_k of the rows: 1 = the minimal-TUL rows (1088 positions); the model never reads a slot position
+  enc_layers: 4
+  dec_layers: 4
+  pool_heads: 8
+  z_scale: 1.0           # RMS of a concept vector
+  ae_noise: 0.1          # stage 1: Gaussian noise on z, std = ae_noise * z_scale (fixed, no learned sigma)
+  ae_ckpt: ""            # stage 2: the stage-1 run dir
+  loss: mse
+  den_layers: 2          # diffusion denoiser layers
+  train_timesteps: 100
+  sample_steps: 40       # DDIM steps
+  cosine_s: 0.008
+  eval_samples: 8        # K sampled concepts per span for the diffusion marginal CE
+  eval_seed: 0

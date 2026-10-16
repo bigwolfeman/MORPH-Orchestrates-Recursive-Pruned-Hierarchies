@@ -1,0 +1,11 @@
+# Variational LCM: ONE stage, end to end, trained and scored on the evidence lower bound (negative ELBO in nats per
+# token of complete spans, an upper bound on token CE). Posterior N(mu_q, I) and prior N(mu_p, I) have fixed unit
+# variance. lxtul/lcm.py::LCMVAE refuses the stage-2-only keys (ae_ckpt, loss: diffusion) and the stage-1 noise keys.
+defaults:
+  - lcm_common
+  - _self_
+name: lcm-vae
+kind: lcm_vae
+lcm:
+  ae_noise: 0.0          # the posterior noise is the unit-variance eps of the ELBO, not a stage-1 knob
+  eval_samples: 16       # K posterior samples (IWAE) and K prior samples per span in the sweep

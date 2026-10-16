@@ -1,0 +1,12 @@
+# Deep supervision without the schedule sampling: spiral_cycle_deep with every cycle starting at the coarsest level (16)
+# and no skips. A CE after every cycle, state detached between cycles. Poisson(3) cycles (max 6). Plain+pointer head.
+name: spiral-cycle-deep-fixedsched
+kind: spiral
+pointer_heads: 4
+spiral:
+  levels:
+    - {kind: chunk, size: 16}
+    - {kind: chunk, size: 8}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2}
+  cycle: {mean: 3, max: 6, start: coarsest, skip_p: 0.0, credit: deep}

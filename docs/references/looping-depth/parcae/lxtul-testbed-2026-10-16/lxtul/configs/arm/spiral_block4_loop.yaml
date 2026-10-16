@@ -1,0 +1,11 @@
+# Block-Parcae (series hierarchy): ONE chunk level of 4 tokens (offset 0, shift 4), Parcae's Poisson depth on the chunk
+# sequence. The coda reads the token embeddings + the loop state of the PREVIOUS chunk and attends only inside its own
+# chunk: the loop is the coda's only route to anything before the chunk. Plain CE through the plain+pointer head.
+name: spiral-block4-loop
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_depth: 8
+  topology: block
+  levels:
+    - {kind: chunk, size: 4, offset: 0, shift: 4, depth: poisson}

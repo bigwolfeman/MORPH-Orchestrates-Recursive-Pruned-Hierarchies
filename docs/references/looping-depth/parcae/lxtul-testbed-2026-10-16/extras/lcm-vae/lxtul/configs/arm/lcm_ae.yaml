@@ -1,0 +1,8 @@
+# LCM stage 1: the concept autoencoder (stands in for the frozen SONAR encoder/decoder). Span-local E and D,
+# one attention-pooled vector per span, reconstruction CE with fixed noise on z. Its run dir is the
+# `lcm.ae_ckpt` of the two stage-2 arms.
+defaults:
+  - lcm_common
+  - _self_
+name: lcm-ae
+kind: lcm_ae

@@ -1,0 +1,16 @@
+# NCM stage 2, "pure span NCM": no token memory across spans. The generator (4 levels, 15 positions per span plus one
+# summary position) reads only the codes of earlier spans; the token model is span-local (every attention, and a BOS at
+# each span start) and reads the plan at m = 4. The repaired LCM reference: discrete codes instead of a regressed concept.
+defaults:
+  - ncm_common
+  - _self_
+name: ncm-pure
+kind: ncm
+ncm:
+  tok_ckpt: /home/wolfe/parcae-runs/ncm-tok-5k
+  gen_levels: 4
+  gen_reads_tokens: false
+  coda_span_local: true
+  m_train: fixed
+  corrupt: [0.5, 0.25, 0.125, 0.0625]
+  pointer_heads: 0

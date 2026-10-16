@@ -1,0 +1,26 @@
+# The lean recipe (Step 3 of the 2026-10-14 plan): LXTUL + normalised pointer head, with the levers that
+# held on MORPH at 5k (2026-10-13/14 diet chain: one-block decoder + Poisson cell mean 2 passed at 3 seeds;
+# hinge-every-4 and the half-slot decoder did not, so they are not here).
+#   ungraded fan     select none: no router, no reset, every cell keeps its own lineage
+#   cell count       per-batch M = clamp(Poisson(2.0), 1, 4), the first M of the 4 roles; eval at M = 4
+#   set reader       the span decoder cross-attends to the slot's M cells as an unordered set
+#   one decoder block spandec_layers 1
+#   fast keys        stratified depths + frozen-cache gather compaction, static depth, clip as Functions,
+#                    CE on packed rows, packed span decoder (all exact or rounding-only except the
+#                    stratified draw and the compaction, which are filed function changes)
+# ckpt_passes stays at its default (4): ckpt_passes 0 is measured in pz-lean/gpu_todo.sh, not assumed to fit.
+name: lean
+kind: lxtul
+lxtul:
+  select: none
+  pointer_heads: 4
+  cell_count: poisson
+  cell_count_mean: 2.0
+  spandec_reads_cells: true
+  spandec_layers: 1
+  slot_depth_stratified: true
+  slot_compact: gather
+  static_depth: true
+  cot_clip_fn: true
+  ce_rows: true
+  spandec_packed: true

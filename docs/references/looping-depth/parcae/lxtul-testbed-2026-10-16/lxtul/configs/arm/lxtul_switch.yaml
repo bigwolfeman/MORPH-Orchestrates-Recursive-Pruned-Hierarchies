@@ -1,0 +1,5 @@
+# Parcae-LXTUL trained strict for 2500 steps, then open geometry to step 5000
+name: lxtul-switch
+kind: lxtul
+lxtul:
+  open_at: 2500

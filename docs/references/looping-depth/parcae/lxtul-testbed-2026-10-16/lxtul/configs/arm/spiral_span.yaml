@@ -1,0 +1,11 @@
+# Span-level loop: ONE level whose groups are the spans of the TUL boundary rule. The span's pooled state is
+# written only to the NEXT span's tokens. The core loops over the span sequence with Parcae's Poisson depth
+# (mean 6, truncated at max_depth 8). Plain CE through the plain+pointer head.
+name: spiral-span
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_spans: 96
+  max_depth: 8
+  levels:
+    - {kind: span}

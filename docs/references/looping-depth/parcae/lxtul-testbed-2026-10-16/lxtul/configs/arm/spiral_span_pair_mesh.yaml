@@ -1,0 +1,15 @@
+# Span-to-pair MeSH: spiral_span_pair with Anchor replaced by MeSH (arXiv 2510.07739; SpiralFormer appendix B).
+# A buffer of n_levels + 3 = 6 token-shaped slots (slot 0 = token embeddings), a transitional write-read of the
+# prelude output, and per level a softmax write router and read router (one Linear(d, 6) each) that write the
+# level's shifted update into the slots and read the next state. The coda reads the last read.
+name: spiral-span-pair-mesh
+kind: spiral
+pointer_heads: 4
+spiral:
+  topology: mesh
+  max_spans: 96
+  max_depth: 8
+  levels:
+    - {kind: span}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2}

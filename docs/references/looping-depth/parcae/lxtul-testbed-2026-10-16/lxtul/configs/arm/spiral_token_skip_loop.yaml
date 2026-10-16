@@ -1,0 +1,10 @@
+# Topology test: chunks of ONE token (offset 0, shift 0), looped with Parcae's Poisson depth. The pool over one token
+# is the identity, so this is plain Parcae's loop with ONE change: the coda reads h0 + u (Anchor's skip around the
+# loop) instead of the loop output alone. Compare K1-K6 against plain + pointer to see whether the skip costs depth.
+name: spiral-token-skip-loop
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_depth: 8
+  levels:
+    - {kind: chunk, size: 1, depth: poisson}

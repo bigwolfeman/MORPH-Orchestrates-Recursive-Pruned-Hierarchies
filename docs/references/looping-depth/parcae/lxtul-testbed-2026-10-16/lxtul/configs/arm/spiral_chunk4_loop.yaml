@@ -1,0 +1,10 @@
+# Chunk-level loop: ONE level of fixed chunks of 4 tokens (offset 2, shift 3), looped with Parcae's Poisson depth
+# (mean 6, truncated at max_depth 8; the last mean_backprop_depth passes carry gradient). Anchor topology, coda reads h0 + u.
+# Plain CE through the plain+pointer head. The K-curve (depths 1..8) comes from the trainer's end-of-run sweep.
+name: spiral-chunk4-loop
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_depth: 8
+  levels:
+    - {kind: chunk, size: 4, depth: poisson}

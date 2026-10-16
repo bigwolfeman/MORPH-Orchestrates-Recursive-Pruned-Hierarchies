@@ -1,0 +1,22 @@
+# NCM stage 2 on the RePR tokenizer: the "span plan on gpt8" arm (ncm_plan_gpt8) reading the span codes of ncm-repr-tok-5k
+# (4 residual stages on one vector per span, so a level is ONE code; the plan uses the first gen_levels = 3), m fixed at gen_levels
+# (the per-span m draw cost the plan-free path 0.042 in v1). The codes come from the tokenizer's LOCAL pass only.
+defaults:
+  - ncm_common
+  - _self_
+name: ncm-repr-plan
+kind: ncm
+ncm:
+  tok_ckpt: /home/wolfe/parcae-runs/ncm-repr-tok-5k
+  tok_objective: repr
+  enc_layers: 4
+  levels: [1, 1, 1, 1]
+  z_norm: false
+  beta: 0.0
+  nested_dropout: 0.0
+  gen_levels: 3
+  gen_reads_tokens: true
+  coda_span_local: false
+  m_train: fixed
+  corrupt: [0.5, 0.25, 0.125]
+  pointer_heads: 4

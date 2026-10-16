@@ -1,0 +1,14 @@
+# Published spiral (chunks 16, 8, 4, 2; one core pass each, Anchor) repeated as an outer cycle: the whole coarse-to-fine
+# descent runs a Poisson(3) number of times (max 6, per row), each cycle starts at a uniformly drawn level and skips each
+# later level with probability 0.2 (training only). One CE after the last cycle (credit end; bptt 3: only the last 3 cycles carry gradient, earlier ones run no-grad). Plain CE through the
+# plain+pointer head. Eval: start at the coarsest level, no skips.
+name: spiral-cycle-end
+kind: spiral
+pointer_heads: 4
+spiral:
+  levels:
+    - {kind: chunk, size: 16}
+    - {kind: chunk, size: 8}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2}
+  cycle: {mean: 3, max: 6, start: uniform, skip_p: 0.2, credit: end, bptt: 3}

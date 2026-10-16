@@ -1,0 +1,13 @@
+# Published spiral (chunks 16, 8, 4, 2; one core pass each, Anchor) with the chunk-4 level looped at Parcae's
+# Poisson depth (mean 6, truncated at max_depth 8). The winning spiral plus a K-curve at the cheaper of the two chunk sizes the
+# chunk-loop batch looped (chunk-4 loop K1-K6 +0.0030 at 0.80x the chunk-2 loop step). Plain CE through the plain+pointer head.
+name: spiral-pub-poisson4
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_depth: 8
+  levels:
+    - {kind: chunk, size: 16}
+    - {kind: chunk, size: 8}
+    - {kind: chunk, size: 4, depth: poisson}
+    - {kind: chunk, size: 2}

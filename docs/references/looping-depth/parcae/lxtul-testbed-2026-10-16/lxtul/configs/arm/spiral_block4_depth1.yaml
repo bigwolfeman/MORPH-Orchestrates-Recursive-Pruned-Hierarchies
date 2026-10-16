@@ -1,0 +1,10 @@
+# Block-Parcae depth-1-trained control: spiral_block4_loop with the chunk level fixed at ONE core pass (no Poisson
+# depth). The CE gap block4-loop minus this arm is the loop's value at equal tokens.
+name: spiral-block4-depth1
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_depth: 8
+  topology: block
+  levels:
+    - {kind: chunk, size: 4, offset: 0, shift: 4}

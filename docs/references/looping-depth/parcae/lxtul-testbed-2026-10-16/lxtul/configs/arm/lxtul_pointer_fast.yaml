@@ -1,0 +1,11 @@
+# lxtul_pointer + every exact / rounding-only speed key (lxtul/CLAUDE.md "Speed keys"). ckpt_passes stays at
+# the default 4; lxtul_pointer_fast_nockpt (ckpt_passes 0) is the variant that may not fit at batch 12.
+name: lxtul-pointer-fast
+kind: lxtul
+lxtul:
+  pointer_heads: 4
+  compact_slots: true
+  static_depth: true
+  cot_clip_fn: true
+  ce_rows: true
+  spandec_packed: true

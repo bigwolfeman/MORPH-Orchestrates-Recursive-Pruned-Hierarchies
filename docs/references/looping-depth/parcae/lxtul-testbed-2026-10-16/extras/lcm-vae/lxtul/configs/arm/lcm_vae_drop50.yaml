@@ -1,0 +1,8 @@
+# Variational LCM with decoder word dropout (Bowman et al. 2015) against posterior collapse: in training each decoder
+# input token is replaced with probability 0.5 by the slot-id embedding. Eval and the sweep never drop.
+defaults:
+  - lcm_vae
+  - _self_
+name: lcm-vae-drop50
+lcm:
+  dec_token_dropout: 0.5

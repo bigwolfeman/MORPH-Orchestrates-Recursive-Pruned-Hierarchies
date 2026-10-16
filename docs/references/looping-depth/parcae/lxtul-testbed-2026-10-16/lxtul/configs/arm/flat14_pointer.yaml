@@ -1,0 +1,5 @@
+# flat14 + the learned pointer head (lxtul/plain_pointer.py::PlainPointer).
+name: flat14-pointer
+kind: gpt
+layers: 14
+pointer_heads: 4

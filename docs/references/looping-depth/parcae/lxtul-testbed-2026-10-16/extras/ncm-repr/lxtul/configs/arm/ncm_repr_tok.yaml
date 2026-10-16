@@ -1,0 +1,18 @@
+# NCM stage 1, the RePR span tokenizer (arXiv 2610.20533; lxtul/ncm.py, "Stage 1, repr"): a 4-block causal prediction trunk run
+# twice with shared weights (FULL view: earlier tokens of the same document; LOCAL view: earlier tokens of the input token's own span),
+# LM head tied to the token embedding. R_ctx(s) on the full state before span s, R_loc(p) on the local state; the loss regresses
+# <R_ctx(s), R_loc(p) - R_loc(p-1)> onto the stop-gradient PMI nll_local - nll_full. The span code z(s) = R_loc at the span's last
+# token (local view only), quantised by a residual VQ of 4 stages on that one vector. No decoder, no commitment term, no z_norm.
+# Its run dir is the `ncm.tok_ckpt` of ncm_repr_plan.
+defaults:
+  - ncm_common
+  - _self_
+name: ncm-repr-tok
+kind: ncm_tok
+ncm:
+  tok_objective: repr
+  enc_layers: 4
+  levels: [1, 1, 1, 1]
+  z_norm: false
+  beta: 0.0
+  nested_dropout: 0.0

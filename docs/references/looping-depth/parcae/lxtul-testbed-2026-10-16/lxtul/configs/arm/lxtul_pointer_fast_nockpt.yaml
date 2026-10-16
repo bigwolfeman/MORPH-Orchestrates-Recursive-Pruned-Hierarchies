@@ -1,0 +1,11 @@
+# lxtul_pointer_fast with the loop passes not checkpointed (no recompute; may not fit at batch 12).
+name: lxtul-pointer-fast-nockpt
+kind: lxtul
+lxtul:
+  pointer_heads: 4
+  compact_slots: true
+  static_depth: true
+  cot_clip_fn: true
+  ce_rows: true
+  spandec_packed: true
+  ckpt_passes: 0

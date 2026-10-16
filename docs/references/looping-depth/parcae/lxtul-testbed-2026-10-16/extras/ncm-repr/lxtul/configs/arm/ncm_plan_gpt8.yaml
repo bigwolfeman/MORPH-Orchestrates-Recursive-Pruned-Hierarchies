@@ -1,0 +1,17 @@
+# NCM stage 2, "span plan on gpt8": the gpt8 + pointer token path (prelude 4, coda 4, causal over the row) whose coda
+# input adds the plan of the label's span (first m code levels of the frozen tokenizer, m drawn per span from
+# {0..3} in training); a looped generator (7 positions per span: levels 1, 2, 4) predicts the codes from the earlier
+# text (it reads the plan-free prelude states of earlier spans), Poisson depth as the plain arm.
+defaults:
+  - ncm_common
+  - _self_
+name: ncm-plan
+kind: ncm
+ncm:
+  tok_ckpt: /home/wolfe/parcae-runs/ncm-tok-5k
+  gen_levels: 3
+  gen_reads_tokens: true
+  coda_span_local: false
+  m_train: uniform
+  corrupt: [0.5, 0.25, 0.125]
+  pointer_heads: 4

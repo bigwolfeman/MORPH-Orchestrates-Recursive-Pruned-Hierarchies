@@ -1,0 +1,10 @@
+# LCM stage 2, Base-LCM: Parcae's looped backbone over the concepts of the row, MSE onto the next concept.
+# E and D frozen from the stage-1 run `lcm.ae_ckpt`.
+defaults:
+  - lcm_common
+  - _self_
+name: lcm-mse
+kind: lcm
+lcm:
+  loss: mse
+  ae_ckpt: /home/wolfe/parcae-runs/lcm-ae-5k

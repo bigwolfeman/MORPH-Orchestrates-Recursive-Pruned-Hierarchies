@@ -1,0 +1,12 @@
+# Span-to-pair spiral: the span-level loop (Poisson depth), then chunks of 4 and of 2 tokens with ONE core pass
+# each (offset size // 2, shift size - 1). Plain CE through the plain+pointer head.
+name: spiral-span-pair
+kind: spiral
+pointer_heads: 4
+spiral:
+  max_spans: 96
+  max_depth: 8
+  levels:
+    - {kind: span}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2}

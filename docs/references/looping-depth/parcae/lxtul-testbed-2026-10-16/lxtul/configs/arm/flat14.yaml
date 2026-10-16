@@ -1,0 +1,5 @@
+# Parcae GPT, 14 layers = prelude 4 + core 6 + coda 4: the plain loop's layer count unrolled once, no loop.
+# Same parameters as plain Parcae (same blocks and init rule at n_layer 14), full causal context.
+name: flat14
+kind: gpt
+layers: 14

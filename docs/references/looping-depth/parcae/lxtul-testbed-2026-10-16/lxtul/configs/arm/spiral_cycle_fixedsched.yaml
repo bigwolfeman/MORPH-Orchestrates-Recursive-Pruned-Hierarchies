@@ -1,0 +1,12 @@
+# Control for the schedule sampling of spiral_cycle_end: the same Poisson(3) cycle count (max 6) and credit end, but every
+# cycle starts at the coarsest level (16) and skips nothing. Plain CE through the plain+pointer head.
+name: spiral-cycle-fixedsched
+kind: spiral
+pointer_heads: 4
+spiral:
+  levels:
+    - {kind: chunk, size: 16}
+    - {kind: chunk, size: 8}
+    - {kind: chunk, size: 4}
+    - {kind: chunk, size: 2}
+  cycle: {mean: 3, max: 6, start: coarsest, skip_p: 0.0, credit: end, bptt: 3}
