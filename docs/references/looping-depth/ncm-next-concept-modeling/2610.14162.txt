@@ -1,0 +1,2396 @@
+                                           N C M           Next-Concept Modeling: Fast, Parallel Coarse-to-Fine
+                                                                         Text Generation
+                                                                               Hermann Kumbong*1 , Ishan S. Khare*1 ,
+                                                                  Iddah Mlauzi1 , Andrew Woen2 , Charles Ding1 , E. Kelly Buchanan1 ,
+                                                                      Simran Arora†3 , Azalia Mirhoseini†1 , and Christopher Ré†1
+                                                                             1
+                                                                             Department of Computer Science, Stanford University
+                                                                        2
+                                                                            Department of Electrical Engineering, Stanford University
+
+
+
+
+arXiv:2610.14162v1 [cs.CL] 9 Oct 2026
+                                                                                                 3
+                                                                                                   Together AI
+                                                                                         § https://github.com/HazyResearch/ncm
+
+                                                                                                                     Abstract
+                                                         Diffusion language models (DLMs) offer parallel sampling for faster generation than autoregressive
+                                                         models, an increasingly important advantage as inference becomes a dominant computational
+                                                         workload. However, DLMs degrade quickly with fewer sampling steps, process the full sequence
+                                                         at every step, and require many passes over the dataset to reach good quality. We introduce
+                                                         Next-Concept Modeling (NCM), a two-stage, coarse-to-fine framework: a multiscale residual
+                                                         VQ-VAE encodes text into a hierarchy of discrete codes, and a transformer generates one level
+                                                         at a time, predicting all codes within a level in parallel. At matched parameter scales, NCM
+                                                         achieves better generative perplexity than the strongest DLM baseline on LM1B while running
+                                                         21× faster. On OpenWebText, NCM is competitive with the strongest DLM while running 10×
+                                                         faster; on XSum, it matches the strongest DLM’s ROUGE-L while being 31× faster. On the
+                                                         reasoning task of Sudoku, NCM outperforms autoregressive and diffusion baselines across all
+                                                         difficulty levels, using fewer function evaluations.
+
+                                                            One
+                                                            One
+                                                           One Billion
+                                                                Billion
+                                                                 Billion
+                                                                       Word
+                                                                         Word
+                                                                         Word
+                                                                            (LM1B)
+                                                                              (LM1B)
+                                                                               (LM1B)                       Extreme
+                                                                                                              Extreme
+                                                                                                             ExtremeSummarization
+                                                                                                                      Summarization
+                                                                                                                      Summarization
+                                                                                                                                  (XSum)
+                                                                                                                                    (XSum)
+                                                                                                                                     (XSum)                                               Sudoku
+                                                                                                                                                                                           Sudoku
+                                                                                                                                                                                           Sudoku
+                                                                                                      29
+                                                                                                       29
+                                                                                                        29              31×
+                                                                                                                         31×
+                                                                                                                          31×
+                                                                                                                            faster
+                                                                                                                              faster
+                                                                                                                               faster
+                                                                                                                                                                     100
+                                                                                                                                                                      100
+                                                                                                                                                                       100                      NCM
+                                                                                                                                                                                                 NCM
+                                                                                                                                                                                                  NCM
+                                                                                                                                                                                                    (ours)
+                                                                                                                                                                                                      (ours)
+                                                                                                                                                                                                       (ours)
+                                               250
+                                                250
+                                                 250
+
+
+
+                                                                                                                                                       Solved boards (%) ↑
+                                                                                                                           AURORA-LM
+                                                                                                                            AURORA-LM
+                                                                                                                             AURORA-LM
+                                                                                                                                     + ++
+                                                                                                                                       CFG
+                                                                                                                                         CFG
+                                                                                                                                          CFG
+                                                                         FLM
+                                                                           FLM
+                                                                            FLM                                     + ++
+                                                                                                                       CFG
+                                                                                                                        CFG
+                                                                                                                         CFG
+                                                                        H=4.33
+                                                                         H=4.33
+                                                                          H=4.33                      28
+                                                                                                       28
+                                                                                                        28
+                                               200
+                                                200
+                                                 200                                                                                                                                               FMLM+
+                                                                                                                                                                                                    FMLM+
+                                                                                                                                                                                                     FMLM+
+
+
+                                                                                                ROUGE-L ↑
+                                                                                                               NCM
+                                                                                                                NCM
+                                                                                                                 NCM
+                                                                                                                   (ours)
+                                                                                                                     (ours)
+                                                                                                                      (ours)            ELF
+                                                                                                                                          ELF
+                                                                                                                                           ELF
+                                                                                                                                            + ++
+                                                                                                                                               CFG
+                                                                                                                                                CFG
+                                                                                                                                                 CFG
+
+                                        Gen. PPL ↓
+                                                                                                      27
+                                                                                                       27
+                                                                                                        27                                                                   75
+                                                                                                                                                                              75
+                                                                                                                                                                               75
+
+
+
+
+                                                                                                                                                       Solved boards
+                                                                                                                                                       Solved
+                                                                                                                                                              boards (%)
+                                                                                                                                                                     (%) ↑
+                                                             DUO
+                                                              DUO
+                                                               DUO                                                                                                                                      DUO
+                                                                                                                                                                                                         DUO
+                                                                                                                                                                                                          DUO
+                                                                                                                                                                                          MDLM
+                                                                                                                                                                                           MDLM
+                                                                                                                                                                                            MDLM
+
+
+
+                                                                                                ROUGE-L ↑
+                                        Gen.                                                    ROUGE-L
+                                        Gen. PPL
+                                             PPL ↓
+                                                            H=4.30
+                                                             H=4.30
+                                                              H=4.30
+                                               150
+                                                150
+                                                 150
+
+
+                                                                                                                                                                         ↑
+                                                                                                                                     AURORA-LM
+                                                                                                                                      AURORA-LM
+                                                                                                                                       AURORA-LM
+
+                                                 ↓                                                      ↑
+                                                                                     CANDI
+                                                                                       CANDI
+                                                                                        CANDI
+                                                                                     H=4.34
+                                                                                      H=4.34
+                                                                                       H=4.34         26
+                                                                                                       26
+                                                                                                        26                                                                                               FLM
+                                                                                                                                                                                                           FLM
+                                                                                                                                                                                                            FLM
+
+                                                                              MDLM
+                                                                                MDLM
+                                                                                 MDLM                                          MDLM
+                                                                                                                                MDLM
+                                                                                                                                 MDLM                                        50
+                                                                                                                                                                              50
+                                                                                                                                                                               50
+                                                                             H=4.33
+                                                                               H=4.33
+                                                                                H=4.33                25
+                                                                                                       25
+                                                                                                        25                           DUO
+                                                                                                                                      DUO
+                                                                                                                                       DUO
+                                                            NCM
+                                                             NCM
+                                                              NCM
+                                                                (ours)
+                                                                  (ours)
+                                                                   (ours)
+                                               100
+                                                100
+                                                 100
+                                                                        21×
+                                                                         21×
+                                                                          21×
+                                                                            faster
+                                                                              faster
+                                                                               faster                 24
+                                                                                                       24
+                                                                                                        24
+                                                            H=4.31
+                                                             H=4.31
+                                                              H=4.31                                                   ELF
+                                                                                                                         ELF
+                                                                                                                          ELF
+                                                                                                                                                                             25
+                                                                                                                                                                              25
+                                                                                                                                                                               25
+                                                                     16
+                                                          4 44 8 88 1616 3232
+                                                                            32 64
+                                                                                64
+                                                                                 64128128
+                                                                                       128                      4 44 8 88 16
+                                                                                                                           16
+                                                                                                                            16 3232 64
+                                                                                                                                32   64
+                                                                                                                                      64128128
+                                                                                                                                           128                                  Easy
+                                                                                                                                                                                 Easy
+                                                                                                                                                                                  Easy     Medium
+                                                                                                                                                                                            Medium
+                                                                                                                                                                                             Medium        Hard
+                                                                                                                                                                                                            Hard
+                                                                                                                                                                                                             Hard
+
+                                                               Wall-clock
+                                                                Wall-clock
+                                                              Wall-clock  time
+                                                                            time
+                                                                             time
+                                                                                (s)
+                                                                                  (s)
+                                                                                   (s)                              Wall-clock
+                                                                                                                     Wall-clock
+                                                                                                                   Wall-clock time
+                                                                                                                                time
+                                                                                                                                 time
+                                                                                                                                    (s)
+                                                                                                                                      (s)
+                                                                                                                                       (s)                                               Difficulty
+                                                                                                                                                                                          Difficulty
+                                                                                                                                                                                           Difficulty
+                                                         (a) Unconditional generation                        (b) Conditional generation                                                  (c) Reasoning
+
+                                          Figure 1: Generation efficiency and reasoning quality. (a,b) NCM achieves better or on-par
+                                          quality with 21× and 31× lower wall-clock time on LM1B and XSum, respectively (Section 4.6).
+                                          H denotes mean unigram entropy. (c) NCM maintains the highest Sudoku accuracy as difficulty
+                                          increases, using fewer function evaluations (NFE) than the diffusion baselines.
+                                                     *                       †
+                                                      Equal contribution.      Equal senior authorship.
+                                                     Correspondence to {kumboh, iskhare}@stanford.edu.
+
+
+
+                                                                                                                          1
+    Next-Token Prediction (NTP)                       L steps of one token       Next-Concept Modeling (NCM)                  K steps of ℓk positions      ours
+
+                                                                                                                        1
+           t=1   t=2     t=3                   ···                   t=L         k=1                                   r1
+
+           the   quick   brown   fox   jumps   over    the    lazy    dog                                1                                  2
+                                                                                 k=2                    r2                                 r2
+
+                                                                                               1                 2                 3                   4
+                                                                                 k=3          r3                r3                r3                  r3
+    Masked Diffusion (MDLM)                     T steps of all L positions
+                                                                                .
+                                                                                .
+                                                                                                                        ..
+    t=T     ?     ?        ?     ?       ?      ?       ?       ?      ?        .                                        .
+                                                                             k=K         1
+                                                                                        rK          2
+                                                                                                   rK     3
+                                                                                                         rK      4
+                                                                                                                rK     5
+                                                                                                                      rK          6
+                                                                                                                                 rK       7
+                                                                                                                                         rK     ···         L
+                                                                                                                                                           rK
+       .    ?    quick     ?     fox     ?     over     ?     lazy     ?
+       .                                                                                                                     decode
+       .
+
+    t=0    the   quick   brown   fox   jumps   over    the    lazy    dog               the    quick    brown   fox   jumps      over    the    lazy       dog
+
+
+
+
+Figure 2: Comparing text generation paradigms. Next-token prediction generates one token
+per step, and masked diffusion (discrete diffusion) refines all L positions at every step. NCM
+instead generates discrete codes rki , the i-th code of level k, from coarse to fine in K ≪ L steps:
+each step predicts the ℓk codes of one level in parallel, conditioned on the reconstruction ẑ (k−1) of
+the earlier levels, and after the final level, the cumulative reconstruction is decoded into tokens.
+
+
+1      Introduction
+Diffusion language models (DLMs) are the leading non-autoregressive language modeling paradigm
+[1, 2, 3]. Their main appeal is their ability to produce many tokens at a time through iterative
+denoising, which can make generation substantially faster than in autoregressive (AR) models
+that generate one token at a time. This is becoming increasingly important, as language model
+inference is one of the dominant computational workloads [4, 5]. DLMs are moving from research to
+practice: open models such as LLaDA [6] scale to billions of parameters, commercial systems such
+as Mercury [7] and DiffusionGemma [8] serve diffusion models in production, and diffusion drafters
+like DFlash [9] accelerate AR models through speculative decoding.
+The promise of DLMs is parallel sampling: generating a sequence in far fewer sequential steps than
+it has tokens. In practice however:
+
+• (i) Many sampling steps. Diffusion models predict tokens in parallel but still perform successive
+  denoising passes. Reducing these passes can substantially degrade generation quality (Figure 5),
+  limiting the speed gains from parallelism.
+• (ii) Expensive sampling steps. Processing the full sequence at every step limits speedups, and
+  bidirectional attention prevents direct reuse of AR-style KV caching [10, 11].
+• (iii) Large training budgets. DLM training often involves many passes over the same data.
+  For example, strong diffusion baselines such as DUO and MDLM are trained on OpenWebText
+  for 1M steps, processing over 500B tokens [12, 3, 13].
+
+Prior work reduces the number of sampling steps mainly through few-step samplers and distillation,
+either by distilling a many-step teacher into a few-step student [12, 14] or by learning a direct map
+between noise levels [15]. These approaches come at the cost of additional training stages on top of
+an already expensive model. Few-step sampling also comes at a price: distilled models tend to be
+less diverse than the models they are distilled from. On standard benchmarks such as OpenWebText
+[16] and LM1B [17], they reach a lower generative perplexity at the expense of sample diversity, as
+measured by mean per-sample unigram entropy [15]. Moreover, these approaches leave the per-step
+
+
+                                                                             2
+cost unchanged. Block-autoregressive diffusion enables KV caching at the cost of parallelism: tokens
+within each block can be denoised in parallel, but blocks must be generated sequentially, with each
+waiting for the previous block to finish [18, 19].
+We introduce Next-Concept Modeling (NCM), a two-stage language modeling framework. A
+multiscale residual VQ-VAE [20] encodes text into K levels of discrete codes, from short coarse
+representations to longer fine ones. A transformer generates these levels sequentially, predicting
+all codes within each level in parallel, following next-scale prediction for images [21, 22]. NCM
+achieves (i) high generation quality and diversity in K ≪ L steps without distillation (Figure 5);
+(ii) lower sampling cost by processing short code sequences at early levels (Figure 1); and (iii)
+strong performance with fewer training passes over the data (Figure 7).
+We evaluate NCM models at approximately 100M parameters against discrete-diffusion, flow-
+based, and hybrid baselines, following standard evaluation protocols [3, 12]. Across unconditional
+generation, conditional generation (translation and summarization), and reasoning tasks (Sudoku),
+we find:
+    • (i) High quality in few steps. Across three unconditional generation datasets (TinyStories,
+      LM1B, and OpenWebText), NCM matches or outperforms strong diffusion baselines with
+      approximately 4–11× fewer function evaluations (NFE), while maintaining sample entropy
+      close to the data (Figure 5). On conditional generation (XSum summarization and WMT14
+      translation), it uses approximately 6–16× fewer NFE than unguided baselines, achieving
+      the best summarization scores and outperforming all but one non-AR translation baseline
+      (Table 2). On Sudoku, NCM outperforms AR and diffusion baselines across difficulty levels
+      while using fewer NFE than any of them (Table 3).
+    • (ii) Fast inference and effective test-time scaling. Fewer sampling steps and lower
+      per-step cost from shorter coarse levels yield 10–31× faster generation at comparable or better
+      quality (Figures 1 and 5). Using the saved time to generate more candidates and select among
+      them with MBR decoding yields about 7% higher ROUGE-L than the strongest summarization
+      baseline within the same sampling-time budget (Figure 6).
+    • (iii) Lower training budgets. NCM achieves competitive generation quality with approxi-
+      mately 4–5× fewer training tokens than strong diffusion baselines on LM1B and OpenWebText,
+      including both tokenizer and generator training (Figure 7; Appendix C).
+We also show preliminary scaling results: increasing NCM’s model size improves generation quality
+on LM1B at a fixed training-token budget (Figure 6a). Qualitative probes suggest that coarse levels
+capture global structure while finer levels add detail (Appendix H, Figures 17–19).
+
+
+2    Background & Related Work
+Diffusion & Flow-Based Models for Text Generation. Text generation using Diffusion &
+Flow-Based Models is an iterative refinement process. Discrete methods operate on token sequences
+[1, 2, 3]; continuous methods evolve representations of tokens in an embedding space [13, 23, 24, 25].
+Distillation/flow-map techniques enable reduction of the number of sampling steps [12, 14, 15];
+however, full-sequence formulations still require processing a length-L representation in every step.
+Block-Autoregressive Diffusion allows KV caching through sequential block generation: tokens within
+a block are generated in parallel; however, each block must be generated after the previous blocks
+[18, 19]. NCM modifies both the representation and the generation schedule. NCM generates a
+
+
+                                                  3
+   Translation                                                                                                              BLEU: 77.8
+   German:      Es besteht allerdings die Sorge, dass kleine und mittlere Unternehmen angreifbar gegenüber Hacking und Überwachung bleiben.
+   Reference: However, there is concern that small and medium-sized companies remain vulnerable to hacking and surveillance.
+
+
+Decoded output after each sampling step, coarse → fine
+
+ Step 1                       Step 3                       Step 6                       Step 8                       Step 11
+ However, it is a             However, it is a             However, there is a          However, there is that       However, there is
+ important to the the the     concern for small small      concern that medium          concern and and              concern that small
+ and the.                     small medium-sized           medium-sized                 medium-sized                 and medium-sized
+                              and-sized-sized and and      enterprises will remain      enterprises will remain      enterprises will remain
+                              and...                       remain remain                vulnerable to hacking        vulnerable to hacking
+                                                           surveillance surveillance    and surveillance.            and surveillance.
+                                                           surveillance capabilities
+
+
+
+Figure 3: NCM generation trajectory. Output decoded after selected sampling steps of one
+German–English translation (WMT14), shown verbatim; the last step (gold frame) is the final
+output. Words matching the reference are shaded green. Coarse levels fix the high-level idea; finer
+levels fill in and correct the content. Appendix J.2 shows all sampling steps with their scores.
+
+
+learned hierarchy of discrete codes from coarse to fine, and predicts all codes within each level in
+parallel. Generation therefore follows a short sequence of levels, with fewer positions processed at
+the early, coarse levels.
+
+Discrete latent variables and next scale prediction. A number of image generative models
+use discrete tokenizers [20, 26, 27]. Residual quantization corrects for errors made at previous steps
+and uses those errors to create a new codebook [28] which has been adapted to neural audio codecs
+[29, 30]. Next-scale prediction generates such hierarchies coarse to fine, one scale at a time in parallel,
+for fast, high-quality images [21, 22]. NCM extends residual quantization and next-scale prediction
+to text through a hierarchy of discrete codes that determines the generation order. While latent
+diffusion models generate continuous representations of text [31, 32], NCM produces successive
+discrete levels. Adapting this approach to text requires learning useful coarse representations without
+a natural counterpart to image downsampling. Accurate reconstruction is also important: a single
+token error can alter meaning, prevent code from running, or invalidate a Sudoku solution.
+
+Hierarchical and concept-level text generation. Several approaches organize language
+modeling around larger units and learned abstractions. MEGABYTE [33] combines global modeling
+of byte patches with local byte prediction, while H-Net [34] learns dynamic chunks within a multistage
+hierarchy. Large Concept Models [35] predict sentence representations. ConceptLM [36] predicts
+discrete concepts to guide subsequent token generation, and Dynamic Large Concept Models [37]
+learn variable-length concepts for computation in a compressed representation space. HDLM [38]
+progressively refines tokens through a hierarchy of semantic vocabularies. NCM represents an
+entire sequence through discrete levels of increasing resolution and generates these levels in order
+using a shared transformer. Predicting all codes within each level in parallel gives a short generation
+path, while the shorter coarse levels reduce computation during early steps.
+
+
+
+
+                                                                      4
+    (a) Stage 1: Learn a Multiscale Tokenizer                                              (b) Stage 2: Learn to Generate
+
+                                Reconstruction loss
+                                                                                                            r1          r2           r3              rK
+
+
+
+                                                                                           Cross-entropy
+                                                                                                                                             ···       ···
+
+ Input x1:L                                                           Output x̂1:L                          r̂1         r̂2          r̂3             r̂K
+    Madison                                                             Madison                                                              ···       ···     Block-diagonal
+     Square
+                           Multiscale residual codes                     Square                                                                                   attention
+     Garden
+               Encoder          coarse → fine               Decoder      Garden
+      was
+                          r1                                               was
+                                                                                                                       Next-Concept Transformer
+      the                 r2                                               the
+
+      place               r3                                               place
+
+       to
+                           ..                                               to
+        .                   .                                                .                                                               ···       ···     levels 1, . . . , K
+        .                rK                                                  .
+        .                                                                    .
+      York                                                                 York                            ẑ (0)      ẑ (1)       ẑ (2)         ẑ (K−1)
+                                                                                                                                                                 own level
+                                                                                                            cumulative reconstruction of the earlier levels,     masked
+     Knicks.                                                            Knicks.
+                                                                                                               resized to the ℓk positions of level k
+
+
+
+
+Figure 4: NCM’s two-stage training. (a) A multiscale residual VQ-VAE learns to encode text
+into a coarse-to-fine hierarchy of discrete codes r1 , . . . , rK and reconstruct the input. (b) The NCM
+transformer predicts all codes within level k in parallel from the cumulative reconstruction ẑ (k−1) ,
+resized to ℓk positions. In the unconditional setting, block-diagonal attention restricts each input
+block to itself. During training, all K levels are predicted in one forward pass using a cross-entropy
+loss. During generation, levels are predicted sequentially from coarse to fine.
+
+3       Next-Concept Modeling
+NCM generates text through a learned coarse-to-fine hierarchy of discrete codes. We first train a
+multiscale residual VQ tokenizer to represent text at progressively finer levels of detail, then freeze
+it and train a transformer to generate the hierarchy. At each level, the transformer predicts all
+codes in parallel, conditioned on the cumulative reconstruction of earlier levels. The tokenizer’s
+decoder maps the completed reconstruction back to text. Figure 3 previews this process through a
+German–English translation, showing how the output develops across levels. The term concept here
+refers to the information carried by the coarse levels of the hierarchy.
+
+3.1           Preliminaries
+Given latent vectors z ∈ RL×d and a codebook V = {e1 , . . . , e|V| }, with entries ej ∈ Rd , vector
+quantization [20] replaces each vector z i with its nearest codebook entry:
+                                                                    zqi = arg min ∥z i − e∥22                                                                                   (1)
+                                                                                     e∈V
+
+The selected codebook vectors form the quantized latent zq ∈ RL×d .
+A single quantization step generally leaves an approximation error. Residual quantization [29] repre-
+sents this error using additional codebooks, adding each quantized correction to the reconstruction.
+Starting from the residual z (0) = z and the reconstruction ẑ (0) = 0, let z (k),i denote the residual
+vector at position i after level k, and ẑ (k),i the corresponding cumulative reconstruction vector.
+Level k quantizes the residual into L codes rk and updates the reconstruction and residual. Here
+ek (rk ) denotes lookup in level k’s codebook, with ek (rk )i = ek,ri :
+                                                                                                                                k
+
+
+                                                 ẑ   (k)
+                                                            = ẑ   (k−1)
+                                                                           + ek (rk ),                            z   (k)
+                                                                                                                            = z − ẑ (k)                                        (2)
+
+                                                                                      5
+The sum ẑ (K) = K    k=1 ek (rk ) approximates z, and each partial sum ẑ
+                                                                            (k) , the cumulative recon-
+                   P
+struction, is a partial reconstruction using the first k levels. Multiscale residual quantization [21]
+uses progressively longer code sequences, with level k containing ℓk codes. Its codebook vectors
+are mapped to a length-L contribution by a reconstruction operator Rk before being added to the
+cumulative reconstruction, allowing shorter, coarse levels to be followed by finer levels that add
+detail.
+
+3.2   Formulation
+Let x ∈ T L be a sequence of L tokens from a text vocabulary T . The tokenizer maps x to discrete
+codes at K levels,
+                           r1:K = (r1 , . . . , rK ), rk ∈ {1, . . . , |Vk |}ℓk ,             (3)
+where Vk is level k’s codebook, |Vk | is its size, ℓk is the number of codes at that level, and
+ℓ1 < ℓ2 < · · · < ℓK = L. Each level encodes the residual left by the earlier ones. The generator
+predicts the levels from coarse to fine, conditioning on earlier levels through their cumulative
+reconstruction ẑ (k−1) :
+                                               K
+                                               Y
+                                  pθ (r1:K ) =    pθ (rk | ẑ (k−1) )                         (4)
+                                                         k=1
+Conditional on this reconstruction, the codes within each level are sampled independently, allowing
+all positions to be generated in one forward pass:
+                                                              ℓk
+                                                              Y
+                                   pθ (rk | ẑ   (k−1)
+                                                         )=         pθ (rki | ẑ (k−1) )                          (5)
+                                                              i=1
+
+After all levels are generated, the tokenizer’s decoder maps their cumulative reconstruction ẑ (K) to
+token distributions at all L positions.
+
+3.3   Multiscale Residual Tokenization
+To obtain the hierarchy, we learn a multiscale residual VQ-VAE, using nested dropout to encourage
+informative partial reconstructions. An encoder Eϕ maps the input sequence x to L latent vectors
+of dimension d:
+                                        z = Eϕ (x) ∈ RL×d                                      (6)
+Starting from z (0) = z and ẑ (0) = 0, each level quantizes the residual left by the preceding levels. At
+level k, the residual is downsampled to ℓk latent vectors, and each vector is assigned the index of its
+nearest entry in the codebook Vk :
+                 uk = Downk (z (k−1) ) ∈ Rℓk ×d ,                 rki = arg       min           ∥uik − ek,j ∥22   (7)
+                                                                              j∈{1,...,|Vk |}
+
+The reconstruction operator Rk maps the selected codebook vectors to a length-L contribution,
+which we add to the cumulative reconstruction:
+                            ẑ (k) = ẑ (k−1) + Rk (ek (rk )),             z (k) = z − ẑ (k)                     (8)
+
+Here ek (rk ) ∈ Rℓk ×d contains the selected codebook vectors, and both ẑ (k) and z (k) have shape
+L × d.
+The VQ-VAE decoder defines token distributions pψ (xi | ẑ (k) ) at all L positions from a cumulative
+reconstruction ẑ (k) .
+
+                                                              6
+Nested dropout. We use nested dropout [39], which     Pk during training retains only the first k levels
+for a sampled cutoff k ∈ {1, . . . , K}, giving ẑ = j=1 Rj (ej (rj )). This encourages earlier levels
+                                                  (k)
+
+to capture meaningful information rather than relying on finer levels to carry it. During training,
+both the reconstruction cross-entropy and the VQ terms are evaluated at the sampled cutoff:
+                                 L
+                               1X                                                                
+                  Ltok = −         log pψ (xi | ẑ (k) ) + β MSE z, sg[ẑ (k) ] + MSE sg[z], ẑ (k)                                (9)
+                               L
+                                  i=1
+
+The VQ terms combine a commitment loss and a latent quantization loss, both measured by mean
+squared error (MSE). Here sg denotes stop-gradient and β weights the commitment term. We use a
+straight-through estimator to pass reconstruction gradients through the discrete quantization step
+to the encoder.
+
+3.4     Coarse-to-Fine Generation
+With the tokenizer frozen, we train the NCM transformer on all levels in one forward pass
+(Algorithm 1); generation proceeds from coarse to fine in K steps (Algorithm 2).
+
+Conditioning Corruption. To improve robustness to accumulating VQ code errors during
+generation, we train with a fraction of conditioning codes replaced by other codes from the same
+level’s codebook, keeping the ground-truth codes intact as labels. Replacement probabilities vary by
+level; ablations are given in Appendix F.3. Let z̃ (k−1) denote the resulting cumulative reconstruction.
+The training objective is
+                                        K          ℓk
+                                        X          X                                          ℓ−α
+                         LNCM = −             wk         log pθ (rki | z̃ (k−1) ),     wk = PK k 1−α                             (10)
+                                        k=1        i=1                                       j=1 ℓj
+
+With α = 0, all code positions have equal weight, and with α = 1, each level has equal weight.
+
+
+ Algorithm 1 NCM training step                                              Algorithm 2 NCM generation
+ Require: Text x, frozen tokenizer, θ                                       Require: Frozen tokenizer, generator pθ
+  1: Encode x into target codes r1:K                                         1: ẑ (0) ← 0
+  2: Uniformly replace codes to obtain r̃1:K                                 2: for k = 1, . . . , K do
+  3: z̃ (0) ← 0                                                              3:       Resize ẑ (k−1) to ℓk positions
+  4: for k = 1, . . . , K do                                                 4:       Project the resized vectors to the hidden width
+  5:       Resize and project z̃ (k−1) to ℓk inputs                          5:       Predict code distributions in one forward pass
+  6:       z̃ (k) ← z̃ (k−1) + Rk (ek (r̃k ))                                6:       Sample all ℓk codes rki in parallel
+  7: end for                                                                 7:       ẑ (k) ← ẑ (k−1) + Rk (ek (rk ))
+  8: Predict all levels in one forward pass                                  8: end for
+  9: Compute LNCM against r1:K                                               9: Decode ẑ (K) to token distributions
+ 10: Update θ using the loss gradient                                       10: Select output tokens by argmax
+
+
+Conditional generation. NCM supports prompt-conditioned generation through a prefix-LM
+attention pattern. Prompt tokens are embedded using the frozen VQ-VAE encoder’s token embedding
+table and projected into the hidden space. Prompt positions attend to each other; each target block
+attends to the prompt and itself, while prompt positions cannot attend to target blocks.
+
+
+
+
+                                                                    7
+4     Experiments
+We evaluate NCM along four axes:
+    • Quality. We first assess tokenizer quality through reconstruction accuracy and codebook
+      utilization (§4.1). We then evaluate unconditional generation on TinyStories [40], One Billion
+      Word (LM1B) [17], and OpenWebText (OWT) [16], measuring generative perplexity alongside
+      sample diversity (§4.2). For conditional generation, we evaluate WMT14 German–English
+      translation [41] using BLEU [42, 43] and XSum summarization [44] using ROUGE-1/2/L [45]
+      (§4.3).
+    • Efficiency. We compare the number of function evaluations (NFE) and wall-clock time
+      required to achieve a given generation quality, as well as the training-token budgets used to
+      obtain these results (§4.6).
+    • Reasoning. We compare NCM with autoregressive and diffusion baselines on Sudoku, where
+      successful generation requires satisfying interdependent constraints across the entire output
+      (§4.4).
+    • Scaling. We investigate how scaling the model size improves generation quality and whether
+      NCM’s fast sampling can translate into further quality gains through additional test-time
+      compute (§4.5).
+Across these evaluations, NCM achieves competitive generation quality with substantially lower
+sampling cost. We train a separate tokenizer and generator for each dataset. Unless otherwise
+stated, our generators have approximately 100M parameters, comparable to or smaller than the
+baselines. We follow established evaluation protocols from prior diffusion language modeling work
+where possible. Appendices B–E provide dataset, architecture, training, and baseline details, along
+with additional results.
+
+4.1    Tokenizer Quality
+
+                            Unconditional                Conditional       Reasoning (Sudoku)
+                    OWT      LM1B     TinyStories       XSum    WMT14     Easy     Medium      Hard
+Recon. acc. (%) ↑   99.99     99.86      99.98          99.79   98.79    100.00     100.00    100.00
+Utilization (%)     83.10     89.31      90.12          86.20   61.89     80.73      83.85     80.73
+
+
+Table 1: Tokenizer reconstruction and codebook utilization. Reconstruction accuracy
+measures exact token recovery on held-out text using the full hierarchy. Utilization is the mean
+percentage of codebook entries used across levels.
+
+Reconstruction errors that are visually imperceptible in images can be consequential in text: e.g.,
+one wrong digit can invalidate a Sudoku solution. Table 1 reports exact reconstruction accuracy.
+On Sudoku, where correctness requires exact recovery, the tokenizer achieves 100% reconstruction
+accuracy. On other tasks, like summarization and translation, token-level reconstruction accuracy is
+close to 100%. Observed tokenizer reconstruction errors often involve substitutions of related words
+or entities, with their effect on meaning depending on the context. We also report tokenizer codebook
+utilization in Table 1, with mean utilization ranging from 62% to 90% across datasets. Appendix G
+
+
+
+                                                    8
+provides further tokenizer analysis, including reconstruction errors and codebook utilization. We
+provide additional experiments in Appendix H to further understand the learned hierarchy.
+
+4.2                Unconditional Generation
+                                TinyStories                                          LM1B                                   OpenWebText
+             100                Data: Gen. PPL 9.67, H=3.96
+                                                              250
+                                                                             Data: Gen. PPL 53.51, H=4.31    800            Data: Gen. PPL 14.15, H=5.44
+
+                                                                                  FLM
+                                                                                 H=4.33
+                                MDLM                                                                         400
+
+
+
+Gen. PPL ↓
+              50                H=4.03
+                   FMLM+
+                                            CANDI
+                                            H=4.03
+                                                              150           DUO
+                                                                                                    CANDI
+                                                                                                             200
+                                                                                                    H=4.34
+                    DUO                                                    H=4.30
+                                                                                                                                       MDLM, H=5.64
+                                                   H=4.01                                  MDLM                    H=5.42
+              20       H=3.98
+                                                                        H=4.31            H=4.33             100
+                                                H=3.90                                                                                     SEDD, H=5.61
+                                                              100
+                                                                                                                              10× faster
+                    NCM (ours) 11× fewer NFE                                     11× fewer NFE                        NCM
+                                                                    NCM (ours)                                       (ours)            DUO, H=5.55
+              10
+                   8       16        32       64       128          8       16       32        64     128             0.1         1
+                                     NFE                                             NFE                             Seconds per sequence
+
+Figure 5: Unconditional generation quality and sampling cost. Generative perplexity (Gen.
+PPL; lower is better) against the number of function evaluations on TinyStories and LM1B, and
+against the sampling time per 1,024-token sequence (batch size 16) on OpenWebText. NCM
+achieves competitive or better Gen. PPL compared to strong diffusion baselines with substantially
+fewer function evaluations and less time. H denotes mean per-sample unigram entropy.
+
+Following standard practice in the diffusion language modeling literature [3, 12, 46], we evaluate
+NCM’s unconditional generation quality using generative perplexity (Gen. PPL), with GPT-2-large
+as the reference model on TinyStories [40], LM1B [17], and OpenWebText (OWT) [16]. We report
+mean per-sample unigram entropy (H) alongside Gen. PPL, since lower Gen. PPL can be obtained
+by reducing sample diversity [46]. For reference, we report both metrics on ground-truth text from
+each dataset. For a fair comparison, NCM is compared against baselines with sample diversity close
+to that of the ground-truth data. Figure 5 compares NCM with strong discrete and continuous
+diffusion language model baselines in terms of Gen. PPL at different numbers of function evaluations
+(NFE). Across the three datasets, NCM achieves competitive or better Gen. PPL with substantially
+fewer function evaluations, while maintaining sample entropy close to that of the data. Table 8
+in Appendix E.2 lists all results with their entropies, and Appendix E.1 gives results under other
+reference scoring models.
+
+4.3                Conditional Generation
+We evaluate NCM on translation (WMT14 German–English, De–En) [41] and extreme summariza-
+tion (XSum) [44], using BLEU [42, 43] and ROUGE-1/2/L [45] scores, respectively. We compare
+NCM with autoregressive baselines [13] and diffusion and flow models [3, 12, 47, 48, 13, 25] at
+comparable model sizes (Table 2). Without guidance, NCM achieves better ROUGE-1/2/L scores
+on XSum than the strongest diffusion baseline, AURORA-LM [25], while reducing the number of
+function evaluations (NFE) by 16×. Among the non-AR baselines on WMT14, NCM trails only
+the strongest diffusion baseline, E2D2 [47], while using 5.8× fewer NFE. NCM’s lower sampling
+cost allows us to match the baselines’ NFE budget using multiple candidates and minimum Bayes
+risk (MBR) decoding. NCM with MBR achieves better scores on all three XSum ROUGE metrics
+than the strongest diffusion baseline with guidance, AURORA-LM [25], while using fewer NFE
+(Table 2). We count each classifier-free guidance step as two function evaluations, since it requires
+
+
+                                                                                 9
+both a conditional and an unconditional generator call. We visualize generated samples in Figure 8
+and Appendix J.
+
+                               WMT14 De–En                        XSum
+       Type Method            Size BLEU ↑ NFE ↓ Size ROUGE-1 ↑ ROUGE-2 ↑ ROUGE-L ↑ NFE ↓
+       –       AR†            99M      25.2   64    99M    30.5    10.2       24.4     64
+       Without guidance
+
+               MDLM†          99M      18.4   64     99M   33.4    11.6       25.8     64
+               DUO†           205M     21.3   64    205M   31.4    10.1       25.0     64
+       Diff.
+               E2D2†          99M      24.8   64     99M   28.4     8.3       22.0     64
+               SeqDiffuSeq†     –      21.3   64      –    19.3     1.7       14.1     64
+               ELF       140M          17.2   64    140M   34.2    11.1       26.4      64
+       Flow
+               AURORA-LM   –            –     –     130M   34.7    12.2       26.6     128
+       Ours    NCM            120M     22.6   11    88M    35.0    12.8      28.0       8
+       With guidance or MBR decoding
+
+               ELF       140M          26.4   128   140M   36.0    12.2       27.8     128
+       Flow
+               AURORA-LM   –            –      –    130M   36.3    13.4       28.6     184
+               NCM + CFG 120M          23.9   22    88M    35.3    13.0      28.2      16
+       Ours
+               NCM + MBR 120M          25.2   132   88M    37.3    14.0      29.6      128
+
+
+Table 2: Conditional generation quality and sampling cost. BLEU on WMT14 De–En and
+ROUGE-1/2/L on XSum (higher is better). Size denotes task-specific generator parameters; NFE
+counts generator calls per output. Bold and underlined values mark the best and second-best results
+within each non-AR decoding setting, including ties. † : results from Hu et al. [13].
+
+
+4.4   Reasoning
+We evaluate NCM on Sudoku, a reasoning task in                                     Accuracy (%) ↑
+which every cell of the solution must satisfy the row,
+column, and box constraints at once. Following the Type Method Size NFE ↓ Easy Med. Hard
+setup of S-FLM [50], we report the percentage of com- AR Sample 25M 128 13.9 5.1 0.6
+pletely solved boards at three difficulty levels defined          Greedy 25M   128 14.6 5.1   1.0
+by the number of provided clues (40, 35, and 30 for easy,         MDLM 29M     128 92.0 77.1 30.2
+                                                            Disc.
+medium, and hard, respectively). NCM outperforms                  DUO    29M   128 96.3 84.7 58.4
+both the AR baselines and the strongest diffusion base-           CANDI   –    128 79.3 45.9 16.7
+line, FMLM+ [49], across all three levels of difficulty Cont. FLM        29M   128 94.2 82.7 44.5
+while using fewer NFE (Table 3). NCM’s coarse-to-                 S-FLM  29M   128 94.8 85.2 45.0
+                                                                  FMLM+ 29M     16 97.7 92.8 81.3
+fine generation is well suited to tasks that require global
+planning: NCM refines a representation of the entire Ours NCM            25M   12  99.5 96.5 86.1
+board across levels, allowing later levels to correct ear-
+lier partial solutions. In contrast, the AR baselines Table 3: Sudoku. Completely solved
+struggle with left-to-right generation, which commits boards (%) by difficulty. Baseline results:
+to individual tokens without revising earlier decisions. Agarwal et al. [49]. NCM outperforms all
+Appendix J.7 shows a sample Sudoku solving trajectory baselines with fewer NFE.
+across different time steps.
+
+
+
+                                                    10
+                              LM1B                                             WMT                                                   XSum
+             120                      NCM-725M                    NCM (ours)                   K=16                                                K=64
+                                      NCM-317M              26                                                                       K=16
+                                                                                                                                            K=32
+             110                                                                                                  30           K=8
+
+
+
+
+Gen. PPL ↓                                                                                            ROUGE-L ↑
+                                      NCM-97M
+                                                                                         K=8                                         AURORA-LM + CFG
+
+
+
+                                                   BLEU ↑
+                                                                     K=1
+             100                                            22                    K=4    DUO                           NCM (ours)
+                                   H=4.31                                                                         28
+                                                                   ELF + CFG                                                                 ELF + CFG
+              90                      H=4.34                                    MDLM
+                                                            18
+                                                                                                                  26                         AURORA-LM
+                                                                 ELF                                                              MDLM      DUO
+              80                   H=4.34
+                                                            14                                                          ELF
+                                                                                                                  24
+                    2    3    4   5      6     7                 1            4      16                                  8      16     32   64 128
+                    Training tokens (billions)                         Wall-clock time (s)                                    Wall-clock time (s)
+
+                   (a) Model Scaling                                                    (b) Test-time Scaling
+
+Figure 6: Model and test-time scaling. (a) Increasing generator size improves Gen. PPL while
+maintaining high sample entropy (H) on LM1B at a fixed generator training-token budget; the
+shared tokenizer is excluded from this panel. (b) Generating more candidates and selecting with
+MBR decoding improves BLEU on WMT14 and ROUGE-L on XSum. K denotes the number
+of candidates; wall-clock time measures sampling cost. On XSum, NCM outperforms diffusion
+baselines at matched inference time.
+
+
+4.5                Scaling
+We study how NCM benefits from additional compute through larger models and increased inference
+budgets. We evaluate model scaling by increasing generator size and test-time scaling by selecting
+among multiple candidates using minimum Bayes risk (MBR) decoding.
+
+Model Scaling. Scaling NCM’s model size improves both generation quality and sample diversity
+at a fixed training-token budget (Figure 6a). We train generators with 97M, 317M, and 725M
+parameters on LM1B, all sharing the same frozen tokenizer. These results suggest that NCM scales
+effectively, with potential for further gains from larger generators.
+
+Test-Time Scaling. In Figure 1 and Table 2, we show that NCM matches or outperforms
+diffusion baselines while using significantly fewer function evaluations (NFEs) and less wall-clock
+time. A natural question is whether we can convert these efficiency gains into further improvements
+in quality. We generate multiple candidates and use minimum Bayes risk (MBR) decoding [51] to
+select the candidate with the highest average similarity to the others. On XSum, Figure 6b shows
+that NCM improves over diffusion baselines at matched inference time.
+
+4.6                Efficiency
+Inference Efficiency. In Figure 5, we show that NCM achieves lower or comparable generative
+perplexity than the strongest diffusion baselines using far fewer function evaluations (NFE). However,
+NFE alone does not capture the full inference efficiency picture, since the cost per step differs across
+different diffusion language models; many DLMs process the full sequence at every step and use
+samplers that can introduce additional overhead. NCM, on the other hand, processes very few
+tokens at the coarse levels of its hierarchy, saving compute at these early steps. We benchmark
+end-to-end wall-clock time for generating 1,024 sequences at batch size 16 on a single NVIDIA H100
+SXM 80GB GPU (Figure 1). On LM1B, NCM uses 11× fewer NFE than the strongest diffusion
+language model baseline, DUO, and runs 21× faster at better generative perplexity. On XSum, it
+uses 16× fewer NFE than the strongest diffusion baseline, AURORA-LM, and runs 31× faster at
+
+                                                                           11
+comparable ROUGE. The speedup gains come from both fewer NFE and a lower average cost per
+step compared to the DLM baselines.
+Lower Training Budgets. NCM achieves strong
+
+
+
+
+                                                                         Training tokens (B)
+                                                                                                           295.4   124.6   115.5   97.3   112.3
+unconditional generation results with fewer training                                           60
+tokens than the diffusion baselines. On LM1B, the
+                                                                                                   20%
+tokenizer and generator together process 13.36B full-                                          40 tokens
+length token positions, approximately 4.9× fewer
+than the baselines’ 66B (Figure 7). We count re-                                               20   93.1
+
+peated passes over the data in this budget; the cal-
+                                                                                               0
+culation is given in Appendix C.2. These budgets                                                    NCM RDLM CANDI MDLM            DUO    FLM
+measure total token exposure. One possible explana-
+tion is that NCM’s fixed coarse-to-fine order simpli-                 Figure 7: Training tokens on LM1B.
+fies learning relative to the many generation orders                  NCM uses 4.9× fewer tokens and reaches a
+learned by diffusion baselines.                                       lower Gen. PPL (above each bar).
+
+4.7    Qualitative Samples
+Figure 8 shows NCM samples across unconditional and conditional settings. The conditional outputs
+remain anchored to their input contexts. Additional samples are provided in Appendix J.
+
+  Summarization                                                    ROUGE-1: 48.5 | ROUGE-2: 12.9 | ROUGE-L: 36.4
+  Context: The 33-year-old has featured only twice for the Foxes this term, having signed a new one-year deal with the
+  Premier League newcomers in the summer. Former Blackpool forward Taylor-Fletcher scored three goals in 23 games for
+  his parent club last season. He joined the 13th-placed Owls prior to Saturday’s Championship game against Norwich City.
+  Reference: Leicester City striker Gary Taylor-Fletcher has joined Sheffield Wednesday on an initial month-long loan.
+  Generated: Sheffield Wednesday have signed Leicester striker James Taylor-Fletcher on loan until the end of the season.
+
+
+  Translation                                                                                                                      BLEU: 51.9
+  German: Leider gibt es kein Wundermittel zur Vorbeugung von Krebs.
+
+  Reference: Unfortunately, there is no miracle recipe for preventing cancer.
+  Generated: Unfortunately, there is no miracle cure to prevent cancer.
+
+
+  Conditional Generation                                                                                                   Prompt | Generated
+  Sample 1: An Egyptian court has ordered a probe into fresh clashes between police and protesters in Cairo. “There are
+  strikes at the Suez Canal,”. witnesses said. “It’s going to be happening in the streets. It’s the new regime.” Those police,
+  responding to the protests, are now getting the money out of the government, he said. . .
+  Sample 2: But Church explosion and billions of thought, frustration, morals, and religion had itself bound inextricably
+  in the fabric of beauty rather than reason. The decay of society fell into the wealth of divine advancement at hand. The
+  power of social engineering perused human godhood into a sense of direction.
+
+  Unconditional Generation                                                                                 Gen. PPL: 55.6 | Entropy: 4.39
+  Generated: [CLS] at the far end of the series around 18 games. [CLS] "it could be good if he doesn't simply name the
+  party that has won his past two on the other side and the corners, " he said. [CLS] "if you are in power then you can put
+  your players down and work together and try find out the changes with which we need. [CLS] i work in the various schools
+  or into children's school. [CLS] saunders, who was also hit after britain's most successful player in 30 years, had been for
+  six appearances since starting 11 with an 11–14 major league record, a 28-year high [CLS]
+
+Figure 8: Qualitative samples from NCM. Unconditional generation samples are on LM1B. Conditional
+generation samples use prompts from a held-out OWT validation set. Summarization and translation samples
+are on XSum and WMT14 De–En, respectively. Additional samples are provided in Appendix J.
+
+
+
+
+                                                              12
+5    Conclusion
+We introduce Next-Concept Modeling (NCM), a two-stage framework that first learns a discrete
+coarse-to-fine representation of text and then trains a transformer to generate its levels in order.
+Predicting all codes within each level in parallel provides a short sequential generation path. On
+unconditional generation across TinyStories, LM1B, and OpenWebText, NCM achieves competitive
+or better Gen. PPL than strong diffusion baselines with approximately 4–11× fewer function
+evaluations (NFE), while maintaining sample entropy close to the data. Generation is 10–21×
+faster on LM1B and OpenWebText. On conditional generation, NCM uses approximately 6–16×
+fewer NFE than unguided diffusion baselines on WMT14 translation and XSum summarization,
+achieving competitive translation quality and the best summarization scores. On XSum, it runs
+31× faster than the strongest diffusion baseline. It also uses approximately 4–5× fewer training
+tokens than strong diffusion baselines on LM1B and OpenWebText, including both tokenizer and
+generator training. Finally, preliminary scaling results on LM1B show that increasing the generator
+size improves generation quality at a fixed training-token budget.
+
+
+Acknowledgments
+We thank Yasa Baig, Dan Biderman, Bradley Brown, Francois Chaubard, Mayee Chen, Vivien
+Cheng, Catherine Deng, Owen Dugan, Sabri Eyuboglu, Simon Guo, Neel Guha, Junmiao Hu,
+Hangoo Kang, Jacky Kwok, Jerry Liu, Avanika Narayan, Divya Nori, Jon Saad-Falcon, Ben Spector,
+Stuart Sul, Tarun Suresh, Shayan Talaei, Roberto Torres, Ateh Wangia, and Michael Zhang for
+their helpful feedback and discussions.
+
+
+We gratefully acknowledge the support of NIH under Nos. U54EB020405 (Mobilize) and
+R01GM124443 (SimTK); NSF under Nos. CCF2247015 (Hardware-Aware), CCF1763315 (Beyond
+Sparsity), CCF1563078 (Volume to Velocity), 1937301 (RTML), 1900638 (Open Federated Virtual
+Assistants), and 2028602 (PPoSS); DARPA under No. HR00112520038 (Fallingwater); US DEV-
+COM ARL under Nos. W911NF-23-2-0184 (Long-context) and W911NF-21-2-0251 (Interactive
+Human-AI Teaming); NSTXL under No. N00164-23-9-G057-01 (Energy-Efficient AI Hardware);
+ONR under Nos. N000142312633 (Deep Signal Processing), N000142212426 (Misinformation
+Analysis), N000142012480 (Non-Euclidean Geometry), and N000142012275 (Data Programming);
+Stanford HAI under Nos. 247183, 215955, and 345077 (Evo); Google DeepMind; Google Research;
+Google Cloud; NXP, Xilinx, LETI-CEA, Intel, IBM, Microsoft, NEC, Toshiba, TSMC, ARM,
+Hitachi, BASF, Accenture, Ericsson, Qualcomm, Analog Devices, Salesforce, Total, the Laude
+Institute, Prime Intellect, Anthropic, the HAI-GCP Cloud Credits for Research program, the
+Stanford Data Science Initiative (SDSI), the Stanford Marlowe Computing Platform, Lambda Labs,
+Modal, Zoltan’s Flops, and members of the Stanford DAWN project: Meta, Google, and VMWare;
+and members of the Stanford SEAMS project: IBM and Felicis. HK is supported by the Knight
+Hennessy Scholars Program. IK is supported in part by the NSF GRFP. The U.S. Government is
+authorized to reproduce and distribute reprints for Governmental purposes notwithstanding any
+copyright notation thereon. Any opinions, findings, and conclusions or recommendations expressed
+in this material are those of the authors and do not necessarily reflect the views, policies, or
+endorsements, either expressed or implied, of NIH, ONR, DARPA, or the U.S Government.
+
+
+
+
+                                                13
+References
+ [1] Jacob Austin, Daniel D. Johnson, Jonathan Ho, Daniel Tarlow, and Rianne van den Berg.
+     Structured denoising diffusion models in discrete state-spaces. In A. Beygelzimer, Y. Dauphin,
+     P. Liang, and J. Wortman Vaughan, editors, Advances in Neural Information Processing
+     Systems, 2021.
+
+ [2] Aaron Lou, Chenlin Meng, and Stefano Ermon. Discrete diffusion modeling by estimating the
+     ratios of the data distribution. arXiv preprint arXiv:2310.16834, 2024.
+
+ [3] Subham Sekhar Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marroquin,
+     Justin T Chiu, Alexander Rush, and Volodymyr Kuleshov. Simple and effective masked
+     diffusion language models. arXiv preprint arXiv:2406.07524, 2024.
+
+ [4] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu,
+     Joseph E. Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large
+     language model serving with PagedAttention. arXiv preprint arXiv:2309.06180, 2023.
+
+ [5] Reiner Pope, Sholto Douglas, Aakanksha Chowdhery, Jacob Devlin, James Bradbury, Anselm
+     Levskaya, Jonathan Heek, Kefan Xiao, Shivani Agrawal, and Jeff Dean. Efficiently scaling
+     transformer inference. arXiv preprint arXiv:2211.05102, 2022.
+
+ [6] Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Hu, Jun Zhou, Yankai
+     Lin, Ji-Rong Wen, and Chongxuan Li. Large language diffusion models. arXiv preprint
+     arXiv:2502.09992, 2025.
+
+ [7] Inception Labs, Samar Khanna, Siddhant Kharbanda, Shufan Li, Harshit Varma, Eric Wang,
+     Sawyer Birnbaum, Ziyang Luo, Yanis Miraoui, Akash Palrecha, Stefano Ermon, Aditya Grover,
+     and Volodymyr Kuleshov. Mercury: Ultra-fast language models based on diffusion. arXiv
+     preprint arXiv:2506.17298, 2025.
+
+ [8] DiffusionGemma Team, Adrien Ali Taïga, James Assiene, Daniele Calandriello, Rahma
+     Chaabouni, João Gante, Tamara von Glehn, Nate Keating, Chris Knutsen, Martin Kukla, et al.
+     DiffusionGemma technical report. arXiv preprint arXiv:2608.00146, 2026.
+
+ [9] Jian Chen, Yesheng Liang, and Zhijian Liu. DFlash: Block diffusion for flash speculative
+     decoding. arXiv preprint arXiv:2602.06036, 2026.
+
+[10] Chengyue Wu, Hao Zhang, Shuchen Xue, Zhijian Liu, Shizhe Diao, Ligeng Zhu, Ping Luo,
+     Song Han, and Enze Xie. Fast-dLLM: Training-free acceleration of diffusion LLM by enabling
+     KV cache and parallel decoding. In International Conference on Learning Representations,
+     volume 2026, pages 57027–57051, 2026.
+
+[11] Xinyin Ma, Runpeng Yu, Gongfan Fang, and Xinchao Wang. dKV-Cache: The cache for diffusion
+     language models. Advances in Neural Information Processing Systems, 38:149009–149033, 2026.
+
+[12] Subham Sekhar Sahoo, Justin Deschenaux, Aaron Gokaslan, Guanghan Wang, Justin T Chiu,
+     and Volodymyr Kuleshov. The diffusion duality. In Forty-second International Conference on
+     Machine Learning, 2025.
+
+[13] Keya Hu, Linlu Qiu, Yiyang Lu, Hanhong Zhao, Tianhong Li, Yoon Kim, Jacob Andreas, and
+     Kaiming He. ELF: Embedded language flows. arXiv preprint arXiv:2605.10938, 2026.
+
+
+                                                14
+[14] Justin Deschenaux and Caglar Gulcehre. Beyond autoregression: Fast LLMs via self-distillation
+     through time. In International Conference on Learning Representations, volume 2025, pages
+     5007–5045, 2025.
+
+[15] Chanhyuk Lee, Jaehoon Yoo, Manan Agarwal, Sheel Shah, Jerry Huang, Aditi Raghunathan,
+     Seunghoon Hong, Nicholas M. Boffi, and Jinwoo Kim. Flow map language models: One-step
+     language modeling via continuous denoising. arXiv preprint arXiv:2602.16813, 2026.
+
+[16] Aaron Gokaslan and Vanya Cohen. OpenWebText corpus. http://Skylion007.github.io/
+     OpenWebTextCorpus, 2019.
+
+[17] Ciprian Chelba, Tomas Mikolov, Mike Schuster, Qi Ge, Thorsten Brants, Phillipp Koehn, and
+     Tony Robinson. One billion word benchmark for measuring progress in statistical language
+     modeling. arXiv preprint arXiv:1312.3005, 2013.
+
+[18] Marianne Arriola, Aaron Gokaslan, Justin T. Chiu, Zhihan Yang, Zhixuan Qi, Jiaqi Han,
+     Subham Sekhar Sahoo, and Volodymyr Kuleshov. Block diffusion: Interpolating between
+     autoregressive and diffusion language models. In The Thirteenth International Conference on
+     Learning Representations, 2025. URL https://arxiv.org/abs/2503.09573.
+
+[19] Chengyue Wu, Hao Zhang, Shuchen Xue, Shizhe Diao, Yonggan Fu, Zhijian Liu, Pavlo
+     Molchanov, Ping Luo, Song Han, and Enze Xie. Fast-dLLM v2: Efficient block-diffusion
+     LLM. In The Fourteenth International Conference on Learning Representations, 2026. URL
+     https://arxiv.org/abs/2509.26328.
+
+[20] Aaron van den Oord, Oriol Vinyals, and Koray Kavukcuoglu. Neural discrete representation
+     learning. arXiv preprint arXiv:1711.00937, 2018.
+
+[21] Keyu Tian, Yi Jiang, Zehuan Yuan, Bingyue Peng, and Liwei Wang. Visual autoregressive
+     modeling: Scalable image generation via next-scale prediction. Advances in neural information
+     processing systems, 37:84839–84865, 2024.
+
+[22] Hermann Kumbong, Xian Liu, Tsung-Yi Lin, Xihui Liu, Ziwei Liu, Daniel Y Fu, Ming-Yu Liu,
+     Christopher Re, and David W Romero. HMAR: Efficient hierarchical masked autoregressive
+     image generation. Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+     Recognition (CVPR), 2025.
+
+[23] Sander Dieleman, Laurent Sartran, Arman Roshannai, Nikolay Savinov, Yaroslav Ganin,
+     Pierre H. Richemond, Arnaud Doucet, Robin Strudel, Chris Dyer, Conor Durkan, Curtis
+     Hawthorne, Rémi Leblond, Will Grathwohl, and Jonas Adler. Continuous diffusion for
+     categorical data, 2022. URL https://arxiv.org/abs/2211.15089.
+
+[24] Patrick Pynadath, Jiaxin Shi, and Ruqi Zhang. CANDI: Hybrid discrete-continuous diffusion
+     models. arXiv preprint arXiv:2510.22510, 2025.
+
+[25] Jiajun Liang, Yucheng Liao, Yukang Cao, Jiazhe Wei, Ken Li, Wende Tan, Jiankun Zhang,
+     ZY Cui, Jingkang Yang, Liucheng Guo, et al. AURORA-LM: Autoencoding unified represen-
+     tation for continuous-latent diffusion language modeling. arXiv preprint arXiv:2608.02602,
+     2026.
+
+[26] Ali Razavi, Aaron van den Oord, and Oriol Vinyals. Generating diverse high-fidelity images
+     with VQ-VAE-2. arXiv preprint arXiv:1906.00446, 2019.
+
+                                               15
+[27] Patrick Esser, Robin Rombach, and Björn Ommer. Taming transformers for high-resolution
+     image synthesis. arXiv preprint arXiv:2012.09841, 2021.
+
+[28] Doyup Lee, Chiheon Kim, Saehoon Kim, Minsu Cho, and Wook-Shin Han. Autoregressive
+     image generation using residual quantization. In Proceedings of the IEEE/CVF Conference on
+     Computer Vision and Pattern Recognition (CVPR), pages 11523–11532, 2022.
+
+[29] Neil Zeghidour, Alejandro Luebs, Ahmed Omran, Jan Skoglund, and Marco Tagliasacchi.
+     SoundStream: An end-to-end neural audio codec. arXiv preprint arXiv:2107.03312, 2021.
+
+[30] Alexandre Défossez, Jade Copet, Gabriel Synnaeve, and Yossi Adi. High fidelity neural audio
+     compression. Transactions on Machine Learning Research, 2023. ISSN 2835-8856. Featured
+     Certification, Reproducibility Certification.
+
+[31] Justin Lovelace, Varsha Kishore, Chao Wan, Eliot Shekhtman, and Kilian Q. Weinberger.
+     Latent diffusion for language generation. In Advances in Neural Information Processing Systems,
+     volume 36, 2023.
+
+[32] Yizhe Zhang, Jiatao Gu, Zhuofeng Wu, Shuangfei Zhai, Joshua Susskind, and Navdeep Jaitly.
+     PLANNER: Generating diversified paragraph via latent language diffusion model. In Advances
+     in Neural Information Processing Systems, volume 36, 2023.
+
+[33] Lili Yu, Dániel Simig, Colin Flaherty, Armen Aghajanyan, Luke Zettlemoyer, and Mike Lewis.
+     MEGABYTE: Predicting million-byte sequences with multiscale transformers. Advances in
+     Neural Information Processing Systems, 36:78808–78823, 2023.
+
+[34] Sukjun Hwang, Brandon Wang, and Albert Gu. Dynamic chunking for end-to-end hierarchical
+     sequence modeling. In International Conference on Learning Representations, volume 2026,
+     pages 149273–149313, 2026.
+
+[35] Loïc Barrault, Paul-Ambroise Duquenne, Maha Elbayad, Artyom Kozhevnikov, Belen Alastruey,
+     Pierre Andrews, Mariano Coria, Guillaume Couairon, Marta R Costa-jussà, David Dale, et al.
+     Large concept models: Language modeling in a sentence representation space. arXiv preprint
+     arXiv:2412.08821, 2024.
+
+[36] Yuliang Liu, Yunchong Song, Yixuan Wang, Kewen Ge, Alex Lamb, Qipeng Guo, Kai Chen,
+     Bowen Zhou, and Zhouhan Lin. Next concept prediction in discrete latent space leads to
+     stronger language models. arXiv preprint arXiv:2602.08984, 2026.
+
+[37] Xingwei Qu, Shaowen Wang, Zihao Huang, Kai Hua, Fan Yin, Rui-Jie Zhu, Jundong Zhou,
+     Qiyang Min, Zihao Wang, Yizhi Li, et al. Dynamic large concept models: Latent reasoning in
+     an adaptive semantic space. arXiv preprint arXiv:2512.24617, 2025.
+
+[38] Cai Zhou, Chenyu Wang, Dinghuai Zhang, Shangyuan Tong, Yifei Wang, Stephen Bates, and
+     Tommi Jaakkola. Next semantic scale prediction via hierarchical diffusion language models.
+     Advances in Neural Information Processing Systems, 38:41496–41531, 2026.
+
+[39] Xiang Li, Kai Qiu, Hao Chen, Jason Kuen, Jiuxiang Gu, Bhiksha Raj, and Zhe Lin. ImageFolder:
+     Autoregressive image generation with folded tokens. arXiv preprint arXiv:2410.01756, 2024.
+
+[40] Ronen Eldan and Yuanzhi Li. Tinystories: How small can language models be and still speak
+     coherent english? arXiv preprint arXiv:2305.07759, 2023.
+
+
+                                                16
+[41] Ondřej Bojar, Christian Buck, Christian Federmann, Barry Haddow, Philipp Koehn, Johannes
+     Leveling, Christof Monz, Pavel Pecina, Matt Post, Herve Saint-Amand, Radu Soricut, Lucia
+     Specia, and Aleš Tamchyna. Findings of the 2014 workshop on statistical machine translation.
+     In Ondřej Bojar, Christian Buck, Christian Federmann, Barry Haddow, Philipp Koehn, Christof
+     Monz, Matt Post, and Lucia Specia, editors, Proceedings of the Ninth Workshop on Statistical
+     Machine Translation, pages 12–58, Baltimore, Maryland, USA, June 2014. Association for
+     Computational Linguistics. doi: 10.3115/v1/W14-3302.
+[42] Kishore Papineni, Salim Roukos, Todd Ward, and Wei-Jing Zhu. BLEU: a method for automatic
+     evaluation of machine translation. In Proceedings of the 40th annual meeting of the Association
+     for Computational Linguistics, pages 311–318, 2002.
+[43] Matt Post. A call for clarity in reporting BLEU scores. In Ondřej Bojar, Rajen Chatterjee,
+     Christian Federmann, Mark Fishel, Yvette Graham, Barry Haddow, Matthias Huck, Anto-
+     nio Jimeno Yepes, Philipp Koehn, Christof Monz, Matteo Negri, Aurélie Névéol, Mariana
+     Neves, Matt Post, Lucia Specia, Marco Turchi, and Karin Verspoor, editors, Proceedings of the
+     Third Conference on Machine Translation: Research Papers, pages 186–191, Brussels, Belgium,
+     October 2018. Association for Computational Linguistics. doi: 10.18653/v1/W18-6319.
+[44] Shashi Narayan, Shay B. Cohen, and Mirella Lapata. Don’t give me the details, just the
+     summary! Topic-aware convolutional neural networks for extreme summarization. In Ellen
+     Riloff, David Chiang, Julia Hockenmaier, and Jun’ichi Tsujii, editors, Proceedings of the
+     2018 Conference on Empirical Methods in Natural Language Processing, pages 1797–1807,
+     Brussels, Belgium, October-November 2018. Association for Computational Linguistics. doi:
+     10.18653/v1/D18-1206.
+[45] Chin-Yew Lin. ROUGE: A package for automatic evaluation of summaries. In Text Summariza-
+     tion Branches Out, pages 74–81, Barcelona, Spain, July 2004. Association for Computational
+     Linguistics.
+[46] Kaiwen Zheng, Yongxin Chen, Hanzi Mao, Ming-Yu Liu, Jun Zhu, and Qinsheng Zhang.
+     Masked diffusion models are secretly time-agnostic masked models and exploit inaccurate
+     categorical sampling. In International Conference on Learning Representations, 2025. URL
+     https://arxiv.org/abs/2409.02908.
+[47] Marianne Arriola, Yair Schiff, Hao Phung, Aaron Gokaslan, and Volodymyr Kuleshov. Encoder-
+     decoder diffusion language models for efficient training and inference. In The Thirty-ninth
+     Annual Conference on Neural Information Processing Systems, 2025.
+[48] Hongyi Yuan, Zheng Yuan, Chuanqi Tan, Fei Huang, and Songfang Huang. SeqDiffuSeq: Text
+     diffusion with encoder-decoder transformers. arXiv preprint arXiv:2212.10325, 2023.
+[49] Manan Agarwal, Sheel Shah, Chanhyuk Lee, Jaehoon Yoo, Jerry Huang, Seunghoon Hong,
+     Aditi Raghunathan, Jinwoo Kim, and Nicholas M Boffi. Posterior refinement: Fast language
+     generation via any-order flow maps. arXiv preprint arXiv:2606.24773, 2026.
+[50] Justin Deschenaux and Caglar Gulcehre. Language modeling with hyperspherical flows. arXiv
+     preprint arXiv:2605.11125, 2026.
+[51] Amanda Bertsch, Alex Xie, Graham Neubig, and Matthew R Gormley. It’s MBR all the way
+     down: Modern generation techniques through the lens of minimum Bayes risk. In Proceedings
+     of the Big Picture Workshop, pages 108–122, 2023.
+
+                                                17
+[52] Subham Sekhar Sahoo, Zhihan Yang, Yash Akhauri, Johnna Liu, Deepansha Singh, Zhoujun
+     Cheng, Zhengzhong Liu, Eric Xing, John Thickstun, and Arash Vahdat. Esoteric language
+     models: A family of any-order diffusion LLMs. arXiv preprint arXiv:2506.01928, 2025.
+
+
+
+
+                                           18
+Appendix Contents
+
+A Probabilistic Formulation and ELBO                                                                 21
+    A.1 Setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 21
+    A.2 Evidence Lower Bound . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 21
+
+B Datasets                                                                                           22
+
+C Architecture Details                                                                               22
+    C.1 Multiscale VQVAE Tokenizer . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 23
+    C.2 Generator (NCM) . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+
+D Baselines                                                                                          24
+    D.1 Unconditional Generation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+    D.2 Conditional Generation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 25
+    D.3 Reasoning . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 25
+
+E Additional Results                                                                                 25
+    E.1 Generative Perplexity Under Other Reference Models          . . . . . . . . . . . . . . . . . 25
+    E.2 Unconditional Generation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26
+
+F Ablations                                                                                          26
+    F.1 Latent Code Hierarchy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26
+    F.2 NCM Transformer . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 28
+    F.3 Code Corruption . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29
+    F.4 Sampling . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 30
+
+G Tokenizer Analysis                                                                                 31
+
+H Probing the Hierarchy                                                                              32
+
+I   Limitations & Future Work                                                                        35
+
+J Additional Qualitative Samples                                                                     35
+    J.1 WMT14 De–En . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 35
+    J.2   Generation Trajectory . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 36
+
+
+
+                                                   19
+J.3 XSum . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 36
+J.4 TinyStories . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 37
+J.5   LM1B . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 38
+J.6   OpenWebText . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 38
+J.7   Sudoku . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 40
+
+
+
+
+                                               20
+A      Probabilistic Formulation and ELBO
+We formulate NCM as a hierarchical latent-variable model and derive an evidence lower bound
+(ELBO) on its text log-likelihood. We consider unconditional generation with deterministic nearest-
+neighbor code assignments.
+
+A.1     Setup
+Following Section 3, let x ∈ T L be a sequence of L tokens from the text vocabulary T . The tokenizer
+assigns x a hierarchy r1:K
+                        ∗ (x) = (r ∗ , . . . , r ∗ ), where r ∗ ∈ {1, . . . , |V |}ℓk and ℓ < · · · < ℓ = L. We
+                                   1            K            k                  k          1           K
+fix the tokenizer’s parameters and use a fixed rule to break nearest-neighbor ties, so this assignment
+is deterministic. For any code hierarchy r1:K , define its cumulative reconstruction by
+                                                          k
+                                                          X
+                                       (k)
+                                                                                           ẑ (0) = 0,               (11)
+                                                                           
+                                  ẑ         (r1:k ) =          Rj ej (rj ) ,
+                                                          j=1
+
+where ej is the codebook lookup and Rj is the reconstruction operator of Section 3.3. The decoder
+defines a likelihood over text,
+                                                                L
+                                                                Y
+                                                                      pψ xn | ẑ (K) (r1:K ) ,                       (12)
+                                                                                            
+                                   pψ (x | r1:K ) =
+                                                                n=1
+and the generator defines a prior over hierarchies,
+                                              K
+                                              Y                         ℓk
+                                                                      K Y
+                                                                    Y
+                                                   pθ rk | ẑ (k−1) =      pθ rki | ẑ (k−1) ,                       (13)
+                                                                                            
+                          pθ (r1:K ) =
+                                             k=1                                 k=1 i=1
+
+where ẑ (k−1) = ẑ (k−1) (r1:k−1 ).
+                                  Each factor is normalized for every preceding hierarchy, so their
+product defines a normalized prior. The joint distribution and marginal text likelihood are
+                                                                  X
+           pθ,ψ (x, r1:K ) = pψ (x | r1:K )pθ (r1:K ), pθ,ψ (x) =   pψ (x | r1:K )pθ (r1:K ).  (14)
+                                                                                            r1:K
+
+
+A.2     Evidence Lower Bound
+Use the tokenizer’s deterministic assignment as a point-mass variational distribution,
+                                                                     ∗
+                                             q(r1:K | x) = 1{r1:K = r1:K (x)}.                                       (15)
+This distribution has zero entropy. Its ELBO therefore reduces to the log joint probability of the
+tokenizer’s assigned hierarchy:
+                         LELBO (x) ≡ Eq(r1:K |x) [log pθ,ψ (x, r1:K ) − log q(r1:K | x)]
+                                                        ∗                ∗
+                                         = log pψ (x | r1:K ) + log pθ (r1:K )
+                                               X                                                                     (16)
+                                         ≤ log     pψ (x | r1:K )pθ (r1:K ) = log pθ,ψ (x).
+                                                   r1:K
+
+The inequality follows because the marginal likelihood sums nonnegative terms and includes the
+          ∗ . Writing ẑ (k) = ẑ (k) (r ∗ ) and substituting (12) and (13) gives
+term for r1:K           ∗               1:k
+
+                                        L                                          ℓk
+                                                                                 K X
+                                                                   (K)                                    (k−1) 
+                                        X                                        X
+                      LELBO (x) =              log pψ xn | ẑ∗               +              log pθ rk∗i | ẑ∗        (17)
+                                        n=1                                      k=1 i=1
+                                        |                {z              }       |                 {z           }
+                                                reconstruction                               generation
+
+
+                                                                    21
+where rk∗i is the ith code at level k in the assigned hierarchy. The gap to the log-likelihood is
+exactly
+                     log pθ,ψ (x) − LELBO (x) = DKL (q(r1:K | x) ∥ pθ,ψ (r1:K | x))
+                                                             ∗                               (18)
+                                              = − log pθ,ψ (r1:K | x) ≥ 0.
+Thus, the bound is tight if and only if the posterior assigns probability one to the tokenizer’s
+hierarchy. With finite softmax logits, the prior and decoder assign positive probability to every
+hierarchy and text sequence, so the bound and gap are finite.
+For a frozen tokenizer and decoder, only the generation term depends on θ. With clean conditioning
+and α = 0, the generator
+                       P loss in Section 3.4 is the negative generation term divided by the total
+number of codes N = K    k=1 ℓk ; minimizing it therefore maximizes this ELBO over θ. Conditioning
+corruption and nonuniform level weighting modify that objective. The bound uses the complete
+hierarchy; nested dropout and the quantization losses used to train the tokenizer are not included
+in it.
+
+
+B     Datasets
+We train a separate tokenizer and generator for each of six datasets, grouped by task as in Section 4.
+Table 4 summarizes them.
+
+Dataset                         Abbreviation Task              Text tokenizer     Context c       Target L
+OpenWebText [16]                OWT            Unconditional   GPT-2             Null prefix       1,024
+One Billion Word [17]           LM1B           Unconditional   bert-base-uncased Null prefix        128
+TinyStories [40]                –              Unconditional   Custom BPE        Null prefix        128
+Extreme Summarization [44]      XSum           Summarization GPT-2                Article (512)      48
+WMT 2014 German–English [41]    WMT14          Translation   Qwen3-0.6B           German (96)        64
+Sudoku [50]                     –              Reasoning       FMLM+ [49]         Puzzle             89
+
+Table 4: Datasets. Target length L is the number of target tokens, which equals the length ℓK of
+the finest level; context lengths are in tokens. “–” indicates that we use the full dataset name rather
+than a separate abbreviation.
+
+
+C     Architecture Details
+A tokenizer and a generator are trained for each dataset (Appendix B): the tokenizer first, and it is
+then frozen as the generator trains. For XSum and WMT14, the generator is initially trained with
+unpaired text, then with source–target pairs. The target length schedule and level schedule remain
+unchanged. Table 5 describes the tokenizers’ architectures and training. Table 6 provides details
+about the generators’ architectures, training, and sampling. The datasets are listed in the same order
+as in Table 1. All experiments employed seed 42, BF16 mixed-precision and torch.compile.
+
+
+
+
+                                                  22
+C.1    Multiscale VQVAE Tokenizer
+
+         Setting                 OWT      LM1B       TinyStories     XSum       WMT14 Sudoku
+         Architecture
+         Text vocab. size        50,304    30,528          8,192     50,304     151,680       12
+         Target length L          1,024      128            128         48         64        89
+         Levels K                   32       12              12          8         11        12
+         Codebook vocab. Vk       4,096     8,192          4,096      4,096      4,096        16
+         Latent width d            384       384            384        384        384        256
+         Encoder blocks             0         0              0          0          0          0
+         Decoder blocks             1         4              1           1         1          1
+         Decoder attn. heads        6         6              6           6          6          4
+         Dropout                   0.3       0.1            0.3        0.1        0.1        0.3
+         Parameters              111.2M   111.40M         36.43M     60.63M     144.00M    14.90M
+         Training
+         Training updates        78,432   25,957           30,000     120,001    60,000     10,000
+         Global batch size         768     2,048            4,096      4,096      4,096      1,024
+         Peak learning rate     3 × 10−4 3 × 10−4         5 × 10−4   5 × 10−4   5 × 10−4   5 × 10−4
+         Learning-rate floor    3 × 10−5 3 × 10−5         5 × 10−5   5 × 10−5   5 × 10−5   5 × 10−5
+         Warmup updates           1,000    1,000            1,000      1,000      1,000       500
+         AdamW β1                  0.9       0.9              0.9       0.9        0.9        0.9
+         AdamW β2                 0.95      0.99             0.95      0.95       0.95       0.99
+         Weight decay             0.01     0.05              0.01      0.01       0.01       0.01
+         Gradient clipping norm     1         1                1         1          1           1
+         Codebook EMA decay        0.99     0.99             0.95      0.95       0.95        0.99
+         Nested dropout            0.5   0.7 / 0.3           0.5        0.5        0.5         0.5
+
+
+Table 5: Tokenizers. Text vocabulary size includes unused padding rows. Nested dropout is the
+probability of dropping the finest levels; LM1B trains on the complete and a truncated hierarchy,
+weighted 0.7 and 0.3.
+
+
+
+
+                                                     23
+C.2       Generator (NCM)
+
+Setting                   OWT        LM1B      TinyStories     XSum        WMT14         Sudoku
+Architecture
+Parameters               94.65M      97.07M       88.61M       88.02M       119.96M      25.46M
+Transformer blocks          12         12           12           12            12           8
+Hidden width               768         768          768          768          768          512
+Attention heads            12          12           12            12           12           8
+Prefix length P             1           1            1           512           96          91
+RoPE base                  105         104          105          105          105          104
+Dropout                    0.1         0.1          0.1          0.3          0.1          0.1
+Training
+Training updates          250,000    100,000      50,000       350,000       150,000      50,000
+Global batch size           256        512         2,048         512          2,048        1,024
+Peak learning rate       3 × 10−4   3 × 10−4     3 × 10−4     3 × 10−4      3 × 10−4     3 × 10−4
+Learning-rate floor      3 × 10−5   3 × 10−5     3 × 10−5     3 × 10−5      3 × 10−5     3 × 10−5
+Warmup updates              500       1,000         500          500           500         1,000
+AdamW β1                    0.9         0.9         0.9          0.9            0.9         0.9
+AdamW β2                   0.95        0.95        0.95          0.95          0.95        0.99
+Weight decay                0.1        0.1          0.1          0.1          0.01          0.01
+Gradient clipping norm       1           1           1            1              1            1
+
+
+Table 6: Generators. The prefix holds the source (XSum, WMT14), the puzzle (Sudoku), or a
+null token. Training settings for XSum and WMT14 describe conditional training. “–” means not
+applicable.
+
+
+Training-token accounting. Budgets count full-length text positions, including padding and
+repeated data exposure. For LM1B, tokenizer and generator training total 25,957 × 2,048 × 128 +
+100,000 × 512 × 128 ≈ 13.36B positions (6.80B+6.55B). For OpenWebText, the corresponding total
+is 78,432 × 768 × 1,024 + 250,000 × 256 × 1,024 ≈ 127.22B positions (61.68B+65.54B), approximately
+4× fewer than the 500B-plus tokens used by MDLM and DUO [3, 12]. Scaling plots exclude the
+shared tokenizer. These budgets measure token exposure, not FLOPs.
+Each generator block contains self-attention followed by a feed-forward layer. The resized re-
+construction ẑ (k−1) and prompt embeddings are projected to the hidden width before the first
+block. Attention heads have dimension 64, equal to the hidden width divided by the number of
+heads.
+
+
+D     Baselines
+This appendix states where every baseline number in Section 4 comes from and how the baselines
+were sampled.
+
+D.1       Unconditional Generation
+LM1B. All LM1B baselines (RDLM, CANDI, MDLM, DUO, and FLM) use the checkpoints of
+Lee et al. [15], who trained them for the same 1M iterations on 66B tokens. We sample each with
+T ∈ {8, 12, 16, 32, 64, 128} steps under the protocol of Section 4.2. RDLM is omitted from Figure 5
+because its Gen. PPL lies far above the other curves.
+
+                                                24
+TinyStories. We train the AR, DUO, MDLM, and CANDI baselines ourselves using the same
+transformer architecture and training settings as the TinyStories NCM generator (Table 6). For
+FMLM+, we use the publicly released checkpoint [49].
+
+OpenWebText. The MDLM, DUO, SEDD, and Eso-LM baselines use publicly available check-
+points [3, 12, 2, 52]. We sample each with T ∈ {8, 16, . . . , 1,024} steps under the same protocol.
+
+D.2     Conditional Generation
+The MDLM, DUO, E2D2, and SeqDiffuSeq results of Table 2 are taken from Hu et al. [13] (marked
+† ), with their configurations. We use publicly available checkpoints of ELF (with and without
+
+guidance) and AURORA-LM [25] to reproduce their quality results and measure sampling time
+under the setup of Section 4.6. For conditional baselines without released checkpoints, we benchmark
+sampling time using randomly initialized weights with the same model architecture and task-specific
+sampling configuration reported for those tasks. These runs are used only for timing; their quality
+results are taken from the published results.
+
+D.3     Reasoning
+We follow the Sudoku evaluation setup of S-FLM [50], reporting the percentage of completely
+solved boards at three difficulty levels: easy, medium, and hard, with 40, 35, and 30 provided clues,
+respectively. The baseline results in Table 3 are taken from Agarwal et al. [49].
+
+
+E     Additional Results
+This appendix checks that the LM1B comparison does not depend on the scoring model (Ap-
+pendix E.1) and collects unconditional generation results from Section 4 (Appendix E.2).
+
+E.1    Generative Perplexity Under Other Reference Models
+To check whether the LM1B comparison depends on the reference model, we evaluate the same
+checkpoints and sampling settings as Figure 5 under four additional autoregressive models. Table 7
+averages five sampling seeds with 256 samples each. NCM has the lowest average Gen. PPL, using
+approximately 5× fewer training tokens and 12 sampling steps rather than 128.
+
+      Model    Size   Tokens   Mistral-7B ↓   Llama-3.1-8B ↓   Gemma-2-9B ↓   Qwen-3-14B ↓   Avg. ↓
+
+      RDLM 108M        66B       179.54          315.40          1293.67         379.00      541.90
+      CANDI 139M       66B       67.75            99.96          208.59          125.87      125.54
+      MDLM 139M        66B       63.63            91.84          186.53          115.25      114.31
+      DUO   139M       66B       55.08            77.24          141.16          96.59        92.52
+      FLM   139M       66B       68.08            89.20           150.11         110.98      104.59
+      NCM     97M     13.36B      59.69           75.23          106.41          91.64       83.24
+
+
+Table 7: LM1B Gen. PPL (lower is better). Baselines use 128 steps; NCM uses 12. Size:
+generator parameters; Tokens: training budget (including tokenizer training for NCM); Avg.:
+unweighted mean.
+
+
+
+                                                    25
+E.2     Unconditional Generation
+Table 8 collects the unconditional results of all three datasets at the largest NFE reported for each
+baseline. We report generative perplexity under GPT-2-large alongside mean per-sample unigram
+entropy H to assess sample quality and diversity together. The ground-truth data are included as a
+reference for both metrics.
+
+                               TinyStories                 LM1B                     OpenWebText
+        Type Method NFE ↓ Gen. PPL ↓         H      NFE ↓ Gen. PPL ↓   H      NFE ↓ Gen. PPL ↓    H
+        –       Data      –        9.67      3.96     –      53.51     4.31     –       14.15     5.44
+                Sample   128       8.89      4.01     –       –         –     1024      35.45     5.58
+        AR
+                Greedy   128       5.34      4.06     –       –         –     1024      1.07      1.65
+                MDLM     128       17.89     4.03    128    115.45     4.33   1024      105.15    5.63
+                Duo      128       19.63     4.01    128    97.30      4.30   1024      77.69     5.55
+        Disc.
+                SEDD      –          –         –      –       –          –    1024      101.43    5.61
+                Eso-LM    –          –         –      –       –          –    1024      131.96    5.65
+              RDLM        –          –         –     128    295.40     4.35     –         –         –
+              CANDI      128       22.74     4.03    128    124.64     4.34   1024      143.13    5.71
+        Cont. FLM        128       57.50     4.17    128    112.33     4.33   1024      62.23     5.33
+              S-FLM      128       95.25     4.08     –       –          –    1024      123.87    5.52
+              FMLM+      128       15.43     3.90     –       –          –     128      66.60     5.21
+        Ours    NCM      12        15.41     3.98    12      93.05     4.31    32       83.12     5.42
+
+
+Table 8: Unconditional generation on TinyStories, LM1B, and OpenWebText. Gen. PPL
+under GPT-2-large and mean per-sample unigram entropy H; the Data row scores ground-truth
+text; “–” means no result on that dataset. Lower Gen. PPL at an entropy below that of the data, as
+for FLM and FMLM+ on OpenWebText, partly reflects reduced diversity.
+
+
+F     Ablations
+We ablate the key design choices in NCM: the latent code hierarchy (Appendix F.1), the NCM
+transformer (Appendix F.2), code corruption (Appendix F.3), and sampling (Appendix F.4). Unless
+otherwise stated, we run our ablations on TinyStories [40]. Each experiment changes one design
+choice and keeps every other setting fixed.
+
+F.1     Latent Code Hierarchy
+F.1.1    Number of Levels
+The number of levels K sets the number of generation steps. We compare ladders on TinyStories
+with K ∈ {4, 8, 16, 32}. Each uses a linear schedule starting at 1 and ending at 128.
+
+Setup. Each ladder has its own tokenizer with 4,096 codes per level, trained for 40k steps. We then
+train an NCM transformer on top of each tokenizer for 10k steps. We do not use code corruption,
+so the ladder is the only meaningful difference between runs. We compute Gen. PPL using 512
+generated samples and multiple sampling seeds, with GPT-2-Large as the reference model. Reference
+text has Gen. PPL 9.67 and unigram entropy H = 3.96.
+
+
+                                                      26
+                        Over training                                  Gen. PPL of final checkpoint                                          Tokenizer reconstruction
+                                                                       H=4.22                                                          100
+                                        K=4
+             300                        H=4.22
+                                                                 300
+
+
+
+
+                                                                                                                Recon. acc. (%) ↑
+                                                                                                                                        75
+
+
+
+Gen. PPL ↓                                         Gen. PPL ↓
+             200                                                 200    −52%
+
+                                        K=8                                             H=4.15                                          50
+                                        H=4.15
+                                                                                             H=4.11
+                                                                                   −32%
+                                        K=16                     100                                  H=4.08                            25
+                                                                                                                                                                        K=4
+             100                        H=4.11
+                                                                                              −20%
+                                                                                                                                                                        K=8
+                                        K=32                                                                                                                            K=16
+                                        H=4.08                                                                                                                          K=32
+                                                                                                                                         0
+                   2    4    6   8 10                                    4          8         16       32                                    1     32    64    96            128
+                       Training step (k)                                                NFE                                                          Tokens kept
+
+
+                         (a) Training                                        (b) Final checkpoint                                                (c) Reconstruction
+
+Figure 9: Ablation on the number of levels in the hierarchy. (a) Gen. PPL against training
+steps. (b) Gen. PPL at the final checkpoint. (c) Cumulative reconstruction accuracy per level.
+
+
+Gen. PPL decreases as the number of levels in the hierarchy grows (Figure 9). It continues to
+improve at the largest hierarchy tested, but with diminishing returns: further increases in the
+number of levels yield smaller gains. Panel (c) shows cumulative reconstruction accuracy; longer
+hierarchies achieve slightly better final reconstruction, although all four reconstruct at least 99.95%
+of tokens. These ablations do not use code corruption, so errors can accumulate across levels; adding
+corruption may narrow the gaps between hierarchies.
+
+F.1.2              Level Schedule
+The level schedule determines how the number of codes grows from coarse to fine. We consider six
+schedules: linear, quadratic, square-root, logarithmic, exponential, and cosine. Each has K = 12
+levels, starting at 1 code and ending at 128; code lengths are rounded to integers. Figure 10
+compares Gen. PPL over training, Gen. PPL of the final checkpoint at 10k steps, and the schedules
+themselves.
+                        Over training                                  Gen. PPL of final checkpoint                                                 Level schedules
+                                                                                                                                                 Linear        Logarithmic
+             200                           Sqrt                                      196.7                                                       Quadratic     Exponential
+                                                                                    H=4.21                                                       Square-root   Cosine
+                                           Log                   200                       168.2                                       128
+
+
+
+
+                                                                                                                     Codes per level
+                                                                                          H=4.20
+
+
+
+
+Gen. PPL ↓                                          Gen. PPL ↓
+                                                                                                                                        96
+             100                                                        88.4
+                                                                                                        77.8                            64
+                                           Lin.                  100 H=4.09 59.6
+                                           Cos.                                                   57.7 H=4.08
+                                                                               H=4.06            H=4.05
+
+                                           Quad.
+                                                                                                                                        32
+                                           Exp.
+              50                                                                                                                         1
+                                                                   0
+                   2     4    6    8 10                                 Lin. Quad. Sqrt      Log Exp. Cos.                                   1       4        8              12
+                       Training step (k)                                         Level schedule                                                     Hierarchy level
+
+                         (a) Training                                          (b) Final checkpoint                                                  (c) Schedules
+
+Figure 10: Ablation on the level schedule. (a) Gen. PPL against training steps. (b) Gen. PPL
+of the final checkpoint at 10k steps (bars). (c) Code lengths for six level schedules. H is the final
+per-sample unigram entropy.
+
+
+
+                                                                                   27
+F.2                     NCM Transformer
+F.2.1                    Attention Pattern
+For comparison purposes on TinyStories, we used the exact same 12-level tokenizer, generator,
+and selected conditioning-corruption recipe (mean rate 0.50; Appendix F.3) as in the previous
+example. The input blocks at each level are aggregated from the earlier levels. Block-causal
+attention also includes information from earlier blocks; a two-level window includes the preceding
+block. Block-diagonal attention is the best option for generating low PPL and fast sampling time
+with good preservation of entropy (Table 9). We therefore use this in NCM.
+
+                                         Attention                         Gen. PPL ↓            H       Time (s) ↓
+                                         Block-causal                        19.63           4.01              7.90
+                                         Sliding window (2 levels)           17.84           3.99              6.83
+                                         Block-diagonal (ours)               15.41           3.98              5.65
+
+
+Table 9: Attention ablation on TinyStories. Quality uses the selected corruption recipe; H
+is mean unigram entropy. Times are for 1,024 TinyStories samples at 12 steps with batch size 16
+(Section 4.6); block-causal and sliding-window times are 1.40× and 1.21× the block-diagonal time.
+
+                                                                                        (c) Sliding window
+                        (a) Causal                     (b) Block-causal                      (2 levels)               (d) Block-diagonal (NCM)
+              1                                  1                                 1                                  1
+              2                                  2                                 2                                  2
+
+
+
+
+Query level
+              3                                  3                                 3                                  3
+
+
+
+
+              4                                  4                                 4                                  4
+
+
+
+                  1 2    3           4               1 2   3           4               1 2   3           4                1 2   3           4
+                         Key level                         Key level                         Key level                          Key level
+
+Figure 11: Attention over cumulative-reconstruction blocks. Allowed query–key pairs
+are colored by key level. (a) Causal (reference). (b) Block-causal. (c) Two-level sliding window.
+(d) Block-diagonal (NCM): attention stays within the current block, whose input already summarizes
+earlier levels.
+
+
+F.2.2                    Context Encoder
+
+To support conditional generation, NCM uses a                                                            T5-small  Ours
+prefix LM. One design decision is how to encode                                        Metric            encoder (VQ-VAE)              ∆
+the prefix. On XSum, we compare the frozen
+                                                                                       ROUGE-1 ↑             34.89    34.79          +0.10
+encoder from pretrained T5-small with the encoder                                      ROUGE-2 ↑             12.92    12.77          +0.15
+from our VQ-VAE (Table 10). T5-small achieves                                          ROUGE-L ↑             28.19    27.95          +0.24
+slightly higher ROUGE scores: +0.10 ROUGE-1,                                           Parameters            123.4M   88.0M         +35.3M
++0.15 ROUGE-2, and +0.24 ROUGE-L. However,
+it adds 35.3M parameters, approximately a 40%
+                                                                                  Table 10: Context encoder: frozen T5-
+increase over our 88M model, and introduces a
+                                                                                  small vs. our VQ-VAE encoder. Both use
+dependency on an externally pretrained language
+                                                                                  the constant-LR recipe and greedy decoding at
+model. We therefore use the encoder from our
+                                                                                  8 NFE, on the full XSum test set.
+VQ-VAE in all reported experiments.
+
+
+                                                                             28
+F.2.3                        Loss Weighting
+The loss weights level k by wk ∝ ℓ−α  k : α = 0 weights every code equally, as the ELBO does
+(Appendix A.2), and α = 1 every level equally. On TinyStories (setup of Appendix F.3), raising α
+from 0 to 1.5 moves the coarse levels’ share of the loss from 19% to 63% and lowers their validation
+loss, yet Gen. PPL after 10k steps stays at 18.9–19.0 for α ≤ 1 and rises slightly to 19.4 at 1.5
+(Figure 12).
+
+                             Loss share per level                          Gen. PPL over training                                                  Coarse-level validation loss
+                    20                          α=0
+                                                                                                                                          4.20     19.0
+
+
+
+
+                                                                                                                     Loss, levels 2−6 ↓
+                                                α=0.25                35
+
+
+
+
+Share of loss (%)
+                                                                                                                                                            18.9
+                    15
+
+
+
+                                                         Gen. PPL ↓
+                                                α=0.5                                     H=3.96−3.97                                     4.15                     18.9
+                                                α=0.75
+                                                                      30                   at 10k steps
+                                                                                                                                                                          19.0
+                    10                          α=1                                                                                                                              18.9
+                                                                      25                                                                  4.10
+                                                                                                                                                                                            19.4
+                     5                          α=1.5
+
+                                                                      20                                                                  4.05         labels: Gen. PPL at 10k
+                     0
+                         2    4     6 8 10 12                              2       4    6     8          10                                             0          0.5             1        1.5
+                                  Predicted level                              Training step (k)                                                                           α
+
+Figure 12: Loss weighting on TinyStories. Left: loss share per level. Middle: Gen. PPL during
+training. Right: coarse-level validation loss, labelled with Gen. PPL after 10k steps.
+
+
+F.3                      Code Corruption
+During training, NCM uses teacher forcing and conditions                                                                                      Gen. PPL of final checkpoint
+on clean input codes; during inference, it conditions on its
+                                                                                                                50
+own generated codes. This difference creates opportunities                                                                                    H=4.06
+
+
+for errors to accumulate across levels. Since codes within
+
+                                                                                                   Gen. PPL ↓
+                                                                                                                40
+each level are generated in parallel, multiple errors can
+enter the reconstruction used to generate the next level.                                                       30
+We address this mismatch by making the model resilient                                                                                                       H=4.00
+                                                                                                                                                                          recipe
+                                                                                                                                                                                         H=3.96
+
+
+to incorrect input codes: during training, we replace some                                                      20
+                                                                                                                                                         H=3.97
+input codes with entries sampled uniformly from the same                                                                                                              H=3.97            H=3.95
+
+
+level’s codebook, at a different rate per level. Targets                                                                                  0        0.25       0.5                        0.75
+                                                                                                                                                 Mean corruption rate
+remain clean.
+                                                                                                   Figure 13: Effect of code corruption. Gen.
+This ablation and the loss-weighting ablation (Ap- PPL after 10k steps vs. mean corruption rate.
+pendix F.2.3) use TinyStories (128 tokens) and the 12-level Nonzero rates use a shifted linear decreasing
+                                                                 schedule; H is entropy.
+tokenizer of Table 5. Each 88.6M NCM transformer is
+trained for 10,000 steps with a batch size of 1,024. Gen. PPL is averaged over five sampling seeds
+with 256 samples each. The degree of corruption matters: moderate corruption greatly improves
+generation quality, while excessive corruption weakens the conditioning signal and degrades quality
+(Figure 13). The type of corruption, including how rates vary across levels and which replacement
+codes are selected, also affects how closely training resembles generation. We use a linearly decreasing
+corruption rate across levels. Corruption based on the model’s actual errors may better match
+inference conditions; we leave this to future work.
+
+
+
+
+                                                                                  29
+F.4        Sampling
+The quality of NCM’s generations may be enhanced during inference time without retraining. The
+two types of decoding choices we examine in Table 2 are Classifier-Free Guidance and Minimum
+Bayes Risk (MBR) Decoding.
+Classifier-Free Guidance. For Classifier-Free Guidance, we use VAR’s approach [21] to allow for
+Classifier-Free Guidance in multiscale generations by combining conditional and unconditional logits
+from each scale using a guidance weight w. As illustrated in Figure 14, Classifier-Free Guidance
+results in less improvement on XSum summarization compared to WMT14 translation.
+                    BLEU ↑                       ROUGE-1 ↑                          ROUGE-2 ↑                      ROUGE-L ↑
+                                                                      13.0
+
+
+  23.5                                                                                               28.0
+                                   35.0
+                                                                      12.6
+
+  23.0
+
+                                   34.5                                                              27.5
+                                                                      12.2
+  22.5
+           0          1       2             0           1        2             0        1       2             0        1       2
+
+                                                           Guidance weight w
+
+Figure 14: Effect of classifier-free guidance. De–En BLEU and XSum ROUGE-1/2/L as a
+function of the guidance weight w. All three ROUGE metrics peak at w = 0.5, the setting reported
+in Table 2; BLEU, which is length-corrected, peaks later at w = 1.0.
+
+Minimum Bayes Risk Decoding. We draw K candidates and keep the one with the highest
+average similarity to the rest. Figure 15 sweeps K: all three metrics rise monotonically with
+diminishing returns, gaining 4.48 ROUGE-1 in total from K = 1 to K = 256. The main-table settings
+use K = 16 on XSum (128 NFE) and K = 12 on WMT14 (132 NFE), yielding 29.6 ROUGE-L and
+25.2 BLEU, respectively.
+                   BLEU ↑                       ROUGE-1 ↑                          ROUGE-2 ↑                      ROUGE-L ↑
+                                   39
+                                                                      15
+  27
+                                   38                                                                30
+  26
+                                   37                                 14
+  25                                                                                                 29
+                                   36
+  24                                                                  13
+                                   35                                                                28
+  23
+
+  22                               34                                 12                             27
+       1       4     16   64 256        1       4     16    64 256         1       4   16   64 256        1       4   16   64 256
+
+                                                    MBR candidates K (log scale)
+
+Figure 15: Effect of MBR candidate count. De–En BLEU and XSum ROUGE-1/2/L against
+the number of sampled candidates K, on a log-spaced axis. Quality improves as more candidates
+are sampled. NCM’s low sampling cost allows multiple candidates within the NFE budget that
+diffusion baselines use for a single sample, enabling extra inference compute to be used for sampling
+and verification through MBR selection.
+
+
+                                                                     30
+G     Tokenizer Analysis
+Reconstruction & Utilization. Figure 16 shows how the reconstruction builds up across the
+hierarchy of the OpenWebText (OWT) tokenizer. After each level k, we decode the cumulative
+reconstruction ẑ (k) and measure exact token accuracy on held-out data. We also report the fraction
+of each level’s codebook entries used and its effective codebook utilization, measured by codebook
+perplexity. Reconstruction accuracy increases across levels, reaching 99.99% at full resolution.
+          Reconstruction acc. (%)                  Codebook utilization (%)          Codebook perplexity (% | raw)
+100                                      100                                       100                             4k
+                            99.99%
+ 75                                       75                                        75                             3k
+
+ 50                                       50                                        50                             2k
+
+ 25                                       25                                        25                             1k
+
+  0                                        0                                         0                             0
+      0       8      16     24      31         0       8      16     24       31         0   8     16    24   31
+                  Level k                                  Level k                               Level k
+
+Figure 16: Reconstruction and utilization by level. Left: exact token accuracy after decoding
+levels 0 through k at the final tokenizer checkpoint. Middle: percentage of the entries of each level’s
+codebook selected at least once. Right: effective codebook utilization, measured by the perplexity
+of each level’s code distribution, as a percentage of the codebook size.
+
+
+Tokenizer Failure Cases. We investigate typical tokenizer reconstruction errors using the OWT
+tokenizer as a case study. As reported in Table 1, it achieves 99.99% exact token reconstruction
+accuracy, corresponding to approximately 0.01% incorrectly reconstructed tokens. Table 11 summa-
+rizes representative errors, including substitutions of named entities and numerals, as well as errors
+in diacritics, usernames, markup, and word boundaries.
+
+Category             Original → reconstruction, in context
+
+Named entities       . . . City Metro Sydney Melbourne Melbourne Brisbane Adelaide Adelaide Perth . . .
+Diacritics           . . . ev sahibi takım takäm skoru . . . geriye düştü. düştüü . . .
+Numerals             . . . 1957 1956 1957 1955 1954 1955 1953 . . . 1949 1948 1947 1947 1946 1946 . . .
+Usernames            . . . 10 maxion 10 fishingcat 10 da_lan_xiong_mao da_op_xiong_mao . . .
+Markup               . . . < head > < < > title > < #BlackoutUK . . .
+Word boundaries      . . . Biological and Physical SciencesJournal Sciences Journal of Chemical . . .
+
+Table 11: Tokenizer reconstruction errors on OpenWebText, by category. Struck-through grey:
+original; red: its reconstruction.
+
+
+
+
+                                                           31
+H      Probing the Hierarchy
+We use the 12-level TinyStories model. TinyStories [40] contains short, simple stories that make
+changes easy to follow. We encode 128-token stories with the VQ-VAE to obtain codes at each level
+of the hierarchy.
+Shared Structure, Different Realizations. We fix the first three levels of the hierarchy and
+randomly sample the remaining nine levels using two seeds. As shown in Figure 17, the outputs
+tend to preserve the broad theme of the source story while varying names, objects, and wording.
+Story A retains a girl seeking warmth and a garment that moves; Story B retains Tim’s alarm at
+something in the sky.
+
+ Source story A                                    128 tokens          Source story B                                   128 tokens
+ One day, a little girl went outside to play. It was very cold,        One day, a boy named Tim saw a weird jet in the sky. It
+ and she started to shiver. She saw an enormous tree with              was big, shiny, and made a loud noise. Tim was scared and
+ big leaves. The girl thought the leaves could be a wrap to            ran to his mom. "Mom, look at the weird jet!" he said.
+ keep her warm. So, she took one leaf and wrapped it                   Mom looked up and saw it too. She told Tim not to worry,
+ around her. As she played, she found a big box under the              but he was still scared. Tim went to his friend, Sue. "Sue,
+ tree. She opened the box and saw many wraps inside. She               did you see the weird jet?" he asked. Sue nodded and said,
+ was very happy and took one wrap to wear. Now, she was                "Yes, it was big and loud." They both wanted to know
+ warm and not shivering anymore. But then, something                   what it was. They decided to ask Mr. Brown, who knew a
+ unexpected happened. The wraps in the box started to                  lot about planes
+ move! They were not wraps at all, but a
+
+ Story A, seed 1                               44% changed             Story B, seed 1                               51% changed
+ One day, a girl named Sue went outside to play. It was a              One day, a boy named Tim saw a terrible cloud in the sky.
+ cold, and Sue started to shiver. She a big tree with many             It was big and made a loud noise. It was thunder. Tim was
+ leaves. Sue thought it would be a shelter to stay dry. So,            scared. "Mom, look at the big cloud!" he said. His mom
+ she put her scarf and wrapped it around her neck. As Sue              looked up and saw it too. "Yes, Tim, the thunder is not
+ was walking, she found a small box under the tree. She                scary," she said.. Tim’s friend, Sue, came over to. "Tim,
+ opened the box and found many colorful hats inside. Sue               come see the big thunder?" Sue asked. Tim said, "I think
+ was very happy. She decided to wear the scarf to play. She            think it’s so big and scary to see!" They both decided to
+ was not so cold anymore. But then, something unexpected               ask their teacher, Mr. Fox, about the thunder. Mr.
+ happened. The scarf started to move! It was not just a
+ scarf at all - a scarf
+
+ Story A, seed 2                               42% changed             Story B, seed 2                                54% changed
+ One day, a girl named Sue went to play outside. It was a              One day, a boy named Tim saw a weird thing in the sky. It
+ cold day, and she started to shiver again. She saw a big              was a big lightning and loud lightning outside. Tim was
+ tree, and thought it would be a nice to keep her warm. So,            scared. He said, "Mom, look at the big lightning!" he said.
+ she took a sweater and wrapped it around her. As she                  His mom looked up and saw it too. She saw lightning too,
+ played, she found a cold cold box under a tree. Sue opened            Tim. It is not safe." Tim felt sad. Tim’s friend, Sam, came
+ the box and saw many pretty dresses. She was very happy.              to play. "Did you see the lightning, Tim?" Sam asked. Tim
+ She decided to wear the sweater to play outside. She was              nodded. "I saw a big, dark cloud in the sky!" They both
+ not cold anymore. But then, something unexpected                      knew what what to do. They decided to ask their friend,
+ happened. The sweater started to move away! It was not a              Mr. Owl.
+ sweater at all! It was
+
+
+Figure 17: Shared structure, different realizations. Each column shows one source story and two
+samples generated with its coarse codes fixed. Text is shown verbatim to the 128-token limit, including
+unfinished endings. Yellow highlights added or replaced words relative to the corresponding source; deletions
+are not marked.
+
+
+
+
+                                                                  32
+Mixing Coarse Representations from Different Stories. We encode pairs of 128-token stories
+from TinyStories with the VQ-VAE, mix their coarse representations, and use NCM to generate the
+remaining finer levels conditioned on the mixture. Figure 18 shows two source pairs. Stories 1 and 2
+blend drawing and billboard details with the cold-weather and moving-object narrative. Stories 5
+and 6 begin with Tim and the jet before shifting to Max and the rain.
+
+                    Stories 1 and 2                                                        Stories 5 and 6
+ Source A: Story 2                                128 tokens           Source A: Story 5                                128 tokens
+ Sara and Tom were twins who liked to draw. They were                  One day, a boy named Tim saw a weird jet in the sky. It
+ gifted at making pictures with crayons and paper. They                was big, shiny, and made a loud noise. Tim was scared and
+ drew animals, flowers, cars, and houses. They wanted to               ran to his mom. "Mom, look at the weird jet!" he said.
+ share their pictures with everyone. One day, they saw a big           Mom looked up and saw it too. She told Tim not to worry,
+ billboard near their home. It was old and faded. It had a             but he was still scared. Tim went to his friend, Sue. "Sue,
+ picture of a soda that no one drank anymore. The billboard            did you see the weird jet?" he asked. Sue nodded and said,
+ was rotting and falling apart. "Let’s draw on the billboard!"         "Yes, it was big and loud." They both wanted to know what
+ Sara said. "We can make it pretty and new!" "Good idea!"              it was. They decided to ask Mr. Brown, who knew a lot
+ Tom said. "We can use our crayons and tape!" They took                about planes
+ their crayons and paper and
+
+ Source B: Story 1                                  128 tokens         Source B: Story 6                               128 tokens
+ One day, a little girl went outside to play. It was very cold,        Once upon a time there were two puppies, one was named
+ and she started to shiver. She saw an enormous tree with              Spot and the other was named Max. Spot was so cheerful
+ big leaves. The girl thought the leaves could be a wrap to            and playful, he loved to run around outside and enjoy the
+ keep her warm. So, she took one leaf and wrapped it                   sunshine. Max was quite different though, he was much
+ around her. As she played, she found a big box under the              more shy and preferred to stay inside all day. One day it
+ tree. She opened the box and saw many wraps inside. She               was raining outside so Spot and Max couldn’t go out and
+ was very happy and took one wrap to wear. Now, she was                play. Even though Spot was sad he still decided to try and
+ warm and not shivering anymore. But then, something                   cheer Max up. He started to display such a playful attitude,
+ unexpected happened. The wraps in the box started to                  trying to invite Max to come out and play even though it
+ move! They were not wraps at all, but a                               was raining. However, Max wanted to stay inside and
+                                                                       remain safe
+
+ Mixed coarse representations                                          Mixed coarse representations
+ Sara was a little girl who liked to draw. It was cold, but she        One day a boy named Tim saw a weird jet in the sky. It
+ loved her crayons. She drew flowers, houses houses, and big           was big, shiny, and made a loud noise. Tim was scared and
+ trees. She wanted to share her crayons to keep everyone               ran to his mom. "Mom, look at the weird jet!" he said.
+ warm. So, she took a big billboard near her house and                 Mom looked up and saw it too. She told Tim not to worry,
+ wrapped it. As she drew, she found a beautiful picture                but it was raining outside, and Max couldn’t go out and
+ under a tree. She it billboard and saw many colors inside.            play. Even though he was scared, he wanted to try and
+ She was very happy and took one picture on the billboard              cheer Max up. He started to have such such a playful friend,
+ Sara. Now, she could make it pretty anymore. But then,                Tim, waiting Max to come out and play even though it was
+ something unexpected happened. The pictures in the                    raining. Eventually, Max wanted to stay inside and stay
+ picture started to move! They were not their lines at all, but        stay
+
+Figure 18: Mixing coarse representations. Each column shows two sources and one output with newly
+generated finer levels. Green (source A) and yellow (source B) highlight selected shared wording and details.
+All text is verbatim, including unfinished endings.
+
+
+
+
+                                                                  33
+Perturbing Early Codes. We perturb a story’s coarse representation by replacing two codes with
+random codes observed at the same level across validation stories, then generate the finer levels.
+Using the same sampling seed, we compare outputs with and without these replacements. Figure 19
+shows that changing two coarse codes can alter characters, objects, and events while preserving
+parts of the narrative.
+
+ Story 1: original validation text                                                                                 128 tokens
+ One day, a little girl went outside to play. It was very cold, and she started to shiver. She saw an enormous tree with big
+ leaves. The girl thought the leaves could be a wrap to keep her warm. So, she took one leaf and wrapped it around her. As
+ she played, she found a big box under the tree. She opened the box and saw many wraps inside. She was very happy and
+ took one wrap to wear. Now, she was warm and not shivering anymore. But then, something unexpected happened. The
+ wraps in the box started to move! They were not wraps at all, but a
+Position 0            1               2                3                    4               5              6               7
+3165 → 512          3094          410 → 2383          963                 3438             370            3334            2301
+
+ Clean, seed 1                                                         Perturbed, seed 1
+ One day, a lovely cat named Lily went outside to play. She            One day, a girl named Sue went to play outside. She liked
+ liked to play in the sun. She saw a big box on the ground.            to dig in the sun. She saw a key on the ground. She picked
+ Lily thought it would be a good place to hide. So she                 it up and thought it would be fun. So, she decided to keep
+ decided to keep it. While playing, Lily found a small key.            it. WhileWhile Sue was digging, she found a small key key
+ She put the key on. She opened the box and found a toy                on it. She opened the key and found a secret box inside.
+ inside. Inside, she found a real toy cat! Lily was so happy to        Inside the box, she saw many fake toys inside She was so
+ find it. She wanted to show friends her new toy all the time.         happy and surprised. She wanted to play with her new toys
+ But then, something unexpected happened. The toy cat                  all day long. But then, something unexpected happened.
+ started to move! It was not a real cat, but real                      The fake toys started to talk! It was not a real toy, but a
+
+
+ Story 2: original validation text                                                                               128 tokens
+ Sara and Tom were twins who liked to draw. They were gifted at making pictures with crayons and paper. They drew
+ animals, flowers, cars, and houses. They wanted to share their pictures with everyone. One day, they saw a big billboard
+ near their home. It was old and faded. It had a picture of a soda that no one drank anymore. The billboard was rotting and
+ falling apart. "Let’s draw on the billboard!" Sara said. "We can make it pretty and new!" "Good idea!" Tom said. "We can
+ use our crayons and tape!" They took their crayons and paper and
+Position 0            1               2                 3                   4              5               6               7
+1474 → 219          3164             3742             2611             4055 → 2225        1178            2580            3910
+
+ Clean, seed 1                                                         Perturbed, seed 1
+ Tom and Lily were twins who liked to play with cardboard.             Ben and Lily were twins who liked to play with their toys.
+ They had a lot of toys: cars, dolls, blocks and more. They            They had a lot of toys: cars, dolls, dolls, blocks, books,
+ wanted more and more, but they always wanted to play                  books and more, but they always wanted more and. One
+ with. One day, they found a new box in the garage. It was             day, they found a new box in the garage. It was big and red
+ big and red and shiny. It was a box of cardboard that Mom             and shiny. It had many lights and stickers inside. Ben and
+ wrapped. Tom wondered what it was for. "Let’s go play                 Lily wanted to see what was inside. "Let’s play with the
+ with it!" Lily said. "Maybe we can make a spaceship!" Tom             tape!" Ben said. "Maybe we can make something!" Lily
+ said. They ran to the living room and tore the cardboard              said. They ran to the living room and cut the tape into
+ into pieces. They made circles, lines, squares and                    pieces. They made circles, stickers, and stickers
+
+Figure 19: Replacing two early codes. Each example shows the original story, its level-1 code replacements,
+and paired clean and perturbed outputs with the same seed. Yellow marks word-level differences on both
+sides; punctuation-only changes are unmarked. Code positions index eight equal regions of the 128-token
+grid. Text is verbatim, including unfinished endings.
+
+
+
+
+                                                                  34
+I     Limitations & Future Work
+NCM shows promising results on unconditional generation and downstream conditional generation
+tasks such as summarization and translation. Several directions remain for further improvement.
+NCM fixes both the hierarchy depth K and the per-level lengths ℓk , so even short continuations
+traverse the full hierarchy; an input-dependent schedule would adapt compute to example complexity.
+NCM relies on a separately trained multiscale VQ-VAE tokenizer, decoupling representation learning
+from the generative objective. An end-to-end training approach could benefit NCM by aligning
+representation learning with the generative objective. Our main experiments use generators of
+roughly 100M parameters, and our scaling study extends to 725M parameters on LM1B. Scaling to
+larger datasets and model sizes is another exciting direction. Generations are generally fluent but
+exhibit occasional artifacts at coarse-level transitions, presenting another opportunity to further
+improve NCM.
+
+
+J      Additional Qualitative Samples
+Figure 8 presents short samples from WMT14 German–English, XSum, LM1B, and OWT. In this
+section, we give three additional samples each for WMT14 German–English, XSum, TinyStories,
+LM1B, and OpenWebText, with the relevant metrics reported where available, and we follow NCM
+through one hard Sudoku puzzle step by step (§J.7).
+
+J.1      WMT14 De–En
+    Sample 1                                                                                                BLEU: 30.6
+    German: Volkswirtschaftler sorgen sich auch wegen der hohen Verbraucherverschuldung in Thailand, das diese Woche
+            knapp aus einer technischen Rezession herausgekommen ist.
+
+    Reference: Economists are also worried about high levels of consumer debt in Thailand, which this week narrowly
+               emerged from technical recession.
+    Generated: Economists also worry about high consumer debt in Thailand, which has just come out of a technical
+               recession this week.
+
+
+    Sample 2                                                                                                BLEU: 55.7
+    German: Außerdem erlebte er auf seiner Bahnfahrt von Titisee-Neustadt nach Freiburg die bereits unternommenen
+            Anstrengungen für den Ausbau des öffentlichen Personennahverkehrs.
+
+    Reference: In addition to this, on his train journey from Titisee-Neustadt to Freiburg, he experienced first-hand the
+               efforts already undertaken to develop public transport.
+    Generated: Furthermore, on his train journey from Titisee-Neustadt to Freiburg, he experienced the efforts already
+               made to develop local public transport.
+
+
+    Sample 3                                                                                                BLEU: 18.6
+    German: Samsung, Huawei und HTC stellen Handys her, die mit Googles Betriebssystem Android arbeiten, das in
+            scharfem Wettbewerb zu den Mobilprodukten von Apple und Microsoft steht.
+
+    Reference: Samsung, Huawei and HTC all manufacture phones that operate on Google’s Android operating system,
+               which competes fiercely with Apple and Microsoft mobile products.
+    Generated: Samsung, BMW and HTC make mobile phones that work with Android’s operating operating system, which
+               is firmly competing with Apple and and Microsoft products.
+
+
+
+
+                                                             35
+J.2        Generation Trajectory
+Table 12 shows the German source, reference, final generated translation, and level-by-level outputs
+of a single generation run. Figure 3 shows selected levels from the same run. Each generated row
+decodes the cumulative reconstruction after that level. Intermediate quality is not monotonic.
+
+  Translation trajectory                                                                                           Final BLEU: 77.8
+  German: Es besteht allerdings die Sorge, dass kleine und mittlere Unternehmen angreifbar gegenüber Hacking und
+          Überwachung bleiben.
+
+  Reference:     However, there is concern that small and medium-sized companies remain vulnerable to hacking and surveillance.
+
+  Generated:     However, there is concern that small and medium-sized enterprises will remain vulnerable to hacking and surveillance.
+
+
+  Level     Decoded output after this level                                                                               BLEU ↑
+
+      1     However, it is a important to the the the and the.                                                            6.0
+      2     However, it is a small to to small and and small, and small and and.                                          7.2
+      3     However, it is a concern for small small small medium-sized and-sized-sized and and and...                    6.3
+      4     However, there is a medium of medium-sized enterprises remain remain remain remain to to to                  16.0
+            to.
+      5     However, there is a concern of medium medium-sized-sized enterprises remain remain remain                    17.5
+            and and orientation.
+      6     However, there is a concern that medium medium-sized enterprises will remain remain remain                   17.7
+            surveillance surveillance surveillance capabilities
+      7     However, there is that that and and medium-sized enterprises will remain remain vulnerable                   24.2
+            surveillance and surveillance.
+      8     However, there is that concern and and medium-sized enterprises will remain vulnerable to                    51.7
+            hacking and surveillance.
+      9     However, there is that that small and medium-sized enterprises will remain vulnerable to to and              38.9
+            surveillance.
+      10    However, there is concern that small and medium-sized enterprises will remain vulnerable to to               56.3
+            surveillance surveillance.
+   11       However, there is concern that small and medium-sized enterprises will remain                               77.8
+            vulnerable to hacking and surveillance.
+
+
+Table 12: German–English translation trajectory. Each row decodes the cumulative recon-
+struction after one level of a single NCM generation; text is shown as generated, and BLEU is
+computed per level against the reference. The final level (shaded) is the output.
+
+
+
+J.3        XSum
+  Sample 1                                                         ROUGE-1: 80.00 | ROUGE-2: 71.43 | ROUGE-L: 80.00
+  Context: The Brazil international, who had two years remaining on his current deal, scored 13 goals in 59 games for the
+  Blues last season. Willian, 27, joined from Russian side Anzhi Makhachkala for a reported £30m in 2013. “It’s a dream to
+  continue with this club and over the next four years I will try to help the team win more trophies,” he said. Willian, who
+  has scored 19 goals in 140 matches for Chelsea, was named player of the year last season as the club finished 10th in the
+  Premier League. He has won 30 caps for Brazil since making his debut in 2011, scoring six goals. Last week, Chelsea
+  signed Belgium striker Michy Batshuayi from Marseille for a fee believed to be worth £33m, their first capture under new
+  manager Antonio Conte.
+
+  Reference:     Chelsea midfielder Willian has signed a new four-year contract with the club.
+  Generated: Chelsea midfielder Willian has signed a new four-year contract to stay with the Premier League champions.
+
+
+
+
+                                                                   36
+ Sample 2                                                          ROUGE-1: 73.3 | ROUGE-2: 57.1 | ROUGE-L: 73.3
+ Context: The incident happened in Gerard Street, Ashton-in-Makerfield in Wigan at about 14:45 BST on Saturday. The
+ woman, who has not been named but was in her 70s, was critically injured and died at the scene. Gerard Street was closed
+ for a time while investigations were carried out. Police have appealed for any witnesses to contact them.
+
+ Reference:     A woman has died after being hit by a lorry in Greater Manchester, police have said.
+ Generated: A woman has died after she was hit by a car in Greater Manchester.
+
+
+ Sample 3                                                     ROUGE-1: 58.82 | ROUGE-2: 12.50 | ROUGE-L: 41.18
+ Context: The scene from Alice in Wonderland in Wardie Primary’s assembly hall dates back to 1936 and was recently
+ restored with a Heritage Lottery Fund.
+ A mother has lodged a complaint about the image describing it as racist.
+ Edinburgh City Council said it understands the offensiveness of the image but said it does not reflect the attitudes of the
+ school.
+ An Edinburgh City Council spokesman said: “The Alice in Wonderland mural at Wardie Primary School was painted in
+ 1936 and is of both historical and artistic importance as evidenced by the fact it recently received full Heritage Lottery
+ Funding support to restore the work.
+ “While we understand the offensiveness of the image, it is in no way indicative of the attitudes of either the school or the
+ council.
+ “Our equalities policies and approaches are robustly multi-cultural and anti-racist, promoting diversity and good relationships
+ among pupils.”
+ A Police Scotland spokesman said: “Police in Edinburgh have received a complaint in relation to a mural at a primary
+ school in the Trinity area.
+ “Officers are now liaising with Edinburgh City Council education department with regards to this matter.
+ “Police Scotland treats all reports relating to hate incidents extremely seriously and will thoroughly investigate whenever a
+ report of this nature is made.”
+
+ Reference:     Police are investigating a complaint about a mural at an Edinburgh primary school which features a golliwog.
+ Generated: A police investigation is under way after a mural was painted at a primary school in Edinburgh.
+
+
+
+J.4   TinyStories
+
+ Sample 1                                                                                         Gen. PPL: 10.2 | H: 3.98
+ Once upon a time, there was a little boy named Tim. Tim loved to play with his yellow blocks. One day, he wanted to
+ build a tower with his blocks. He was happy. Tim’s best friend, Tom, came over to play. Tom asked Tim, “Can I play with
+ your blocks?” Tim said, “No„ you cannot play with my blocks. But we can get us to play for you.” They played and had
+ fun. They put the yellow blocks and made an even bigger tower. It was tall and colorful. Tim and Tom had so much fun.
+ They built the tower and made. . .
+
+
+ Sample 2                                                                                         Gen. PPL: 14.1 | H: 3.88
+ Once upon a time, there was a little dog named Sam. Sam was a big dog who liked to pull rope. He often liked to watch
+ his pants spin and wagging his tail very much. One day, Sam wanted his rope to his side, but the rope was too high for
+ him to move. Sam felt sad and did not know what to do. His friend, Tom the cat, saw what was wrong. Sam asked him
+ back for help. Sam and Sam tried to pull the rope together. They pulled and pulled, but the rope would not move. Sam
+ was sad and he could not get to his side.
+
+
+ Sample 3                                                                                         Gen. PPL: 17.9 | H: 4.03
+ Once upon a time, there was a small brother named Sam. One day, Tim and Sam to the table. He saw something unusual
+ in the kitchen. It was a little egg out of toast. Tim said, “Look, Sam! A little little egg!” Sam looked and stared at the
+ tree. Suddenly, it started to crack. The egg began to shake. Tim was scared. He did not want to lose the eggs or the cake.
+ He watched as the little cake landed on the tree branch. Tim picked it up and smiled. “Look, Mom! The cake will fall
+ back!” he said. His mom came. . .
+
+
+
+
+                                                              37
+J.5    LM1B
+  Sample 1                                                                                         Gen. PPL: 39.4 | H: 4.29
+  [CLS] swine flu cases have been confirmed across the united states. [CLS] there are actually more people that see it—since
+  you don't worry about other things. [CLS] the labor department says. [CLS] the two proposals are approved by the end of
+  the week. [CLS] he soon said that he always felt him about health care which was not a practical issue and insisted on
+  comprehensive reforms to improve a child's health. [CLS] the euro also added 1.33 per cent to $1.46829 against the dollar
+  and gained 0.8 percent tob72,54 against the yen and slipped 2.4 percent barrel to [CLS]
+
+
+  Sample 2                                                                                         Gen. PPL: 66.1 | H: 4.39
+  [CLS] to be welcome—the united nations security resolution that was imposed by russia earlier this month, the united
+  states, european union and the baltic states to take sanctions against iran, whose nuclear program also is its west and
+  nuclear programme. [CLS] they will cover the amount of state subsidies on power and equipment. [CLS] any power cuts
+  rates will be likely on those who are still in talks over a deal late thursday, according to a government report released late
+  tuesday. [CLS] conservative advocates have done their effort to helping people who have fallen before given to come into
+  life while others has in particular turn them off work, he said. [CLS] more than two [CLS]
+
+
+  Sample 3                                                                                         Gen. PPL: 72.0 | H: 4.35
+  [CLS] that individuals should be given an perspective on where the things are right now, and when we know things are
+  doing well you know that the federal government should still take measures to get us back over the next three months.
+  [CLS] "it is certainly saying, by 50 it isn't going to be put this week in charge, but this has been a ridiculous prospect.. 'i
+  thought would say we have been very good before election," he added. [CLS] gs said the profit dropped 8 percent to £96.7
+  million, and revenues grew 9 percent from $10bn to £2.7m. [CLS] " [CLS]
+
+
+
+J.6    OpenWebText
+We provide excerpts of 1,024-token unconditional generations from our NCM model trained on
+OWT. Samples are shortened for space and readability; ellipses mark omissions. Gen. PPL and
+entropy are computed on the full samples.
+
+  Sample 1                                                                                         Gen. PPL: 47.8 | H: 5.40
+  Compise of Doctor is the world’s first shot villain in the Marvel Marvelion and appears to have host a full trailer for the
+  beloved new Marvel franchise and Arrow in Daredevil. He has the upcoming show scenes in November 2015.
+  Welcome to the famous show, as well as those who joined Marvel films.
+  “Dark franchise is a wonderful, kind of exciting,” Batman said in an interview. JoseRamos told reporters in a conference. “I
+  feel like I never happen, but never is a dream. I hope I do it.” . . .
+  “It’s wonderful, wonderful actors,” he said. “You can’t watch it and watch a video on screen.”
+  Watch the full video of Batman’s future in Flash or Flash? . . .
+  It’s a difficult matter to imagine how it can make it easier for you to talk about content, since it’s hard to work on what
+  works.
+  Here’s more information about the future, in that context of out aspects of “wots,”, and the products that are merely
+  cultural historical references to them online. Do you think the way they keep their web communication online? . . .
+  Facebook’s content is called “The Internet,” a web company called Media tool. It allows users to speed up interviews with
+  some of the top web sites, including web sites, said Thomas William Abbartis, who just appeared on an online strategy
+  that seemed to focus its attention to the web, its products and its groups. . . .
+  Most of these companies are based on social sites, and Dr. Ababbartis’s blog on Facebook’s new site is to popularize web
+  sites on its,, efficient manner. . . .
+
+
+
+
+                                                               38
+Sample 2                                                                                         Gen. PPL: 26.4 | H: 5.27
+. . . The growth is slowing down, the job creation is ramping up, and still again, a quarter of the Oregonians are stuck in
+part-time or without not work at all.
+A new report shows Walmart’s workforce gained economic growth this fall, dropping up an estimated 5,300 jobs last year
+alone, after increasing improvements for recovery. Instead, employment has declined, from 7.1 percent in August to to 7.3
+percent in November, a five-year low.
+But seasonally 272,195,000 people were unemployed in November, and just as many people were underemployed -- working
+part-time, but they could not get full-time jobs.
+“Even though we’re seeing [a] jobs recovery, there’s still a lot of people who need to be working more than they are,” said
+Nicke Belele, a Colorado statistician. . . .
+“It’s just just about the quality of the jobs out there, it’s the quality of jobs,” State Department Mark McMullen said. “We
+still have some work to do in terms of the quality of jobs.”
+The November jobs report, issued Tuesday morning, will be the date of the last year. McMullen said it makes clear that
+Oregon has undergone rapid economic growth this fall, but the damage left by the workforce still can’t be developed. The
+longer they are slightly underizedized, the bigger the focus on Oregon’s economic growth potential. . . .
+And things could turn for things worse quickly. An estimated 17,000 Oregonians will run out of jobless unemployment in
+two weeks, when the long-term recovery emerged. . . .
+
+
+Sample 3                                                                                         Gen. PPL: 41.5 | H: 5.12
+Three Canadian music star Thomas Smith partnered with Graham Graham’s Matthew Helons. . . .
+Steve Feich forward: I am going to start a year later this year, so are your thoughts have changed completely?
+Since then, I understand that I’ve managed to grow up as a person as a decent person. . . .
+What are your thoughts on my career with last year?
+It was so important. It was important for a whole lot. But I just can’t do just any other than everyone. But I was for the
+whole comfortable feeling, and that’s what I was happy. I wanted to do. . . .
+How can you change your career, the enthusiasm in your season, and how too much do you feel when you’re in the team?
+There’s a lot of opportunities and a lot of opportunities. I know that I would be happy, and I know a lot that they’re
+actually the ones, and the ones who do, but I don’t say what I wanted to do to. . . .
+How was it hard for my professional career? Do you think you spend your life and present for your life?
+Well, I thought it to be fairly unfair at risk of being college football. I have always been informed, busy, and playing while
+working hard and as a user. As a result, it’s too hard to get in the right five hours and yourself being focused on your
+sweet school school at the football level. It’s so much harder than the other player.
+What do you have to do?
+I have a whole moment at the good balance, for which I’m grateful for you for what’s going into my life. . . .
+
+
+
+
+                                                             39
+J.7          Sudoku
+
+             Puzzle                              Solution                      Step 1 (1 code)                      Step 2 (2 codes)                      Step 3 (4 codes)
+             30 clues                        51 cells to fill                      16/81 correct                         15/81 correct                          16/81 correct
+
+  2 1 6              7       8 5     9   2   1    6   4   7   3   8   5   9    6   7   6   2    4   9   6   5   9    6   7   6   2   4   9   6   5   9     3   7   6   2   8       9   6   5
+7 6                    2             7   6   4    8   3   5   2   9   1   4    6   2   6   9    4   8   6   4   4    6   2   6   9   4   8   6   4   2     3   2   6   9   5       8   6   4
+    3                2 7             5   8   3    9   1   2   7   6   4   7    6   7   6   2    5   9   6   4   7    6   7   6   5   5   9   6   4   9     6   7   6   2   5       9   2   4
+  5 2 3                              4   5   2    3   6   9   1   7   8   3    9   6   8   6    2   6   4   8   3    9   6   8   6   2   6   4   8   3     8   6   8   6   2       6   4   9
+                                     1   7   9    4   5   8   6   2   3   6    9   6   5   6    2   6   4   9   6    9   6   5   6   2   6   4   9   6     9   6   5   6   2       3   2   2
+8        6 7                         8   3   6    7   2   1   5   4   9   6    8   6   8   6    9   3   4   8   6    8   6   8   6   9   3   4   8   2     8   6   8   3   9       3   4   9
+2                8 4         3 6     2   1   7    5   8   4   9   3   6   6    7   9   4   8    3   4   8   6   6    7   9   4   8   3   4   8   6   6     7   9   6   8   6       2   3   6
+6        8 1             4           6   9   8    1   7   3   4   5   2   6    8   8   2   8    6   4   3   6   6    7   6   6   8   6   4   3   6   6     7   6   9   8   6       4   1   6
+     4           9               7   3   4   5    2   9   6   8   1   7   6    5   4   4   8    3   2   9   6   6    5   4   4   8   3   2   9   6   3     5   3   4   8   3       2   5   6
+
+
+    Step 4 (6 codes)                     Step 5 (9 codes)                     Step 6 (13 codes)                     Step 7 (18 codes)                     Step 8 (26 codes)
+         21/81 correct                       19/81 correct                         25/81 correct                         28/81 correct                          44/81 correct
+
+9    3   7   6   2   4   9   6   5   9   3   7    6   2   4   9   6   5   1    1   7   6   2    4   8   8   8   9    6   2   6   2   4   3   5   5   1     2   2   6   4   4       3   5   5
+2    6   2   6   9   5   9   6   1   2   6   2    6   9   5   9   6   1   4    4   2   3   5    5   5   6   1   4    3   7   6   5   5   1   5   1   4     4   4   3   3   2       1   1   1
+9    6   9   6   2   6   9   2   4   9   6   9    6   2   6   9   2   4   5    3   5   6   8    6   9   6   4   5    5   7   3   9   4   2   6   4   5     5   3   5   9   2       2   6   4
+3    2   6   8   6   2   6   4   9   3   2   6    8   6   2   6   4   9   6    5   6   5   6    2   1   1   1   6    2   6   2   6   7   1   1   1   2     2   5   3   6   9       1   7   7
+4    9   6   5   6   2   6   2   2   4   9   6    5   6   2   6   2   2   1    9   4   9   5    2   6   2   8   1    9   4   9   7   8   6   2   6   1     7   5   5   5   8       6   2   3
+6    2   6   8   3   9   6   4   9   6   8   6    8   3   9   6   4   1   7    2   3   3   3    9   6   4   9   6    7   6   3   2   9   9   5   9   6     3   6   7   2   4       4   5   9
+6    7   9   6   8   6   7   3   6   6   7   9    6   8   6   7   8   6   2    2   5   5   7    3   7   8   6   2    7   5   5   9   6   4   9   6   2     7   5   5   8   4       4   4   6
+6    7   6   9   8   3   4   5   4   6   7   6    9   8   3   4   5   4   6    8   6   6   8    3   4   5   4   6    8   6   6   7   3   4   5   4   6     8   8   9   7   3       4   5   4
+3    5   3   4   8   3   7   9   6   3   5   3    4   8   3   7   9   6   4    4   3   7   8    3   2   1   6   5    4   9   5   8   6   1   7   6   3     4   2   9   9   8       1   6   6
+
+
+    Step 9 (37 codes)                Step 10 (50 codes)                   Step 11 (67 codes)                    Step 12 (89 codes)                             Correct cells
+         55/81 correct                       62/81 correct                         64/81 correct                         81/81 correct                         after each step
+
+2    2   2   6   4   4   3   8   5   9   2   2    6   4   4   3   5   5   9    2   1   6   7    4   3   5   5   9    2   1   6   4   7   3   8   5   81
+7    7   4   8   3   5   5   2   1   7   6   4    3   3   5   5   9   1   7    7   4   8   3    5   5   9   1   7    6   4   8   3   5   2   9   1
+8    5   3   1   9   2   7   6   4   8   5   3    9   1   2   2   6   4   5    5   3   3   9    2   7   6   4   5    8   3   9   1   2   7   6   4   54
+4    5   5   3   3   9   1   1   7   4   5   5    3   3   9   1   8   8   4    5   5   3   6    9   1   7   8   4    5   2   3   6   9   1   7   8
+1    7   1   4   5   8   6   2   3   1   7   9    4   5   8   6   2   3   1    7   9   4   4    8   6   2   3   1    7   9   4   5   8   6   2   3
+                                                                                                                                                     27
+8    6   6   7   2   1   5   5   4   8   3   6    7   2   5   5   4   4   8    6   6   7   2    5   5   4   9   8    3   6   7   2   1   5   4   9
+2    2   7   5   8   4   4   3   6   2   1   7    5   8   4   9   3   6   2    1   7   5   5    4   9   3   6   2    1   7   5   8   4   9   3   6
+6    8   1   1   7   3   4   5   2   6   6   1    1   3   3   4   5   2   6    6   1   1   7    3   4   5   2   6    9   8   1   7   3   4   5   2    0
+                                                                                                                                                           1       4           8           12
+4    4   5   9   2   6   8   1   1   3   4   5    9   9   6   1   7   7   3    5   5   9   9    6   8   1   7   3    4   5   2   9   6   8   1   7
+                                                                                                                                                                       Step
+
+
+
+
+Figure 20: Solving a hard Sudoku puzzle step by step. Top left: the puzzle, with its 30 clues
+shaded, and its solution. Step k decodes the codes that NCM has generated in its first k steps,
+where step k generates level k of the code hierarchy; its header gives the number of codes at that
+level and how many of the 81 cells match the solution. Green cells are correct, red digits are wrong,
+and bold digits mark the clue positions. Bottom right: correct cells after each step. Across levels,
+NCM iteratively refines the decoded board until it reaches the correct solution.
+
+
+
+
+                                                                                           40
+

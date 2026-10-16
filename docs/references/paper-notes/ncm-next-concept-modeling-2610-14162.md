@@ -2,7 +2,7 @@
 
 - **Title:** Next Concept Modeling (NCM), Hazy Research and Stanford
 - **arXiv or URL:** arXiv 2610.14162. Code: github.com/HazyResearch/ncm
-- **Local paper text:** none archived
+- **Local paper text:** docs/references/looping-depth/ncm-next-concept-modeling/2610.14162.txt (pdftotext, 2026-10-16)
 - **Released weights (checked 2026-10-16):** https://huggingface.co/hazyresearch/ncm-checkpoints (MIT, not gated). Each model is a frozen residual-VQ tokenizer (tokenizer.pt) plus a generator (generator.pt) and config.yaml. Released: LM1B small, medium, large (large: 36 layers, width 1280, 12 levels of 8192 codes); Sudoku easy, medium, hard; TinyStories; XSum; WMT14. NOT released: OpenWebText (`owt/` holds only TODO.md, though the repo README links it). The GitHub repo (MIT, last commit 2026-10-14) holds eval and sampling code; no training script was seen at top level.
 - **Date first noted:** 2026-10-14
 
@@ -20,6 +20,9 @@ Read in full on 2026-10-14. Section numbers not recorded.
 - 2026-10-14 (stage 2): About 100M transformer. Level k is predicted in parallel from the cumulative reconstruction of levels below k. Block-diagonal attention: each level reads only its own block. All levels train in one teacher-forced forward, with no BPTT.
 - 2026-10-14: Uniform code corruption on inputs, decreasing per level, gives a large Gen-PPL gain (the paper's exposure fix).
 - 2026-10-14: Block-diagonal (state-only read) beats block-causal (history read): Gen PPL 15.41 vs 19.63, and it is faster.
+- 2026-10-16 (sec. 3.4, Fig. 4, eq. 10, App. B, App. F.1): Level lengths grow l_1 < ... < l_K = L (ablations: K = 12, linear 1 to 128). The generator trains ALL levels in one forward, so one training example is N = sum_k l_k positions (block-diagonal attention). For a linear 1-to-L schedule that is about K * L / 2 positions (LM1B, K = 12, L = 128: about 6x the L positions an AR model processes). The paper's token budgets count full-length text positions and say "These budgets measure token exposure, not FLOPs" (App. B accounting paragraph). So the speed gain is at generation (K sequential steps instead of L); training costs more per text token than AR at the same width and depth (our reading of the shapes, not a measurement).
+- 2026-10-16 (App. A): The ELBO uses the complete hierarchy; minimizing L_NCM maximizes it over theta. So a likelihood bound per sequence exists and can score multiple-choice candidates.
+- 2026-10-16 (App. B, Table 4): OWT uses the GPT-2 tokenizer and L = 1024; LM1B uses bert-base-uncased and L = 128; TinyStories a custom BPE, L = 128.
 - 2026-10-14 (weak spots): No likelihood or CE is reported. The ELBO is derived but never given. OWT Gen PPL is 83 vs 35 for an AR sample. The token budget counts L positions per sample, not the sum over levels, so the paper understates FLOPs (our reading). K is fixed for every input.
 
 ## 3. Our speculation
