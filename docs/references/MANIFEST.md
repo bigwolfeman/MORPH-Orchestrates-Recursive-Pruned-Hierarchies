@@ -6,6 +6,8 @@ stay together.
 
 ## Required: paper notes and ledger
 
+**Before you read or cite a paper, read its note in [`paper-notes/`](paper-notes/README.md) first** (check [`LEDGER.md`](paper-notes/LEDGER.md) for the slug). The note says why we use the paper, what it actually measured, what earlier readings got wrong, and where our own runs disagree with it. Use it to read the paper, not in place of it: when a claim matters, check it against the paper text and add a correction if the note is wrong.
+
 Whenever you read a paper in full, cite it in a design, or measure something that confirms or disagrees with it, write or update its note in [`paper-notes/`](paper-notes/README.md) and add a dated line to [`paper-notes/LEDGER.md`](paper-notes/LEDGER.md). The ledger entry is required.
 
 ## Topic Index

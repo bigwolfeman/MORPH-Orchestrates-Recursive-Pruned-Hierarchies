@@ -58,5 +58,5 @@ The current TUL is LXTUL (winner note above). The v0.1 contract is `.agents/spec
 ## Local Archives
 
 - [Reference archive by topic](references/MANIFEST.md)
-- [Paper notes and ledger (required for every paper read or used)](references/paper-notes/README.md). One note per paper. Append dated entries to [`LEDGER.md`](references/paper-notes/LEDGER.md)
+- [Paper notes and ledger (read the note before the paper; required for every paper read or used)](references/paper-notes/README.md). One note per paper. Append dated entries to [`LEDGER.md`](references/paper-notes/LEDGER.md)
 - [Figure archive by topic](figures/MANIFEST.md) — TikZ/LaTeX architecture diagrams. Measurement plots from wandb are separate: `../lab/experiments/figures/`.

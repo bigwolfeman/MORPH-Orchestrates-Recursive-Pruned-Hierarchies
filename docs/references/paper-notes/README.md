@@ -7,6 +7,12 @@ our own measurements disagree with it.
 The paper text stays in `docs/references/<topic>/<paper>/`. The note stays
 here. Do not copy paper text into a note.
 
+## When to read
+
+Read a paper's note BEFORE you read or cite the paper. The corrections and disagreements sections exist so the
+same misreading does not happen twice. If the note and the paper text disagree, the paper text wins: add a dated
+correction to the note.
+
 ## When to write
 
 Write or update a note every time you:
