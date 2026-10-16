@@ -3,6 +3,7 @@
 - **Title:** Next Concept Modeling (NCM), Hazy Research and Stanford
 - **arXiv or URL:** arXiv 2610.14162. Code: github.com/HazyResearch/ncm
 - **Local paper text:** none archived
+- **Released weights (checked 2026-10-16):** https://huggingface.co/hazyresearch/ncm-checkpoints (MIT, not gated). Each model is a frozen residual-VQ tokenizer (tokenizer.pt) plus a generator (generator.pt) and config.yaml. Released: LM1B small, medium, large (large: 36 layers, width 1280, 12 levels of 8192 codes); Sudoku easy, medium, hard; TinyStories; XSum; WMT14. NOT released: OpenWebText (`owt/` holds only TODO.md, though the repo README links it). The GitHub repo (MIT, last commit 2026-10-14) holds eval and sampling code; no training script was seen at top level.
 - **Date first noted:** 2026-10-14
 
 ## 1. Why we reference it
