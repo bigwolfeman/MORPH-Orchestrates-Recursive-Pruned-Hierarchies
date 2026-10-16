@@ -4,6 +4,10 @@ Local markdown and PDF archive of papers and technical references used by
 `../references.md`. The archive is grouped by MORPH component so related papers
 stay together.
 
+## Required: paper notes and ledger
+
+Whenever you read a paper in full, cite it in a design, or measure something that confirms or disagrees with it, write or update its note in [`paper-notes/`](paper-notes/README.md) and add a dated line to [`paper-notes/LEDGER.md`](paper-notes/LEDGER.md). The ledger entry is required.
+
 ## Topic Index
 
 | Topic | Local references |
