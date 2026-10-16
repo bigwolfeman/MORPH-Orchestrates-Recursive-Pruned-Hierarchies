@@ -1,0 +1,1335 @@
+                                         LUMIA Lab                                                                                                                                 2026-02-10
+
+
+                                        Next Concept Prediction in Discrete Latent
+                                        Space Leads to Stronger Language Models
+                                        Yuliang Liu1,2,5 , Yunchong Song2 , Yixuan Wang1,2,5 , Kewen Ge1 , Alex Lamb4 , Qipeng Guo2 , Kai Chen2 , Bowen
+                                        Zhou2,3 , Zhouhan Lin1,2‡
+                                        1 LUMIA Lab, School of Artificial Intelligence, Shanghai Jiao Tong University
+                                        2 Shanghai AI Laboratory
+                                        3 Department of Electronic Engineering, Tsinghua University
+                                        4 College of Artificial Intelligence, Tsinghua University
+                                        5 Shanghai Innovation Institute
+
+
+                                        #{liuyl03181, lin.zhouhan} @gmail.com ‡ Corresponding Author.
+                                        § Code and Models: https://github.com/LUMIA-Group/ConceptLM
+
+
+
+
+arXiv:2602.08984v1 [cs.CL] 9 Feb 2026
+                                            Abstract
+                                            We propose Next Concept Prediction (NCP), a generative pretraining paradigm built on top of Next
+                                            Token Prediction (NTP). NCP predicts discrete concepts that span multiple tokens, thereby forming a
+                                            more challenging pretraining objective. Our model, ConceptLM, quantizes hidden states using Vector
+                                            Quantization and constructs a concept vocabulary. It leverages both NCP and NTP to drive parameter
+                                            updates and generates a concept to guide the generation of the following tokens. We train ConceptLM
+                                            from scratch at scales ranging from 70M to 1.5B parameters with up to 300B training data, including
+                                            Pythia and GPT-2 backbones. Results on 13 benchmarks show that NCP yields consistent performance
+                                            gains over traditional token-level models. Furthermore, continual pretraining experiments on an 8B-
+                                            parameter Llama model indicate that NCP can further improve an NTP-trained model. Our analysis
+                                            suggests that NCP leads to more powerful language models by introducing a harder pretraining task,
+                                            providing a promising path toward better language modeling.
+
+
+
+                                        1. Introduction
+                                        The remarkable success of modern AI is largely driven by the generative pretraining paradigm, where
+                                        intelligence emerges from training on large amounts of data to predict future units [Brown et al.,
+                                        2020, Ho et al., 2020]. However, as models scale up, low-level learning objectives cannot fully utilize
+
+
+                                                      22                GPT-2                              24                  GPT-2                             24                   GPT-2
+                                                                        ConceptLM (Ours)                                       ConceptLM (Ours)                                       ConceptLM (Ours)
+                                                                                                           22                                                    22
+                                                      20
+
+
+                                         Perplexity                                           Perplexity                                            Perplexity
+                                                                                                           20                                                    20
+                                                      18
+                                                                                                           18                                                    18
+                                                                           37% fewer params                                      24% fewer tokens                                       19% fewer FLOPs
+                                                      16                                                                                                         16
+                                                                                                           16
+
+                                                      14                                                   14                                                    14
+                                                           124M     355M     774M    1.5B                       1.6B    3.2B   4.8B      8.0B                         2           4        6    8   10
+                                                                  Model Parameters                                     Training Tokens                                    Training FLOPs (1019)
+
+                                        Figure 1 | Scaling performance comparison of ConceptLM against traditional token-level models across
+                                        three key dimensions: model parameters, training tokens, and total FLOPs. The results demonstrate
+                                        that ConceptLM exhibits superior scalability.
+                         NCP Leads to Stronger Language Models
+
+model capacity, bottlenecking AI models’ potential [LeCun, 2022]. The evolution in the abstract level
+of prediction is pratically evident across domains: modern computer vision methods increasingly
+emphasize latent that transcend pixel-level details in favor of high-level abstractions [Tian et al.,
+2024]; sequential decision-making in modern RL and robotics treats decision tasks as trajectory-level
+sequence modeling rather than independent, step-wise action mapping [Chen et al., 2021, Chi et al.,
+2024]; and multimodal methods, like LCM [team et al., 2024], elevate the predictive target to a fixed
+embedding space, focusing on predicting whole sentences. Joint Embedding Predictive Architectures
+(JEPA) [Assran et al., 2023] demonstrates the efficacy of learning through a latent space rather
+than from raw inputs, and reveals the rationale for learning in a high-level space from a systematic
+perspective. Yet LLMs, despite reaching trillion-parameter scale, remain constrained to token-level
+prediction [Grattafiori and Abhimanyu Dubey, 2024, Yang et al., 2025], which may no longer be
+sufficient to unlock their full power.
+Beyond token-level modeling, several studies have explored language modeling at other semantic
+levels. For instance, the Hourglass Transformer [Nawrot et al., 2022] and ContextLM [Dai et al.,
+2025] compress sequences to learn high-level dense representations, while H-Net [Hwang et al.,
+2025] and BLT [Pagnoni et al., 2024] target lower-level modeling, introduce dynamic segmentation,
+and are thus tokenizer-free. Despite modeling hierarchical representation, these models remain
+reliant on standard next token prediction or next byte prediction training objectives. Multi-Token
+Prediction [Gloeckle et al., 2024] takes a step toward a harder training task by predicting multiple
+tokens simultaneously, yet it remains confined to the token space. Directly predicting a set of tokens,
+rather than a single one, increases the learning difficulty combinatorially.
+We propose Next Concept Prediction (NCP), a concept-level pretraining objective operating within
+a discrete latent space, as the core of the ConceptLM framework. ConceptLM integrates concept-
+level and token-level prediction by utilizing Vector Quantization (VQ) to project continuous concept
+representations, which are aggregated from token-level hidden states, into finite learnable codebooks.
+This establishes a discrete concept vocabulary, thereby providing explicit targets for concept-level
+prediction. The model then predicts next tokens conditioned on the corresponding predicted concept,
+rather than ground-truth future concepts, to prevent information leakage. By jointly optimizing NCP
+and Next-Token Prediction (NTP), our model implicitly implements planning before generation. Our
+main contributions include:
+ • Models with NCP scale up better: We train GPT-2 and Pythia backbones from scratch, scal-
+   ing up to 1.5B parameters for GPT-2 with 8B tokens, and 410M for Pythia with 300B tokens,
+   demonstrating that ConceptLM achieves significant improvements in various language modeling
+   and downstream tasks compared with token-level baselines. We provide the scaling performance
+   from three perspectives in Figure 1.
+ • NCP can enhance existing LLMs: By using only 9.6B tokens for continual pretraining, we
+   successfully extend the existing Llama model into a concept-level model, achieving an average
+   performance gain of 0.4 on the 8B-parameter scale, compared with its token-level counterpart
+   across 4 benchmarks.
+ • NCP improves long-range modeling: Detailed ablation studies confirm that NCP drives the
+   performance gains. Furthermore, our analysis reveals that NCP encourages the model to focus
+   on long-range dependencies, enhancing its global modeling capability, and that NCP makes the
+   models scaling behavior better.
+
+
+
+
+                                                                                                     2
+                                                           NCP Leads to Stronger Language Models
+
+                                ConceptLM                                                  Concept-level Module                                      Vector Quantization
+                 x! ) x! (     x! ' x! & x! %    x! $ x! # x! "         x! !
+                                                                                                      NCP Loss                                               VQ Loss
+                             Token-level Decoder                               predicted
+                                                                               concepts
+                                                                                                𝑐̂!           𝑐̂"           𝑐̂#      quantized
+                                                                                                                                     concepts        c0                c1                c2
+                 h0 h1         h2 h3 h4          h5 h6 h7               h8
+                                                                                                 Concat S Segments for each                               Concat S segments for each
+                                                                                                     predicted concept                                       quantized concept
+                               Element-wise Addition
+
+                                                                                           S             S           S                           S                 S               S
+                                                                               predicted                                             quantized
+                    𝑐!̂                    𝑐"̂                    𝑐#̂          segments                                              segments
+
+
+
+
+     Residual
+                                                                               codebooks                                             codebooks
+
+                             Concept-level Module
+                                                                                               Weighted combination of codes
+                                                                                                                                                          Quantize to the nearest code
+                                                                                 logits
+                     c0                     c1                    c2                                                                   split
+                                                                                                                                                 S                 S               S
+                                                                                                                                     concepts
+                                                                                               Head          Head        Head
+
+                h0 h1 h2              h3 h4 h5             h6 h7 h8                                                                                       Split into S segments along
+                                                                                                      Transformers                                              hidden dimension
+                             Token-level Encoder
+
+                 x0 x1 x2 x3 x4 x5 x6 x7 x8                                                     c0            c1           c2                        c0                c1                c2
+
+    Figure 2 | Overview of ConceptLM. The figure is organized into three components: the left one
+    shows the ConceptLM workflow; the central part shows the concept prediction process; and the right
+    one shows the segmented VQ strategy used to train the concept vocabulary. We only quantize the
+    concept-level representations to train the codebooks in the training phase.
+
+
+    2. ConceptLM Architecture
+    In this section, we introduce ConceptLM architecture, including the Token-level Encoder, the Concept-
+    level Module, and the Token-level Decoder. ConceptLM construct a concept-level discrete latent space
+Context that
+     D𝑐LM     residesMap
+           – Concept  on the  continuous latent space H𝑐 , and then perform concept-level prediction on
+                          - 1013
+    the concept space, thereby driving the token prediction of the model with conceptual supervision.
+    Figure 2 shows the overview of our model.
+
+
+    2.1. Token-level Encoder
+
+     Given a raw token sequence, the Token-level Encoder first encodes tokens into continuous token-level
+     hidden states ℎ ∈ H , which serve as the founda-
+     tional intermediate representations. These hidden                     NTP Loss
+     states are designed for three purposes: (1) provid-
+ residual
+     ing token-level hidden states for the Token-level               Token-level Decoder
+     Decoder to facilitate predicting the next token; (2)
+                                                                        Element-wise Addition
+     serving as the source for compression into concept-
+                                                                             NCP Loss         VQ Loss
+     level hidden states for predicting the next concept;
+                                                                                                                      Residual
+     and (3) being projected into the discrete latent               Concept-level Module       VQ
+     space for concept-level vocabulary optimization.
+                                                                                                                                       Mean Pooling
+                                                        Quantizer
+    2.2. Concept-level Module
+                                                                                                                                  Token-level Encoder
+    With the continuous token-level hidden states, we
+               Loss 3: Cross
+    derive concept-level     entropy
+                         hidden   states by aggregating                                                        Figure 3 | Forward and backward of ConceptLM.
+    adjacent token-level ones with a mean-pooling
+
+                                                                                                                                                                                              3
+                            NCP Leads to Stronger Language Models
+
+function 𝑓𝑐 : H → H𝑐 . The length of the concept-
+level sequence is reduced to 𝑇 /𝑘, where 𝑘 denotes
+the compression factor. Then, the model predicts the next concept over a concept vocabulary within a
+discrete latent space defined by a Quantizer operating on the concept hidden states.
+Construct the Concept-level Vocabulary: We employ Vector Quantization (VQ) [Gray, 1984] to
+transform the continuous concept-level states into a discrete and predictable space. The VQ maps
+continuous latent states into a finite set of representative embeddings, denoted as 𝑓 : H𝑐 → D𝑐 .
+To enhance the representational capacity of VQ, we adopt a product quantization strategy [Jegou
+et al., 2010]. Specifically, each continuous concept representation is partitioned into 𝑆 independent
+segments along the feature dimension. Each segment is then quantized using a separate codebook
+containing 𝑁 learnable entries { 𝑒1𝑠 , 𝑒2𝑠 , . . . , 𝑒𝑠𝑁 } for the 𝑠-th segment. This results in a total discrete
+representation space of size 𝑁 𝑆 , significantly increasing the expressivity of this discrete space while
+maintaining a small codebook size, with a near-zero cost in terms of quantization latency.
+Predict the Next Concept: To predict the subsequent concept, the Concept-level Module employs
+Transformer layers to process the historical continuous concept hidden states c<𝑡/𝑘 ∈ H𝑐 . Subsequently,
+𝑆 independent prediction heads are deployed to estimate the multi-segment discrete representation
+of the target concept. Specifically, each head performs a linear projection from the hidden state
+dimension to the codebook size 𝑁 , producing a logits distribution over the entries of its corresponding
+segment. Formally, for the 𝑠-th segment, we predicts
+
+                                       𝑤𝑛𝑠 = 𝑃𝜃𝑐𝑠 ( ℎ<𝑡/𝑐 ) ,     𝑛 = 1, . . . , 𝑁,
+
+where 𝑁 is the number of codebook entries for this segment, and 𝜃𝑐𝑠 denotes the parameters of the
+shared Transformer layers with segment-specific prediction head.
+Rather than performing hard sampling, which would introduce non-differentiability, the predicted
+segment representation is derived as a weighted sum of the codebook entries based on these predicted
+logits, noted by:
+                                                  𝑁
+                                                 ∑︁
+                                            𝑐ˆ =
+                                              𝑠
+                                                    𝑤𝑛𝑠 𝑒𝑛𝑠 .
+                                                          𝑛=1
+
+The final predicted conceptual representation 𝑐ˆ is the concatenation of all segment-wise predictions:
+
+
+                                                       𝑐1 , 𝑐ˆ2 , . . . , 𝑐ˆ𝑆 ) .
+                                           𝑐ˆ = concat(ˆ
+
+
+2.3. Token-level Decoder
+
+Finally, the Decoder performs autoregressive generation to predict the next token. To align with the
+number of corresponding token hidden states of each concept, the predicted concept representation ĉ
+is broadcast 𝑘 times to match the token-level hidden states. This broadcast concept representation is
+then integrated with the token-level hidden states via element-wise addition.
+Prevent Information Leakage: Since each concept spans multiple tokens, predicting the next concept
+requires access to the complete Encoder hidden states ℎ of the previous concept. This leads to a
+misalignment in which the first 𝑘 − 1 tokens of a sequence lack a predicted concept. To prevent
+information leakage, we shift the broadcast concept sequence forward by 𝑘 − 1 positions before the
+element-wise addition, adding zero vectors to the first 𝑘 − 1 tokens.
+This element-wise addition can be simply described by:
+
+
+                                                                                                               4
+                          NCP Leads to Stronger Language Models
+
+                                          (
+                                              ℎ𝑡 + 0,                    0≤𝑡 < 𝑘−1
+                                  ℎ˜𝑡 =
+                                              ℎ𝑡 + ĉ ⌊ 𝑡/( 𝑘 −1) ⌋ ,    𝑘−1≤𝑡 <𝑇
+
+The Token-level Decoder with parameter 𝜃 predicts the next token based on the fused representation,
+formally:
+
+
+                                              𝑝 ( 𝑥𝑡+1 | 𝑥 ≤ 𝑡 ) = 𝑃𝜃 ( ℎ˜<𝑡 ) .
+
+
+3. ConceptLM Training
+We delineate the training objectives of ConceptLM, including LVQ that construct discrete concept
+vocabulary; LNCP that supervise the next concept prediction; and LNTP that supervise the next token
+prediction. We show the forward and backward details in Figure 3.
+The Supervision Signal to Construct Concept Vocabulary: LVQ is strictly confined to the Quantizer
+module without affecting the model’s representation learning. By isolating this loss, we ensure the
+codebook entries effectively track the latent space without imposing quantization-specific constraints
+back onto the hidden representations. Formally, the VQ loss is defined as:
+
+                                 LVQ = ∥sg( 𝑐) − 𝑑 ∥ 22 + 𝛽 ∥ 𝑐 − sg( 𝑑 ) ∥ 22 ,
+
+where 𝑐 ∈ H𝑐 denotes the input concept-level hidden state, 𝑑 ∈ D𝑐 is the corresponding quantized
+embedding, and sg(·) denotes the stop-gradient operator.
+The Supervision Signal to Predict Next Concept: Building upon this discrete space, LNCP supervises
+the NCP LM to predict next concept. To supervise this predictive process, we employ a Mean Squared
+Error (MSE) loss that aligns the predicted concept 𝑐ˆ with the ground-truth continuous latent states ℎ𝑐 .
+It is calculated over all predicted time steps:
+
+                                                   𝑀 −1
+                                                1 ∑︁
+                                LNCP =                  ∥ˆ𝑐𝑡 − 𝑐𝑡 ∥ 22 , 𝑀 = 𝑇 /𝑘.
+                                               𝑀−1
+                                                   𝑡 =1
+
+
+By regressing to a weighted combination of codebook representations, the LNCP effectively supervises
+the next concept prediction while avoiding unconstrained optimization. The context prediction
+gradients propagate back to the Encoder, forcing the Encoder to capture high-level semantic and
+long-range dependencies that are essential for predicting future concepts, rather than merely focusing
+on tokens.
+The Supervision Signal to Predict Next Token: With the fused token-level representation ℎ˜, the
+resulting token-level supervision can be formulated by:
+
+                                                𝑇
+                                                ∑︁−1
+                               LNTP = −                log 𝑃 ( 𝑥𝑡+1 | 𝑥 ≤ 𝑡 , 𝑐ˆ≤ ⌊ 𝑡/( 𝑘 −1) ⌋ )
+                                                𝑡 =0
+                                                𝑇 −1
+                                                       log 𝑃 ( 𝑥𝑡+1 | ℎ˜𝑡 )
+                                                ∑︁
+                                      =−
+                                                𝑡 =1
+
+
+
+
+                                                                                                      5
+                            NCP Leads to Stronger Language Models
+
+where the conditional dependency ( 𝑥 ≤ 𝑡 , 𝑐ˆ≤ ⌊ 𝑡/( 𝑘 −1) ⌋ ) is instantiated by the integrated representation
+ℎ˜𝑡 . LCE provides dense, end-to-end supervision. It affects all trainable parameters through backprop-
+agation, ensuring the model maintains its fundamental language modeling capabilities.
+Total Training Objective of ConceptLM: Finally, we train the model end-to-end with the total
+training objective:
+
+
+                                           L = LNTP + LNCP + LVQ .
+
+
+4. Experiments
+To evaluate ConceptLM, we conduct several experiments across various model backbones, parameter
+scales, and training stages: training from scratch and continual pre-training. Section 4.1 details the
+general experimental setup and the configurations for ConceptLM. Section 4.2 shows the scaling
+experiments for the GPT-2 [Radford et al., 2019] backbone, from 160M to 1.5B parameters with 8B
+tokens, and for the Pythia [Biderman et al., 2023] backbone, from 70M to 410M parameters with
+300B tokens. Furthermore, we continually pre-train the existing token-level Llama-3.1-8B to extend
+it into concept models in Section 4.3.
+
+
+4.1. Experimental Setup
+
+Models and Datasets: For scaling experiments, we use GPT-2 and Pythia series models as backbones,
+and train them using OpenWebText [Gokaslan et al., 2019] and the Pile [Gao et al., 2020] dataset from
+scratch, respectively. For 8B models, we use Llama-3.1-8B as the base model and perform continual
+pre-training using the LongCtxEng dataset [Fu et al., 2024]. We follow the official hyperparameters
+in the scaling experiments; we list the detailed experiment settings in Appendix B.
+Configurations for ConceptLM: For the VQ, to avoid representation collapse, we draw inspiration
+from SimVQ [Zhu et al., 2025] by introducing a two-layer MLP with ReLU activation to transform
+the codebook embeddings. We set the number of segments 𝑆 = the head numbers in each model and
+use a small 𝑁 of 64. And we use a two-layer Transformer backbone for concept-level processing with
+a chunk size of 4 (𝑘=4) in all main experiments. We insert the Concept-level Module before the
+first layer for GPT-2 models and after the first layer for Pythia and Llama models. A more in-depth
+discussion regarding the insert depth and VQ is provided in Appendix B.2 and Appendix E.3.
+
+
+4.2. Pre-train ConceptLM from Scratch
+
+We evaluate our method from a scaling perspective using GPT-2 and Pythia backbones. For each
+trained model, we employ a diverse suite of benchmarks: 9 downstream tasks (Lambada OpenAI/Stan-
+dard [Paperno et al., 2016], ARC-Easy/Challenge [Clark et al., 2018], WinoGrande [Sakaguchi et al.,
+2019], PIQA [Bisk et al., 2019], HellaSwag [Zellers et al., 2019], SciQ [Welbl et al., 2017], RACE [Lai
+et al., 2017]) and 4 language modeling tasks, covering Lambada OpenAI/Standard, Wikitext [Merity
+et al., 2016], and the original training distributions 1 . Detailed benchmark descriptions are available
+in Appendix D.
+GPT-2 Scaling Experiments: For the GPT-2 series, we train three configurations from scratch for
+comparison: (i) Baseline: The standard GPT-2; (ii) ConceptLM: Our method; (iii) Parameter-Matched
+(PM): The baseline with an additional two token-level layers to match the parameter count of
+  1 All benchmarks except the Pile and OpenWebText are evaluated using the Language Model Evaluation Harness V-0.4.4.
+
+
+
+
+                                                                                                                   6
+                         NCP Leads to Stronger Language Models
+
+Table 1 | Language Modeling results for GPT-2 and Pythia models. O/P denotes the OpenWebText
+results for GPT-2 models and Pile results for Pythia models. Lambada-O and Lambada-S denote the
+Lambada OpenAI and Lambada Standard results. We only annotated the model size for the base
+model in each group of experiments.
+
+                 Model         O/P    Wiki Lambada-O Lambada-S          Avg PPL ↓
+                 GPT2-124M     22.04 43.99     69.29       272.43        101.94
+                 GPT2-PM       21.22 42.15     60.05       273.12         99.14
+                 ContextLM     20.68 41.45     55.22       231.41         87.19
+                 ConceptLM     20.56 40.86     51.83       225.74      84.75↓ 17.19
+                 GPT2-355M     17.97 34.24     35.54        122.54        52.57
+                 GPT2-PM       17.67 33.59     32.91        126.03        52.55
+                 ContextLM     17.03 32.08     28.06        95.06         43.06
+                 ConceptLM     16.81 31.53     26.96        86.75      40.51↓ 12.06
+                 GPT2-774M     16.01 30.03     24.58        74.76        36.35
+                 GPT2-PM       15.89 29.71     23.50        62.45        32.89
+                 ContextLM     15.41 28.82     20.89        62.09        31.80
+                 ConceptLM     15.20 28.52     19.68        55.05      29.61↓ 6.74
+                 GPT2-1.5B     14.99 27.89     20.72        55.12        29.68
+                 GPT2-PM       14.94 27.95     21.00        56.15        30.01
+                 ContextLM     14.60 27.05     17.46        44.62        25.93
+                 ConceptLM     14.40 26.80     17.26        47.06      26.38↓ 3.30
+
+                 Pythia-70M    18.27 57.01     142.01      973.59        297.72
+                 ContextLM     14.96 43.64      71.45      440.77        142.71
+                 ConceptLM     15.00 43.29     58.09       434.44     137.70↓ 160.02
+                 Pythia-160M 12.56 33.44       38.20        187.28        67.87
+                 ContextLM 11.14 28.18         25.97        107.05        43.09
+                 ConceptLM 10.93 27.01         20.01        79.32      34.23↓ 33.54
+                 Pythia-410M 8.88 20.11         10.85       31.53        17.84
+                 ContextLM   8.67 19.50         10.15       24.95        15.82
+                 ConceptLM 8.70 19.49           9.84        23.20      15.31↓ 2.53
+
+
+ConceptLM. Since we use very small codebooks, which have fewer than 2M parameters in total in the
+largest XL model, we do not match these parameters. We evaluate these models in scaling metrics,
+which we visualize in Figure 1. Compared to the base models, we achieve the same performance
+with the largest base models using only 76% of the tokens or 63% of the parameters. And our model
+gains the improvement with significantly lower computational cost, requiring only 81% used by the
+standard models.
+The detailed results of language modeling tasks are shown at the top of Table 1, and the downstream
+tasks’ performance is shown at the top of Table 2. We find that in language modeling tasks, our method
+achieves the best results except when testing Lambada-Standard on the XL-model. In downstream
+tasks, our model also consistently demonstrated the best average performance.
+Pythia Scaling Experiments: For the Pythia series, we train ConceptLM from scratch. Results for
+the baseline and our strong baseline ContextLM, a concept-level model without explicit but implicit
+next concept prediction, are sourced from Dai et al. [2025]. To ensure a fair comparison, we align all
+training and evaluation settings. The language modeling performance of Pythia series is reported at
+the bottom of Table 1, and the downstream performance is shown at the bottom of Table 2.
+We find that the average performance on downstream tasks of our model exceeds the baselines. For
+
+
+                                                                                                    7
+                           NCP Leads to Stronger Language Models
+
+Table 2 | Evaluation of models across downstream tasks (Accuracy ↑) and language modeling (PPL ↓).
+ConceptLM-GPT is denoted as ConceptLM.
+
+                  Lambada Lambada ARC- ARC- Wino      Hella-
+    Model                                        PIQA        SciQ RACE Avg Acc ↑
+                   OpenAI   Std.   E    C   Gd.       Swag
+    GPT-124M        27.3       20.7     41.6   17.9   49.6   60.4   27.5   69.5   27.4     38.0
+    GPT-PM          28.3       20.7     41.7   18.8   49.7   60.7   27.4   69.8   28.3     38.4
+    ConceptLM       29.2       20.3     43.8   19.3   52.9   60.7   27.6   69.5   28.4     39.1
+    ConceptLM       29.5       21.3     43.5   19.2   49.4   61.3   27.9   69.6   28.9   38.9↑ 0.9
+    GPT-355M        32.8       24.4     44.7   19.9   50.7   62.7   28.8   72.5   28.8     40.6
+    GPT-PM          35.2       25.3     44.6   20.4   52.6   62.4   29.1   73.1   29.8     41.4
+    ContextLM       36.8       26.7     46.7   19.5   50.9   62.9   29.8   74.2   29.3     41.9
+    ConceptLM       36.6       27.1     46.0   20.7   50.6   64.2   30.3   75.0   29.1   42.3↑ 1.7
+    GPT-774M        37.2       27.4     47.0   20.2   53.6   64.6   30.3   74.9   29.8     42.8
+    GPT-PM          37.2       29.4     48.4   19.5   52.4   63.8   30.6   74.3   29.8     42.8
+    ContextLM       40.7       29.9     47.9   21.1   51.3   62.9   29.8   76.6   31.0     43.9
+    ConceptLM       41.1       30.6     48.5   19.9   52.1   65.3   31.4   77.0   30.0   44.0↑ 1.2
+    GPT-1.5B        39.3       29.8     49.6   20.6   51.8   65.1   31.5   77.0   30.4     43.9
+    GPT-PM          38.7       29.5     49.2   20.0   51.2   64.8   31.5   77.0   29.9     43.5
+    ContextLM       41.9       32.3     49.9   21.4   51.9   66.1   32.3   77.7   31.2     45.0
+    ConceptLM       42.9       32.2     49.9   21.9   52.1   66.8   32.4   76.8   30.6   45.1↑ 1.2
+
+    Pythia-70M      18.3       13.4     36.9   18.5   52.1   60.0   26.6   60.5   24.9     34.6
+    ContextLM       28.0       17.2     40.7   18.6   52.3   60.5   27.5   72.1   27.0     38.2
+    ConceptLM       29.3       17.5     40.2   17.8   50.8   59.8   27.5   74.3   26.2   38.2↑ 3.6
+    Pythia-160M     32.7       21.5     43.8   19.5   53.4   61.5   28.5   74.3   27.9     40.3
+    ContextLM       37.2       25.6     45.0   19.5   52.0   62.9   29.2   77.6   28.7     42.0
+    ConceptLM       41.8       25.9     44.8   18.3   53.4   62.1   29.4   80.0   30.1   42.9↑ 2.6
+    Pythia-410M     51.6       36.4     52.2   21.3   53.9   66.8   33.8   81.2   30.7     47.5
+    ContextLM       52.2       39.0     51.7   22.7   52.3   67.4   34.3   83.0   30.8     48.2
+    ConceptLM       53.0       39.7     52.0   22.1   54.2   66.6   34.3   82.2   30.2   48.3↑ 0.8
+
+
+language modeling tasks, our model also generally outperforms the base model. While the 70M
+and 410M models perform slightly worse than ContextLM on the trained Pile dataset, our method
+demonstrates superior generalization in language modeling, outperforming ContextLM across several
+other datasets.
+We suggest that the generalization performance of ConceptLM is attributed to the introduction of the
+concept vocabulary, which saves fundamental conceptual representations in a stable, discrete space
+after massive data training, thereby exhibiting significant generalization. Notably, the use of a fixed
+configuration (𝑆 and 𝑁 ) across all the models may not be optimal for every model. Our 160M model
+achieves a more pronounced improvement over the baseline compared to other scales, which we
+attribute to a potentially optimal alignment with the settings. This further underlines the robustness
+and potential of our proposed method.
+
+
+
+
+                                                                                                     8
+                         NCP Leads to Stronger Language Models
+
+4.3. Continual Pre-train ConceptLM on 8B models
+
+To investigate the scalability and generalizability of NCP, we extend the Llama-3.1-8B with concept-
+level prediction through continual pre-training. The model is trained on 9.6B tokens. We compare
+three variants: (i) Trained: The original Llama-3.1-8B, further trained on our corpus. (ii) ConceptLM:
+The model augmented with two concept-level layers and the concept vocabulary, we also use an
+𝑆 = the head numbers and 𝑁 = 64 setting. (iii) PM: The parameter-matching token-level model. To
+ensure stable learning during the expansion, we initialize the newly added layers using the weights
+of the first two layers of the base model. We evaluate these models across widely used benchmarks,
+including MMLU [Hendrycks et al., 2021], ARC-Challenge, AGIEval [Zhong et al., 2023], and SQuAD
+2.0 [Rajpurkar et al., 2018].
+We show the 8B-parameter experiments in Table 3, ConceptLM gains a 0.4 average improvement
+compared to the strong baseline PM model, and gains a 0.1 average improvement compared to the
+Trained-8B model. It is worth noting that training new layers within a pre-trained LLM is inherently
+challenging due to the difficulty of aligning new parameters with well-established representations.
+Despite these difficulties, our results demonstrate that concept-level prediction further enhances the
+performance of existing token-level models, even at an 8B-parameter scale with only 9.6B tokens.
+In addition, we observe that the LVQ continues to decrease with training, indicating a better fit to
+the continuous concept space. This suggests that combining explicit concept-level prediction with
+token-level models may yield more significant gains when scaled to larger datasets.
+
+
+5. Ablation Studies and Analysis
+
+Table 3 | Results of continual pre-trained Llama-3.1-8B with 9.6B tokens. We denote ConceptLMas
+Ours. We train the models using the same settings. Trained-Base-8B denotes the continual pretrained
+base model; PM-8B denotes the token-level base model with 2 more token-level layers to match the
+parameter with ConceptLM.
+
+
+                       Model        MMLU ARC-C AGIEval SquAD 2.0 Avg
+
+                       Trained-8B 64.3       34.8    54.2      36.7     47.5
+                       PM-8B         64.5    35.0    53.3       36.1    47.2
+                       Ours-8B       64.6   35.1     54.2       36.5    47.6
+
+We conduct ablation studies and analysis in this Section. For the ablation studies, we discuss the
+structural and functional design of our model, including: (i) the concept-level modeling and the
+concept vocabulary, and (ii) the training objectives. For the analysis, we analyze the features of our
+method. Specifically, we analyze its performance in long-range modeling and its scaling performance
+compared to standard token-level models. Finally, we provide an assessment of the computational
+costs of our method. Unless otherwise specified, we use a 160M Pythia model as the backbone and
+train it from scratch on 30B tokens.
+
+
+5.1. Concept-level Modeling and Concept Vocabulary
+
+To evaluate the effectiveness of each component, we compare three configurations under the same
+experimental settings, as reported in Table 1 and Table 2. Specifically, the comparison between the
+PM (Parameter-Matching) models and ConceptLM models highlights the superiority of concept-level
+
+
+                                                                                                    9
+                         NCP Leads to Stronger Language Models
+
+modeling in enhancing model capabilities. Furthermore, the performance gap between ContextLM
+and ConceptLM on the Pythia experiments underscores the generalization advantages of explicitly
+incorporating a concept vocabulary compared to implicit concept modeling.
+
+Table 4 | Loss ablation results. We present a training objective ablation study for ConceptLM and a
+baseline LMTP result.
+
+                      Lambada Lambada ARC- ARC- Wino                         Hella-
+  Model                                                               PIQA          SciQ RACE Avg Acc ↑
+                       OpenAI   Std.   E    C   Gd.                          Swag
+                                         Zero-shot Evaluation (Accuracy %)
+                                                    Baseline
+  LMTP                  31.9           20.4    40.2  17.7 49.3        60.3   27.9   71.2   27.0     38.4
+                                                   ConceptLM
+  LNTP                  32.9           20.7    43.4 18.0 50.7         61.3   28.0   72.3   27.0     39.6
+  LNTP + LVQ            34.4           20.5    43.4 18.0 49.1         61.4   28.0   72.3   27.6     39.8
+  LNTP + LNCP           34.0           20.5    43.1 18.3 49.4         61.3   28.1   73.2   27.9     39.5
+  LNTP + LNCP + LVQ     34.0           21.8    43.5 18.8 53.0         61.3   28.3   73.3   28.6     40.3
+
+  Model                        OWT              Wikitext     Lambada OpenAI Lambada Std    —      Avg PPL ↓
+                                          Language Modeling (Perplexity)
+                                                     Baseline
+  LMTP                         14.83              36.51           43.12        230.18      —       81.16
+                                                   ConceptLM
+  LNTP                         12.64              34.30           37.31        192.87      —       69.28
+  LNTP + LVQ                   12.62              33.66           37.60        218.69      —       75.64
+  LNTP + LNCP                  13.21              35.95           41.35        214.70      —       76.30
+  LNTP + LNCP + LVQ            12.64              33.45           36.38        190.06      —       68.13
+
+
+
+5.2. Training Objectives
+
+We conduct an ablation study by systematically removing LNCP and LVQ to evaluate the contribution
+of each loss, while keeping the model architecture unchanged. As shown in Table 4, using LNTP alone
+provides the model with solid foundational capabilities. The independent using of either LVQ or LNCP
+leads to a performance drop. This suggests that without quantization constraints, the vocabulary
+fails to learn robust concept representations; conversely, without concept-prediction supervision, the
+model cannot effectively predict useful discrete concepts. Optimal performance is only achieved when
+objectives are combined.
+Furthermore, we train a token-level model with the MTP loss LMTP , 𝑀 = 4 to serve as one of our
+baselines; however, empirical evidence, including the original MTP paper, suggests that MTP models do
+not yield superior performance at scales below 3B parameters, larger than our largest 1.5B pretrained
+model. Consequently, rather than categorizing it as a strong baseline in the main experiments, we
+train a small MTP variant to evidence this in Table 4.
+
+
+5.3. Long-range Modeling Analysis
+
+We assess long-context modeling capabilities by increasing training sequence lengths while keeping all
+
+
+
+
+                                                                                                           10
+                          NCP Leads to Stronger Language Models
+
+other settings fixed. We compare the language                           2.70
+                                                                                                         PM-Baseline
+modeling loss of ConceptLM and the PM base-                             2.65                             ConceptLM
+line after training on token length from 512 to
+2048. As shown in Figure 4, ConceptLM con-                      Loss    2.60
+sistently achieves larger improvements over the                         2.55
+PM-Baseline as the sequence length increases.
+This highlights a critical advantage of concept-                         2.50
+
+
+                                                               " Loss
+                                                                        0.011
+level modeling beyond general performance gains:                        0.009
+the concept-level module operates on a sequence                         0.007
+length reduced by a factor of 𝑘. This reduction                         0.005
+allows the computational overhead to be more                                    512      1024                     2048
+effectively focused on capturing long-range de-                                          Training length
+pendencies rather than being focused on the local              Figure 4 | Long-range dependency experiments.
+tokens.
+Table 5 | Comparison of model scaling w/ or w/o the concept layers.
+
+                      Lambada Lambada ARC- ARC- Wino                                   Hella-
+ Model                                                                          PIQA          SciQ RACE     Avg Acc ↑
+                       OpenAI   Std.   E    C   Gd.                                    Swag
+                                             Zero-shot Evaluation (Accuracy %)
+ +2 token-layers       33.7           21.0       44.5   20.1   50.7             61.4   27.9   74.7   27.4     40.1
+ +2 concept-layers     34.0           21.8       43.5   18.8   53.0             61.3   28.3   73.3   28.6    40.3+0.2
+ +6 token-layers       34.7           22.5       44.8   18.8   52.1             60.2   27.6   72.3   28.6     40.1
+ +6 concept-layers     33.9           23.3       43.0   19.7   54.1             61.0   28.4   76.0   28.6    40.9+0.8
+ +10 token-layers      33.0           20.7       44.0   19.8   52.0             61.9   28.1   74.7   27.0     40.2
+ +10 concept-layers    33.9           22.3       43.3   18.7   53.6             61.5   28.3   73.8   27.9    40.4+0.2
+
+ Model                        OWT                  Wikitext    Lambada OpenAI Lambada Std            —      Avg PPL ↓
+                                              Language Modeling (Perplexity)
+ +2 token-layers              12.77                 34.02                 37.94          200.67      —         59.80
+ +2 concept-layers            12.64                 33.45                 36.38          190.06      —      68.13+3.22
+ +6 token-layers              12.74                 34.06                 37.31          176.90      —         65.25
+ +6 concept-layers            12.45                 33.06                 37.83          134.48      —      54.34+7.91
+ +10 token-layers             12.73                 34.06                 40.69          213.06      —         75.20
+ +10 concept-layers           12.32                 33.26                 36.96          150.88      —      58.21+16.99
+
+
+
+5.4. Scaling Performance Analysis
+
+We show that introducing concept-level modeling significantly enhances scaling behavior. As shown
+in Table 5, we observe that for standard token-level models, simply stacking additional token layers
+does not yield stable performance gains. The performance even degrades significantly when the depth
+reaches 22 token-level layers. This phenomenon can be attributed to the depth-width imbalance or
+representation bottlenecks, where the limited dimension cannot effectively support the increased
+abstraction required by excessive depth, leading to worse performance.
+However, our results demonstrate that by incorporating concept-level modeling with a certain number
+of token layers, ConceptLM effectively overcomes these scaling limitations. With the concept-level
+layers operating on a denser semantic space, ConceptLM exhibits a widening performance PPL.Avg
+gap as depth increases, underscoring its robust scaling behavior under a fixed-width configuration.
+
+                                                                                                                     11
+                          NCP Leads to Stronger Language Models
+
+5.5. Computational Complexity Analysis
+
+We analyze the computational complexity of ConceptLM in Table 6. The empirical training cost shows
+our training time of the 8B models with 8 NVIDIA H200 GPUs, and the inference cost is the time test
+on the SQuAD-V2 benchmark. Theoretically, by compressing the sequence length by a factor of 𝑘, the
+concept-level layers achieve a quadratic reduction (𝑘2 ) in attention overhead and a linear reduction
+(𝑘) in MLP computation. Notably, this advantage becomes more substantial as the sequence length 𝑇
+increases.
+Table 6 | Training and Inference cost comparison. 𝑇 denotes sequence length, 𝑑 denotes the hidden
+dimension.
+
+                           Layer / Model Training Cost Inference Cost
+
+                           Theoretical Complexity Analysis
+                           Token Layer         𝑂 (𝑇 2 𝑑 + 𝑇 𝑑 2 )   𝑂 (𝑇𝑑 + 𝑑 2 )
+                           Concept Layer 𝑂 (( 𝑇𝑘 ) 2 𝑑 + 𝑇𝑘 𝑑 2 )   𝑂 ( 𝑇𝑘 𝑑 + 𝑑 2 )
+
+                           Empirical Cost (Llama-3.1-8B)
+                           Llama-PM-8B             80.0 h            99.0 min
+                           ConceptLM-8B 71.0 h↓ 11.3% 86.0 min↓ 13.1%
+
+
+Practically, in our experiment, the Llama-PM-8B model is a 34-layer token-level model, ConceptLM
+replacing 2 out of the 34 token-level layers with 2 concept-level layers, which should yield a training
+computational reduction of approximately 4.69% in terms of FLOPs, except for the embedding in/out
+module. However, our empirical results show a more significant improvement (11.3% in training
+and 13.1% in inference). This is attributed to the substantial reduction in IO cost. By processing
+concept representations instead of token representations, ConceptLM reduces the KV cache size and
+intermediate hidden states size in the concept layers, thereby alleviating the memory bandwidth
+bottleneck that often dominates large-scale model training. We provide the FLOPs calculation in
+Appendix C.
+
+
+6. Related Work
+
+6.1. Abstract-level Prediction in AI
+
+A growing body of research explores high-level prediction in AI, shifting learning objectives from
+fine-grained, low-level targets to abstract semantic representations. As a pioneering framework,
+JEPA [Assran et al., 2023, Bardes et al., 2024] emphasizes prediction within a joint-embedding space
+to bypass the modeling of redundant pixel-level details, a paradigm successfully extended to video
+understanding [Assran et al., 2025]. In the realm of decision-making and planning, world models
+such as Dreamer [Hafner et al., 2024] and GAIA-1 [Hu et al., 2023] demonstrate that predicting
+future latent states, rather than raw inputs, is crucial for robust long-horizon reasoning. Similarly, the
+field of audio has transitioned from raw waveform reconstruction toward the prediction of discrete
+hidden units [Baevski et al., 2020, Hsu et al., 2021] to better capture long-range dependencies.
+And for multimodal learning, the Large Concept Model (LCM) [team et al., 2024] operates in a
+modality-agnostic latent space, performing inference on sentence-level embeddings rather than
+tokens. Collectively, these developments suggest that higher level prediction is a universal path
+toward building better models.
+
+                                                                                                      12
+                          NCP Leads to Stronger Language Models
+
+6.2. Abstract-level Modeling in Language Models
+
+There are also several works that have explored language modeling beyond individual tokens. One
+prominent approach involves structural compression, where tokens are aggregated into patches:
+MegaByte [Yu et al., 2023] uses a fixed chunk size to convert bytes into patches; BLT [Pagnoni
+et al., 2024] and H-net [Hwang et al., 2025] dynamically patchify byte sequences into patches,
+and DLCM [Qu et al., 2026] extends the H-net paradigm to the token level. They then perform
+patch-level language modeling. The high-level process methods also focus on accelerating model
+training or inference [Liu and Zhang, 2025, Shao et al., 2025]. And more recently, latent reasoning
+paradigms [Deng et al., 2024, Hao et al., 2025, Su et al., 2025, Tack et al., 2025] emerged to
+leverage latent tokens to capture abstract representations. Despite these advancements, designing a
+self-supervised pretraining objective specifically for high-level language representations remains an
+open challenge.
+
+
+7. Conclusion
+In this paper, we propose Next Concept Prediction (NCP), a novel and more challenging pre-training
+objective built upon a discrete concept-level latent space. By leveraging VQ to construct this space and
+integrating it with standard Next Token Prediction (NTP), we develop the ConceptLM framework. Our
+results demonstrate that ConceptLM exhibits superior performance on language modeling tasks and
+downstream tasks than standard token-level models and strong baselines. Moreover, by leveraging
+continual pre-training to transform an 8B existing token-level model into a context-aware variant, we
+show the applicability, robustness, and low-cost feature of our method. Finally, we provide empirical
+evidence of the model’s long-range modeling ability and its scalability across different parameter
+scales. These findings suggest that the modeling supervision space transitioning, from token-level to
+concept-level, is a promising path for building the next generation of LLMs.
+
+
+Acknowledgment
+This work is sponsored by the National Natural Science Foundation of China (NSFC) grant (No.
+62576211) and the National Key Research and Development Program of China (No. 2023ZD0121402).
+It is also the result of a collaborative project on novel language model architectures between Shanghai
+Jiao Tong University (SJTU) and the Shanghai Artificial Intelligence Laboratory. The computational
+resources required for pretraining the models were provided by the Shanghai AI Lab.
+
+
+
+
+                                                                                                    13
+                         NCP Leads to Stronger Language Models
+
+References
+Mahmoud Assran, Quentin Duval, Ishan Misra, Piotr Bojanowski, Pascal Vincent, Michael Rabbat,
+ Yann LeCun, and Nicolas Ballas. Self-supervised learning from images with a joint-embedding
+ predictive architecture, 2023. URL https://arxiv.org/abs/2301.08243.
+Mido Assran, Adrien Bardes, David Fan, Quentin Garrido, Russell Howes, Mojtaba, Komeili, Matthew
+  Muckley, Ammar Rizvi, Claire Roberts, Koustuv Sinha, Artem Zholus, Sergio Arnaud, Abha Gejji,
+ Ada Martin, Francois Robert Hogan, Daniel Dugas, Piotr Bojanowski, Vasil Khalidov, Patrick Labatut,
+  Francisco Massa, Marc Szafraniec, Kapil Krishnakumar, Yong Li, Xiaodong Ma, Sarath Chandar,
+  Franziska Meier, Yann LeCun, Michael Rabbat, and Nicolas Ballas. V-jepa 2: Self-supervised video
+  models enable understanding, prediction and planning, 2025. URL https://arxiv.org/abs/
+  2506.09985.
+Alexei Baevski, Henry Zhou, Abdelrahman Mohamed, and Michael Auli. wav2vec 2.0: A framework
+  for self-supervised learning of speech representations, 2020. URL https://arxiv.org/abs/20
+  06.11477.
+Adrien Bardes, Quentin Garrido, Jean Ponce, Xinlei Chen, Michael Rabbat, Yann LeCun, Mahmoud
+  Assran, and Nicolas Ballas. Revisiting feature prediction for learning visual representations from
+  video, 2024. URL https://arxiv.org/abs/2404.08471.
+Stella Biderman, Hailey Schoelkopf, Quentin Anthony, Herbie Bradley, Kyle O’Brien, Eric Hallahan,
+  Mohammad Aflah Khan, Shivanshu Purohit, USVSN Sai Prashanth, Edward Raff, Aviya Skowron,
+  Lintang Sutawika, and Oskar Van Der Wal. Pythia: a suite for analyzing large language models
+  across training and scaling. In Proceedings of the 40th International Conference on Machine Learning,
+  ICML’23. JMLR.org, 2023.
+Yonatan Bisk, Rowan Zellers, Ronan Le Bras, Jianfeng Gao, and Yejin Choi. Piqa: Reasoning about
+  physical commonsense in natural language, 2019. URL https://arxiv.org/abs/1911.11641.
+Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan, Prafulla Dhariwal, Arvind
+  Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, Sandhini Agarwal, Ariel Herbert-Voss,
+  Gretchen Krueger, Tom Henighan, Rewon Child, Aditya Ramesh, Daniel M. Ziegler, Jeffrey Wu,
+  Clemens Winter, Christopher Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin
+  Chess, Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya Sutskever, and Dario
+  Amodei. Language models are few-shot learners, 2020. URL https://arxiv.org/abs/2005.1
+  4165.
+Lili Chen, Kevin Lu, Aravind Rajeswaran, Kimin Lee, Aditya Grover, Michael Laskin, Pieter Abbeel,
+   Aravind Srinivas, and Igor Mordatch. Decision transformer: Reinforcement learning via sequence
+   modeling, 2021. URL https://arxiv.org/abs/2106.01345.
+Cheng Chi, Zhenjia Xu, Siyuan Feng, Eric Cousineau, Yilun Du, Benjamin Burchfiel, Russ Tedrake,
+  and Shuran Song. Diffusion policy: Visuomotor policy learning via action diffusion, 2024. URL
+  https://arxiv.org/abs/2303.04137.
+Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa Schoenick, and
+  Oyvind Tafjord. Think you have solved question answering? try arc, the ai2 reasoning challenge,
+  2018. URL https://arxiv.org/abs/1803.05457.
+Beiya Dai, Yuliang Liu, Daozheng Xue, Qipeng Guo, Kai Chen, Xinbing Wang, Bowen Zhou, and
+  Zhouhan Lin. Context-level language modeling by learning predictive context embeddings, 2025.
+  URL https://arxiv.org/abs/2510.20280.
+
+                                                                                                   14
+                          NCP Leads to Stronger Language Models
+
+Yuntian Deng, Yejin Choi, and Stuart Shieber. From explicit cot to implicit cot: Learning to internalize
+  cot step by step, 2024. URL https://arxiv.org/abs/2405.14838.
+
+Yao Fu, Rameswar Panda, Xinyao Niu, Xiang Yue, Hannaneh Hajishirzi, Yoon Kim, and Hao Peng. Data
+  engineering for scaling language models to 128k context. In Proceedings of the 41st International
+  Conference on Machine Learning, ICML’24. JMLR.org, 2024.
+
+Leo Gao, Stella Biderman, Sid Black, Laurence Golding, Travis Hoppe, Charles Foster, Jason Phang,
+  Horace He, Anish Thite, Noa Nabeshima, Shawn Presser, and Connor Leahy. The pile: An 800gb
+  dataset of diverse text for language modeling, 2020. URL https://arxiv.org/abs/2101.000
+  27.
+Fabian Gloeckle, Badr Youbi Idrissi, Baptiste Rozière, David Lopez-Paz, and Gabriel Synnaeve. Better
+  & faster large language models via multi-token prediction, 2024. URL https://arxiv.org/ab
+  s/2404.19737.
+Aaron Gokaslan, Vanya Cohen, Ellie Pavlick, and Stefanie Tellex. Openwebtext corpus. http:
+  //Skylion007.github.io/OpenWebTextCorpus, 2019.
+Aaron Grattafiori and et.al. Abhimanyu Dubey. The llama 3 herd of models, 2024. URL https:
+  //arxiv.org/abs/2407.21783.
+R. Gray. Vector quantization. IEEE ASSP Magazine, 1(2):4–29, 1984. doi: 10.1109/MASSP.1984.116
+  2229.
+
+Danijar Hafner, Jurgis Pasukonis, Jimmy Ba, and Timothy Lillicrap. Mastering diverse domains
+  through world models, 2024. URL https://arxiv.org/abs/2301.04104.
+
+Shibo Hao, Sainbayar Sukhbaatar, DiJia Su, Xian Li, Zhiting Hu, Jason Weston, and Yuandong
+  Tian. Training large language models to reason in a continuous latent space, 2025. URL https:
+  //arxiv.org/abs/2412.06769.
+Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob
+  Steinhardt. Measuring massive multitask language understanding, 2021. URL https://arxiv.
+  org/abs/2009.03300.
+Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models, 2020. URL
+  https://arxiv.org/abs/2006.11239.
+Wei-Ning Hsu, Benjamin Bolte, Yao-Hung Hubert Tsai, Kushal Lakhotia, Ruslan Salakhutdinov, and
+ Abdelrahman Mohamed. Hubert: Self-supervised speech representation learning by masked
+ prediction of hidden units, 2021. URL https://arxiv.org/abs/2106.07447.
+
+Anthony Hu, Lloyd Russell, Hudson Yeo, Zak Murez, George Fedoseev, Alex Kendall, Jamie Shotton,
+  and Gianluca Corrado. Gaia-1: A generative world model for autonomous driving, 2023. URL
+  https://arxiv.org/abs/2309.17080.
+Sukjun Hwang, Brandon Wang, and Albert Gu. Dynamic chunking for end-to-end hierarchical
+  sequence modeling, 2025. URL https://arxiv.org/abs/2507.07955.
+
+Herve Jegou, Matthijs Douze, and Cordelia Schmid. Product quantization for nearest neighbor search.
+  IEEE transactions on pattern analysis and machine intelligence, 33(1):117–128, 2010.
+
+Guokun Lai, Qizhe Xie, Hanxiao Liu, Yiming Yang, and Eduard Hovy. Race: Large-scale reading
+  comprehension dataset from examinations, 2017. URL https://arxiv.org/abs/1704.04683.
+
+                                                                                                    15
+                        NCP Leads to Stronger Language Models
+
+Yann LeCun. A path towards autonomous machine intelligence version 0.9. 2, 2022-06-27. 2022.
+
+Jingyu Liu and Ce Zhang. Hamburger: Accelerating llm inference via token smashing, 2025. URL
+  https://arxiv.org/abs/2505.20438.
+Stephen Merity, Caiming Xiong, James Bradbury, and Richard Socher. Pointer sentinel mixture models,
+  2016. URL https://arxiv.org/abs/1609.07843.
+
+Piotr Nawrot, Szymon Tworkowski, Michał Tyrolski, Lukasz Kaiser, Yuhuai Wu, Christian Szegedy,
+  and Henryk Michalewski. Hierarchical transformers are more efficient language models. In Marine
+  Carpuat, Marie-Catherine de Marneffe, and Ivan Vladimir Meza Ruiz, editors, Findings of the
+  Association for Computational Linguistics: NAACL 2022, pages 1559–1571, Seattle, United States,
+  July 2022. Association for Computational Linguistics. doi: 10.18653/v1/2022.findings-naacl.117.
+  URL https://aclanthology.org/2022.findings-naacl.117/.
+
+Artidoro Pagnoni, Ram Pasunuru, Pedro Rodriguez, John Nguyen, Benjamin Muller, Margaret Li,
+  Chunting Zhou, Lili Yu, Jason Weston, Luke Zettlemoyer, Gargi Ghosh, Mike Lewis, Ari Holtzman,
+  and Srinivasan Iyer. Byte latent transformer: Patches scale better than tokens, 2024. URL https:
+  //arxiv.org/abs/2412.09871.
+Denis Paperno, Germán Kruszewski, Angeliki Lazaridou, Quan Ngoc Pham, Raffaella Bernardi,
+  Sandro Pezzelle, Marco Baroni, Gemma Boleda, and Raquel Fernández. The lambada dataset:
+ Word prediction requiring a broad discourse context, 2016. URL https://arxiv.org/abs/16
+  06.06031.
+Xingwei Qu, Shaowen Wang, Zihao Huang, Kai Hua, Fan Yin, Rui-Jie Zhu, Jundong Zhou, Qiyang Min,
+  Zihao Wang, Yizhi Li, Tianyu Zhang, He Xing, Zheng Zhang, Yuxuan Song, Tianyu Zheng, Zhiyuan
+  Zeng, Chenghua Lin, Ge Zhang, and Wenhao Huang. Dynamic large concept models: Latent
+  reasoning in an adaptive semantic space, 2026. URL https://arxiv.org/abs/2512.24617.
+
+Alec Radford, Jeff Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. Language models
+  are unsupervised multitask learners. 2019.
+
+Pranav Rajpurkar, Robin Jia, and Percy Liang. Know what you don’t know: Unanswerable questions
+  for squad, 2018. URL https://arxiv.org/abs/1806.03822.
+
+Keisuke Sakaguchi, Ronan Le Bras, Chandra Bhagavatula, and Yejin Choi. Winogrande: An adversarial
+  winograd schema challenge at scale, 2019. URL https://arxiv.org/abs/1907.10641.
+
+Chenze Shao, Fandong Meng, and Jie Zhou. Beyond next token prediction: Patch-level training for
+  large language models, 2025. URL https://arxiv.org/abs/2407.12665.
+
+DiJia Su, Hanlin Zhu, Yingchen Xu, Jiantao Jiao, Yuandong Tian, and Qinqing Zheng. Token
+  assorted: Mixing latent and text tokens for improved language model reasoning, 2025. URL
+  https://arxiv.org/abs/2502.03275.
+Jihoon Tack, Jack Lanchantin, Jane Yu, Andrew Cohen, Ilia Kulikov, Janice Lan, Shibo Hao, Yuandong
+  Tian, Jason Weston, and Xian Li. Llm pretraining with continuous concepts, 2025. URL https:
+  //arxiv.org/abs/2502.08524.
+LCM team, Loïc Barrault, Paul-Ambroise Duquenne, Maha Elbayad, Artyom Kozhevnikov, Belen
+  Alastruey, Pierre Andrews, Mariano Coria, Guillaume Couairon, Marta R. Costa-jussà, David Dale,
+  Hady Elsahar, Kevin Heffernan, João Maria Janeiro, Tuan Tran, Christophe Ropers, Eduardo
+  Sánchez, Robin San Roman, Alexandre Mourachko, Safiyyah Saleem, and Holger Schwenk. Large
+
+                                                                                               16
+                         NCP Leads to Stronger Language Models
+
+  concept models: Language modeling in a sentence representation space, 2024. URL https:
+  //arxiv.org/abs/2412.08821.
+Keyu Tian, Yi Jiang, Zehuan Yuan, Bingyue Peng, and Liwei Wang. Visual autoregressive modeling:
+  Scalable image generation via next-scale prediction, 2024. URL https://arxiv.org/abs/2404
+  .02905.
+Johannes Welbl, Nelson F. Liu, and Matt Gardner. Crowdsourcing multiple choice science questions,
+  2017. URL https://arxiv.org/abs/1707.06209.
+
+An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao,
+  Chengen Huang, Chenxu Lv, Chujie Zheng, Dayiheng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge,
+  Haoran Wei, Huan Lin, Jialong Tang, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi
+  Yang, Jing Zhou, Jingren Zhou, Junyang Lin, Kai Dang, Keqin Bao, Kexin Yang, Le Yu, Lianghao
+  Deng, Mei Li, Mingfeng Xue, Mingze Li, Pei Zhang, Peng Wang, Qin Zhu, Rui Men, Ruize Gao,
+  Shixuan Liu, Shuang Luo, Tianhao Li, Tianyi Tang, Wenbiao Yin, Xingzhang Ren, Xinyu Wang,
+  Xinyu Zhang, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yinger Zhang, Yu Wan, Yuqiong
+  Liu, Zekun Wang, Zeyu Cui, Zhenru Zhang, Zhipeng Zhou, and Zihan Qiu. Qwen3 technical report,
+  2025. URL https://arxiv.org/abs/2505.09388.
+
+Lili Yu, Dániel Simig, Colin Flaherty, Armen Aghajanyan, Luke Zettlemoyer, and Mike Lewis. Megabyte:
+   Predicting million-byte sequences with multiscale transformers, 2023. URL https://arxiv.or
+   g/abs/2305.07185.
+Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin Choi. Hellaswag: Can a machine
+  really finish your sentence?, 2019. URL https://arxiv.org/abs/1905.07830.
+
+Wanjun Zhong, Ruixiang Cui, Yiduo Guo, Yaobo Liang, Shuai Lu, Yanlin Wang, Amin Saied, Weizhu
+ Chen, and Nan Duan. Agieval: A human-centric benchmark for evaluating foundation models,
+ 2023. URL https://arxiv.org/abs/2304.06364.
+
+Yongxin Zhu, Bocheng Li, Yifei Xin, Zhihua Xia, and Linli Xu. Addressing representation collapse
+  in vector quantized models with one linear layer. In Proceedings of the IEEE/CVF International
+  Conference on Computer Vision (ICCV), pages 22968–22977, October 2025.
+
+
+
+
+                                                                                                17
+                            NCP Leads to Stronger Language Models
+
+A. NCP versus NTP
+We show the comparison of NCP versus NTP in Table 7.
+
+Table 7 | NTP v.s. NCP
+
+ Module                       Next Token Prediction LM                Next Concept Prediction LM
+
+ Input                             Discrete tokens                        Token Hidden states
+ Initial Representation       Standard token embedding         Concept embedding grouped by hidden states
+ Backbone                           Transformers                             Transformers
+ LM Head                  Token hidden states → token logits     Concept hidden states → concept logits
+ Vocabulary                   Pre-trained BPE vocabulary          Jointly optimized concept vocabulary
+ Generation Strategy      Sampling from vocabulary by logits      Aggregating over vocabulary by logits
+ Loss Function                    Cross-Entropy Loss                    Mean Squared Error Loss
+
+
+
+B. Experiments Setting
+
+B.1. Model Setup
+
+We list the model backbones, training stages, training datasets, and tokens in Table 8.
+
+Table 8 | Experiments Setting Summary.
+
+   Model Backbone         Parameters        Training Stage         Training Dataset    Token Numbers
+         GPT-2            160M-1.5B          Pre-training           OpenWebText               8B
+         Pythia           70M-410M           Pre-training              The Pile              300B
+         Llama               8B         Continual Pre-training       LongCtxEng              9.6B
+
+
+B.2. ConceptLM Setup
+
+We list the specific setting for ConceptLM in Table 9, including insert depth, concept layers, chunk
+size, 𝑆, and 𝑁 .
+Insert Depth Discussion: To ensure that more Decoder layers benefit from multi-level information
+while maintaining a token-level feature mixing before the concept layer, we default to inserting
+concept layers after the first Token Layer of the backbone. In this configuration, the first layer acts as
+the Token-level Encoder, while the remaining 𝐿 − 1 layers serve as Token-level Decoder.
+However, given that the GPT-2 model was pretrained on a relatively small dataset (less than 10B
+tokens), its performance is highly sensitive to architectural depth. To ensure a fair comparison with
+our strong baseline, ContextLM, we conducted additional experiments on GPT-2 by inserting the
+concept layer before the first Token-level layer. Results for the configuration where the concept layer
+is inserted after the first layer are reported in Appendix E.1.
+Furthermore, we conducted extensive ablation studies to analyze the impact of the insert depth. Our
+results indicate that placing the concept layers at either the very beginning (Layer 0) or after the
+first layer (Layer 1) is suboptimal. Instead, the model achieves the best performance when the layer
+is positioned at three-quarters of the backbone depth (a trend consistently verified through repeat
+
+
+                                                                                                          18
+                         NCP Leads to Stronger Language Models
+
+experiments). We hypothesize that this superiority stems from the backpropagation of concept-level
+supervision into the Encoder layers; a sufficiently deep Encoder provides more refined representations,
+thereby facilitating more accurate concept prediction. Detailed experimental results are provided in
+Appendix E.2.
+
+Table 9 | ConceptLM Setting Summary in main experiments.
+
+ Model Backbone             Insert Depth            Concept Layers    Chunk Size          𝑆        𝑁
+       GPT-2        before the first/second layer         2               4          head number   64
+       Pythia         before the second layer             2               4          head number   64
+       Llama          before the second layer             2               4          head number   64
+
+
+
+B.3. Training Configuration for GPT2 Backbone
+
+We show the training configuration of GPT-2 series models, all the variant of a certain size (base
+model, PM model, ConceptLM, ContextLM) use the same training setting in Table 10.
+
+Table 10 | GPT-2 training configuration.
+
+                    Model Size          Learning Rate    Batch Size    Training Length
+                 GPT-Base (124M)             1e-3             512             1024
+                GPT-Medium (355M)            8e-4             512             1024
+                 GPT-Large (774M)            6e-4             512             1024
+                   GPT-XL (1.5B)             4e-4             512             1024
+
+
+B.4. Training Configuration for Pythia Backbone
+
+We show the training configuration of Pythia series models, all the variant of a certain size (base
+model, PM model, ConceptLM, ContextLM) use the same training setting in Table 11.
+
+Table 11 | Pythia training configuration.
+
+                    Model Size     Learning Rate     Batch Size     Training Length
+                   Pythia-70M           1e-3            1024             2048
+                   Pythia-160M          6e-4            1024             2048
+                   Pythia-410M          4e-4            1024             2048
+
+
+B.5. Training Configuration for Llama Model
+
+We show the training configuration of Llama model, all the variant of a certain size (base model, PM
+model, ConceptLM) use the same training setting.
+
+
+C. 8B Models Computation Cost
+We provide a brief computation cost analysis, mainly use the following function, where 𝑇 is the input
+sequence length, 𝑑 is the hidden size.
+
+
+                                                                                                    19
+                         NCP Leads to Stronger Language Models
+
+Table 12 | Llama training configuration.
+
+                    Model Size      Learning Rate       Batch Size        Training Length
+                   Llama-3.1-8B          1e-5                  96                 8192
+
+
+
+               Token-level Layer FLOPs =           8𝑇𝑑 2              + 4𝑇𝑑 2 +           2𝑇 2 𝑑
+                                                   |{z}                 |{z}              |{z}
+                                            Attention Linear Layers    FFN (at 4𝑑 )   Attention Score
+                                                  2        2
+                                           = 12𝑇𝑑 + 2𝑇 𝑑
+
+For a certain 34 token-layers Llama-3.1-8B-PM, and a 32 token-layers and 2 concept-layers ConceptLM-
+Llama-3.1-8B.
+Llama-3.1-8B-PM:
+
+
+                     Total FLOPs𝑃𝑀 = 34 × (12𝑇𝑑 2 + 2𝑇 2 𝑑 ) = 408𝑇𝑑 2 + 68𝑇 2 𝑑
+
+ConceptLM-Llama-3.1-8B:
+
+                                                                                1
+                 Total FLOPs𝐶𝑜𝑛𝑐𝑒𝑝𝑡𝐿𝑀 = 32 × (12𝑇𝑑 2 + 2𝑇 2 𝑑 ) + 2 × (3𝑇𝑑 2 + 𝑇 2 𝑑 )
+                                                                                8
+                                                                        1
+                                      = (384𝑇𝑑 2 + 64𝑇 2 𝑑 ) + (6𝑇𝑑 2 + 𝑇 2 𝑑 )
+                                                                        4
+                                      = 390𝑇𝑑 2 + 64.25𝑇 2 𝑑
+
+With our training setting 𝑇 = 8192, ℎ = 4096, we have
+
+                             Total FLOPs𝑃𝑀 − Total FLOPs𝐶𝑜𝑛𝑐𝑒𝑝𝑡𝐿𝑀
+                   Ratio =                                        ∗ 100% ≈ 4.69%
+                                       Total FLOPs𝑃𝑀
+
+
+D. Downstream Tasks
+We show the evaluation capabilities for benchmarks.
+
+Table 13 | Evaluated benchmarks with capabilities.
+
+ Capability                                     Benchmarks / Datasets
+ Long-range dependency & context consistency    Lambada (OpenAI / Standard)
+ Commonsense reasoning                          ARC-Easy, ARC-Challenge, WinoGrande, PIQA, HellaSwag
+ Scientific knowledge                           SciQ
+ Paragraph comprehension                        RACE
+ General language modeling                      The Pile, WikiText, OpenWebText
+
+
+
+E. Experimental Results
+We show other experimental results in this section.
+
+
+                                                                                                        20
+                          NCP Leads to Stronger Language Models
+
+E.1. GPT2 Results with L1 setting
+
+We show all the GPT-2 experiments, including insert concept-level layers after the first layer in
+Table 14.
+
+
+E.2. Insert Depth Ablation
+
+We insert the concept-level layers to L0, L1, L3, L5, L7, L9, L11, the result are shown in Table 15. We
+find that inserting the concept layers at the three-quarters (3/4) depth of the model yields superior
+generalization performance in the 160M model size.
+
+
+E.3. VQ Module Setting
+
+In our early experiments, we employ a vanilla VQ module without the SimVQ trick. We observe that
+the codebooks frequently collapsed when the concept layers are inserted before the first layer. The
+training stability is only achieved by applying complex transformations to the codebook through
+non-linear activation functions. So we keep the 2-MLP layers and ReLU activation setting.
+We hypothesize that this collapse occurs because: A simple linear projection (or no projection) lacks
+the capacity to balance the complex representations with the discrete latent space, causing most inputs
+to map to a few specific codebook entries. The introduction of non-linear activations redistributes the
+representations, preventing the model from converging to a few codes and significantly increasing
+codebook utilization.
+Across all our experimental configurations in this paper, the VQ codebook utilization consistently
+reached nearly 100%, demonstrating that our design effectively mitigates the common issue of
+codebook collapse. We provide an early experiment to test the codebook usage even with a large
+codebook size setting 𝑆 = 12, 𝑁 = 1024.
+
+
+
+
+Figure 5 | Codebook usage. The figure shows the usage frequency of each code entry across 12
+codebooks, each containing 1,024 entries, evaluated on the OpenWebText test set.
+
+
+
+
+                                                                                                   21
+                          NCP Leads to Stronger Language Models
+
+E.4. VQ Ablation
+
+We provide the experimental results for the codebook size ( 𝑁 ) ablation in Table 16 and the experi-
+mental results for the codebook number (𝑆) ablation in Table 17.
+The results show that for 𝑁 , adjusting the number of 𝑁 has little impact on downstream tasks but
+can significantly affect perplexity (PPL). While a smaller 𝑁 is easier to predict, a larger 𝑁 can encode
+more fine-grained information; achieving optimal results requires a trade-off between the two factors.
+For 𝑆, appropriately increasing the value reduces the segment size, leading to better fitting and
+improved downstream performance. However, if 𝑆 is too large, the fixed-width concept-layer Trans-
+formers may struggle to accurately predict the concepts. However, it should be noted that these
+experiments are conducted with a hidden size of 768. Further experimentation is required to deter-
+mine whether larger models can support increased values for 𝑁 and 𝑆.
+Disregarding the context, for a token vocabulary of size 𝑉 (vocab_size) and a chunk size 𝑘, the
+representation space of a concept is 𝑉 𝑘 . For a concept vocabulary, the representation range is 𝑁 𝑆 . For
+our Pythia models experiments, 𝑉 ≈ 50000, 𝑘 = 4, 𝑁 = 64, 𝑆 = 12, 𝑉 𝑘 = 6.25 ∗ 1018 , 𝑁 𝑆 ≈ 72 ∗ 1022 .
+𝑁 𝑆 >> 𝑉 𝑘 .
+
+
+E.5. Chunk Size Ablation
+
+We provide our experimental results for the chunk size ablation. Note that a larger chunk size
+introduces smaller layer computational cost, showing a clear trade-off between computational costs
+and model capability. We show the results in Table 18.
+
+
+
+
+                                                                                                      22
+                        NCP Leads to Stronger Language Models
+
+
+Table 14 | Evaluation of models across downstream tasks (Accuracy ↑) and language modeling (PPL
+↓). ConceptLM-GPT is denoted as ConceptLM. ConceptLM-L1 denotes that we insert the concept-level
+module after the first layer. ConceptLMdenotes that we insert the concept-level module before the
+first layer.
+
+                       Lambada Lambada             Wino                   Hella-
+Model                                  ARC-E ARC-C                PIQA           SciQ RACE Avg Acc ↑
+                        OpenAI   Std.              Gd.                    Swag
+                                   Zero-shot Evaluation (Accuracy %)
+GPT-Base                 27.3    20.7      41.6   17.9   49.6      60.4   27.5   69.5   27.4 38.0
+GPT-Base-PM              28.3    20.7      41.7   18.8   49.7      60.7   27.4   69.8   28.3 38.4
+ConceptLM-Base           29.2    20.3      43.8   19.3   52.9      60.7   27.6   69.5   28.4 39.1
+ConceptLM-Base-L1        28.9    20.7      41.9   18.0   50.0      60.2   27.8   70.8   30.1 38.7+0.7
+ConceptLM-Base           29.5    21.3      43.5   19.2   49.4      61.3   27.9   69.6   28.9 38.9+0.9
+GPT-medium               32.8    24.4      44.7   19.9   50.7      62.7   28.8   72.5   28.8 40.6
+GPT-medium-PM            35.2    25.3      44.6   20.4   52.6      62.4   29.1   73.1   29.8 41.4
+ContextLM-medium         36.8    26.7      46.7   19.5   50.9      62.9   29.8   74.2   29.3 41.9
+ConceptLM-Medium-L1      34.1    25.3      46.1   20.1   50.4      63.3   29.7   76.0   28.7 41.5+0.9
+ConceptLM-Medium         36.6    27.1      46.0   20.7   50.6      64.2   30.3   75.0   29.1 42.3+1.7
+GPT-large                37.2    27.4      47.0   20.2   53.6      64.6   30.3   74.9   29.8 42.8
+GPT-large-PM             37.2    29.4      48.4   19.5   52.4      63.8   30.6   74.3   29.8 42.8
+ContextLM-Large          40.7    29.9      47.9   21.1   51.3      62.9   29.8   76.6   31.0 43.9
+ConceptLM-Large-L1       39.4    29.6      49.1   21.5   50.8      64.3   31.3   75.1   30.5 43.5+0.7
+ConceptLM-Large          41.1    30.6      48.5   19.9   52.1      65.3   31.4   77.0   30.0 44.0+1.2
+GPT-XL                   39.3    29.8      49.6   20.6   51.8      65.1   31.5   77.0   30.4 43.9
+GPT-XL-PM                38.7    29.5      49.2   20.0   51.2      64.8   31.5   77.0   29.9 43.5
+ContextLM-XL             41.9    32.3      49.9   21.4   51.9      66.1   32.3   77.7   31.2 45.0
+ConceptLM-xl-L1          41.7    32.2      49.7   21.0   52.0      65.4   31.9   77.9   30.7 44.7+0.8
+ConceptLM-xl             42.9    32.2      49.9   21.9   52.1      66.8   32.4   76.8   30.6 45.1+1.2
+
+Model                        OWT            Wikitext     Lambada OpenAI Lambada Std — Avg PPL ↓
+                                    Language Modeling (Perplexity)
+GPT2-Base                   22.04            43.99              69.29       272.43       —   101.94
+GPT2-Base-PM                21.22            42.15              60.05       273.12       —   99.14
+ContextLM-Base-L1           20.68            41.45              55.22       231.41       —   87.19
+ConceptLM-Base              21.19            42.13              56.84       230.41       —   87.64+14.30
+ConceptLM-Base              20.56            40.86              51.83       225.74       —   84.75+17.19
+GPT2-Medium                 17.97            34.24              35.54       122.54       —   52.57
+GPT2-Medium-PM              17.67            33.59              32.91       126.03       —   52.55
+ContextLM-Medium            17.03            32.08              28.06        95.06       —   43.06
+ConceptLM-Medium-L1         17.14            32.42              31.29       100.50       —   43.34+9.23
+ConceptLM-Medium            16.81            31.53              26.96       86.75        —   40.51+12.06
+GPT2-Large                  16.01            30.03              24.58        74.76       —   36.35
+GPT2-Large-PM               15.89            29.71              23.50        62.45       —   32.89
+ContextLM-Large             15.41            28.82              20.89        62.09       —   31.80
+ConceptLM-Large-L1          15.47            29.66              21.55        61.52       —   32.05+4.30
+ConceptLM-Large             15.20            28.52              19.68        55.05       —   29.61+6.74
+GPT2-XL                     14.99            27.89              20.72        55.12       —   29.68
+GPT2-XL-PM                  14.94            27.95              21.00        56.15       —   30.01
+ContextLM-XL                14.60            27.05              17.46        44.62       —   25.93
+ConceptLM-XL-L1             14.51            26.83              18.47        49.09       —   27.23+2.45
+ConceptLM-XL                14.40            26.80              17.26        47.06       —   26.38+3.30
+
+
+
+                                                                                                        23
+                            NCP Leads to Stronger Language Models
+
+Table 15 | Insert depth ablation. Evaluation of Pythia-160M backbone trained on 30B the Pile tokens,
+L0 denotes there are 0-token-layers before the Concept-level Module.
+
+                 Lambada Lambada ARC- ARC- Wino                                   Hella-
+ Model                                                                    PIQA           SciQ RACE Avg Acc ↑
+                  OpenAI   Std.   E    C   Gd.                                    Swag
+                                           Zero-shot Evaluation (Accuracy %)
+ ConceptLM-L0       34.2            22.4      45.2    19.0    51.0        61.5     28.1     75.1    27.9   40.5
+ ConceptLM-L1       34.0            21.8      43.5    18.8    53.0        61.3     28.3     73.3    28.6   40.3
+ ConceptLM-L3       32.2            21.6      42.0    19.7    51.1        61.4     28.1     71.9    28.8   39.6
+ ConceptLM-L5       33.9            22.7      43.5    19.0    51.9        61.3     28.3     73.0    29.0   40.3
+ ConceptLM-L7       34.0            21.7      42.9    17.5    51.6        62.5     28.2     75.2    28.7   40.3
+ ConceptLM-L9       34.9            24.2      43.1    19.7    50.3        61.9     27.8     74.2    27.9   40.4
+ ConceptLM-L11      33.9            22.3      43.3    18.7    53.6        61.5     28.3     73.8    27.9   40.3
+
+ Model                      OWT                 Wikitext     Lambada OpenAI Lambada Std              —     Avg PPL ↓
+                                            Language Modeling (Perplexity)
+ ConceptLM-L0               12.52                33.74               37.46              166.29       —     63.25
+ ConceptLM-L1               12.64                33.45               36.38              190.06       —     68.13
+ ConceptLM-L3               12.65                33.70               38.94              163.07       —     62.09
+ ConceptLM-L5               12.66                33.62               38.09              158.20       —     60.64
+ ConceptLM-L7               12.62                33.49               35.86              175.37       —     64.34
+ ConceptLM-L9               12.64                33.72               35.49              138.28       —     55.04
+ ConceptLM-L11              18.67                32.26               36.96              150.88       —     59.79
+
+Table 16 | VQ codebook size ablation. Evaluation of Pythia-160M backbone with 2 concept layers
+trained on 30B the Pile tokens. We set 𝑆 = number of head, and ablate 𝑁 .
+
+           Lambada Lambada ARC- ARC- Wino                                        Hella-
+ Model                                                               PIQA               SciQ RACE Avg Acc ↑
+            OpenAI   Std.   E    C   Gd.                                         Swag
+                                       Zero-shot Evaluation (Accuracy %)
+ 𝑁 =8        33.3           21.6       43.0      19.8      51.7      60.7        28.1     74.0     27.9    40.0
+ 𝑁 = 16      33.9           21.6       44.7      18.7      52.0      60.5        28.1     76.2     27.1    40.3
+ 𝑁 = 32      33.2           21.5       43.1      18.3      51.7      61.7        28.4     74.9     28.4    40.2
+ 𝑁 = 64      34.0           21.8       43.5      18.8      53.0      61.3        28.3     73.3     28.6    40.3
+ 𝑁 = 128     34.4           22.2       44.3      18.7      53.2      62.2        28.1     74.0     26.6    40.4
+ 𝑁 = 256     33.4           21.9       43.3      19.5      51.4      60.6        27.9     75.6     29.2    40.3
+
+ Model              OWT                    Wikitext        Lambada OpenAI Lambada Std              —       Avg PPL ↓
+                                           Language Modeling (Perplexity)
+ 𝑁 =8               12.70                   33.87                 39.89            181.06          —       66.88
+ 𝑁 = 16             12.64                   33.71                 35.67            170.08          —       63.03
+ 𝑁 = 32             12.62                   33.68                 38.51            191.97          —       69.20
+ 𝑁 = 64             12.64                   33.45                 36.38            190.06          —       68.13
+ 𝑁 = 128            12.63                   33.61                 36.71            189.30          —       68.06
+ 𝑁 = 256            12.68                   33.45                 39.88            195.50          —       70.38
+
+
+                                                                                                                   24
+                           NCP Leads to Stronger Language Models
+
+
+Table 17 | VQ codebook size ablation. Evaluation of Pythia-160M backbone with 2 concept layers
+trained on 30B the Pile tokens. We set 𝑁 = 64, and ablate 𝑆, the following head num ∗ 4 denotes
+𝑆 = head num ∗ 4 .
+
+                Lambada Lambada ARC- ARC- Wino                                  Hella-
+ Model                                                               PIQA              SciQ RACE Avg Acc ↑
+                 OpenAI   Std.   E    C   Gd.                                   Swag
+                                        Zero-shot Evaluation (Accuracy %)
+ head num ∗ 4     34.0           21.7     43.3     19.8    51.3          62.1    28.0   74.2   27.9   40.3
+ head num ∗ 2     34.8           22.7     43.8     18.7    51.8          61.4    28.3   76.5   28.0   40.7
+ head num ∗ 1     34.0           21.8     43.5     18.8    53.0          61.3    28.3   73.3   28.6   40.3
+ head num/2       33.7           22.1     43.2     20.1    51.1          61.9    28.0   74.3   29.5   40.4
+ head num/3       34.2           21.5     45.2     19.5    51.8          62.0    28.2   72.2   28.3   40.3
+ head num/4       33.0           21.0     45.3     18.8    50.5          61.0    28.3   74.4   26.8   39.9
+ head num/6       33.1           21.2     42.9     18.9    51.8          60.9    28.1   71.1   27.9   39.5
+
+ Model                   OWT                Wikitext       Lambada OpenAI Lambada Std           —     Avg PPL ↓
+                                         Language Modeling (Perplexity)
+ head num ∗ 4            12.64                 33.57              38.34            205.29       —     72.46
+ head num ∗ 2            12.62                 33.56              36.48            165.45       —     62.03
+ head num ∗ 1            12.64                 33.45              36.38            190.06       —     68.13
+ head num/2              12.64                 33.57              37.97            164.35       —     62.09
+ head num/3              12.67                 33.73              37.58            184.04       —     67.00
+ head num/4              12.68                 33.86              40.28            186.71       —     68.38
+ head num/6              12.66                 33.82              37.44            170.22       —     63.54
+
+
+
+Table 18 | Chunk size ablation. Evaluation of Pythia-160M backbone trained on 30B the Pile tokens,
+Chunk-2 denotes chunk size = 2 (𝑘 = 2).
+
+            Lambada Lambada ARC- ARC- Wino                                      Hella-
+ Model                                                              PIQA               SciQ RACE Avg Acc ↑
+             OpenAI   Std.   E    C   Gd.                                       Swag
+                                        Zero-shot Evaluation (Accuracy %)
+ Chunk-2        35.6           22.6     44.7     19.5     53.0      60.8        28.1    75.9   28.2   40.7
+ Chunk-4        34.0           21.8     43.5     18.8     53.0      61.3        28.3    73.3   28.6   40.3
+ Chunk-8        33.7           22.5     43.5     19.2     52.3      61.4        27.3    73.0   28.6   40.2
+ Chunk-16       33.4           21.9     42.8     19.7     50.7      60.8        27.0    74.2   28.6   39.8
+
+ Model                 OWT                Wikitext        Lambada OpenAI Lambada Std           —      Avg PPL ↓
+                                         Language Modeling (Perplexity)
+ Chunk-2               12.59               33.52                 34.89            158.19       —      59.80
+ Chunk-4               12.64               33.45                 36.38            190.06       —      68.13
+ Chunk-8               12.67               33.82                 37.35            179.41       —      65.81
+ Chunk-16              12.73               34.09                 38.73            193.26       —      69.70
+
+
+
+                                                                                                              25
+
