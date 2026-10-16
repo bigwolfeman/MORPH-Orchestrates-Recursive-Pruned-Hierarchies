@@ -30,3 +30,9 @@ Read on 2026-10-16: the abstract and section 7 (Limitations and Conclusion) only
 ## 5. Where our findings disagree
 
 - None recorded yet.
+- 2026-10-16: Our measurement (Parcae testbed, 5k, 2 seeds, 480 paired rows): a best-of-8 span plan on the published
+  spiral, picked by a parameter-free bag score with Sinkhorn balancing. The coda uses the plan (uniform-plan cost 0.13
+  to 0.17 nats per token), but the bound with ln 8 per span is 0.083 worse than one head, and SIS is 0.018 to 0.025
+  worse. The span loop's K-curve is +0.0012 vs +0.0002. Paper's claim: the gain from best-of-K is smallest for AR
+  language models (section 7); this agrees. Source: parcae lxtul/xm-plan,
+  docs/experiments/successes/2026-10-16-parcae-xm-span-plan-5k.md.

@@ -11,3 +11,4 @@ Append only. One line per dated entry. Format:
 2026-10-16 | explorative-modeling | Why we reference it, What the paper shows | Seed note from abstract and section 7: best-of-K training; LLM case modest and hardest
 2026-10-16 | spiralformer-vs-tul-mask | Where our findings disagree | Added FLOP ratio (0.31x plain) and the MeSH-vs-Anchor disagreement (ours 0.004 worse)
 2026-10-16 | qrr-quotient-recurrent-reasoner-2610-18174 | Why we reference it, What the paper shows, Our speculation, Where our findings disagree | New note, paper read in full: slow-mode rate inheritance, gauge-equivariant QRR, quotient halting; agrees with our fixed-point-term finding
+2026-10-16 | explorative-modeling | Where our findings disagree | XM span plan 5k: plan used (gap 0.13-0.17), bound worse 0.083, K-curve +0.0012; agrees with section 7
