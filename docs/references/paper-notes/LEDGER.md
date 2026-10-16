@@ -10,3 +10,4 @@ Append only. One line per dated entry. Format:
 2026-10-16 | spiralformer-vs-tul-mask | Why we reference it, What the paper shows, Corrections | Seed note from memory: spiral reproduces on Parcae; 2026-09-07 summary of its FLOPs claim corrected
 2026-10-16 | explorative-modeling | Why we reference it, What the paper shows | Seed note from abstract and section 7: best-of-K training; LLM case modest and hardest
 2026-10-16 | spiralformer-vs-tul-mask | Where our findings disagree | Added FLOP ratio (0.31x plain) and the MeSH-vs-Anchor disagreement (ours 0.004 worse)
+2026-10-16 | qrr-quotient-recurrent-reasoner-2610-18174 | Why we reference it, What the paper shows, Our speculation, Where our findings disagree | New note, paper read in full: slow-mode rate inheritance, gauge-equivariant QRR, quotient halting; agrees with our fixed-point-term finding

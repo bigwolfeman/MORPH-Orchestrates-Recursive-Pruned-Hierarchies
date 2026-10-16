@@ -1,0 +1,1790 @@
+                                         Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+                                         L OOPED R EASONING F INISHES E ARLIER
+                                         T HAN YOU T HINK
+                                                                                             ∗
+                                          Sumin Park1,2,3 , T. Konstantin Rusch1,2,3,4
+                                          1                               2
+                                              ELLIS Institute Tübingen, Max Planck Institute for Intelligent Systems,
+                                          3
+                                              Tübingen AI Center, 4 Liquid AI
+
+
+                                                                                           A BSTRACT
+
+                                                       Looped reasoning with dynamic depth can be viewed as relaxation toward solution
+
+
+
+
+arXiv:2610.18174v1 [cs.LG] 13 Oct 2026
+                                                       attractors in a learned dynamical landscape. In practice, however, latent trajec-
+                                                       tories often oscillate, cycle, or drift rather than cleanly converge to stable fixed
+                                                       points. How these non-stationary dynamics contribute to reasoning and constrain
+                                                       convergence remains unclear. We show that slowly decaying oscillatory modes can
+                                                       impose their convergence rate on coupled latent dynamics, creating a bottleneck.
+                                                       Yet damping these modes indiscriminately can disrupt the reasoning computation
+                                                       they support. This tension motivates an architectural approach: introducing ro-
+                                                       tational degrees of freedom along which symmetry-generated rotational motion
+                                                       leaves the reasoning-relevant quotient dynamics unchanged by construction. We
+                                                       propose QRR (Quotient Recurrent Reasoner), a gauge-equivariant recurrent ar-
+                                                       chitecture with an exact per-token phase-rotation symmetry. Motion along these
+                                                       symmetry directions leaves the quotient representation unchanged and is dynam-
+                                                       ically decoupled from reasoning-relevant dynamics. Empirically, QRR achieves
+                                                       stable and faster convergence to solution roots in quotient space, without form-
+                                                       ing a dominant slow oscillatory bottleneck, while matching or surpassing recent
+                                                       reasoning models on Sudoku, Maze, and Mini-ARC. Code is available at here.
+
+
+                                         1        I NTRODUCTION
+
+                                         Looped reasoners trade architectural depth for recurrent computation (Dehghani et al., 2019; Saunshi
+                                         et al., 2025; Fan et al., 2025). A shared neural block is applied repeatedly to refine an internal state,
+                                         allowing additional computation without increasing parameter count (Bansal et al., 2022; Geiping
+                                         et al., 2025; Wang et al., 2025; Jolicoeur-Martineau, 2025). Recent works make the dynamical
+                                         interpretation explicit, viewing reasoning as the evolution of a latent state converging toward solution-
+                                         aligned equilibria (Blayney et al., 2026; Kim, 2026). Fixed-Point Reasoning Model (FPRM) uses
+                                         convergence of the recurrent state to a fixed point as an intrinsic stopping criterion, Attractor Models
+                                         define the prediction itself as the equilibrium of a learned refinement process, and Equilibrium
+                                         Reasoners (EqR) explicitly learns task-conditioned attractors whose stable fixed points correspond to
+                                         valid solutions, using multiple initializations to explore their attraction basins (Movahedi et al., 2026;
+                                         Fein-Ashley & Rashidinejad, 2026; Huang et al., 2026). In this view, reasoning is not just a sequence
+                                         of refinements but a recurrent trajectory through the learned dynamical landscape.
+                                         However, viewing recurrent computation as convergence to a stable attractor does not capture the
+                                         full range of dynamics it can exhibit. Trajectories can instead exhibit orbits, drifts, cyclic limiting
+                                         behavior, and other structured forms of non-stationarity, rather than simply relaxing toward a single
+                                         fixed point (Geiping et al., 2025; Pappone et al., 2025; Blayney et al., 2026; Kim, 2026; Yang et al.,
+                                         2026). These studies reveal a wide range of latent geometries in recurrent models, yet how these
+                                         different forms of oscillatory motion affect the underlying latent computation remains unexplored.
+                                         The key distinction is therefore not the geometry of the motion itself, but whether and how it
+                                         influences the recurrent computation. Around a solution root z ⋆ , where the recurrence admits a fixed
+                                         linearization with the Jacobian J = Df (z ⋆ ), we establish a local coupling mechanism by separating
+                                         an oscillatory spectral coordinate from the complementary latent dynamics and quantifying how the
+                                         former drives the latter. When the oscillatory mode decays more slowly, this coupling transfers its rate
+                                              ∗
+                                                  Correspondence to tkrusch@tue.ellis.eu
+
+
+
+                                                                                                 1
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+to the complementary dynamics and delays settlement. We then test this mechanism causally in the
+original nonlinear recurrences of FPRM and HRM (Wang et al., 2025) in Section 3.2. Across distinct
+oscillatory geometries, an initial perturbation of the identified mode produces latent responses and
+settling-time shifts that closely match the predictions of the local coupling model. This agreement
+directly links the convergence delay near solution roots to the coupled slow oscillatory mode.
+Oscillatory appearance alone, how-              (a) FPRM: Coupled alternating dynamics                      (b) HRM: Coupled spiral dynamics
+                                         0.003
+
+
+
+
+                                                          Local spectral coordinate 2                            Local spectral coordinate 2
+ever, does not reveal which motion       0.002
+                                                                                                                2.0
+can be safely removed. In FPRM,                                                                                 1.5
+                                         0.001
+                                                                                                                1.0
+suppressing the alternating mode be-     0.000
+                                                                                                                0.5
+                                         0.001
+fore semantic stabilization degrades     0.002
+                                                                                                                0.0
+task performance, showing that slow                                                                             0.5
+                                         0.003
+                                                   0.016    0.008     0.000     0.008     0.016                            0       1       2
+oscillatory motion can still support                      Local spectral coordinate 1                              Local spectral coordinate 1
+reasoning (Appendix A.4.4). Thus,                               (c) QRR: Quotient dynamics                                     Raw distance to Root
+                                                       Raw trajectory              Root
+rather than identifying and damp-           0.0
+                                                       Quotient trajectory
+                                                                                                                                                           |zt z * |
+                                                                                                                         1
+ing particular oscillations, we in-         0.2
+
+
+
+                                                                         Quotient direction
+stead redesign what counts as con-          0.4                                                                          0
+                                                                                                                            0       100      200    300
+vergence by introducing a controlled        0.6                                                                              Quotient distance to Root
+representational redundancy: motion                                                                                  10
+                                                                                                                                               |g * zt z * |
+                                                                                                                                                                       2
+                                            0.8
+along rotational symmetry directions                                                                                 10                                                5
+                                            1.0
+is irrelevant to the underlying quo-                0.15    0.10      0.05    0.00      0.05    0.10    0.15                0       100      200
+                                                                                                                                   Recurrent step
+                                                                                                                                                    300
+                                                                        Gauge direction Jz *
+tient state by construction. We pro-
+pose QRR, the Quotient Recurrent                                            Early                              Late
+                                                                                         Recurrent step
+Reasoner, which imposes an exact
+per-token rotational symmetry on the Figure 1: Oscillatory geometry and quotient convergence.
+recurrent state, inducing a quotient FPRM and HRM exhibit distinct alternating and spiral dynam-
+representation invariant to this mo- ics near solution roots. In QRR, raw motion persists while
+tion. Gauge-equivariant updates pre- quotient trajectory contracts.
+serve this equivalence, allowing symmetry-generated motion to persist in the raw trajectory without
+driving or limiting the convergence of quotient dynamics.
+As in Figure 1, FPRM and HRM exhibit distinct oscillatory geometries whereas QRR retains raw
+phase motion while its quotient trajectory converges. Oscillatory modes outside the gauge subspace
+remain free to participate in reasoning. Empirically, QRR also retains oscillatory modes in quotient
+space but does not develop the isolated dominant slow mode as in FPRM and HRM (Section 4.4).
+
+2      BACKGROUND
+2.1      L OOPED REASONING MODELS
+Looped reasoning models increase effective computational depth by repeatedly applying shared
+neural blocks to a latent state, allowing additional test-time computation without increasing parameter
+count. Recent approaches can be broadly grouped by how they organize this recurrent computa-
+tion. General recurrent-depth models iterate a shared Transformer block and scale reasoning by
+increasing the number of latent recurrences at inference (Geiping et al., 2025). Puzzle-oriented
+recursive reasoners instead structure the recurrence explicitly. HRM couples high- and low-level
+recurrent modules operating at different frequencies (Wang et al., 2025), whereas Tiny Reasoning
+Model (TRM) simplifies this hierarchy to a single small network that repeatedly refines a latent
+reasoning state and the current answer (Jolicoeur-Martineau, 2025). A complementary line organizes
+recurrent computation around equilibria or attractors: FPRM uses convergence to a fixed point as
+an adaptive halting criterion (Movahedi et al., 2026), EqR learns task-conditioned attractors whose
+stable equilibria correspond to solutions (Huang et al., 2026), and Attractor Models explicitly solve a
+learned fixed-point refinement with implicit differentiation (Fein-Ashley & Rashidinejad, 2026).
+2.2      G AUGE SYMMETRY AND QUOTIENT DYNAMICS
+Gauge symmetry formalizes a local representational redundancy where changing the local reference
+frame changes the coordinates used to represent a state, but not the underlying object itself (Cohen
+et al., 2019a; Bronstein et al., 2021; Gerken et al., 2023). If a map T is equivariant under the action
+of a group G, gauge-related states z ∼ g · z evolve consistently and can be identified as a single
+equivalence class [z] in the quotient space Z/G (Kondor & Trivedi, 2018; Cohen et al., 2019b). The
+quotient collapses symmetry-related representations into a single state, so motion along the symmetry
+
+
+                                                                                              2
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+orbit is ignored while all remaining state changes are preserved. This distinction also changes the
+notion of convergence. An equivariant system may continue moving along a symmetry orbit without
+changing its quotient state. Such motion is captured by a relative equilibrium, T (z ⋆ ) = g ⋆ · z ⋆ ,
+which is non-stationary in the original coordinates but becomes a fixed point after quotienting,
+[T (z ⋆ )] = [z ⋆ ] (Krupa, 1990; Marsden & Ratiu, 1999). In neural architectures, gauge equivariance
+provides a principled way to implement this invariance to local reference frames (Weiler et al., 2021;
+Wiersma et al., 2020). Gauge-equivariant convolutions extend conventional equivariance from global
+transformations to local gauge choices on manifolds (Cohen et al., 2019a), and Gauge Equivariant
+Mesh CNNs combine anisotropic convolution with parallel transport to communicate features in
+different local frames (Haan et al., 2021). The same principle has also been extended to attention,
+where the Gauge Equivariant Transformer constructs gauge-equivariant self-attention by comparing
+features across local coordinate systems after transporting them to a common frame (He et al., 2021).
+2.3   O SCILLATORY AND NON - STATIONARY DYNAMICS IN RECURRENT REASONING
+Recent depth-recurrent language models exhibit structured latent trajectories that are substantially
+richer than monotone convergence to a fixed point, including multi-dimensional orbits and approx-
+imately one-dimensional drifts, particularly on tokens requiring extended computation (Geiping
+et al., 2025; Pappone et al., 2025; Kim, 2026). Other mechanistic studies find cyclic fixed-point
+trajectories, where recurrent layers repeatedly trace a stable cycle in latent space, as well as persistent
+non-stationarity even after successive state differences become small (Huang et al., 2026; Blayney
+et al., 2026). Oscillatory behavior also appears in recurrent reasoners based on solution equilibria.
+FPRM, for example, reports oscillation around solution fixed points and introduces damping to
+stabilize these trajectories (Movahedi et al., 2026). More broadly, looped Transformers with the same
+architecture, objective, and task performance can settle into different dynamical phases, including
+bounded non-stationary motion generated by complex-conjugate Jacobian modes (Kim, 2026).
+What remains unclear is the dynamical role of this motion. An observed orbit or alternating trajectory
+may support recurrent computation, or instead reflect a slowly decaying mode that unnecessarily
+prolongs latent settlement after the remaining dynamics already converged.
+
+3     R ATE -L IMITING S LOW O SCILLATORY M ODES IN R ECURRENT R EASONERS
+Motivated by oscillatory structures observed in recurrent reasoners, we study whether an identified
+oscillatory mode can become rate-limiting for latent convergence. Around solution roots, the nonlinear
+recurrence admits a stationary first-order linearization, allowing us to isolate an oscillatory spectral
+component from its complementary latent dynamics.
+We use a Sylvester decomposition as an analytic attribution tool to separate the latent state dynamics
+into its intrinsic evolution and the response induced by coupling with the identified spectral coordinate.
+This provides a direct way to quantify how the identified coordinate influences the remaining latent
+dynamics and their convergence behavior. The decomposition itself is general to any selected mode,
+particular oscillatory structure enters through local Jacobian block identified from the trained model.
+3.1   L OCAL SPECTRAL DECOMPOSITION AND RATE DOMINANCE
+We analyze how an oscillatory component of the local dynamics affects the remaining latent state near
+a solution root. Let zt+1 = f (zt ) denote the trained nonlinear recurrence, and let z ⋆ be a solution
+root satisfying f (z ⋆ ) = z ⋆ . For a nearby trajectory state, write the root-centered displacement
+δt = zt − z ⋆ . Since z ⋆ is stationary, the same local Jacobian governs subsequent steps as
+                             δt+1 = Jδt + O(∥δt ∥2 ),         J = Df (z ⋆ ).                           (1)
+This stationary linearization allows us to identify and track a fixed spectral component over recurrence.
+Consider an oscillatory spectral component of J, and let U ∈ RD×m be an orthonormal basis for
+the corresponding left-invariant subspace of J, and let S denote the restriction of J to this subspace.
+Equivalently, J ⊤ U = U S ⊤ , with S = U ⊤ JU . Hence, defining a coordinate ut := U ⊤ δt , the local
+dynamics satisfy
+                           ut+1 = U ⊤ Jδt + O(∥δt ∥2 ) = Sut + O(∥δt ∥2 ).                            (2)
+Thus ut is an autonomous spectral coordinate to first order, its next state update depends only on itself
+through the reduced Jacobian block S. We represent the remaining displacement by the orthogonal
+residual et ,
+                           ut = U ⊤ δt ,      et = Qδt ,       Q = I − U U ⊤,                         (3)
+
+
+                                                    3
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+so that δt = U ut + et and U ⊤ et = 0. Projecting the linearized dynamics onto these two coordinates,
+ut and et , gives (see full derivation in Appendix A.2)
+               ut+1 = Sut ,        et+1 = Aet + But ,            A := QJQ,       B := QJU.               (4)
+Here A governs the intrinsic evolution of the complementary state, whereas B measures how the
+isolated spectral coordinate drives that complement. The observed et therefore mixes two effects: its
+intrinsic transient under A and the response transmitted from ut coupled by B. We separate these
+two distinct contributions to evolve et using the following Sylvester decomposition.
+
+ Lemma 3.1 (Exact Sylvester decomposition of a coupled spectral coordinate). Consider the linear
+ dynamics in Eq. 4, with A ∈ Rd×d , S ∈ Rm×m , and B ∈ Rd×m , and assume σ(A) ∩ σ(S) = ∅.
+ Then there exists a unique matrix P ∈ Rd×m satisfying P S − AP = B. The complementary
+ state admits the exact decomposition
+                                     et = At (e0 − P u0 ) + P S t u0 .                                 (5)
+
+Lemma 3.1 separates the complementary state et into two subsystems. The first term, At (e0 −P u0 ), is
+its intrinsic transient, whereas P S t u0 is the response transmitted from the coupled spectral coordinate
+ut . The lemma is not specific to oscillatory dynamics, it provides a general framework for attributing
+the effect of one autonomous spectral component on the rest of a coupled linear system.
+Slow oscillatory specialization. We now specialize this decomposition to the reduced block
+S = U ⊤ JU observed in the actual recurrent reasoners, where the isolated mode is oscillatory and
+decays more slowly than the complementary dynamics. When the measured S has a complex-
+conjugate pair with modulus r and frequency ω, its real two-dimensional dynamics admit
+                     σ(S) = {re±iω },         S = M (rQω )M −1 ,          0 < ω < π,                     (6)
+where Qω is the planar rotation through ω and M is real and invertible. When ρ(A) < r, the intrinsic
+transient in Eq. 5 decays faster than the coupled response P S t u0 . For a trajectory e = (et )t≥0 , define
+        τδ (e) = inf{t ∈ N0 : ∥ek ∥2 ≤ δ for all k ≥ t},           E(e) = inf lim sup ∥et − c∥2 .        (7)
+                                                                          c∈Rd    t→∞
+
+
+ Theorem 3.2 (Rate inheritance from a slow oscillatory mode). Under the setting of Lemma 3.1,
+ suppose S satisfies Eq. 6, with ρ(A) < r ≤ 1, B ̸= 0, and u0 ̸= 0. If r < 1, then et → 0,
+                                                    1/t
+                                      lim sup ∥et ∥2       = r > ρ(A),                                 (8)
+                                       t→∞
+
+ and                                  log(1/δ)
+                                 τδ (e) =       + O(1),      δ ↓ 0.                                    (9)
+                                       − log r
+ If r = 1, then et remains bounded but does not converge to any constant, with
+                                                ∥u0 ∥2 ∥B∥F
+                                  E(e) ≥ √                        > 0.                               (10)
+                                             2 κ2 (M )(1 + ∥A∥2 )
+
+Theorem 3.2 shows that a slower coupled mode transfers its rate to the complementary dynamics,
+delaying settlement when r < 1 and preventing stationary convergence when r = 1. It covers
+general two-dimensional spiral modes, while M = I recovers a scaled rotation and S = −r gives
+the alternating flip case of Corollary A.1. All proofs are provided in Appendix A.1.
+3.2    C AUSAL VERIFICATION IN NONLINEAR RECURRENT DYNAMICS
+We now use this framework to ask whether the slow oscillatory modes identified in trained recurrent
+reasoners actually exert the predicted rate-limiting effect on their nonlinear trajectories. For each
+solution root, we identify a leading oscillatory eigenspace of the local Jacobian, construct its left-
+invariant basis U , and obtain S, A, and B matching the decomposition in Section 3.1. We focus on
+cases satisfying the rate-dominance condition ρ(A) < r ≤ 1 (Appendix A.4.3).
+To test the contribution of this mode in the original nonlinear dynamics, we take a state from the
+native trajectory once it has entered the local linear regime around the solution root z ⋆ . Writing
+                    δ0 := zt0 − z ⋆ = e0 + U u0 ,           e0 = Qδ0 ,    u0 = U ⊤ δ0 ,                (11)
+
+
+                                                       4
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+separates the displacement into the identified oscillatory coordinate u0 and the remaining local state
+e0 . We then vary only the amplitude of u0 by adjusting α,
+                             (α)
+                            zt0 = z ⋆ + e0 + αU u0 ,        α ∈ 1, 21 , 0 ,
+                                                                
+                                                                                                  (12)
+while keeping e0 exactly fixed. Here α = 1 is the native state, α = 0.5 attenuates the oscillatory
+coordinate, and α = 0 removes it at the intervention point. This is the only modification and all
+trajectories subsequently evolve using the original trained nonlinear recurrence f . Because all arms
+                                                                       (α)
+share the same complementary state e0 , the linearized rollout gives ebk = Qδk = QJ k (e0 + αU u0 )
+(Eq. 3), so subtracting the α = 0 arm isolates the response to the oscillatory coordinate. Using the
+decomposition in Eq. 5, this prediction can be further written equivalently as
+                        (α)    (α)    (0)
+                              bk − ebk = αQJ k U u0 = α P S k − Ak P u0 .
+                                                                            
+                     ∆e
+                     c
+                        k =e                                                                      (13)
+This response prediction is determined entirely by the local Jacobian and the native displacement at
+t0 , with no quantities fit to the subsequent nonlinear rollout.
+Alternating oscillatory mode in FPRM. We apply the intervention protocol to the rate-dominant
+oscillatory mode identified in FPRM. As illustrated in Figure 1, this mode appears as an approximately
+one-dimensional alternating flip, with S = −r and ρ(A) < r ≤ 1. The corresponding response
+prediction is (derivations in Appendix A.1)
+                         (α)
+                      c k = α P (−r)k − Ak P u0 = αP (−r)k u0 + o(rk ).
+                                                  
+                      ∆e                                                                          (14)
+Thus, changing α scales the leading response while leaving its asymptotic decay rate unchanged:
+α = 12 halves its leading amplitude, whereas α = 0 removes the rk contribution. We compare
+this closed-form local prediction directly with the response measured from the original nonlinear
+                                                                         (0)
+FPRM recurrence. For α = 0, the linearized counterfactual reduces to ebk = Ak e0 , allowing us to
+additionally test whether removing the oscillatory coordinate accelerates root-relative settlement.
+                                         Predicted vs. measured response                                      Response over time                                              Settling gain
+                                                                                                                                                                                                    0.9
+                                                    α=1                                                                                                                  ideal gain (y = x)
+                                       102          α=½                                                                                                        500       random-direction control   0.8
+
+
+
+
+    FPRM · flip mode
+                                                    y=x
+
+
+
+                                                                                                                                         observed gain Δτobs
+                                                                                                                                                               400
+
+
+                  measured ‖Δek(α)‖
+                                       100                                                                                                                                                          0.7
+
+
+                                                                                                                                                                                                     ‖Pu0‖/‖e0‖
+                                                                                                 101                                                           300                                  0.6
+                                                                                      ‖Δek(α)‖
+                                      10−2
+                                                                                                                                                               200                                  0.5
+                                      10−4
+                                                                                                                                                                                                    0.4
+                                      10−6                                                                   measured, α=1                                     100
+                                                                                                             measured, α=0.5                                                                        0.3
+                                      10−8                                                       100         predicted                                           0
+                                                                                                                                                                                                    0.2
+                                             10−8    10−6   10−4   10−2   100   102                    100           101         102                                 0     100 200 300 400 500
+                                                      predicted ‖α QJ kUu0‖                                  step k after intervention                                     predicted gain Δτpred
+
+Figure 2: Local oscillatory-coupling theory predicts the response and settling cost in the original
+FPRM recurrence. We control only the Jacobian-identified oscillatory coordinate once with α ∈
+{0, 0.5, 1} and then resume unmodified recurrent updates. HRM results in Appendix A.4.1.
+Figure 2 tests the oscillatory-coupling mechanism at three levels: (i) the response induced in the
+complementary state, (ii) its evolution over recurrent time, and (iii) the resulting cost in settling time.
+The left panel measures how a perturbation of the oscillatory coordinate subsequently propagates
+into the complementary latent dynamics over k recurrent steps. For each intervention strength α and
+rollout step k, the horizontal axis shows the prediction from the root Jacobian, while the vertical axis
+shows the corresponding change measured from the original nonlinear rollout:
+                                                                    (α)
+                                            
+                (α)             (α)     (0)                      c k ∥2 = ∥αQJ k U u0 ∥2 .
+           ∥∆ek ∥2 = Q zt0 +k − zt0 +k                 vs.     ∥∆e                                  (15)
+           |                 {z                 }2             |                {z
+                                                                      local linear prediction
+                                                                                              }
+                                                             actual nonlinear rollout
+
+Agreement with the identity line shows that the response induced in the complementary state is
+quantitatively predicted by the local Jacobian.
+The middle panel tests whether this prediction remains accurate throughout the subsequent nonlinear
+rollout. Consistent with Eq. 14, the measured response follows the predicted alternating temporal
+envelope, including the proportional reduction under α = 0.5.
+The right panel tests whether the same local mode produces the predicted delay in convergence.
+Using the root-relative settling criterion τδ (e) = inf{k : ∥ej ∥ ≤ δ for all j ≥ k} from Eq. 7, we
+
+
+                                                                                                                           5
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+define τ̂ (α) := τδ (ê(α) ) and τ (α) := τδ (e(α) ) using the same sustained-window implementation. The
+corresponding gains from removing the oscillatory coordinate are ∆τpred = τ̂ (1) − τ̂ (0) and ∆τobs =
+τ (1) − τ (0) . The identity-line agreement therefore confirms that the local prediction quantitatively
+matches the actual settling-time gain from removing the identified oscillatory component.
+Together, the three columns test the causal chain u0 → ∆ek → ∆τδ in the original FPRM. The
+root Jacobian predicts how the oscillatory coordinate drives the complementary latent state, and
+removing that coordinate accelerates settlement while preserving the decoded output. Extended
+analysis for distinct two-dimensional spiral mode in HRM is provided in Appendix A.4.1, where we
+obtain the same prediction–measurement agreement.
+
+4     Q UOTIENT DYNAMICS CONVERGENCE
+Our analysis in Section 3 shows that slowly decaying oscillatory modes can limit convergence speed
+in a locally linearized regime near a solution root. This does not, however, justify suppressing
+oscillatory motion throughout the entire reasoning trajectory. Rotational or alternating dynamics
+may still participate in the reasoning computation, and removing them indiscriminately can disrupt
+reasoning. Indeed, persistently suppressing an alternating trajectory component in FPRM before
+output stabilization degrades task performance (see Appendix A.4.4). Rather than attempting to
+directly correct the oscillatory bottlenecks identified above, QRR takes a complementary architectural
+approach by introducing an exact token-local gauge symmetry.
+Importantly, QRR does not assume any correspondence between these gauge directions and the
+slow modes identified in other reasoners. QRR learns its own recurrent trajectory. The symmetry
+instead introduces token-local rotational degrees of freedom whose motion is separated from the
+task-relevant quotient dynamics. How this symmetry changes the learned dynamics is therefore an
+empirical question: QRR still retains oscillatory modes in quotient space, but does not develop the
+isolated dominant slow mode observed in FPRM or HRM.
+
+4.1   T OKEN - LOCAL GAUGE SYMMETRY
+Let the recurrent state consist of S token states h = (h1 , . . . , hS ), with hs ∈ Cd , together with
+momentum states ms ∈ Cd . In our implementation, each real-valued token state ys ∈ R2d is
+reinterpreted as hs ∈ Cd through the fixed pairing hs,c = ys,2c−1 + i ys,2c , c = 1, . . . , d. The input
+representation x is gauge-neutral. We introduce the group G = U (1)S , with one phase ϕs for each
+token. For gϕ = (eiϕ1 , . . . , eiϕS ) ∈ G, the group action is
+
+                    gϕ · (h, m) = (eiϕs hs )Ss=1 , (eiϕs ms )Ss=1 ,
+                                                                 
+                                                                         gϕ · x = x.                 (16)
+
+Thus, all complex channels within a token share a common phase, while different tokens may
+rotate independently. Equivalently, in real coordinates, let J denote the block-diagonal infinitesimal
+generator of the phase rotation, so that the gauge tangent associated with token s is generated by J ys
+(or, equivalently, by ihs in complex coordinates). We require the recurrent map T to be G-equivariant
+while the prediction readout R is G-invariant,
+               T (g · z; x) = g · T (z; x),     R(g · z; x) = R(z; x),         z = (h, m).             (17)
+Hence, states that differ only by token-local phase are identified as the same task-relevant state, and
+motion along the corresponding gauge directions is invisible to the prediction readout.
+4.2   Q UOTIENT DYNAMICS
+The symmetry identifies all states on the same group orbit, [z] = G · z = {g · z : g ∈ G}, yielding the
+quotient state space Q = Z/G. Because the recurrent map is G-equivariant, it induces a well-defined
+map on the quotient,
+                                        T ([z]; x) = [T (z; x)].                                   (18)
+The quotient removes only symmetry-generated degrees of freedom, while preserving all remaining
+latent variation. Accordingly, a state may satisfy T (z ⋆ ; x) = g ⋆ · z ⋆ for some g ⋆ ∈ G, making z ⋆
+a relative equilibrium where the unreduced trajectory may continue along the group orbit, while
+T ([z ⋆ ]; x) = [z ⋆ ] is an ordinary fixed point in the quotient. Moreover, exact equivariance ensures that
+a perturbation along the gauge orbit remains gauge-tangent after the recurrent update, and therefore
+produces no change in the quotient state.
+
+
+                                                     6
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+At a relative equilibrium, the quotient analogue of Eq. 4 takes the form et+1 = AQ et + BG ut with
+BG = 0, so this symmetry-generated motion cannot transmit its timescale into the quotient dynamics.
+We formalize this non-forcing property in Proposition A.2.
+                                                                                                  FPRM
+Quotient-based halting. The quotient view changes what it means             10                              0
+
+
+for recurrent reasoning to have converged. At a relative equilibrium,      10                                2
+
+                                                                           10                                4
+
+
+
+
+                                                                                        1 cos(yt, yfinal)
+the state may continue moving along its gauge orbit while its quotient     10                                6
+
+state remains fixed. Thus, requiring raw-state stationarity can mis-       10                                8
+
+take symmetry-generated phase motion for unfinished computation           10     Controller OFF
+                                                                                                            10
+
+                                                                          10     Controller ON              12
+even after the quotient state has converged. Figure 3 illustrates this           Halt: t = 179
+                                                                          10                                14
+distinction between raw-state and quotient convergence. In FPRM,               0  200         400        600 800         1000
+                                                                                                 Iteration
+residual oscillatory motion prevents the raw latent state from becom-                              QRR
+ing stationary until it is damped by the step-size controller, making       10                              0
+
+                                                                           10                                2
+its fixed-point halting criterion sensitive to this motion. In QRR, by     10                                4
+
+
+
+
+                                                                                        1 cos(yt, yfinal)
+contrast, the raw state may continue moving along its gauge orbit          10                                6Latent
+                                                                                                              Quotient
+after the quotient trajectory has converged to numerical precision, al-    10                                8Halt: t = 23
+                                                                          10                                10
+lowing convergence to be detected substantially earlier. We therefore     10                                12
+
+measure convergence modulo the gauge,                                     10                                14
+                                                                               0  200         400        600 800         1000
+                                  ∥T (z; x) − g · z∥                                             Iteration
+                   rG (z) = inf                      .             (19)
+                             g∈G       ∥z∥ + ϵ                           Figure 3: Convergence and
+This residual vanishes when the current state and its next update differ halting in quotient space.
+only by a gauge transformation, while remaining sensitive to motion in the quotient. At inference,
+QRR halts once rG remains below a calibrated threshold for a prescribed persistence window.
+
+4.3    G AUGE - EQUIVARIANT RECURRENT BLOCK
+QRR adopts the recurrent Transformer block of FPRM as its back-
+bone, while replacing its internal operations with gauge-equivariant                                          Covariant
+                                                                                                                                   GaugeConv
+                                                                                                                                                        Momentum
+                                                                                                            input injection                               input
+counterparts. Under the token-local symmetry in Equations 16–17,
+the latent state and momentum transform covariantly with the local                                                                     2×
+                                                                                                                                   G-Attention
+token phase, while attention weights and prediction readouts remain                                                                 G-SwiGLU
+
+gauge-invariant. Figure 4 provides an overview of the overall QRR                                                                       zt
+architectural workflow. Full architectural details are in Appendix A.3.                               Recurrent step t → t + 1
+
+
+                                                                                                                 YES
+
+Relative transport. Because each token has its own local phase, fea-
+                                                                                                                                             NO
+tures from different tokens must be aligned before they can be mixed.                                            Integrator
+
+We associate each token with a covariant phase γs ∈ U (1), satisfying                                                         Momentum + state update
+
+
+γs 7→ eiϕs γs , and define the relative transport Us←t = γs γt∗ . Under
+a pure gauge rotation, Us←t 7→ ei(ϕs −ϕt ) Us←t , providing the rela-
+tive phase required to transport features from token t into the local
+frame of token s. We use this transport for both token mixing and Figure 4: Overview of the
+self-attention.                                                         QRR recurrent block.
+
+Gauge-equivariant attention. Queries, keys, and values are produced by complex-linear maps.
+Using the relative transport, we define the attention scores as
+                                             1
+                                     ast = √ Re Us←t qs† kt ,
+                                                               
+                                                                                              (20)
+                                               d
+                        P Values are likewise transported into the local frame of token s before
+which are gauge-invariant.
+aggregation, os = WO t softmaxt (ast ) Us←t vt , so that os transforms covariantly with token s.
+Gauge-covariant input injection and feed-forward layers. Because the input xs is gauge-neutral,
+it cannot be added directly to the recurrent state. We construct a covariant phase carrier
+                                       ⟨Wd xs , hs ⟩
+                            Ds =                         ,        hs ← α0 hs + β0 Ds xs ,                                                                          (21)
+                                     |⟨Wd xs , hs ⟩| + ϵ
+where Ds 7→ eiϕs Ds , so that the injected input transforms in the local frame of token s. For the
+feed-forward block, we use an invariant gate with an equivariant value branch,
+                              G-SwiGLU(h) = Wdown [SiLU(|Wg h|) ⊙ Wv h] .                                                                                          (22)
+
+                                                             7
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Momentum-carrying recurrent dynamics. We use a momentum-carrying second-order recurrence
+to evolve the latent state. At each recurrent step, the gauge-equivariant trunk produces a state proposal
+zt = Φθ (yt ; x, mt ), defining the residual Ft = zt − yt . We update the momentum as
+                                    pt = βmt + (1 − β)Ft ,                                                         β = σ(bH ),                                 (23)
+where bH ∈ R is a learned global scalar. The recurrent state is then updated by
+                                                                            yt+1 = yt + pt ,            mt+1 = pt .                                            (24)
+The carried momentum is also fed back into the recurrent trunk at the next step.
+
+4.4 S PECTRAL D OMINANCE AND C ONVERGENCE IN R EASONING DYNAMICS
+We next examine how these dynamical constraints are reflected in the learned spectra of QRR.
+We characterize the local                 (a) Leading mode         (b) Bottleneck isolation     (c) Settling-time consequence
+spectral structure of FPRM                                   1.0
+
+
+
+
+                                     Spectral rate |λ|1/L (per layer-fwd)
+                                                                                            2000
+
+
+
+
+                                                                                                                                 Settling time τ (layer-fwd)
+and QRR around certified         0.99                        0.8
+                                                                                            1000
+
+
+                                                                                               Fraction of roots
+solution roots that decode       0.98                        0.6
+                                                                                             500
+to the ground truth. FPRM        0.97                        0.4
+roots are ordinary fixed                                     0.2
+                                                                                             200      218
+                                                                                                             162
+                                 0.96                                                                               138   130
+points of the latent dynam-                                                                  100
+                                                             0.0
+ics, whereas QRR roots                FPRM FPRM QRR QRR          1     2          5      10        FPRM FPRM QRR QRR
+                                      slow comp. slow comp.             Dominance Score             raw comp. raw comp.
+are relative equilibria, fixed                          FPRM  FPRM comp.            QRR     QRR comp.
+points in quotient space. Figure 5: Spectral analysis and settling near solution roots for FPRM
+We linearize FPRM in latent and QRR. Results for HRM in Appendix A.4.2
+space and QRR in quotient
+space, and report spectral rates as |λ|1/L , where L is the number of recurrent layer-forwards (lfwd)
+per native step. Following Section 3, we decompose each system into its leading spectral mode
+and complementary dynamics. For FPRM, the leading mode is slow oscillatory block identified in
+Section 3.2. For QRR, both are derived from quotient space.
+Figure 5 (a) shows QRR operates in a faster spectral regime with less clear separation between its
+leading and remaining dynamics. Figure 5 (b) quantifies this separation using the dominance score
+D = log rcomp / log rslow , D = 1 indicates matched timescales, while larger D indicates a more
+isolated slow leading mode. FPRM frequently exhibits strong spectral dominance, whereas QRR
+remains much closer to D = 1 despite retaining some weaker oscillatory modes. Panel (c) shows the
+corresponding time settlement. QRR settles earlier than FPRM, while factoring out the leading mode
+accelerates FPRM (218 → 162) but the effect remains only modest in QRR (138 → 130). Thus, QRR
+operates in a faster convergence regime with weaker dependence on a single slow leading mode.
+
+5     E XPERIMENTS
+Datasets and baselines We evaluate on four reasoning benchmarks covering constraint satisfaction,
+path finding, and abstract transformation. Sudoku-Extreme consists of challenging partially filled
+9 × 9 Sudoku puzzles with unique solutions; following the standard HRM protocol, we train on 1,000
+base puzzles with 1,000× augmentation and evaluate using exact sequence accuracy on the full test
+set (Wang et al., 2025). Maze-Hard is a 30 × 30 shortest-path benchmark with 1,000 training and
+1,000 test mazes. We follow the FPRM setup with no augmentation (Movahedi et al., 2026). For
+Mini-ARC, a compact 5 × 5 ARC variant for abstract rule induction (Kim et al., 2022; Huang et al.,
+2026), we use the released tasks with 100 data augmentations per task. We additionally evaluate
+on Maze-Unique, following the EqR construction. Unlike Maze-Hard, where multiple optimal
+paths may correspond to a single supervised target, Maze-Unique uses perfect tree-structured mazes
+with a unique start–goal solution (Kim et al., 2022). This provides a cleaner convergence analysis,
+avoiding the ambiguous solution geometry that can hinder formation of a single stable basin (Huang
+et al., 2026). We compare against HRM, TRM, EqR, and FPRM, spanning hierarchical recurrence,
+recursive refinement, learned attractors, and fixed-point adaptive halting.
+5.1    R ESULTS
+Table 1 summarizes both reasoning performance and computational cost. In Table 1 (a), we prioritize
+matched evaluation from an official checkpoint when available, otherwise use the official result, and
+reproduce the baseline under its native setup. HRM, TRM, and EqR use their own fixed inference
+
+
+                                                                                           8
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+budgets, whereas FPRM and QRR halt adaptively according to fixed-point residuals evaluated in
+the latent and quotient space, respectively. For the latter, we report halt-or-cap performance with
+caps of 35k recurrent steps on Sudoku and 3k on the Maze tasks. QRR achieves the strongest
+performance on Sudoku, Maze-Unique, and Mini-ARC while remaining competitive on Maze-Hard.
+Table 1 (b) reports corresponding runtime cost in single A100 GPU on Sudoku-Extreme. QRR
+takes approximately 1.5× higher LFWD latency and 1.3× higher memory than FPRM, reflecting
+the additional cost of its complex-valued gauge-equivariant operations and explicit phase transport.
+Nevertheless, faster convergence outweighs this overhead. The median end-to-end rollout time
+decreases from 5.4 s to 1.9 s, and the p95 from 168.1 s to 60.0 s (2.8× faster). Thus, despite its
+higher per-LFWD cost, QRR completes full reasoning rollout faster than FPRM.
+
+Table 1: Reasoning performance and runtime. (a) exact accuracy on Sudoku-Extreme, Maze-Hard,
+and Maze-Unique, and task-level Pass@1 on Mini-ARC. Models with adaptive halting (FPRM
+and QRR) report halt-or-cap results. Superscripts denote: 1 evaluation matched from an official
+checkpoint, 2 official report, and 3 full reproduction following the native setup. (b) Comparison of
+per-layer-forward (LFWD) computational cost and end-to-end rollout time (s).
+                           (a) Reasoning performance                                                       (b) Runtime comparison
+ Model           Params   Sudoku-Extreme                     Maze                  Mini-ARC          Setting                  QRR        FPRM
+                   (M)          Exact ↑          Hard Exact ↑   Unique Exact ↑     Pass@1 ↑          Per LFWD (B = 512)
+ HRM               27           55.41               74.52           51.93            56.43           Runtime (ms)             34.7        22.3
+ TRM               7            75.71               85.32           58.03            40.93           Peak memory (GB)         2.88        2.14
+ EqR               7            89.91                 –             88.92            41.63
+                                                                                                     End-to-end rollout
+ FPRM               7           91.51               86.41             –                –
+                                                                                                     Coverage (%)              98.0       100.0
+ FPRM (Rep.)        7           83.73               85.33           94.73            57.13
+                                                                                                     Halt step, p50 / p95   27 / 865 122 / 3,769
+ QRR                7            97.9                85.8            97.0            62.4            Runtime (s), p50 / p95 1.9 / 60.0 5.4 / 168.1
+
+
+
+Table 2: Convergence and adaptive halting. (a) Root convergence on Sudoku-Extreme. (b) Adaptive
+halting of FPRM and QRR across tasks. Coverage is the fraction halted within finite cap.
+(a) Root convergence on Sudoku-Extreme                       (b) Adaptive halting (cap Sudoku 35k, Maze-Unique 3k)
+                                                                                         Coverage           τhalt      Acc.@halt False halt
+   Model           τroot         Correct root found         Task                 Model    (%) ↑         median [IQR] ↓   (%) ↑     (%) ↓
+               median [IQR] ↓          (%) ↑
+                                                                                 FPRM        100.0       122 [39, 295]        91.1          8.9
+   HRM     1,032 [744, 1,272]             55.2              Sudoku-Extreme
+                                                                                 QRR          98.0        27 [23, 63]         99.9          0.1
+   EqR       672 [546, 966]               86.1
+   FPRM      234 [152, 396]               90.4                                   FPRM        96.4         36 [27, 76]         98.2          1.8
+                                                            Maze-Unique
+   QRR       122 [108, 148]               89.6                                   QRR         98.0         42 [32, 61]         98.5          1.5
+
+
+Table 2 (a) evaluates root convergence on Sudoku-Extreme using Anderson acceleration applied to
+each trained recurrent map. Full solver, certification, and compute-normalization details are provided
+in Appendix A.5.2. Correct root found is the fraction of examples for which the solver finds a root
+decoding to the ground-truth solution, while τroot is the first sustained entry of the native trajectory
+into a neighborhood of that root, measured in recurrent layer-forward equivalents. For QRR, distance
+is measured in quotient space after removing token-local gauge motion. QRR reaches solution roots
+significantly earlier than the baselines while maintaining a root-finding rate comparable to FPRM.
+Table 2 (b) evaluates deployed adaptive halting under finite rollout caps. Coverage is the fraction
+halted within the cap, while τhalt reports the median halting step and IQR over halted examples.
+Among these, Acc.@halt is the fraction with an exactly correct prediction, and False halt the fraction
+halted incorrectly. QRR halts earlier with fewer false halts on Sudoku, while achieving comparable
+halting depth with higher coverage and accuracy on Maze-Unique.
+
+Ablations
+We ablate the main structural compo-
+nents of QRR. Restricting the token- Variant                  Exact (%) ↑ Coverage (%) ↑ False halt (%) ↓      τhalt [IQR] ↓
+
+local U (1)S symmetry to a single Training
+                                      QRR                        97.9          98.0             0.1             27 [23, 63]
+global U (1) preserves moderate task global U (1)                91.3           0.0              –           CAP (never fires)
+accuracy but never triggers halting, first order w/o momentum
+                                      FPRM trunk + momentum
+                                                                 87.8
+                                                                 77.0
+                                                                               79.6
+                                                                               100
+                                                                                               0.1
+                                                                                               23.0
+                                                                                                                28 [22, 44]
+                                                                                                          12,650 [12,522, 12,871]
+indicating that a shared global phase
+is too restrictive to account for the            Table 3: QRR ablations on Sudoku-Extreme.
+residual token-wise phase motion that persists after the decoded answer settles. Removing momen-
+
+
+                                                                      9
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+tum and using first-order dynamics disrupts both exact accuracy and coverage, while leaving the
+faster halting time and quotient halting precision of trajectories that do settle largely intact. Finally,
+replacing the G-equivariant trunk with FPRM trunk while applying momentum sharply degrades
+accuracy and leads to unreliable convergence. All examples eventually halt, but only after longer
+trajectories and with a high false-halt rate.
+
+
+6    C ONCLUSION
+We studied how non-stationary latent dynamics constrain convergence in recurrent reasoners. Our
+analysis shows that a slowly decaying oscillatory mode can transmit its rate to coupled latent dynamics
+and become the bottleneck to settlement, while direct suppression of such motion can also disrupt
+the reasoning computation. This motivates QRR, which does not eliminate oscillations based on
+their dynamical appearance, but instead introduces an exact token-local gauge symmetry under
+which symmetry-generated motion leaves the quotient state unchanged by construction. Exact gauge
+equivariance prevents this motion from forcing the quotient dynamics, allowing convergence and
+halting to be defined modulo the symmetry. Across various reasoning tasks, QRR achieves strong
+reasoning performance while reaching solution roots much earlier and supporting reliable adaptive
+halting. These results suggest that convergence in recurrent reasoning is better understood in terms of
+task-relevant quotient space than raw latent space.
+
+ACKNOWLEDGMENTS
+This work was supported by the Hector Foundation.
+
+
+R EFERENCES
+Arpit Bansal, Avi Schwarzschild, Eitan Borgnia, Zeyad Emam, Furong Huang, Micah Gold-
+  blum, and Tom Goldstein. End-to-end algorithm synthesis with recurrent networks: Ex-
+  trapolation without overthinking.   In S. Koyejo, S. Mohamed, A. Agarwal, D. Bel-
+  grave, K. Cho, and A. Oh (eds.), Advances in Neural Information Processing Sys-
+  tems, volume 35, pp. 20232–20242. Curran Associates, Inc., 2022.      doi: 10.52202/
+  068431-1471. URL https://proceedings.neurips.cc/paper_files/paper/
+  2022/file/7f70331dbe58ad59d83941dfa7d975aa-Paper-Conference.pdf.
+
+Hugh Blayney, Álvaro Arroyo, Johan Obando-Ceron, Pablo Samuel Castro, Aaron Courville,
+  Michael M. Bronstein, and Xiaowen Dong. A mechanistic analysis of looped reasoning lan-
+  guage models, 2026.
+
+Michael M. Bronstein, Joan Bruna, Taco Cohen, and Petar Veličković. Geometric deep learning:
+ Grids, groups, graphs, geodesics, and gauges. arXiv preprint arXiv:2104.13478, 2021.
+
+Taco Cohen, Maurice Weiler, Berkay Kicanaoglu, and Max Welling. Gauge equivariant convolutional
+  networks and the icosahedral CNN. In Kamalika Chaudhuri and Ruslan Salakhutdinov (eds.),
+  Proceedings of the 36th International Conference on Machine Learning, volume 97 of Proceedings
+  of Machine Learning Research, pp. 1321–1330. PMLR, 2019a. URL https://proceedings.
+  mlr.press/v97/cohen19d.html.
+
+Taco S. Cohen, Mario Geiger, and Maurice Weiler. A general theory of equivariant cnns on homoge-
+  neous spaces. arXiv preprint arXiv:1811.02017, 2019b.
+
+Mostafa Dehghani, Stephan Gouws, Oriol Vinyals, Jakob Uszkoreit, and Lukasz Kaiser. Universal
+ transformers. In International Conference on Learning Representations, 2019.
+
+Ying Fan, Yilun Du, Kannan Ramchandran, and Kangwook Lee. Looped transformers for length
+  generalization. In International Conference on Learning Representations, 2025. URL https:
+  //openreview.net/forum?id=2edigk8yoU.
+
+Jacob Fein-Ashley and Paria Rashidinejad. Solve the loop: Attractor models for language and
+  reasoning, 2026. URL https://arxiv.org/abs/2605.12466.
+
+
+                                                   10
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Jonas Geiping, Sean McLeish, Neel Jain, John Kirchenbauer, Siddharth Singh, Brian R. Bartoldson,
+  Bhavya Kailkhura, Abhinav Bhatele, and Tom Goldstein. Scaling up test-time compute with
+  latent reasoning: A recurrent depth approach, 2025. URL https://arxiv.org/abs/2502.
+  05171.
+Jan E. Gerken, Jimmy Aronsson, Oscar Carlsson, Hampus Linander, Fredrik Ohlsson, Christoffer
+  Petersson, and Daniel Persson. Geometric deep learning and equivariant neural networks. Artificial
+  Intelligence Review, 56:14605–14662, 2023. doi: 10.1007/s10462-023-10502-7.
+Pim De Haan, Maurice Weiler, Taco Cohen, and Max Welling. Gauge equivariant mesh cnns:
+  Anisotropic convolutions on geometric graphs. In International Conference on Learning Represen-
+  tations, 2021. URL https://openreview.net/forum?id=Jnspzp-oIZE.
+Lingshen He, Yiming Dong, Yisen Wang, Dacheng Tao, and Zhouchen Lin. Gauge equivariant
+  transformer. In Advances in Neural Information Processing Systems, volume 34, pp. 27331–27343,
+  2021.
+Benhao Huang, Zhengyang Geng, and Zico Kolter. Equilibrium reasoners: Learning attractors
+  enables scalable reasoning, 2026. URL https://arxiv.org/abs/2605.21488.
+Alexia Jolicoeur-Martineau. Less is more: Recursive reasoning with tiny networks, 2025. URL
+  https://arxiv.org/abs/2510.04871.
+Gunn Kim. Dynamical phase selection controls compute scaling in looped transformers, 2026. URL
+  https://arxiv.org/abs/2608.26556.
+Subin Kim, Prin Phunyaphibarn, Donghyun Ahn, and Sundong Kim. Playgrounds for Abstraction
+  and Reasoning. In NeurIPS Workshop on neuro Causal and Symbolic AI, 2022.
+Risi Kondor and Shubhendu Trivedi. On the generalization of equivariance and convolution in neural
+  networks to the action of compact groups. In Proceedings of the 35th International Conference
+  on Machine Learning, volume 80 of Proceedings of Machine Learning Research, pp. 2747–2755.
+  PMLR, 2018.
+Martin Krupa. Bifurcations of relative equilibria. SIAM Journal on Mathematical Analysis, 21(6):
+ 1453–1486, 1990. doi: 10.1137/0521081.
+Jerrold E. Marsden and Tudor S. Ratiu. Introduction to Mechanics and Symmetry: A Basic Exposition
+   of Classical Mechanical Systems, volume 17 of Texts in Applied Mathematics. Springer, 1999.
+Sajad Movahedi, Vera Milovanović, Shlomo Libo Feigin, Alexander Theus, Thomas Hofmann,
+  Valentina Boeva, T. Konstantin Rusch, and Antonio Orvieto. Fixed-point reasoners: Stable and
+  adaptive deep looped transformers, 2026. URL https://arxiv.org/abs/2606.18206.
+Francesco Pappone, Donato Crisostomi, and Emanuele Rodolà. Two-scale latent dynamics for
+  recurrent-depth transformers, 2025. URL https://arxiv.org/abs/2509.23314.
+Nikunj Saunshi, Nishanth Dikkala, Zhiyuan Li, Sanjiv Kumar, and Sashank J. Reddi. Reasoning with
+  latent thoughts: On the power of looped transformers. In International Conference on Learning
+  Representations, 2025. URL https://openreview.net/forum?id=din0lGfZFd.
+Guan Wang, Jin Li, Yuhao Sun, Xing Chen, Changling Liu, Yue Wu, Meng Lu, Sen Song, and
+ Yasin Abbasi Yadkori. Hierarchical reasoning model, 2025. URL https://arxiv.org/
+  abs/2506.21734.
+Maurice Weiler, Patrick Forré, Erik Verlinde, and Max Welling. Coordinate independent convolutional
+ networks: Isometry and gauge equivariant convolutions on riemannian manifolds. arXiv preprint
+ arXiv:2106.06020, 2021.
+Ruben Wiersma, Elmar Eisemann, and Klaus Hildebrandt. Cnns on surfaces using rotation-equivariant
+  features. ACM Transactions on Graphics, 39(4), 2020. doi: 10.1145/3386569.3392437.
+Xiao-Wen Yang, Ziyu Han, Xi-Hua Zhang, Wen-Da Wei, Jie-Jing Shao, Lan-Zhe Guo, and Yu-Feng
+  Li. Stabilizing recurrent dynamics for test-time scalable latent reasoning in looped language
+  models, 2026. URL https://arxiv.org/abs/2605.26733.
+
+
+                                                11
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+A      A PPENDIX
+
+A.1    T HEORETICAL P ROOFS
+
+
+Lemma 3.1 (Exact Sylvester decomposition of a coupled spectral coordinate). Consider the linear
+dynamics in Eq. 4, with A ∈ Rd×d , S ∈ Rm×m , and B ∈ Rd×m , and assume σ(A) ∩ σ(S) = ∅.
+Then there exists a unique matrix P ∈ Rd×m satisfying P S − AP = B. The complementary state
+admits the exact decomposition
+                                   et = At (e0 − P u0 ) + P S t u0 .                             (5)
+
+Proof. Define the Sylvester operator
+
+                          L(X) := XS − AX,              L : Rd×m → Rd×m .
+Using vectorization,
+                           vec(L(X)) = S ⊤ ⊗ Id − Im ⊗ A vec(X).
+                                                        
+                                                                                                (25)
+The eigenvalues of S ⊤ ⊗ Id − Im ⊗ A are
+                                µ − λ,       µ ∈ σ(S),     λ ∈ σ(A).
+Because σ(A) ∩ σ(S) = ∅, none of these eigenvalues is zero. Hence the matrix in Eq. 25 is invertible,
+so L is bijective. Therefore, for every B, there exists a unique P ∈ Rd×m satisfying
+                                           P S − AP = B.
+
+Now define the reparameterized auxiliary variable using P ,
+                                           wt := et − P ut .                                    (26)
+Using et+1 = Aet + But , ut+1 = Sut , and P S − AP = B, we obtain
+                                   wt+1 = et+1 − P ut+1                                         (27)
+                                        = Aet + But − P Sut                                     (28)
+                                        = Aet − AP ut                                           (29)
+                                        = A(et − P ut ) = Awt .                                 (30)
+Thus
+                                   wt = At w0 = At (e0 − P u0 ).
+Since ut = S t u0 , substituting back into et = wt + P ut gives
+                                   et = At (e0 − P u0 ) + P S t u0 ,
+which proves Eq. 5.
+
+Theorem 3.2 (Rate inheritance from a slow oscillatory mode). Under the setting of Lemma 3.1,
+suppose S satisfies Eq. 6, with ρ(A) < r ≤ 1, B ̸= 0, and u0 ̸= 0. If r < 1, then et → 0,
+                                                 1/t
+                                   lim sup ∥et ∥2      = r > ρ(A),                               (8)
+                                     t→∞
+
+and
+                                          log(1/δ)
+                               τδ (e) =            + O(1),        δ ↓ 0.                         (9)
+                                           − log r
+If r = 1, then et remains bounded but does not converge to any constant, with
+                                               ∥u0 ∥2 ∥B∥F
+                                E(e) ≥ √                         > 0.                           (10)
+                                            2 κ2 (M )(1 + ∥A∥2 )
+
+                                                  12
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Proof. Since
+                                      S = M (rQω )M −1
+and every eigenvalue of S has modulus r > ρ(A), we have
+                                            σ(A) ∩ σ(S) = ∅.
+Hence Lemma 3.1 gives a unique solution P of P S − AP = B and the exact decomposition
+                                     et = At (e0 − P u0 ) + P S t u0 .                             (31)
+Since B ̸= 0, the Sylvester equation implies P ̸= 0. Define
+                           q := M −1 u0 ,          C := P M,            a := ∥q∥2 .
+Invertibility of M implies a > 0 and C ̸= 0. Moreover,
+                                           S t = rt M Qtω M −1 ,
+so
+                                       P S t u0 = rt CQtω q.
+This change of oscillator coordinates leaves the complementary state et and its Euclidean norm
+unchanged. Choose ν such that
+                                         ρ(A) < ν < r.
+There exists Cν < ∞ satisfying
+                                       ∥At ∥2 ≤ Cν ν t ,          t ≥ 0.
+Writing
+                                 ξt := At (e0 − P u0 ),          pt := CQtω q,
+we obtain
+                            et = rt pt + ξt ,     ∥ξt ∥2 = O(ν t ) = o(rt ),                        (32)
+                                         t
+where ξt takes the A-transient part and r pt corresponds to the oscillatory response. We first establish
+a uniform two-step lower bound on the oscillatory response. This accounts for possible cancellation
+at individual steps. Let
+                                 Qtω q
+                         vt :=         ∈ R2 ,       Vt := (vt       Qω vt ) ∈ R2×2 .
+                                  a
+Because Qω is orthogonal,
+                          ∥vt ∥2 = ∥Qω vt ∥2 = 1,              ⟨vt , Qω vt ⟩ = cos ω.
+Thus                                                                   
+                                                         1      cos ω
+                                        Vt⊤ Vt =
+                                                       cos ω      1
+has eigenvalues 1 ± | cos ω|. Moreover, because vt and Qω vt are non-collinear for 0 < ω < π, the
+Gram matrix Vt⊤ Vt is positive definite. The same eigenvalues occur in Vt Vt⊤ , giving
+                            (1 − | cos ω|)I2 ⪯ Vt Vt⊤ ⪯ (1 + | cos ω|)I2 .
+Since
+                                   pt = aCvt ,          pt+1 = aCQω vt ,
+we have
+                       ∥pt ∥22 + ∥pt+1 ∥22 = a2 ∥CVt ∥2F = a2 tr(CVt Vt⊤ C ⊤ ).
+Consequently,
+                a2 (1 − | cos ω|)∥C∥2F ≤ ∥pt ∥22 + ∥pt+1 ∥22 ≤ a2 (1 + | cos ω|)∥C∥2F .            (33)
+The lower bound is strictly positive because 0 < ω < π, a > 0, and C ̸= 0. The results show that pt
+can be temporarily collapsed close to 0 but pt and pt+1 cannot become arbitrarily small at the same
+time.
+Extending this result to et = rt pt + ξt , define the two-step envelope
+                                                                 1/2
+                                  Wt := ∥et ∥22 + r−2 ∥et+1 ∥22       .                            (34)
+
+
+                                                       13
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Eq. 32 gives                                                                   
+                                   et                  t        pt             ξt
+                                                  =r                       + −1       ,
+                                 r−1 et+1                      pt+1          r ξt+1
+where                                              
+                                          ξt
+                                                               = O(ν t ) = o(rt ).
+                                        r−1 ξt+1           2
+The triangle and reverse triangle inequalities therefore imply
+                                                          1/2
+                              Wt − rt ∥pt ∥22 + ∥pt+1 ∥22      = O(ν t ).
+
+Combining this with Eq. 33, there exist constants c− , c+ > 0 and t0 such that
+                                     c− rt ≤ Wt ≤ c+ rt ,                     t ≥ t0 .              (35)
+Now suppose r < 1. Since
+                                                  ∥pt ∥2 ≤ ∥C∥2 a,
+Eq. 32 implies et → 0 and
+                                                                     1/t
+                                              lim sup ∥et ∥2               ≤ r.
+                                                  t→∞
+If this limsup were strictly smaller than r, there would exist 0 < s < r such that
+                                                  ∥et ∥2 = O(st ).
+It would follow from Eq. 34 that
+                                          Wt = O(st ),
+contradicting the lower bound Wt ≥ c− rt in Eq. 35. Hence
+                                                                     1/t
+                                              lim sup ∥et ∥2               = r,
+                                                  t→∞
+
+which proves Eq. 8. We next derive the settling-time asymptotic. Since et → 0, τδ (e) is finite for
+every δ > 0. The positive lower bound in Eq. 35 rules out an eventually zero trajectory,
+                                          τδ (e) −→ ∞                  as δ ↓ 0.
+Thus, for sufficiently small δ, the relevant settling times are at least t0 . If t ≥ t0 satisfies
+                                                     c+ rt ≤ δ,
+then, for every k ≥ t,
+                                  ∥ek ∥2 ≤ Wk ≤ c+ rk ≤ c+ rt ≤ δ.
+Therefore, for sufficiently small δ,
+                                         
+                               log(c+ /δ)       log(c+ /δ)    log(1/δ)
+                   τδ (e) ≤                 ≤1+            =           + O(1).                      (36)
+                                 − log r          − log r      − log r
+Conversely for the lower bound, if ∥ek ∥2 ≤ δ for every k ≥ t, then
+                                                p
+                                        Wt ≤ δ 1 + r−2 .
+At t = τδ (e) ≥ t0 , the lower bound in Eq. 35 therefore gives
+                                                     p
+                                       c− rτδ (e) ≤ δ 1 + r−2 ,
+and hence                              √         
+                             log c− /(δ 1 + r−2 )    log(1/δ)
+                    τδ (e) ≥                       =          + O(1).                               (37)
+                                     − log r          − log r
+Combining Eq. 36 and Eq. 37 yields
+                                              log(1/δ)
+                                   τδ (e) =            + O(1),                    δ ↓ 0,
+                                               − log r
+which proves Eq. 9. This shows that et inherits the slow rate of the oscillatory mode with r < 1 due
+to the coupling.
+
+
+                                                               14
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Now it remains to consider r = 1. Eq. 32 becomes
+                            et = pt + ξt ,         pt = CQtω q,             ξt → 0.                       (38)
+The sequence (et ) is bounded because (pt ) is bounded and ξt decays geometrically. Write
+                                            q = a(cos ϕ, sin ϕ)⊤ .
+Since 0 < ω < π, both eiω and e2iω differ from 1. For ℓ ∈ {1, 2}, the geometric-sum formula gives
+                                     T −1
+                                   1 X iℓtω    1 − eiℓT ω
+                                         e  =               −→ 0.
+                                   T t=0      T (1 − eiℓω )
+
+Applying the ℓ = 1 identity to                                         
+                                                          cos(ϕ + tω)
+                                       Qtω q = a
+                                                          sin(ϕ + tω)
+yields zero-mean for the rotating vector Qtω q
+                                                T −1
+                                             1 X t
+                                                  Q q −→ 0.                                               (39)
+                                             T t=0 ω
+
+For the second moment, the double-angle identities give
+                                 a2    a2 cos(2ϕ + 2tω)
+                                                                                          
+                                                                             sin(2ϕ + 2tω)
+               Qtω qq ⊤ (Qtω )⊤ = I2 +                                                       .
+                                 2      2 sin(2ϕ + 2tω)                     − cos(2ϕ + 2tω)
+The ℓ = 2 identity therefore implies
+                                      T −1
+                                    1 X t ⊤ t ⊤         a2
+                                          Qω qq (Qω ) −→ I2 .                                             (40)
+                                    T t=0               2
+
+These limits require no irrationality assumption on ω/(2π). Since pt = CQtω q, we obtain
+                                   T −1            T −1
+                                                           !
+                                1 X              1 X t
+                                        pt = C          Q q −→ 0,
+                                T t=0            T t=0 ω
+
+and
+                  T −1                         T −1
+                                  "                                     !           #
+                1 X         2               1 X t ⊤ t ⊤                         ⊤            a2
+                       ∥pt ∥2 = tr C             Q qq (Qω )                 C           −→      ∥C∥2F .
+                T t=0                       T t=0 ω                                          2
+Thus
+                            T −1                          T −1
+                         1 X                           1 X             a2
+                               pt −→ 0,                      ∥pt ∥22 −→ ∥C∥2F .                           (41)
+                         T t=0                         T t=0           2
+Fix any c ∈ Rd . The squared distance satisfies
+                          ∥et − c∥22 = ∥pt − c∥22 + 2⟨pt − c, ξt ⟩ + ∥ξt ∥22 .
+Because ξt decays geometrically, the last two terms vanish as
+                              T −1                               T −1
+                           1 X                               1 X
+                                 ∥ξt ∥2 −→ 0,                      ∥ξt ∥22 −→ 0.
+                           T t=0                             T t=0
+
+Moreover,
+                       T −1                                   T −1
+                     1 X                                    1 X
+                           ⟨pt − c, ξt ⟩ ≤ (∥C∥2 a + ∥c∥2 )        ∥ξt ∥2 −→ 0.
+                     T t=0                                  T t=0
+Using
+                                 ∥pt − c∥22 = ∥pt ∥22 − 2⟨pt , c⟩ + ∥c∥22 ,
+
+
+                                                        15
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Eq. 41 therefore yields
+                                         T −1
+                                  1 X               a2
+                              lim       ∥et − c∥22 = ∥C∥2F + ∥c∥22 .                         (42)
+                             T →∞ T                 2
+                                    t=0
+
+For every c, the limsup is at least the limiting Cesàro average,
+                                                              T −1
+                                                     1        X
+                            lim sup ∥et − c∥22 ≥ lim                 ∥et − c∥22 .
+                              t→∞               T →∞ T        t=0
+
+Taking square roots and then the infimum over c gives
+                            a        ∥q∥2 ∥C∥F   ∥M −1 u0 ∥2 ∥P M ∥F
+                     E(e) ≥ √ ∥C∥F =    √      =        √            .                       (43)
+                             2             2               2
+Finally, we express this bound in the original coordinates. Multiplying P S − AP = B on the right
+by M , and using SM = M Qω when r = 1, gives
+                                 BM = P SM − AP M = CQω − AC.
+Since Qω is orthogonal,
+                                            ∥CQω ∥F = ∥C∥F .
+Consequently,
+                                       ∥BM ∥F ≤ ∥CQω ∥F + ∥AC∥F
+                                              ≤ ∥C∥F + ∥A∥2 ∥C∥F
+                                              = (1 + ∥A∥2 )∥C∥F .
+Substituting into Eq. 43 gives
+                                                 ∥M −1 u0 ∥2 ∥BM ∥F
+                                        E(e) ≥     √                .
+                                                     2(1 + ∥A∥2 )
+The identities u0 = M (M −1 u0 ) and B = (BM )M −1 imply
+                                         ∥u0 ∥2 ≤ ∥M ∥2 ∥M −1 u0 ∥2
+and
+                                        ∥B∥F ≤ ∥BM ∥F ∥M −1 ∥2 .
+Therefore,
+                                                    ∥u0 ∥2 ∥B∥F     ∥u0 ∥2 ∥B∥F
+                      ∥M −1 u0 ∥2 ∥BM ∥F ≥                        =             .
+                                                   ∥M ∥2 ∥M −1 ∥2     κ2 (M )
+We conclude that
+                                         ∥u0 ∥2 ∥B∥F
+                                  E(e) ≥ √                 > 0,
+                                      2 κ2 (M )(1 + ∥A∥2 )
+which proves Eq. 10. Hence the complementary state remains bounded but cannot converge to any
+constant.
+
+ Corollary A.1 (Alternating modes). Consider the alternating oscillatory mode
+                                 et+1 = Aet + but ,        ut+1 = −rut ,                   (44)
+ where et , b ∈ Rd , ut ∈ R, A ∈ Rd×d , ρ(A) < r ≤ 1, and bu0 ̸= 0. If r < 1, the rate and
+ settling-time conclusions from 3.2 hold. More precisely, we can further derive
+                                  ∥et ∥2
+                                 lim     = ∥(−rI − A)−1 bu0 ∥2 > 0.                        (45)
+                              t→∞   rt
+ If r = 1, the trajectory approaches an alternating two-cycle, and
+                                       E(e) = ∥(I + A)−1 bu0 ∥2 > 0.                       (46)
+
+
+                                                     16
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Proof. Since ρ(A) < r, the matrix −rI − A is invertible. Define
+                                         v = (−rI − A)−1 bu0 .                                       (47)
+Then v ̸= 0 and −rv − Av = bu0 . Direct substitution into Eq. 44 gives
+                                       et = At (e0 − v) + (−r)t v.                                   (48)
+The matrix-power bound implies At (e0 − v) = o(rt ). Therefore,
+                                        r−t et = (−1)t v + o(1),                                     (49)
+which proves Eq. 45.
+For r < 1, the norm is consequently bounded above and below by positive multiples of rt for all
+sufficiently large t. The exponential-rate and settling-time conclusions follow as in Theorem 3.2.
+For r = 1, Eq. 48 gives
+                                      e2t −→ v,       e2t+1 −→ −v.                                   (50)
+Thus
+                          E(e) = inf max{∥v − c∥2 , ∥ − v − c∥2 } = ∥v∥2 .                           (51)
+                                 c∈Rd
+The last equality follows because any ball containing v and −v has radius at least ∥v∥2 , attained at
+c = 0. Since v = −(I + A)−1 bu0 when r = 1, this proves Eq. 46.
+
+Perturbation response       In the alternating case S = −r, the Sylvester equation gives
+                            P (−r) − AP = b,             P = (−rI − A)−1 b.
+Hence the linearized complementary trajectory is
+                                (α)
+                                      = Ak e0 + α P (−r)k − Ak P u0 .
+                                                                
+                               ebk
+Subtracting the α = 0 counterfactual isolates the response induced by the oscillatory coordinate,
+                            (α)
+                         c k := eb(α) − eb(0) = α P (−r)k − Ak P u0 .
+                                                                     
+                        ∆e          k       k
+
+Since ρ(A) < r, we have Ak P u0 = o(rk ), and therefore
+                                        (α)
+                                      ∆e
+                                      ck      = αP (−r)k u0 + o(rk ).
+
+A.1.1    S TRUCTURAL NON - FORCING OF GAUGE MOTION .
+The quotient construction in Section 4.2 is stronger than readout invariance, exact equivariance
+prevents symmetry-generated motion from forcing dynamics transverse to the gauge orbit.
+
+ Proposition A.2 (Gauge-to-quotient non-forcing). Let T be differentiable and equivariant under
+ the token-local G = U (1)S action. Define the gauge tangent space Vz := Tanz (G · z), and let
+ Πz denote the orthogonal projector onto Vz⊥ . Then
+                                     ΠT (z) DT (z)ξ = 0,       ξ ∈ Vz .                            (52)
+
+ At a relative equilibrium T (z ⋆ ) = g ⋆ · z ⋆ , define Tb = (g ⋆ )−1 · T and Jb = DTb(z ⋆ ). If UG has
+ orthonormal columns spanning V ∗ z ⋆ , then
+                              JUG = UG ,
+                              b                    BG := Π ∗ z ⋆ b
+                                                                JUG = 0.                           (53)
+
+Proof. Let ξ ∈ Vz . By definition of the tangent space to the group orbit, there exists a differentiable
+curve g(ϕ) ∈ G with g(0) = e such that
+                                                 d
+                                           ξ=      g(ϕ) · z     .                                    (54)
+                                                dϕ          ϕ=0
+
+By equivariance,
+                                       T (g(ϕ) · z) = g(ϕ) · T (z).                                  (55)
+
+
+                                                    17
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Differentiating at ϕ = 0 gives
+                                                 d
+                                 DT (z)ξ =         g(ϕ) · T (z)     ∈ VT (z) .                  (56)
+                                                dϕ              ϕ=0
+Hence
+                                             DT (z)Vz ⊆ VT (z) ,                                (57)
+and therefore
+                                     ΠT (z) DT (z)ξ = 0,             ξ ∈ Vz .                   (58)
+Now let z ⋆ satisfy T (z ⋆ ) = g ⋆ · z ⋆ , and define
+                                                Tb = (g ⋆ )−1 · T.                              (59)
+Then Tb(z ⋆ ) = z ⋆ . Since G = U (1)S is Abelian, gg ⋆ = g ⋆ g for all g, g ⋆ ∈ G, and hence
+                                Tb(g · z) = (g ⋆ )−1 · T (g · z)                                (60)
+                                                  ⋆ −1
+                                            = (g )       g · T (z)                              (61)
+                                            = g(g ⋆ )−1 · T (z) = g · Tb(z).                    (62)
+Thus Tb is also G-equivariant.
+Thus, for any ξ ∈ Vz⋆ and any curve g(ϕ) generating ξ,
+                                  b = d Tb(g(ϕ) · z ⋆ )
+                                  Jξ                                                            (63)
+                                        dϕ              ϕ=0
+                                                 d
+                                            =      g(ϕ) · Tb(z ⋆ )                              (64)
+                                                dϕ                 ϕ=0
+                                                 d
+                                            =      g(ϕ) · z ⋆     = ξ.                          (65)
+                                                dϕ            ϕ=0
+
+Therefore Jb acts as the identity on Vz⋆ . If UG spans this space,
+                                               JU
+                                               b G = UG .                                     (66)
+Thus, in the co-moving frame, while the raw state advances along the gauge orbit by g ⋆ , removing
+this common rotation leaves infinitesimal gauge perturbations unchanged to first order.
+In direct analogy with the coupling matrix B = QJU in Section 3.1, define the coupling from the
+gauge coordinate into the transverse quotient dynamics as
+                                         BG := Πz⋆ bJUG .                                  (67)
+Since Πz⋆ UG = 0 and JUG = UG ,
+                        b
+                                  BG = Πz⋆ b JUG = Πz⋆ UG = 0.                             (68)
+Finally, let W be an orthonormal basis of Vz⊥⋆ and write δ = W e + UG u. Projecting the co-moving
+linearization onto the quotient coordinates gives
+                                   e+ = W ⊤ J(Wb e + UG u)                                   (69)
+                                           = W ⊤ JW
+                                                 b e + W ⊤ JU
+                                                           b Gu                                 (70)
+                                           = AQ e,                                              (71)
+where AQ := W ⊤ b
+               JW . Thus the quotient component evolves independently of the gauge coordinate.
+
+
+To connect this result to the coupled-mode analysis in Section 3, let W be an orthonormal basis of
+Vz⊥⋆ and write δ = W e + UG u. Since W ⊤ bJUG = 0, the quotient component evolves locally as
+
+                                   ek+1 = AQ ek ,           AQ := W ⊤ b
+                                                                     JW,
+independently of the gauge coordinate uk . Hence a symmetry-generated gauge rotation cannot
+transmit its timescale into the quotient dynamics. This statement applies only to the gauge subspace
+so other oscillatory modes transverse to the gauge orbit remain unconstrained and may continue to
+participate in the quotient dynamics.
+
+
+                                                       18
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+A.2     L OCAL THEORY AND EMPIRICAL PREDICTION
+
+
+
+Derivation of the local block dynamics.
+Let U ∈ RD×m have orthonormal columns and satisfy
+                                            J ⊤U = U S⊤.                                         (72)
+Transposing gives
+                                            U ⊤ J = SU ⊤ .                                       (73)
+Define
+                                         Q = I − U U ⊤.                                          (74)
+Since U ⊤ U = I, Q is the orthogonal projector onto the complement of span(U ), and
+                                        QU = 0,           U ⊤ Q = 0.                             (75)
+
+For any root-centered displacement δ, define
+                                        u = U ⊤ δ,         e = Qδ.                               (76)
+                          ⊤
+Then δ = e + U u, with U e = 0. Under the linearized dynamics
+                                               δ + = Jδ,                                         (77)
+the oscillatory coordinate evolves as
+                                        u+ = U ⊤ δ +                                             (78)
+                                               ⊤
+                                           = U J(e + U u)                                        (79)
+                                                   ⊤          ⊤
+                                           = SU e + SU U u                                       (80)
+                                           = Su.                                                 (81)
+Thus the complementary coordinate does not feed back into u to first order.
+Similarly,
+                                        e+ = Qδ +                                                (82)
+                                           = QJ(e + U u)                                         (83)
+                                           = QJQ e + QJU u,                                      (84)
+where we used e = Qe. Defining
+                                   A := QJQ,              B := QJU,                              (85)
+gives
+                                  e+ = Ae + Bu,       u+ = Su.                                (86)
+Hence the left-invariant oscillatory coordinate evolves autonomously, while it can still drive the
+complementary state through the coupling block B.
+
+A.3     QRR A RCHITECTURE
+
+QRR follows the recurrent-block organization of FPRM, but replaces the recurrent trunk with the
+gauge-equivariant construction described in Section 4.3 and augments recurrence with momentum.
+
+Input and recurrent state. Let x denote the embedded task input, which is kept fixed and re-
+injected at every recurrent step. The recurrent state consists of a latent state yt and a momentum
+state mt , both transforming covariantly under the token-local G = U (1)S action. In real coordinates,
+yt , mt ∈ RS×2d , with the fixed identification R2d ≃ Cd used throughout the gauge-equivariant
+trunk. For each input, we initialize m0 = 0 and draw y0 independently at random. Specifically, each
+four-dimensional real cell of y0 is sampled coordinate-wise from a truncated normal distribution and
+normalized to unit norm.
+
+
+                                                     19
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Gauge-equivariant recurrent trunk.           At recurrent step t, the trunk receives the current state,
+carried momentum, and input,
+                                          zt = Φθ (yt , mt ; x),                                  (87)
+where Φθ is G-equivariant,
+                                 Φθ (g· y, g· m; x) = g· Φθ (y, m; x).                            (88)
+The trunk retains the pre-norm Transformer structure of FPRM, while token mixing, input injection,
+attention, and feed-forward transformations are replaced by their gauge-equivariant counterparts. The
+input x is injected through a covariant carrier, while the carried momentum mt is also fed back into
+the trunk. The resulting output zt is a state proposal, rather than the next recurrent state directly.
+
+Momentum-carrying update.          We define the proposal residual
+                                                Ft = zt − yt .                                    (89)
+The deployed recurrence applies momentum directly to this residual,
+                              pt = βmt + (1 − β)Ft ,              β = σ(bH ),                     (90)
+where bH is a learned global scalar. Ignoring an equivalent gauge rephasing described below, the
+update is
+                                yet+1 = yt + pt ,    me t+1 = pt .                          (91)
+
+Gauge rephasing.     The implementation additionally permits a state-dependent gauge rotation
+                                      ⟨Ft , J yt ⟩
+                               at =                ,        Rt = exp(at J ),                      (92)
+                                      ∥yt ∥2 + ϵ
+with at detached from the computational graph. The stored recurrent state is then
+                               yt+1 = Rt yet+1 ,            mt+1 = Rt m
+                                                                      e t+1 .                     (93)
+Since Rt is itself a gauge transformation, this operation doesn’t change quotient state.
+
+Readout and adaptive halting.       Predictions are produced by a gauge-invariant readout
+                             ybt = R(yt ; x),          R(g· yt ; x) = R(yt ; x).                  (94)
+Consequently, prediction is insensitive to motion confined to the gauge orbit. Adaptive halting is
+based on the quotient residual rG from Equation 19, computed from the joint state (yt , mt ) after
+phase alignment. A trajectory halts once this residual remains below the task-specific threshold for
+the prescribed persistence window; otherwise recurrence continues until the rollout cap.
+
+Recurrent training. The pair (yt , mt ) is carried across recurrent steps and across successive deep-
+supervision segments for the same input, and is reset only when a new example is started. Within
+each segment, the model is unrolled for a task-specific number of recurrent steps, while gradients are
+propagated only through the final truncated-BPTT window. Earlier steps advance the recurrent state
+without storing gradients. After each deep-supervision segment, the prediction loss is applied and the
+carried state is detached before the next segment.
+
+A.4     A DDITIONAL E XPERIMENTAL R ESULTS
+
+A.4.1    C AUSAL VERIFICATION ON HRM SPIRAL DYNAMICS
+We additionally verify the local oscillatory-coupling prediction on HRM, whose solution-root dy-
+namics exhibit a qualitatively different oscillatory geometry from the alternating mode analyzed
+for FPRM in Section 3.1. Here, the identified slow spectral component is a two-dimensional real
+invariant block
+                        S ∈ R2×2 ,       σ(S) = {re±iω },       0 < ω < π,                        (95)
+with ρ(A) < r ≤ 1. Thus, rather than alternating along a single direction, the slow coordinate rotates
+while decaying toward the solution root. We use exactly the same intervention protocol used for
+FPRM in main paper. The local linearization from Eq. 13 predicts
+                              (α)          k              k      k
+                                                                    
+                           ∆e k = αQJ U u0 = α P S − A P u0 ,                                     (96)
+                            c
+
+
+                                                       20
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+                                                                      Predicted vs. measured response                                                Response over time                                                                        Settling gain
+                                                                    100                                                                                                                                                                                                      0.9
+                                                                            α=1                                                     10−1                                                                                                  ideal gain (y = x)
+                                                                            α=½                                                                                                                        60                                 random-direction control           0.8
+
+
+
+                                       HRM · spiral mode
+                                                                   10−2     y=x                                                     10−2
+
+
+
+
+                                                                                                                                                                                 observed gain Δτobs
+                                                                                                                                                                                                       50
+
+
+                                                 measured ‖Δek ‖
+                                                                   10−4                                                                                                                                                                                                      0.7
+                                                                                                                                    10−3
+
+                                                                                                                                                                                                                                                                                 ‖Pu0‖/‖e0‖
+                                                                                                                                                                                                       40                                                                    0.6
+                                                                                                                    ‖Δek(α)‖
+                                                                   10−6                                                             10−4
+                                                                                                                                    10−5                                                               30                                                                    0.5
+
+                                                    (α )
+                                                                   10−8                                                                                                                                20
+                                                                                                                                    10−6                                                                                                                                     0.4
+                                                                   10−10                                                                            measured, α=1                                      10
+                                                                                                                                    10−7            measured, α=0.5                                                                                                          0.3
+                                                                   10−12                                                            10−8            predicted                                           0
+                                                                                                                                                                                                                                                                             0.2
+                                                                           10−11 10−9   10−7   10−5   10−3   10−1                             100            101           102                                          0                        20       40         60
+                                                                                predicted ‖α QJ kUu0‖                                               step k after intervention                                                               predicted gain Δτpred
+
+Figure 6: The local oscillatory-coupling prediction extends to the two-dimensional spiral dynam-
+ics of HRM. We modify only the Jacobian-identified oscillatory coordinate once with α ∈ {0, 0.5, 1}
+and subsequently resume the original nonlinear HRM recurrence.
+
+
+where the full matrix power S k retains the rotation of the two-dimensional spiral mode.
+Figure 6 mirrors the three tests reported for FPRM in Figure 2. First, the response measured from the
+nonlinear rollout agrees with the Jacobian-based prediction
+                                            
+                               (α)      (0)
+                         Q zt0 +k − zt0 +k           vs.       αQJ k U u0 2 .                    (97)
+                                                                                                                                                         2
+Second, the temporal response follows the predicted rotating and decaying evolution, rather than
+the one-dimensional alternation observed in FPRM. Finally, removing the oscillatory component
+with α = 0 reduces root-relative settling time by an amount consistent with the local prediction,
+using the same settling criterion and sustained-window implementation as in the main-text analysis.
+These results show that the intervention agreement in Figure 2 is not specific to the nearly one-
+dimensional flip geometry of FPRM. The same local decomposition predicts the nonlinear response
+and convergence cost for a qualitatively distinct two-dimensional spiral mode.
+
+ A.4.2                                                             S PECTRAL A NALYSIS ON HRM VS . QRR
+
+                                                                          (a) Leading mode                                                          (b) Bottleneck isolation                                                                   (c) Settling-time consequence
+                                                                                                                                        1.0
+
+
+
+
+Spectral rate |λ|1/L (per layer-fwd)
+                                                                                                                                                                                                                                          2000
+
+
+
+
+                                                                                                                                                                                                            Settling time τ (layer-fwd)
+                                       0.99                                                                                             0.8
+
+
+
+                                                                                                                    Fraction of roots
+                                                                                                                                                                                                                                          1000
+                                       0.98                                                                                             0.6                                                                                                             768          672
+                                                                                                                                                                                                                                           500
+                                       0.97                                                                                             0.4
+
+                                                                                                                                        0.2                                                                                                200
+                                       0.96                                                                                                                                                                                                                                  138              130
+                                                                                                                                        0.0                                                                                                100
+                                                                   HRM       HRM         QRR           QRR                                    1           2          5           10                                                                   HRM       HRM        QRR           QRR
+                                                                   slow     comp.        slow         comp.                                                Dominance Score                                                                            raw      comp.       raw          comp.
+                                                                                                  HRM                                    HRM comp.                        QRR                                                     QRR comp.
+
+Figure 7: Spectral organization and settling in HRM and QRR. (a) Leading and complementary
+spectral rates near certified solution equilibria. QRR rates are measured in quotient space. (b)
+Distribution of the dominance score D = log rcomp / log rlead . (c) Root-relative settling time before
+and after factoring out the leading-mode response.
+
+We repeat the spectral analysis of Section 4.4 for HRM, whose local dynamics exhibit the spiral
+geometry studied in Appendix A.4.1. For HRM, we linearize the recurrent H-cycle map around
+certified solution fixed points. For QRR, we analyze the corresponding linearization in quotient
+space around relative equilibria. As in the main analysis, we decompose each system into its leading
+spectral mode and complementary dynamics and normalize spectral rates to recurrent layer-forward.
+Figure 7 shows the same distinction at a different absolute timescale. Although the leading–
+complementary spectral gaps appear similar in magnitude, HRM operates much closer to unit
+spectral rate, producing a larger separation in decay timescales and a stronger dominance score than
+QRR. This is reflected in finite-time settlement. Factoring out the leading-mode response reduces
+
+
+                                                                                                                                                              21
+  Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+  the median HRM settling time from 768 to 672 layer-forwards, whereas the corresponding change
+  in the QRR quotient is only 138 to 130. Thus, QRR remains in a substantially faster regime and is
+  less dependent on its leading mode for settlement, even relative to the qualitatively different spiral
+  dynamics of HRM.
+
+   A.4.3                                S PECTRAL P ROPERTIES OF L EADING O SCILLATORY M ODES
+  For each certified solution root, we linearize the one-step recurrent map and identify the leading spec-
+  tral mode of the local Jacobian J. We retain roots for which this mode is oscillatory, corresponding
+  to either a complex-conjugate pair or a real negative flip mode. Let U span this leading block, with
+  modulus r, and define its complement by Q = I − U U ⊤ and A = QJQ. Because the selected block
+  contains the leading eigenmode of J, r ≥ ρ(A) holds by construction. We therefore use r − ρ(A) to
+  measure the spectral separation between the leading oscillatory mode and the remaining dynamics.
+
+                                             (a) (A) < r 1                                (b) Rate-ordering margin                              (c) Oscillation geometry
+                                                                                 1.0                                                  120
+                               1.00                                                                                                                         FPRM
+
+
+
+
+r (Oscillatory-mode modulus)
+                                                                                                                                                            HRM
+                                                                                 0.8                                                  100
+                               0.95
+                                                                                                                                      80
+                               0.90                                              0.6
+                                                                          ECDF                                                Roots   60
+                               0.85                                              0.4
+                                                        FPRM                                                                          40
+                                                        HRM                      0.2
+                               0.80                     y = x (r = (A))                                             FPRM              20
+                                                        r=1                                                         HRM
+                                                                                 0.0                                                   0
+                                          0.80 0.85 0.90 0.95 1.00                     0.00     0.05         0.10      0.15                 0       50      100       150
+                                      (A) = (QJQ) (Complementary rate)                             r   (A)                                           | | (deg / step)
+
+  Figure 8: Spectral separation of leading oscillatory modes. (a) Leading-mode modulus r and
+  complementary spectral radius ρ(A). (b) Spectral margin r − ρ(A). (c) Oscillation angle |ω| for
+  FPRM and HRM.
+ Figure 8 shows a strict spectral gap for all selected roots. The median margin r − ρ(A) is 0.0176
+ for FPRM and 0.035 for HRM, with minimum margins of 2.2 × 10−4 and 1.5 × 10−4 . The leading
+ modes also exhibit distinct geometries. FPRM is concentrated near |ω| = π with median 179.7◦ ,
+ whereas HRM exhibits small-angle spirals with median 3.9◦ . Thus, the selected oscillatory modes
+ are cleanly separated from the complementary spectrum across both flip and spiral regimes.
+
+   A.4.4                                FPRM FLIP MODE SUPPRESSION
+  The local analysis in Section 3 shows that the slowly decaying flip mode can limit late-stage
+  convergence in FPRM. This does not imply, however, that the same mode is dispensable throughout
+  reasoning. We therefore test whether persistently suppressing the alternating component before the
+  output has stabilized interferes with the computation itself.
+  For each trajectory, we estimate a one-dimensional alternating direction U from the preceding
+  recurrent updates and, from an intervention time t0 onward, modify every subsequent update dt as
+                                   (α)
+                                 zt+1 = zt + I − (1 − α)U U ⊤ dt .
+                                                               
+                                                                                               (98)
+ We use α = 12 as the suppression intervention and compare against the unmodified rollout. Early
+ interventions start before the native output-stabilization (decoded output stabilizes and remains equal
+ for the remainder of the rollout), whereas late interventions start after stabilization. To distinguish
+ suppression of the oscillatory mode from a generic reduction in update magnitude, we additionally
+ suppress a non-oscillatory control direction while matching the removed energy. All comparisons
+ are paired against the corresponding original rollout, and confidence intervals are obtained by
+ bootstrapping over boards.
+  Early suppression decreases final exact accuracy by 5.9 percentage points, and delays output sta-
+  bilization. In contrast, removing a comparable amount of update energy along a non-oscillatory
+  direction produces no statistically distinguishable degradation, and suppressing the flip mode only
+  after the output has stabilized has no measurable effect. These results indicate that the oscillatory
+  motion of the same alternating form can still participate in the earlier reasoning computation. This
+  motivates QRR to avoid suppressing oscillations based on their dynamical appearance alone, and
+  instead quotient out only motion whose representational redundancy is guaranteed by symmetry.
+
+
+                                                                                                 22
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Table 4: Persistent suppression of the FPRM flip mode. Suppressing the alternating component
+before output stabilization reduces final exact accuracy, whereas an energy-matched non-oscillatory
+intervention does not show a significant effect.
+
+                                                     Intervention                                                ∆ final accuracy                                       95% CI
+                                                     Oscillatory suppression, early                                         −5.9 pp                              [−13.1, −0.6]
+                                                     Energy-matched control, early                                          −1.1 pp                               [−2.8, 0.0]
+                                                     Oscillatory suppression, late                                          0.0 pp                                 [0.0, 0.0]
+
+
+
+A.4.5                                 H ALTING TIME SENSITIVITY TO TASK DIFFICULTY
+
+                                                Halting latency                                                 Coverage                                                     Exact-match accuracy
+                                         FPRM =+0.201                                                                                                           1.000
+                                103      QRR (ours) =+0.356                               1.00
+                                                                                                                                                                0.975
+
+
+
+
+      E[ | certified] (steps)                                                                                                            Exact-match accuracy
+                                                                                          0.99                                                                  0.950
+                                                                                                                                                                0.925
+
+                                                                               Coverage
+                                                                                          0.98
+                                                                                                                                                                0.900
+                                                                                          0.97                                                                  0.875
+                                102                                                                                                                             0.850
+                                                                                          0.96                                                                  0.825
+                                                                                                   FPRM                                                                    FPRM
+                                                                                          0.95     QRR (ours)                                                   0.800      QRR (ours)
+                                           52       54         56     58                             52          54          56     58                                       52         54         56     58
+                                       Blank cells per puzzle (bin mean)                         Blank cells per puzzle (bin mean)                                       Blank cells per puzzle (bin mean)
+                                                                                                                                                                1.000
+                                103                                                       1.00
+                                                                                                                                                                0.975
+
+
+
+
+      E[ | certified] (steps)                                                                                                            Exact-match accuracy
+                                                                                          0.99                                                                  0.950
+                                                                                                                                                                0.925
+                                                                               Coverage   0.98                                                                  0.900
+                                                                                                                                                                0.875
+                                                                                          0.97                                                                  0.850
+                                102                       FPRM =+0.202                             FPRM                                                                    FPRM
+                                                          QRR (ours) =+0.365                       QRR (ours)                                                   0.825      QRR (ours)
+                                                                                          0.96
+                                            102          103        104                               102             103         104                                         102            103        104
+                                        Solver backtracks (bin mean)                              Solver backtracks (bin mean)                                            Solver backtracks (bin mean)
+
+Figure 9: Adaptive halting as a function of Sudoku difficulty. Difficulty as the number of blank
+cells (top) and the backtrack count (bottom). Left: mean halting time among certified examples.
+Middle: fraction of examples certified within the rollout budget. Right: exact-match accuracy.
+
+On 42,023 held-out Sudoku-Extreme boards, we evaluate QRR and FPRM under the same halting
+rules and 35,000-step cap as in Table 2. As shown in Figure 9, halting latency increases with difficulty
+for both models, but more strongly for QRR. The Spearman correlation is ρ = 0.356 versus 0.201 for
+blank count and 0.365 versus 0.202 for solver backtracks. QRR nevertheless certifies significantly
+earlier across the difficulty range while maintaining 98.0% overall coverage and consistently higher
+exact-match accuracy, indicating stronger difficulty-adaptive compute allocation with lower cost.
+
+
+A.5                         E XPERIMENTAL S ETUP
+
+A.5.1                                 R EASONING TASKS
+
+We evaluate on four reasoning benchmarks. Sudoku-Extreme consists of partially filled 9×9 Sudoku
+boards with unique solutions and is evaluated by exact-match accuracy of the completed grid (Wang
+et al., 2025). Maze-Hard contains 30 × 30 shortest-path problems and is evaluated by exact match
+to the supervised solution path (Wang et al., 2025). Because multiple optimal paths may exist in
+Maze-Hard, we additionally use Maze-Unique, constructed from perfect tree-structured mazes so
+that each start–goal pair has a unique solution (Kim et al., 2022; Huang et al., 2026). Mini-ARC
+is a compact 5 × 5 abstract rule-induction benchmark in which the model infers a transformation
+from demonstration pairs and applies it to a held-out input (Kim et al., 2022; Huang et al., 2026). We
+follow the standard augmentation-based evaluation, map predictions from each augmented view back
+to the original frame, aggregate identical candidate grids by voting, and report task-level Pass@1
+from the highest-ranked prediction.
+
+
+                                                                                                                23
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+A.5.2    ROOT CONVERGENCE ANALYSIS
+Here we provide detailed protocol for root convergence analysis used in this paper, which is used
+for the local Jacobian and spectral analyses in Sections 3, 4.4, and Table 2 (a). We firstly identify
+solution equilibria using Anderson acceleration with history m = 6, Tikhonov regularization 10−8 ,
+and β = 1 in fp64. The solver runs for a fixed budget and returns the iterate with the smallest residual.
+For FPRM, HRM, and EqR, the solved maps are one FPRM recurrent step, two HRM H-cycles, and
+three EqR cycles, respectively. For QRR, Anderson acceleration is applied to the gauge-aligned map.
+For each certified solution root, we run the original model from its native initialization and measure
+when the trajectory reaches the corresponding root. We define τroot as the first step after which the
+root-relative distance remains below δ = 10−3 for a persistence window of approximately 96 recurrent
+layer-forwards. This corresponds to 48 native steps for FPRM and QRR and 4 trajectory steps for
+HRM. For EqR, whose native step contains 42 layer-forwards, we use two steps, corresponding to 84
+layer-forwards. Correct root found denotes the fraction of evaluation examples for which the solver
+returns a certified solution equilibrium decoding to the ground truth.
+To compare convergence across architectures with different computation per native recurrent step,
+we report convergence times in recurrent layer-forward equivalents (LFWD). An LFWD counts one
+forward evaluation of one recurrent network layer. If one native step of model m evaluates ℓm
+recurrent layers, then
+                                        (m)         (m)
+                                       τlfwd = ℓm τnative ,
+        (m)
+where τnative is the number of native recurrent steps required to reach the certified solution equilibrium.
+Table 5 summarizes the conversion used for each model.
+Table 5: Conversion from native recurrent steps to recurrent layer-forward equivalents. An LFWD
+counts one forward evaluation of one recurrent network layer.
+
+                 Model    Layer-forward computation per native step      ℓm (LFWD/step)
+                 QRR      1 × Llayers = 1 × 2                                          2
+                 FPRM     1 × Llayers = 1 × 2                                         2
+                 HRM      Hcyc Lcyc Llayers + Hlayers = 2(2 · 4 + 4)                  24
+                 EqR      Hcyc (Lcyc + 1)Llayers = 3(6 + 1)2                          42
+
+
+A.5.3    H YPERPARAMETERS
+
+
+We use the same core QRR architecture across all tasks and tune only the task-specific training,
+recurrent-compute, and inference settings summarized in Table 6. Architectural details shared across
+tasks are given in Section A.3.
+
+
+
+
+                                                   24
+Looped Reasoning Finishes Earlier Than You Think
+
+
+
+
+Table 6: Task-specific training and inference configurations for QRR. The core architecture is
+shared across tasks. The reported result is from the best in-run evaluation checkpoint.
+
+   Setting                      Sudoku-Extreme      Maze-Hard      Maze-Unique        Mini-ARC
+   Data and optimization
+   Training data                 1K × 1000 aug.     1K, no aug.    1K, no aug.    149 tasks, 100 aug.
+   Training epochs                   60K               60K             6K                100K
+   Global batch size                  768              768            384                 768
+   Learning rate                    3×10−4           1×10−4         2×10−4             6×10−4
+   Weight decay                      10−3               1.0            1.0                0.1
+   Gradient clipping                  1.0               1.0            1.0                1.0
+   Compute setup
+   Training GPUs                     4× H100            4× B200     4× H100           1× A100
+   Parallelism                       DDP ×4             DDP ×4      DDP ×4           single GPU
+   Per-GPU batch size                  192                192         96                 768
+   Recurrence and deep supervision
+   Max DS segment                        12               24            24                8
+   Recurrent steps / DS segment           6                6             6                6
+   TBPTT depth                           6                6             6                 6
+   Inference and halting
+   Halting criterion                 rG < 0.03      rG < 0.075      rG < 0.15         rG < 0.08
+   Persistence window W                   1               1              1                 2
+   Rollout cap                         35,000          3,000          3,000               100
+   Evaluation                        halt-or-cap     halt-or-cap    halt-or-cap   halt-or-cap + vote
+
+
+
+
+                                                   25
+
