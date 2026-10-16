@@ -30,10 +30,14 @@ Read in full on 2026-10-14. Section numbers not recorded.
 - 2026-10-14 Speculation: The block-diagonal result favors a span code that each level reads from its own state only. This is untested on our models.
 - 2026-10-14 Speculation: Because the paper reports no likelihood, our own CE numbers are the only comparison we have for a span code.
 
+- 2026-10-16 (Table 8, App. E.2): Gen PPL under GPT-2-large. TinyStories: data 9.67, AR sample 8.89, NCM 15.41 (12 NFE). LM1B: data 53.51, NCM 93.05, no AR row. OWT: data 14.15, AR sample 35.45, NCM 83.12 (32 NFE). NCM beats the diffusion and flow baselines at far fewer NFE; it does not reach AR sampling quality on any dataset with an AR row.
+
 ## 4. Corrections
 
 - None recorded yet.
 
 ## 5. Where our findings disagree
+
+- 2026-10-16: Agreement. Our run of the released checkpoints (their evaluate.py, 5 seeds x 256 samples, GPT-2-large; morph-scratch/abq/ncm-ref/REPORT.md): TinyStories Gen PPL 16.68 (paper 15.41); LM1B small 94.69, medium 88.96, large 81.25 (paper 93.05, size not matched). 11 network passes per 128-token batch (level 0 is drawn from a stored unigram). LM1B sampling uses a hand-tuned greedy pick with frequency and adjacency penalties. The prompt prefix is one token; prompts gave word salad on LM1B and were often ignored on TinyStories. TinyStories samples are story-shaped with local repeats ("is is", "too too"). Training cost shape from their code: 642 generator positions per 128-token example (about 5x AR), attention pairs about 6.4x.
 
 - 2026-10-14: Our measurement: our span NCM on Parcae (branch lxtul/ncm) costs more to predict than it saves. Level 1 costs 0.226 nats per token and saves 0.118 nats per token. Paper's claim: the paper reports no likelihood, so there is no number to compare. Source: filing docs/experiments/failures/2026-10-14-parcae-span-ncm-5k.md (on branch lxtul/ncm; this file is not on master in this checkout).
