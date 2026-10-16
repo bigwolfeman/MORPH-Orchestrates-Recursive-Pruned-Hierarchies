@@ -6,12 +6,59 @@ date the experiment RAN, not the date the note was edited.
 | Folder | Holds |
 |---|---|
 | `planned/` | Pre-registered question, method and predictions, written BEFORE the run. |
+| `successes/` | Runs whose main prediction was "supported". |
 | `results/` | Runs that produced a usable comparison, plus the data behind their figures. |
-| `failures/` | Runs that produced no verdict, or whose predictions were falsified. A record here is still a result — it is where the campaign's real cost is written down. |
-| `mixed/` | Runs where SOME predictions held and some were falsified, and the mixed reading is itself the result (added 2026-09-21 on Wolfe's call; the first record is the discrete-thought vq8/vq4 panel). Not a home for an inconclusive run — that is a `failures/` record with the next planned experiment. |
+| `failures/` | Runs whose main prediction was "not supported" or "can't tell". A "can't tell" record names the next planned experiment. A record here is still a result: it is where the campaign's real cost is written down. |
+| `mixed/` | Closed to new records (historical). One main prediction makes a mixed verdict impossible. Existing records stay as written. |
 | `figures/` | Rendered PNGs for the records above. |
 
-A `planned/` file moves to `results/` or `failures/` when it has an answer. It keeps its
+## How to write and grade an experiment
+
+This is the method children learn, used the same way here. Write one planned file per question. Commit it before the run.
+
+1. **Ask a question.** One sentence: "Does changing X change Y?" One question per experiment.
+2. **Make a guess (hypothesis).** "I think X will make Y better / worse / no different, because ___." The "because" names the mechanism.
+3. **Say what you expect to see (prediction).** A behavior against a control, not a number to hit. Allowed forms: direction (A better / worse / same as B), ordering (A < B < C), shape (the K-curve slopes down / is flat), sign. A number is allowed only when it is a fixed anchor (uniform ln vocab, 0, an oracle ceiling). "The same" means inside the seed spread of the controls. You measure that spread from repeated control runs. You do not choose it. Write at most three predictions. ONE is the main prediction, and only it answers the question.
+4. **Make it a fair test.** Change one thing. The control is the same model without the change, on the same rows. Run enough seeds to know what "no change" looks like. If no spread has been measured, measuring it is the first job.
+5. **Write what each answer makes you do.** "If supported, we do A. If not, we do B." If both answers lead to the same next step, do not run it.
+6. **Observe.** Report paired differences with their intervals, and the whole curve, not one cut point.
+7. **Conclude,** with one of three words for the main prediction:
+   - **supported**: the result matches it, outside noise.
+   - **not supported**: the result is the opposite, or there is no effect where one was expected.
+   - **can't tell**: the result is inside noise. The test was too small. This is not a verdict on the idea. Write the bigger test that would answer it.
+8. **Next question.** What the result taught, and what you try next.
+
+### Gates are not predictions
+
+Finite loss, peak memory, head-off checks and token counts are GATES. If a gate fails, the run is broken: fix it and rerun. Gates never count toward a verdict. Speed is a measurement. Report it. It is not a pass/fail line unless speed is the question.
+
+### Rules
+
+- The verdict comes from the main prediction, never from a count such as "5 of 11".
+- No invented thresholds. A number in a prediction that is not a fixed anchor or a measured noise band gets deleted.
+- No probabilities on predictions. An audit of 51 predictions found stated probabilities 10 to 25 points too high in the middle range.
+- Read the earlier filings on the same arm before you write a prediction.
+- Never edit predictions after the run starts. Method changes go in a dated amendment.
+
+### Filing
+
+| Verdict on the main prediction | Folder |
+|---|---|
+| supported | `successes/` |
+| not supported | `failures/` |
+| can't tell | `failures/`, with the next planned experiment named |
+
+A filing leads with the main prediction's word and the paired number behind it.
+
+### Example (Block-Parcae, rewritten)
+
+- **Question.** Can a loop that runs over chunks in series replace the token loop?
+- **Hypothesis.** I think the coda can decode tokens from the chunk states alone, because the spiral's chunk levels carry most of its gain.
+- **Main prediction.** Block-4 CE is the same as plain Parcae + pointer (inside seed spread), and its K-curve slopes down.
+- **What each answer does.** If supported, build the series design out. If not, keep the token stream in the loop.
+- **Result.** 0.25 nats worse, far outside noise. Not supported. (The old filing said "failure 5/11" and hid this.)
+
+A `planned/` file moves to `successes/` or `failures/` when it has an answer. It keeps its
 original name and its predictions are never edited after the fact; corrections go in a
 numbered `## Amendment N` section with the date.
 
