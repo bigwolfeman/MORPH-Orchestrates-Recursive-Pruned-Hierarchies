@@ -26,6 +26,12 @@ exits 0 and prints 95 lines. 80 end `depends on axioms: [propext, Classical.choi
 Quot.sound]`. 15 (the `Prog` lemmas and most of `Hops.lean`) use a subset of those three or
 none. No line mentions `sorryAx`, and `grep -rn sorry TulExploration/` finds nothing.
 
+Recorded 2026-10-18 after the particle files (`TulExploration/Particles/`) were added,
+built with `nice -n 19 taskset -c 15 env LEAN_NUM_THREADS=1 lake build` (one core):
+"Build completed successfully (2204 jobs)", zero warnings. `lake env lean Axioms.lean`
+exits 0 and prints 185 lines: 169 end `[propext, Classical.choice, Quot.sound]`, 16 use a
+subset or none. No line mentions `sorryAx`.
+
 `taskset -c 0,1` holds the build to two cores. That is a house rule for this machine (the
 UPS trips when the GPU is loaded and the CPU joins it), not a Lean requirement.
 
@@ -181,6 +187,135 @@ This is a depth job that exists without any hop structure in the data: the loop 
 fixed-size choice, and a reader that needs the modes separated needs the passes. Loses: the
 eigen-direction statement is linear; the real core is nonlinear, and only the Lipschitz
 bounds (`washout`, `reinjected_rollouts_stay_apart`) hold for it.
+
+## Coarse-level particles (P1 to P6)
+
+The design: run `K` copies of the Parcae spiral testbed's coarse loop (chunks 16) on one
+context, each from an independent random start `x⁰ₖ`, and let the coda attend to all `K`
+exit states as a set. Exchangeable particles would let `K` be sampled in training and raised
+at inference ("train at 4, infer at 128"). The files are `TulExploration/Particles/*.lean`,
+imported by `TulExploration/Particles.lean`. Numerics: `numerics/particles_double_well.py`.
+
+| result | file:line | statement |
+|---|---|---|
+| `particles_spread` | `Particles/Collapse.lean:62` | a `ρ`-Lipschitz pass: pairwise particle distance `≤ ρᵀ δ` (`washout` applied to particles) |
+| `particles_to_fixedPoint` | `Collapse.lean:73` | a contraction on a complete space: every particle within `C ρᵀ/(1-ρ)` of the ONE fixed point |
+| **`set_read_gap`** | `Collapse.lean:91` | any `Lr`-Lipschitz set read is within `Lr C ρᵀ/(1-ρ)` of the read of `K` copies of the fixed point |
+| `mean_read_const` | `Collapse.lean:102` | a mean-pooled read of `K` copies is the read of one |
+| **`attn_duplicates`** | `Collapse.lean:119` | softmax attention over `K` copies of a key = ONE copy with logit `+ log K` |
+| `attn_duplicates_corrected` | `Collapse.lean:134` | with bias `-log K` on each particle key, `K` copies read as one for every `K` |
+| `fixed_points_lip_ge_one`, `no_contraction_two_fixed` | `Collapse.lean:150`, `:158` | two distinct fixed points: every Lipschitz constant on a set holding both is `≥ 1` |
+| **`parcae_needs_expansion`** | `Collapse.lean:178` | `x ↦ F(Dx + b)`, `‖Dv‖ ≤ d‖v‖`, two distinct fixed points: `L_F · d ≥ 1` |
+| `residual_fixed_points` | `Collapse.lean:191` | MORPH residual form: `‖x-y‖ ≤ ‖D(x-y)‖ + L_u ‖x-y‖` |
+| **`stable_pair_forces_expansion`** | `Collapse.lean:228` | 1-D, two locally stable fixed points: `G'(c) > 1` at some `c` between them |
+| `iid_drop`, `iid_marginal` | `Particles/IWAE.lean:62`, `:80` | dropping a coordinate of an iid tuple leaves an iid tuple; one coordinate has law `q` |
+| **`iwae_mono`**, `iwae_mono_le` | `IWAE.lean:147`, `:209` | iid particles: `E log (1/K)∑ p(zₖ)` is nondecreasing in `K ≥ 1` (Burda et al. 2015) |
+| **`iwae_le_log_mean`** | `IWAE.lean:182` | and is `≤ log E_q p` |
+| `iwae_mono_avg`, `iwae_avg_le_bayes` | `IWAE.lean:218`, `:228` | averaged over targets; below the Bayes read |
+| `concave_mean_mono` | `IWAE.lean:282` | any concave read of the particles' MEAN value is also nondecreasing in `K` |
+| **`add_candidate_iff`** | `IWAE.lean:337` | a FIXED (role) candidate raises the uniform mixture iff its likelihood `≥` the current mean |
+| `role_cell_can_hurt` | `IWAE.lean:348` | so a worse role cell strictly lowers the read |
+| `mixture_le_best`, **`best_le_mixture_add_logK`** | `Particles/SetRead.lean:50`, `:62` | span oracle minus uniform mixture lies in `[0, log K]`, per span and draw |
+| `post_sum_one`, `post_past_only` | `SetRead.lean:95`, `:101` | posterior weights over particles sum to one and use only tokens already seen |
+| **`seq_bayes_eq_span_mixture`** | `SetRead.lean:122` | the token-by-token posterior read EQUALS the span mixture (chain rule) |
+| `seqRead_le_token_oracle` | `SetRead.lean:138` | any past-only weighting is at most the per-token oracle |
+| **`switching_beats_span_oracle`** | `SetRead.lean:167` | a past-only switching read scores `0` where the span oracle and the mixture score `log ε` |
+| `arith_pool_floor` | `SetRead.lean:196` | a probability mixture keeps the floor `w_k p_k(y)` |
+| **`value_mix_loses_floor`** | `SetRead.lean:210` | value mixing + linear head: read `≤ (c-d)/2` (to `-∞`) while the probability mixture `≥ -log 4` |
+| `committee_can_beat_mixture` | `SetRead.lean:253` | and the reverse: errors that cancel give the value mix `1/3`, the probability mix `≤ e^{-M}` |
+| `mixture_grad_resp` | `Particles/Credit.lean:57` | the soft objective's derivative along particle `k` is its responsibility `r_k` |
+| **`resp_tendsto_one`**, `resp_tendsto_zero` | `Credit.lean:114`, `:95` | at zero temperature the strict winner gets all the credit: WTA is the limit |
+| **`soft_grad_at_collapse`** | `Credit.lean:134` | at a collapsed configuration every particle gets the same gradient `ℓ'/K` |
+| **`soft_split_collapses`**, `soft_split_grows` | `Credit.lean:164`, `:173` | split `μ ± η`, soft read: `η = 0` local max if `2aV < 1`, local min if `2aV > 1` |
+| **`hardPair_eq`**, `hardPair_escape` | `Credit.lean:197`, `:213` | WTA read of the split: `J(0) + a(2ηE|μ-y| - η²)`, first-order escape at every `a > 0` |
+| **`colip_lower`**, `passes_to_settle` | `Particles/Depth.lean:55`, `:70` | co-Lipschitz rate `λ`: `T ≥ log(d₀/ε)/log(1/λ)` passes to reach `ε` of the basin point |
+| **`saddle_read_margin`**, `passes_to_decide` | `Depth.lean:83`, `:95` | expansion `μ` at the boundary: a Lipschitz reader needs `T ≥ log(m/(Lr δ))/log μ` passes to decide a particle that started `δ` from the boundary |
+| **`monotone_side_preserved`** | `Depth.lean:112` | 1-D increasing pass: a particle never changes side of the boundary |
+
+**P1, a contractive pass collapses the particles, and plain attention counts the copies.**
+If every coarse pass is a contraction, the `K` particles converge to one fixed point at
+rate `ρᵀ`, and any Lipschitz set read approaches the read of `K` copies of that point. `K`
+copies are not the read of one particle under plain softmax attention: they act as one key
+with its logit raised by `log K`. Raising `K` from 4 to 128 at inference therefore adds
+`log 32 ≈ 3.47` to the coarse memory's logit even when the particles carry nothing new. A
+`-log K` bias on every particle key removes that and makes `K` collapsed particles read as
+one. (For distinct particles that bias makes the group a softmax within the group mixed in
+as one key of logit `log mean exp sₖ`; that identity is algebra and is not proved here.) Loses: the
+read is held fixed; the contraction must hold on the whole space (on an invariant complete
+subset the same proof works but is not restated).
+
+**P2, basins need a non-contractive pass.** Two distinct fixed points force the pass's
+Lipschitz constant on a set holding both to be at least 1, so per-context diversity at the
+fixed points rules out a contraction on the region the starts cover. For the Parcae form
+`x ↦ F(D⊙x + b)` the condition is `L_F · d ≥ 1`, with `d` the largest decay
+`exp(-ΔᵢAᵢ)` along the inter-basin direction: the blocks must expand by `1/d`. In 1-D, two
+locally stable fixed points force a point between them with local gain above 1 (the
+saddle). The connection to MapCause's 0.865 floor is weak and stated as such: that number is
+the TYPICAL (Frobenius) gain of MORPH's residual `DiagonalInjection`, where 704 of 1024
+channels have decay 1. In the residual form `residual_fixed_points` asks nothing of the
+blocks along an undecayed channel and `L_u ≥ 1 - 0.447` along the context slice. No Parcae
+testbed decay value is read here, so no number transfers to the coarse loop.
+
+**P3, train at 4, infer at 128, holds for exchangeable particles and fails for role cells.**
+With iid particles and a fixed reader, the expected uniform-mixture read is nondecreasing
+in `K` and bounded by `log E_q p(y|z)` (and so by the Bayes read). The proof uses
+exchangeability: each leave-one-out `K`-subset of `K+1` iid particles is again `K` iid
+particles. For fixed role-indexed candidates there is no such statement: a new candidate
+helps iff its likelihood is at least the current mean, so a worse cell lowers the read. That
+is the shape of the variable-cell-count v1 failure (fresh or cyclic extra cells cost +0.05
+to +0.14 nats). The same monotonicity holds for any concave read of the particles' mean
+value, which covers uniform-weight attention with a linear head, but its limit is the read
+of the mean particle, not the mixture. Loses: the reader is fixed while `K` changes; the
+limit `K → ∞` (law of large numbers) is not formalised; real attention weights depend on the
+particles, so the read is a ratio of two sample means, and no monotonicity is proved for it.
+
+**P4, the `log K` ceiling and the sequential Bayes read.** Per span and per draw the best
+particle beats the uniform mixture by at most `log K`. Reading the span token by token, each
+token from the posterior over particles given the true prefix, is EXACTLY the span mixture
+(the chain rule telescopes), and those weights use only tokens already seen. So a mixture
+objective in training and a posterior-weighted set read at deploy are the same objective.
+Two things break the simple picture. First, a past-only reader that switches particles
+between tokens can beat the span oracle, per draw, by an unbounded amount: the claim "a
+learned past-only weighting lies between the mixture and the oracle" is false. (In
+expectation over the true law a past-only weighting still defines a pmf over spans and stays
+below the Bayes read; that is not formalised.) Second, attention mixes VALUES, not
+probabilities. With a linear head that is a normalised geometric pool, which has no `log K`
+floor: one confidently wrong particle drives it to `-∞` while the probability mixture stays
+above `-log 4`. It is not uniformly worse either: errors that cancel in the mean favour it.
+Loses: the coda has many layers after the attention, so "linear head" is the one-layer case.
+
+**P5, soft credit vs winner-take-all.** The soft objective credits particle `k` with its
+responsibility; with temperature `1/β → 0` the strict winner's responsibility tends to 1 and
+the losers' to 0, so WTA is the zero-temperature limit. At a collapsed configuration the soft
+objective gives every particle the same gradient, so soft credit cannot break a collapse at
+first order. For a symmetric split `μ ± η` with the Gaussian reader the soft objective
+holds the collapse (`η = 0` a local max) when `2aV < 1` and splits it when `2aV > 1`; WTA
+gains `2aηE|μ-y|` at first order, so it splits at every sharpness. "Soft collapses, WTA keeps
+basins apart" is therefore true for a broad reader and false as a general claim. For
+particles from iid random starts, the soft threshold is the stricter `2aV(1-1/K) > 1`
+(`iid_deriv2`): at the matched reader the soft objective pushes the particles' start
+sensitivity `σ` to zero at every finite `K`, which is `Smooth.lean`'s T1 collapse. Loses: one
+real dimension; a Gaussian reader; local (second-order) statements; the particle positions
+are treated as the free variable, while in the design they are outputs of a shared map.
+
+**P6, what depth buys.** No depth lower bound holds for a general pass (a pass that maps
+every start to its basin point needs one pass). Two local hypotheses give one. A
+co-Lipschitz rate `λ` toward the basin point gives `T ≥ log(d₀/ε)/log(1/λ)`. A Lipschitz
+rate `μ > 1` at the basin boundary gives: a particle that starts `δ` from the boundary reads,
+to any `Lr`-Lipschitz reader, like the boundary point until `T ≥ log(m/(Lr δ))/log μ`. In 1-D
+with an increasing pass the particle never changes side, so basin IDENTITY is fixed by the
+start and depth buys only MARGIN. Numerics (`particles_double_well.py`, `tanh(2x) + c`,
+starts `N(0,1)`, 200k particles): the undecided fraction `|x_T - x_u| < 0.25` falls
+0.197, 0.102, 0.051, 0.026, 0.013, 0.0063, 0.0032 over `T = 0..6`, within 4 % of the
+`μ^{-T}` prediction (`μ = 2`; the gap grows to 20 % by `T = 11`); no particle changed
+side; the region-wide co-Lipschitz bound held for every particle that started in
+`(x_u, 3]` (rate 0.021, so the bound is weak), while the LOCAL rate `G'(x*)`
+is not a valid bound (16 % of particles settle faster, saturation carries far starts in one
+pass). The basin set depends on the context `c`: two stable points for `|c| < 0.266`, one
+beyond; at `|c| = 0.3` and `T = 8` the particles still split 31/69 % by slow passage past
+the vanished basin, a depth-dependent transient, not an attractor. A contracting control
+(`β = 0.6`) has spread ratio below `ρᵀ` at every `T`. Loses: 1-D; the fraction-of-starts
+statement is numerical, not a theorem.
 
 ## What is assumed, and what is NOT proved here
 
