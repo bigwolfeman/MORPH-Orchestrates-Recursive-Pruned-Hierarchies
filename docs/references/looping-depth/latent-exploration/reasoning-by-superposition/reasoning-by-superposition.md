@@ -315,3 +315,22 @@ and a loss that pays for "any member of the set" destroys it.
    superposition helps on both buckets. A committed point helps only on top-1. A blur
    helps on neither beyond the shuffle control. The set-membership readout proposed in
    the first reading above is the per-pass version.
+
+## Correction 2026-10-18
+
+Both papers summarised in the 2026-09-23 re-read are now cached and read in full. The old
+text above stays as written. The corrections are recorded in the new readings:
+
+- Emergence of Superposition:
+  [`../emergence-of-superposition-2509-23365/emergence-of-superposition-2509-23365.md`](../emergence-of-superposition-2509-23365/emergence-of-superposition-2509-23365.md#corrections-to-our-2026-09-23-summary).
+  In short: the BFS run in Appendix E.2 is a frontier-only variant (Eq. 19) that scores
+  99.0 % against 96.2 %, so "a set loss destroys superposition" is not shown; the
+  12-layer failure in Table 4 is optimisation budget (99.6 % with a longer stage 1); the
+  theorems use linear attention.
+- Mixture collapse:
+  [`../continuous-mixture-collapse-2609-02049/continuous-mixture-collapse-2609-02049.md`](../continuous-mixture-collapse-2609-02049/continuous-mixture-collapse-2609-02049.md).
+  In short: under Theorem 2 `u -> 0` is the 50 / 50 state, where every starting mix ends
+  the same; Theorem 1 needs a zero field `b_t = 0`; and the mix in Section 4 is formed in
+  logit space between two pure branches, not as a soft token.
+
+Paper notes: [`../../../paper-notes/reasoning-by-superposition.md`](../../../paper-notes/reasoning-by-superposition.md).
