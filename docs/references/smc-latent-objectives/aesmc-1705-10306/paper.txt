@@ -1,0 +1,1931 @@
+Published as a conference paper at ICLR 2018
+
+AUTO -E NCODING S EQUENTIAL M ONTE C ARLO
+
+arXiv:1705.10306v2 [stat.ML] 5 Apr 2018
+
+Tuan Anh Le† , Maximilian Igl† , Tom Rainforth‡ , Tom Jin†,§ , Frank Wood†
+†
+Department of Engineering Science, University of Oxford
+‡
+Department of Statistics, University of Oxford
+§
+Department of Statistics, University of Warwick
+{tuananh,igl,jin,fwood}@robots.ox.ac.uk,
+rainforth@stats.ox.ac.uk
+
+A BSTRACT
+We build on auto-encoding sequential Monte Carlo (AESMC):1 a method for model
+and proposal learning based on maximizing the lower bound to the log marginal
+likelihood in a broad family of structured probabilistic models. Our approach
+relies on the efficiency of sequential Monte Carlo (SMC) for performing inference
+in structured probabilistic models and the flexibility of deep neural networks
+to model complex conditional probability distributions. We develop additional
+theoretical insights and experiment with a new training procedure which can
+improve both model and proposal learning. We demonstrate that our approach
+provides a fast, easy-to-implement and scalable means for simultaneous model
+learning and proposal adaptation in deep generative models.
+
+1
+
+I NTRODUCTION
+
+We build upon AESMC (Le et al., 2017), a method for model learning that itself builds on variational
+auto-encoders (VAEs) (Kingma & Welling, 2014; Rezende et al., 2014) and importance weighted
+auto-encoders (IWAEs) (Burda et al., 2016). A ESMC is similarly based on maximizing a lower bound
+to the log marginal likelihood, but uses SMC (Doucet & Johansen, 2009) as the underlying marginal
+likelihood estimator instead of importance sampling (IS). For a very wide array of models, particularly
+those with sequential structure, SMC forms a substantially more powerful inference method than IS,
+typically returning lower variance estimates for the marginal likelihood. Consequently, by using
+SMC for its marginal likelihood estimation, AESMC often leads to improvements in model learning
+compared with VAEs and IWAEs. We provide experiments on structured time-series data that show
+that AESMC based learning was able to learn useful representations of the latent space for both
+reconstruction and prediction more effectively than the IWAE counterpart.
+A ESMC was introduced in an earlier preprint (Le et al., 2017) concurrently with the closely related
+methods of Maddison et al. (2017); Naesseth et al. (2017). In this work we take these ideas further by
+providing new theoretical insights for the resulting evidence lower bounds (ELBOs), extending these
+to explore the relative efficiency of different approaches to proposal learning, and using our results to
+develop a new and improved training procedure. In particular, we introduce a method for expressing
+the gap between an ELBO and the log marginal likelihood as a Kullback-Leibler (KL) divergence
+between two distributions on an extended sampling space. Doing so allows us to investigate the
+behavior of this family of algorithms when the objective is maximized perfectly, which occurs only if
+the KL divergence becomes zero. In the IWAE case, this implies that the proposal distributions are
+equal to the posterior distributions under the learned model. In the AESMC case, it has implications
+for both the proposal distributions and the intermediate set of targets that are learned. We demonstrate
+that, somewhat counter-intuitively, using lower variance estimates for the marginal likelihood can
+actually be harmful to proposal learning. Using these insights, we experiment with an adaptation to
+the AESMC algorithm, which we call alternating ELBOs, that uses different lower bounds for updating
+the model parameters and proposal parameters. We observe that this adaptation can, in some cases,
+improve model learning and proposal adaptation.
+1
+This work builds upon an earlier preprint (Le et al., 2017) along with the independent, simultaneously
+developed, closely related, work of Maddison et al. (2017) and Naesseth et al. (2017).
+
+1
+
+Published as a conference paper at ICLR 2018
+
+2
+
+BACKGROUND
+
+2.1
+
+S TATE -S PACE M ODELS
+
+State-space models (SSMs) are probabilistic models over a set of latent variables x1:T and observed
+variables y1:T . Given parameters θ, a SSM is characterized by an initial density µθ (x1 ), a series
+of transition densities ft,θ (xt |x1:t−1 ), and a series of emission densities gt,θ (yt |x1:t ) with the joint
+QT
+QT
+density being pθ (x1:T , y1:T ) = µθ (x1 ) t=2 ft,θ (xt |x1:t−1 ) t=1 gt,θ (yt |x1:t ).
+
+We are usually interested in approximating
+R the posterior pθ (x1:T |y1:T ) or the expectation of some test
+function ϕ under this posterior I(ϕ) := ϕ(x1:T )pθ (x1:T |y1:T ) dx1:T . We refer to these two tasks
+as inference. Inference in models which are non-linear, non-discrete, and non-Gaussian is difficult
+and one must resort to approximate methods, for which SMC has been shown to be one of the most
+powerful approaches (Doucet & Johansen, 2009).
+We
+R will consider model learning as a problem of maximizing the marginal likelihood pθ (y1:T ) =
+pθ (x1:T , y1:T ) dx1:T in the family of models parameterized by θ.
+2.2
+
+S EQUENTIAL M ONTE C ARLO
+
+SMC performs approximate inference on a sequence of target distributions (πt (x1:t ))T
+t=1 . In the
+context of SSMs, the target distributions are often taken to be (pθ (x1:t |y1:t ))Tt=1 . Given a parameter φ
+
+and proposal distributions q1,φ (x1 |y1 ) and (qt,φ (xt |y1:t , x1:t−1 ))Tt=2 from which we can sample and
+whose densities we can evaluate, SMC is described in Algorithm 1.
+Using the set of weighted particles (x̃k1:T , wTk )K
+last time step, we can approximate the posk=1 at the
+PK
+PK
+P
+k
+terior as k=1 w̄T δx̃k1:T (x1:T ) and the integral Iϕ as k=1 w̄Tk ϕ(x̃k1:T ), where w̄Tk := wTk / j wTj
+is the normalized weight and δz is a Dirac measure centered on z. Furthermore, one can obtain an
+unbiased estimator of the marginal likelihood pθ (y1:T ) using the intermediate particle weights:
+"
+#
+T
+K
+Y
+1 X k
+ẐSMC :=
+wt .
+(1)
+K
+t=1
+k=1
+
+Algorithm 1: Sequential Monte Carlo
+Data: observed values y1:T , model parameters θ, proposal parameters φ
+begin
+Sample initial particle values xk1 ∼ q1,φ (·|y1 ).
+Compute and normalize weights:
+w1k =
+
+µθ (xk1 )g1,θ (y1 |xk1 )
+,
+q1,φ (xk1 |y1 )
+
+wk
+w̄1k = PK 1
+
+`
+`=1 w1
+
+.
+
+Initialize particle set: x̃k1 ← xk1
+for t = 2, 3, . . . , T do
+1
+K
+).
+Sample ancestor index akt−1 ∼ Discrete(·|w̄t−1
+, . . . , w̄t−1
+ak
+
+t−1
+Sample particle value xkt ∼ qt,φ (·|y1:t , x̃1:t−1
+).
+
+ak
+
+t−1
+Update particle set x̃k1:t ← (x̃1:t−1
+, xkt ).
+Compute and normalize weights:
+
+ak
+t−1
+ft,θ (xkt |x̃1:t−1
+)gt,θ (yt |x̃k1:t )
+k
+wt =
+,
+ak
+t−1
+qt,φ (xkt |y1:t , x̃1:t−1
+)
+
+Compute marginal likelihood: ẐSMC =
+
+QT
+
+1
+t=1 K
+
+wk
+w̄tk = PK t
+
+`
+`=1 wt
+
+PK
+
+k
+k=1 wt .
+
+k K
+return particles (x̃k1:T )K
+k=1 , weights (wT )k=1 , marginal likelihood estimate ẐSMC
+
+2
+
+.
+
+Published as a conference paper at ICLR 2018
+
+The sequential nature of SMC and the resampling step are crucial in making SMC scalable to large
+T . The former makes it easier to design efficient proposal distributions as each step need only
+target the next set of variables xt . The resampling step allows the algorithm to focus on promising
+particles in light of new observations, avoiding the exponential divergence between the weights of
+different samples that occurs for importance sampling as T increases. This can be demonstrated
+both empirically and theoretically (Del Moral, 2004, Chapter 9). We refer the reader to (Doucet &
+Johansen, 2009) for an in-depth treatment of SMC.
+2.3
+
+I MPORTANCE W EIGHTED AUTO -E NCODERS
+
+Given a dataset of observations (y (n) )N
+network pθ (x, y) and an inference netn=1 , a generative
+PN
+work qφ (x|y), IWAEs (Burda et al., 2016) maximize N1 n=1 ELBOIS (θ, φ, y (n) ) where, for a given
+observation y, the ELBOIS (with K particles) is a lower bound on log pθ (y) by Jensen’s inequality:
+Z
+ELBO IS (θ, φ, y) =
+QIS (x1:K ) log ẐIS (x1:K ) dx1:K ≤ log pθ (y), where
+(2)
+QIS (x1:K ) =
+
+K
+Y
+k=1
+
+K
+
+qφ (xk |y), ẐIS (x1:K ) =
+
+1 X pθ (xk , y)
+.
+K
+qφ (xk |y)
+
+(3)
+
+k=1
+
+Note that for K = 1 particle, this objective reduces to a VAE (Kingma & Welling, 2014; Rezende
+et al., 2014) objective we will refer to as
+Z
+ELBO VAE (θ, φ, y) =
+qφ (x|y)(log pθ (x, y) − log qφ (x|y)) dx.
+(4)
+The
+Q IWAE optimization
+ is performed using stochastic gradient ascent (SGA) where a sample from
+K
+k (n)
+q
+(x
+|y
+)
+is obtained using the reparameterization trick (Kingma & Welling, 2014) and
+k=1 φ
+
+P
+P
+N
+K
+pθ (xk ,y (n) )
+the gradient N1 n=1 ∇θ,φ log
+k=1 qφ (xk |y (n) ) is used to perform an optimization step.
+
+3
+
+AUTO -E NCODING S EQUENTIAL M ONTE C ARLO
+
+AESMC implements model learning, proposal adaptation, and inference amortization in a similar
+manner to the VAE and the IWAE: it uses SGA on an empirical average of the ELBO over observations.
+However, it varies in the form of this ELBO. In this section, we will introduce the AESMC ELBO,
+
+explain how gradients of it can be estimated, and discuss the implications of these changes.
+3.1
+
+O BJECTIVE F UNCTION
+
+Consider a family of SSMs {pθ (x1:T , y1:T ) : θ ∈ Θ} and a family of proposal distributions
+QT
+{qφ (x1:T |y1:T ) = q1,φ (x1 |y1 ) t=2 qt,φ (xt |x1:t−1 , y1:t ) : φ ∈ Φ}. A ESMC uses an ELBO objective based on the SMC marginal likelihood estimator (1). In particular, for a given y1:T , the
+objective is defined as
+Z
+1:K
+1:K
+1:K
+1:K
+1:K
+ELBO SMC (θ, φ, y1:T ) :=
+QSMC (x1:K
+(5)
+1:T , a1:T −1 ) log ẐSMC (x1:T , a1:T −1 ) dx1:T da1:T −1 ,
+1:K
+where ẐSMC (x1:K
+1:T , a1:T −1 ) is defined in (1) and QSMC is the sampling distribution of SMC ,
+! T K
+!
+K
+Y
+YY
+k
+k
+k at−1
+k
+1:K
+1:K
+1:K
+QSMC (x1:T , a1:T −1 ) =
+q1,φ (x1 )
+qt,φ (xt |x̃1:t−1 ) · Discrete(at−1 |wt−1 ) . (6)
+k=1
+
+t=2 k=1
+
+ELBO SMC forms a lower bound to the log marginal likelihood log pθ (y1:T ) due to Jensen’s inequality
+(n)
+and the unbiasedness of the marginal likelihood estimator. Hence, given a dataset (y1:T )N
+n=1 , we
+P
+(n)
+N
+1
+can perform model learning based on maximizing the lower bound of N n=1 log pθ (y1:T ) as a
+surrogate target, namely by maximizing
+N
+1 X
+(n)
+J (θ, φ) :=
+ELBO SMC (θ, φ, y1:T ).
+(7)
+N n=1
+
+3
+
+Published as a conference paper at ICLR 2018
+
+For notational convenience, we will talk about optimizing ELBOs in the rest of this section. However,
+we note that the main intended use of AESMC is to amortize over datasets, for which the ELBO is
+replaced by the dataset average J (θ, φ) in the optimization target. Nonetheless, rather than using the
+full dataset for each gradient update, will we instead use minibatches, noting that this forms unbiased
+estimator.
+3.2
+
+G RADIENT E STIMATION
+
+We describe a gradient estimator used for optimizing ELBOSMC (θ, φ, y1:T ) using SGA. The SMC
+1:K
+1:K
+sampler in Algorithm 1 proceeds by sampling x1:K
+1 , a1 , x2 , . . . sequentially from their respecQK
+Q
+QK
+ak
+K
+tive distributions k=1 q1 (xk1 ), k=1 Discrete(ak1 |w11:K ), k=1 q2 (xk2 |x1 1 ), . . . until the whole
+1:T
+particle-weight trajectory (x1:K
+, a1:K
+1:T −1 ) is sampled. From this trajectory, using equation (1), we can
+obtain an estimator for the marginal likelihood.
+Assuming that the sampling of latent variables x1:K
+1:T is reparameterizable, we can make their sampling
+independent of (θ, φ). In particular, assume that there exists a set of auxiliary random variables
+k
+1:K
+of reparameterization functions rt . We can simulate the SMC sampler
+1:T where t ∼ st and a set
+QK
+by first sampling 1:K
+∼
+and setting xk1 = r1 (k1 ) and x̃k1 = xk1 , then for t = 2, . . . , T
+1
+k=1 s1 Q
+QK
+K
+1:K
+1:K
+cycling through sampling at−1 ∼ k=1 Discrete(akt−1 |wt−1
+) and 1:K
+∼ k=1 st , and setting
+t
+ak
+
+ak
+
+t−1
+t−1
+xkt = rt (kt , x̃1:t−1
+) and x̃k1:t = (x̃1:t−1
+, xkt ). We use the resulting reparameterized sample of
+1:T
+1:K
+1:K
+(x1:K , a1:T −1 ) to evaluate the gradient estimator ∇θ,φ log ẐSMC (x1:K
+1:T , a1:T −1 ).
+
+To account for the discrete choices of ancestor indices akt one could additionally use the REIN FORCE (Williams, 1992) trick, however in practice, we found that the additional term in the estimator
+has problematically high variance. We explore various other possible gradient estimators and empirical assessments of their variances in Appendix A. This exploration confirms that including the
+additional REINFORCE terms leads to problematically high variance, justifying our decision to omit
+them, despite introducing a small bias into the gradient estimates.
+3.3
+
+B IAS & I MPLICATIONS ON THE P ROPOSALS
+
+In this section, we express the gap between ELBOs and the log marginal likelihood as a KL divergence
+and study implications on the proposal distributions. We present a set of claims and propositions
+whose full proofs are in Appendix B. These give insight into the behavior of AESMC and show the
+advantages, and disadvantages, of using our different ELBO. This insight motivates Section 4 which
+proposes an algorithm for improving proposal learning.
+Definition 1. Given an unnormalized target density P̃ : X → [0, ∞) with normalizing constant
+ZP > 0, P := P̃ /ZP , and a proposal density Q : X → [0, ∞), then
+Z
+P̃ (x)
+ELBO :=
+Q(x) log
+dx,
+(8)
+Q(x)
+is a lower bound on log ZP and satisfies
+ELBO = log ZP − KL (Q||P ) .
+
+(9)
+
+This is a standard identity used in variational inference and VAEs. In the case of VAEs, applying
+Definition 1 with P being pθ (x|y), P̃ being pθ (x, y), ZP being pθ (y), and Q being qφ (x|y), we can
+directly rewrite (4) as ELBOVAE (θ, φ, y) = log pθ (y) − KL (qφ (x|y)||pθ (x|y)).
+The key observation for expressing such a bound for general ELBOs such as ELBOIS and ELBOSMC
+is that the target density P and the proposal density Q need not directly correspond to pθ (x|y) and
+qφ (x|y). This allows us to view the underlying sampling distributions of the marginal likelihood
+Monte Carlo estimators such as QIS in (3) and QSMC in (6) as proposal distributions on an extended
+space X . The following claim uses this observation to express the bound between a general ELBO
+and the log marginal likelihood as KL divergence from the extended space sampling distribution to a
+corresponding target distribution.
+4
+
+Published as a conference paper at ICLR 2018
+
+Claim 1. Given a non-negative unbiased estimator ẐP (x) ≥ 0 of the normalizing constant ZP
+where x is distributed according to the proposal distribution Q(x), the following holds:
+Z
+ELBO =
+Q(x) log ẐP (x) dx = log ZP − KL (Q||P ) ,
+(10)
+where
+
+P (x) =
+
+Q(x)ẐP (x)
+ZP
+
+(11)
+
+is the implied normalized target density.
+In the case of IWAEs, we can apply Claim 1 with Q and ẐP being QIS and ẐIS respectively as defined
+in (3) and ZP being pθ (y). This yields
+ELBO IS (θ, φ, y) = log pθ (y) − KL (QIS ||PIS ) , where
+
+PIS (x1:K ) =
+
+1
+K
+
+K
+X
+
+k=1
+
+
+qφ (x1 |y) · · · qφ (xk−1 |y)pθ (xk |y)qφ (xk+1 |y) · · · qφ (xK |y) .
+
+(12)
+(13)
+
+Similarly, in the case of AESMC, we obtain
+ELBO SMC (θ, φ, y1:T ) = log pθ (y1:T ) − KL (QSMC ||PSMC ) , where
+
+1:K
+1:K
+1:K
+1:K
+1:K
+PSMC (x1:K
+1:T , a1:T −1 ) = QSMC (x1:T , a1:T −1 )ẐSMC (x1:T , a1:T −1 )/pθ (y1:T ).
+
+(14)
+(15)
+
+Having expressions for the target distribution P and the sampling distribution Q for a given ELBO
+allows us to investigate what happens when we maximize that ELBO, remembering that the KL
+term is strictly non-negative and zero if and only if P = Q. For the VAE and IWAE cases then,
+provided the proposal is sufficiently flexible, one can always perfectly maximize the ELBO by setting
+pθ (x|y) = qφ (x|y) for all x. The reverse implication also holds: if ELBOVAE = log ZP then it
+must be the case that pθ (x|y) = qφ (x|y). However, for AESMC, achieving ELBO = log ZP is only
+possible when one also has sufficient flexibility to learn a particular series of intermediate target
+distributions, namely the marginals of the final target distribution. In other words, it is necessary to
+learn a particular factorization of the generative model, not just the correct individual proposals, to
+achieve P = Q and thus ELBOSMC = ZP . These observations are formalized in Propositions 1 and 2
+below.
+Proposition 1. QIS (x1:K ) = PIS (x1:K ) for all x1:K if and only if q(x|y) = p(x|y) for all x.
+1:K
+1:K
+1:K
+1:K
+1:K
+Proposition 2. If K > 1, then PSMC (x1:T
+, a1:K
+1:T −1 ) = QSMC (x1:T , a1:T −1 ) for all (x1:T , a1:T −1 ) if
+and only if
+R
+1. πt (x1:t ) = p(x1:T |y1:T ) dxt+1:T = p(x1:t |y1:T ) for all x1:t and t = 1, . . . , T , and
+2. q1 (x1 |y1 ) = p(x1 |y1:T ) for all x1 and qt (xt |x1:t−1 , y1:t ) = p(x1:t |y1:T )/p(x1:t−1 |y1:T )
+for t = 2, . . . , T for all x1:t ,
+where πt (x1:t ) are the intermediate targets used by SMC.
+Proposition 2 has the consequence that if the family of generative models is such that the first
+condition does not hold, we will not be able to make the bound tight. This means that, except for a
+very small class of models, then, for most convenient parameterizations, it will be impossible to learn
+a perfect proposal that gives a tight bound, i.e. there will be no θ and φ such that the above conditions
+can be satisfied. However, it also means that ELBOSMC encodes important additional information
+about the implications the factorization of the generative model has on the inference—the model
+depends only on the final target πT (x1:T ) = pθ (x1:T |y1:T ), but some choices of the intermediate
+targets πt (x1:t ) will lead to much more efficient inference than others. Perhaps more importantly,
+SMC is usually a far more powerful inference algorithm than importance sampling and so the AESMC
+setup allows for more ambitious model learning problems to be effectively tackled than the VAE or
+IWAE. After all, even though it is well known in the SMC literature that, unlike for IS, most problems
+have no perfect set of SMC proposals which will generate exact samples from the posterior (Doucet
+& Johansen, 2009), SMC still gives superior performance on most problems with more than a few
+dimensions. These intuitions are backed up by our experiments that show that using ELBOSMC
+regularly learns better models than using ELBOIS .
+5
+
+Published as a conference paper at ICLR 2018
+
+4
+
+I MPROVING P ROPOSAL L EARNING
+
+In practice, one is rarely able to perfectly drive the divergence to zero and achieve a perfect proposal.
+In addition to the implications of the previous section, this occurs because qφ (x1:T |y1:T ) may not be
+sufficiently expressive to represent pθ (x1:T |y1:T ) exactly and because of the inevitable sub-optimality
+of the optimization process, remembering that we are aiming to learn an amortized inference artifact,
+rather than a single posterior representation. Consequently, to accurately assess the merits of
+different ELBOs for proposal learning, it is necessary to consider their finite-time performance. We
+therefore now consider the effect the number of particles K has on the gradient estimators for ELBOIS
+and ELBOSMC .
+
+103
+
+102
+
+10
+
+1
+
+Counter-intuitively, it transpires that the tighter bounds implied by using a larger K is often harmful to proposal learning for both IWAE and
+AESMC. At a high-level, this is because an accurate estimate for ẐP can be
+achieved for a wide range of proposal parameters φ and so the magnitude
+of ∇φ ELBO reduces as K increases. Typically, this shrinkage happens
+faster than increasing K reduces the standard deviation of the estimate and
+so the standard deviation of the gradient estimate relative to the problem
+scaling (i.e. as a ratio of true gradient ∇φ ELBO) actually increases. This
+effect is demonstrated in Figure 1 which shows a kernel density estimator
+for the distribution of the gradient estimate for different K and the model
+0
+10
+given in Section 5.2. Here we see that as we increase K, both the expected
+gradient estimate (which is equal to the true gradient by unbiasedness) and Figure 1: Density esstandard deviation of the estimate decrease. However, the former decreases timate of ∇φ ELBO for
+faster and so the relative standard deviation increases. This is perhaps different K
+easiest to appreciate by noting that for K > 10, there is a roughly equal probability of the estimate
+being positive or negative, such that we are equally likely to increase or decrease the parameter value
+at the next SGA iteration, inevitably leading to poor performance. On the other hand, when K = 1,
+it is far more likely that the gradient estimate is positive than negative, and so there is clear drift to
+the gradient steps. We add to the empirical evidence for this behavior in Section 5. Note the critical
+difference for model learning is that ∇θ ELBO does not, in general, decrease in magnitude as K
+increases. Note also that using a larger K should always give better performance at test time; it may
+though be better to learn φ using a smaller K.
+In simultaneously developed work (Rainforth et al., 2017), we formalized this intuition in the IWAE
+setting by showing that the estimator of ∇φ ELBOIS (θ, φ, x) with K particles, denoted by IK , has the
+following signal-to-noise ratio (SNR):
+E[IK ]
+SNR := p
+=O
+Var[IK ]
+
+r
+
+1
+K
+
+!
+.
+
+(16)
+
+We thus see that increasing K reduces the SNR and so the gradient updates for the proposal will
+degrade towards pure noise if K is set too high.
+4.1
+
+A LTERNATING ELBO S
+
+To address these issues, we suggest and investigate the alternating ELBOs (ALT) algorithm which
+updates (θ, φ) in a coordinate descent fashion using different ELBOs, and thus gradient estimates,
+for each. We pick a θ-optimizing pair and a φ-optimizing pair (Aθ , Kθ ), (Aφ , Kφ ) ∈ {IS, SMC} ×
+{1, 2, . . . }, corresponding to an inference type and number of particles. In an optimization step, we
+obtain an estimator for ∇θ ELBOAθ with Kθ particles and an estimator for ∇φ ELBOAφ with Kφ
+particles which we call gθ and gφ respectively. We use gθ to update the current θ and gφ to update
+the current φ. The results from the previous sections suggest that using Aθ = SMC and Aφ = IS
+with a large Kθ and a small Kφ may perform better model and proposal learning than just fixing
+(Aθ , Kθ ) = (Aφ , Kφ ) to (SMC, large) since using Aφ = IS with small Kφ helps learning φ (at least
+in terms of the SNR) and using Aθ = SMC with large Kθ helps learning θ. We experimentally observe
+that this procedure can in some cases improve both model and proposal learning.
+6
+
+Published as a conference paper at ICLR 2018
+
+5
+
+E XPERIMENTS
+
+We now present a series of experiments designed to answer the following questions: 1) Does
+tightening the bound by using either more particles or a better inference procedure lead to an adverse
+effect on proposal learning? 2) Can AESMC, despite this effect, outperform IWAE? 3) Can we further
+improve the learned model and proposal by using ALT?
+First we investigate a linear Gaussian state space model (LGSSM) for model learning and a latent
+variable model for proposal adaptation. This allows us to compare the learned parameters to the
+optimal ones. Doing so, we confirm our conclusions for this simple problem.
+We then extend those results to more complex, high dimensional observation spaces that require
+models and proposals parameterized by neural networks. We do so by investigating the Moving
+Agents dataset, a set of partially occluded video sequences.
+5.1
+
+L INEAR G AUSSIAN S TATE S PACE M ODEL
+
+Given the following LGSSM
+
+p(x1 ) = Normal x1 ; 0, 12 ,
+
+(17)
+2
+
+
+
+p(xt |xt−1 ) = Normal xt ; θ1 xt−1 , 1 ,
+
+√ 2
+p(yt |xt ) = Normal yt ; θ2 xt , 0.1 ,
+
+t = 2, . . . T,
+
+(18)
+
+t = 1, . . . , T,
+
+(19)
+
+we find that optimizing ELBOSMC (θ, φ, y1:T ) w.r.t. θ leads to better generative models than optimizing
+ELBO IS (θ, φ, y1:T ). The same is true for using more particles.
+We generate a sequence y1:T for T = 200 by sampling from the model with θ = (θ1 , θ2 ) = (0.9, 1.0).
+We then optimize the different ELBOs w.r.t. θ using the bootstrap proposal q1 (x1 |y1 ) = µθ (x1 ) and
+qt (xt |x1:t−1 , y1:t ) = ft,θ (xt |x1:t−1 ). Because we use the bootstrap proposal, gradients w.r.t. to θ
+are not backpropagated through q.
+
+θ1
+
+−1000
+−2000
+
+0.5
+
+0.0
+
+−3000
+2
+
+−4000
+
+θ2
+
+Log Marginal Likelihood
+
+We use a fixed learning rate of 0.01 and optimize for 500 steps using SGA. Figure 2 shows that the
+convergence of both log pθ (y1:T ) to maxθ log pθ (y1:T ) and θ to argmaxθ log pθ (y1:T ) is faster when
+ELBO SMC and more particles are used.
+
+is 10
+is 10000
+
+−5000
+
+smc 10
+smc 10000
+
+1
+0
+
+0
+
+100
+
+200
+
+300
+
+400
+
+500
+
+0
+
+Optimization Step
+
+100
+
+200
+
+300
+
+400
+
+500
+
+Optimization Step
+
+Figure 2: (Left) Log marginal likelihood analytically evaluated at every θ during optimization; the
+black line indicates maxθ log pθ (y1:T ) obtained by the expectation maximization (EM) algorithm.
+(Right) learning of model parameters; the black line indicates argmaxθ log pθ (y1:T ) obtained by the
+EM algorithm.
+
+5.2
+
+P ROPOSAL L EARNING
+
+We now investigate how learning φ, i.e. the proposal, is affected by the the choice of ELBO and the
+number of particles.
+7
+
+Published as a conference paper at ICLR 2018
+
+Consider a simple, fixed generative model p(µ)p(x|µ) = Normal(µ; 0, 12 )Normal(x; µ, 12 ) where
+µ and x are the latent and observed variables respectively and a family of proposal distributions
+qφ (µ) = Normal(µ; µq , σq2 ) parameterized by φ = (µq , log σq2 ). For a fixed observation x = 2.3,
+we initialize φ = (0.01, 0.01) and optimize ELBOIS with respect to φ. We investigate the quality of
+the learned parameter φ as we increase the number of particles K during training. Figure 3 (left)
+clearly demonstrates that the quality of φ compared to the analytic posterior decreases as we increase
+K.
+
+µq
+
+1.0
+0.5
+0.0
+
+2
+σq
+
+1.5
+1.0
+0.5
+0
+
+500
+
+1000
+
+10
+100
+
+−300
+−350
+−400
+−450
+−500
+
+0
+
+500
+
+1000
+
+1500
+
+Optimization step
+
+Optimization step
+true
+1
+
+−250
+
+L2 between approx and true
+marginal posterior means
+
+Log Marginal Likelihood
+
+Similar behavior is observed in Figure 3 (middle, right) where we optimize ELBOSMC with respect to
+both θ and φ for the LGSSM described in Section 5.1. We see that using more particles helps model
+learning but makes proposal learning worse. Using our ALT algorithm alleviates this problem and at
+the same time makes model learning faster as it profits from a more accurate proposal distribution.
+We provide more extensive experiments exploring proposal learning with different ELBOs and number
+of particles in Appendix C.3.
+
+1000
+10000
+
+smc 10
+smc 1000
+
+20
+
+15
+
+10
+
+5
+0
+
+500
+
+1000
+
+1500
+
+Optimization Step
+alternate
+EM/bootstrap
+
+Figure 3: (Left) Optimizing ELBOIS for the Gaussian unknown mean model with respect to φ results
+in worse φ as we increase number of particles K. (Middle, right) Optimizing ELBOSMC with respect
+to (θ, φ) for LGSSM and using the ALT algorithm for updating (θ, φ) with
+(Aθ , Kθ ) = (SMC, 1000)
+qP
+T
+kalman
+and (Aφ , Kφ ) = (IS, 10). Right measures the quality of φ by showing
+− µapprox
+)2
+t
+t=1 (µt
+where µkalman
+is the marginal mean obtained from the Kalman smoothing algorithm under the model
+t
+with EM-optimized parameters and µapprox
+is an marginal mean obtained from the set of 10 SMC
+t
+particles with learned/bootstrap proposal.
+
+5.3
+
+M OVING AGENTS
+
+To show that our results are applicable to complex, high dimensional data we compare AESMC
+and IWAE on stochastic, partially observable video sequences. Figure 7 in Appendix C.2 shows an
+example of such a sequence.
+(n)
+
+The dataset consists of N = 5000 sequences of images (y1:T )N
+n=1 of which 1000 are randomly held
+out as test set. Each sequence contains T = 40 images represented as a 2 dimensional array of size
+32 × 32. In each sequence there is one agent, represented as circle, whose starting position is sampled
+randomly along the top and bottom of the image. The dataset is inspired by (Ondrúška & Posner,
+2016), however with the crucial difference that the movement of the agent is stochastic. The agent
+performs a directed random walk through the image. At each timestep, it moves according to
+yt+1 ∼ Normal(yt+1 ; yt + 0.15, 0.022 )
+(20)
+xt+1 ∼ Normal(xt+1 ; 0, 0.022 )
+where (xt , yt ) are the coordinates in frame t in a unit square that is then projected onto 32 × 32 pixels.
+In addition to the stochasticity of the movement, half of the image is occluded, preventing the agent
+from being observed.
+For the generative model and proposal distribution we use a Variational Recurrent Neural Network
+(VRNN) (Chung et al., 2015). It extends recurrent neural networks (RNNs) by introducing a stochastic
+8
+
+Published as a conference paper at ICLR 2018
+
+latent state xt at each timestep t. Together with the observation yt , this state conditions the deterministic transition of the RNN. By introducing this unobserved stochastic state, the VRNN is able to better
+model complex long range variability in stochastic sequences. Architecture and hyperparameter
+details are given in Appendix C.1.
+Figure 4 shows max(ELBOIS , ELBOSMC ) for models trained with IWAE and AESMC for different
+particle numbers. The lines correspond to the mean over three different random seeds and the shaded
+areas indicate the standard deviation. The same number of particles was used for training and testing,
+additional hyperparameter settings are given in the appendix. One can see that models trained using
+AESMC outperform IWAE and using more particles improves the ELBO for both. In Appendix C.2,
+we inspect different learned generative models by using them for prediction, confirming the results
+presented here. We also tested ALT on this task, but found that while it did occasionally improve
+performance, it was much less stable than IWAE and AESMC.
+
+max(ELBOIS , ELBOSMC )
+
+−355
+−356
+
+Particles
+
+−357
+
+10
+
+−358
+IWAE-10
+IWAE-20
+IWAE-40
+AESMC-10
+AESMC-20
+AESMC-40
+
+−359
+−360
+−361
+−362
+
+0
+
+20
+
+40
+
+60
+
+20
+40
+
+Method
+IWAE
+AESMC
+IWAE
+AESMC
+IWAE
+AESMC
+
+Moving Agents
+-357.3
+-356.7
+-356.6
+-356.1
+-356.2
+-356.1
+
+80
+
+Epoch
+
+Figure 4: (Left) Rolling mean over 5 epochs of max(ELBOSMC , ELBOIS ) on the test set, lines indicate the average over 3 random seeds and shaded areas indicate standard deviation. The color
+indicates the number of particles, the line style the used algorithm. (Right) The table shows the final
+max(ELBOSMC , ELBOIS ) for each learned model.
+
+6
+
+C ONCLUSIONS
+
+We have developed AESMC—a method for performing model learning using a new ELBO objective
+which is based on the SMC marginal likelihood estimator. This ELBO objective is optimized using
+SGA and the reparameterization trick. Our approach utilizes the efficiency of SMC in models with
+intermediate observations and hence is suitable for highly structured models. We experimentally
+demonstrated that this objective leads to better generative model training than the IWAE objective for
+structured problems, due to the superior inference and tighter bound provided by using SMC instead
+of importance sampling.
+Additionally, in Claim 1, we provide a simple way to express the bias of objectives induced by log of
+marginal likelihood estimators as a KL divergence on an extended space. In Propositions 1 and 2, we
+investigate the implications of these KLs being zero in the case of IWAE and AESMC. In the latter case,
+we find that we can achieve zero KL only if we are able to learn SMC intermediate target distributions
+corresponding to marginals of the target distribution. Using our assertion that tighter variational
+bounds are not necessarily better, we then introduce and test a new method, alternating ELBOs, that
+addresses some of these issues and observe that, in some cases, this improves both model and proposal
+learning.
+
+9
+
+Published as a conference paper at ICLR 2018
+
+ACKNOWLEDGMENTS
+TAL is supported by EPSRC DTA and Google (project code DF6700) studentships. MI is supported
+by the UK EPSRC CDT in Autonomous Intelligent Machines and Systems. TR is supported by the
+European Research Council under the European Union’s Seventh Framework Programme (FP7/20072013) ERC grant agreement no. 617071; majority of TR’s work was undertaken while he was in the
+Department of Engineering Science, University of Oxford, and was supported by a BP industrial
+grant. TJ is supported by the UK EPSRC and MRC CDT in Statistical Science. FW is supported by
+The Alan Turing Institute under the EPSRC grant EP/N510129/1; DARPA PPAML through the U.S.
+AFRL under Cooperative Agreement FA8750-14-2-0006; Intel and DARPA D3M, under Cooperative
+Agreement FA8750-17-2-0093.
+
+R EFERENCES
+Yuri Burda, Roger Grosse, and Ruslan Salakhutdinov. Importance weighted autoencoders. In ICLR,
+2016.
+Junyoung Chung, Kyle Kastner, Laurent Dinh, Kratarth Goel, Aaron C Courville, and Yoshua Bengio.
+A recurrent latent variable model for sequential data. In Advances in neural information processing
+systems, pp. 2980–2988, 2015.
+P Del Moral. Feynman-Kac formulae: genealogical and interacting particle systems with applications.
+Probability and its applications, 2004.
+Arnaud Doucet and Adam M Johansen. A tutorial on particle filtering and smoothing: Fifteen years
+later. Handbook of nonlinear filtering, 12(656-704):3, 2009.
+Diederik P Kingma and Max Welling. Auto-encoding variational Bayes. In ICLR, 2014.
+Tuan Anh Le, Maximilian Igl, Tom Jin, Tom Rainforth, and Frank Wood. Auto-encoding sequential
+Monte Carlo. arXiv preprint arXiv:1705.10306v1, 2017.
+Chris J Maddison, John Lawson, George Tucker, Nicolas Heess, Mohammad Norouzi, Andriy Mnih,
+Arnaud Doucet, and Yee Teh. Filtering variational objectives. In Advances in Neural Information
+Processing Systems, pp. 6576–6586, 2017.
+Christian A Naesseth, Scott W Linderman, Rajesh Ranganath, and David M Blei. Variational
+sequential Monte Carlo. arXiv preprint arXiv:1705.11140, 2017.
+Peter Ondrúška and Ingmar Posner. Deep tracking: Seeing beyond seeing using recurrent neural
+networks. In Thirtieth AAAI Conference on Artificial Intelligence, 2016.
+Tom Rainforth, Tuan Anh Le, Maximilian Igl, Chris J Maddison, Yee Whye Teh, and Frank Wood.
+Tighter variational bounds are not necessarily better. NIPS Workshop on Bayesian Deep Learning,
+2017.
+Danilo Jimenez Rezende, Shakir Mohamed, and Daan Wierstra. Stochastic backpropagation and
+approximate inference in deep generative models. In ICML, 2014.
+Ronald J Williams. Simple statistical gradient-following algorithms for connectionist reinforcement
+learning. Machine learning, 8(3-4):229–256, 1992.
+
+10
+
+Published as a conference paper at ICLR 2018
+
+A
+
+G RADIENTS
+
+The goal is to obtain an unbiased estimator for the gradient
+Z
+1:K
+1:K
+1:K
+1:K
+1:K
+∇θ,φ QSMC (x1:K
+1:T , a1:T −1 ) log ẐSMC (x1:T , a1:T −1 ) dx1:T da1:T −1 .
+A.1
+
+(21)
+
+F ULL R EINFORCE
+
+We express the required quantity as
+Z
+1:K
+1:K
+1:K
+1:K
+1:K
+∇θ,φ QSMC (x1:K
+1:T , a1:T −1 ) log ẐSMC (x1:T , a1:T −1 ) dx1:T da1:T −1
+Z
+1:K
+1:K
+1:K
+= ∇θ,φ QSMC (x1:K
+1:T , a1:T −1 ) log ẐSMC (x1:T , a1:T −1 )+
+Z
+=
+
+(22)
+(23)
+
+1:K
+1:K
+1:K
+1:K
+1:K
+QSMC (x1:K
+1:T , a1:T −1 )∇θ,φ log ẐSMC (x1:T , a1:T −1 ) dx1:T da1:T −1
+h
+1:K
+1:K
+1:K
+1:K
+1:K
+QSMC (x1:K
+1:T , a1:T −1 ) ∇θ,φ log QSMC (x1:T , a1:T −1 ) log ẐSMC (x1:T , a1:T −1 )+
+i
+1:K
+1:K
+1:K
+∇θ,φ log ẐSMC (x1:K
+1:T , a1:T −1 ) dx1:T da1:T −1 ,
+
+(24)
+(25)
+(26)
+
+1:K
+which
+we can estimate by sampling (x1:K
+1:T , a1:T −1 ) directly from QSMC and ievaluating
+h
+1:K
+1:K
+1:K
+1:K
+1:K
+∇θ,φ log QSMC (x1:K
+1:T , a1:T −1 ) log ẐSMC (x1:T , a1:T −1 ) + ∇θ,φ log ẐSMC (x1:T , a1:T −1 ) .
+
+A.2
+
+R EINFORCE & R EPARAMETERIZATION
+
+We express the required quantity as
+Z
+1:K
+1:K
+1:K
+1:K
+1:K
+∇θ,φ QSMC (x1:K
+1:T , a1:T −1 ) log ẐSMC (x1:T , a1:T −1 ) dx1:T da1:T −1
+! T K
+!
+Z Y
+K
+YY
+k
+k
+k at−1
+k
+1:K
+= ∇θ,φ
+q1 (x1 )
+qt (xt |xt−1 ) · Discrete(at−1 |wt−1 )
+t=2 k=1
+1:K
+1:K
+1:K
+log ẐSMC (x1:T , a1:T −1 ) dx1:K
+1:T da1:T −1
+
+(27)
+
+k=1
+
+= ∇θ,φ
+
+Z
+
+K
+Y
+
+!
+
+T Y
+K
+Y
+
+s1 (k1 )
+
+(28)
+!
+
+1:K
+st (kt ) · Discrete(akt−1 |wt−1
+)
+
+t=2 k=1
+1:K
+1:K
+1:K
+log ẐSMC (r(1:T ), a1:T −1 ) d1:K
+1:T da1:T −1
+
+Z
+=
+
+k=1
+
+T Y
+K
+Y
+
+!"
+st (kt )
+
+t=1 k=1
+T
+Y K
+Y
+t=2 k=1
+
+∇θ,φ
+
+T Y
+K
+Y
+t=2 k=1
+
+(29)
+
+1:K
+1:K
+Discrete(akt−1 |wt−1
+) log ẐSMC (r(1:K
+1:T ), a1:T −1 )+
+
+!
+
+#
+
+1:K
+1:K
+1:K
+1:K
+Discrete(akt−1 |wt−1
+) ∇θ,φ log ẐSMC (r(1:K
+1:T ), a1:T −1 ) d1:T da1:T −1
+
+(30)
+Z
+=
+
+T Y
+K
+Y
+
+!
+st (kt )
+
+t=1 k=1
+
+"
+∇θ,φ log
+
+T Y
+K
+Y
+t=2 k=1
+
+T Y
+K
+Y
+t=2 k=1
+
+!
+1:K
+Discrete(akt−1 |wt−1
+) ·
+
+!
+1:K
+Discrete(akt−1 |wt−1
+)
+
+1:K
+log ẐSMC (r(1:K
+1:T ), a1:T −1 )+
+
+i
+1:K
+1:K
+1:K
+∇θ,φ log ẐSMC (r(1:K
+1:T ), a1:T −1 ) d1:T da1:T −1 ,
+
+(31)
+
+1:K
+where r(1:K
+1:T ) denotes a sample with identical distribution as x1:T obtained by passing
+1:K
+the auxiliary samples 1:T through the reparameterization function. We can thus estimate
+
+11
+
+Published as a conference paper at ICLR 2018
+
+the
+1:K
+distribution, reparameterizing and evaluating
+1:T from the auxiliary
+h gradient
+Qby sampling
+
+i
+QK
+T
+k
+1:K
+1:K
+1:K
+1:K
+1:K
+∇θ,φ log
+Discrete(a
+|w
+)
+log
+Ẑ
+(r(
+),
+a
+)
++
+∇
+log
+Ẑ
+(r(
+),
+a
+)
+SMC
+θ,φ
+SMC
+t−1 t−1
+1:T
+1:T −1
+1:T
+1:T −1 .
+t=2
+k=1
+In Figure 5, we demonstrate that the estimator in (31) has much higher variance if we include the first
+term.
+0.00003
+
+reinforce
+
+ignore
+
+0.02
+
+0.01
+
+0.00002
+0.00001
+0.00000
+
+0.00
+250
+
+300
+
+−50000
+
+350
+
+0
+
+50000
+
+Figure 5: T = 200 model described in Section 5.1. Kernel density estimation (KDE) of ∇θ1 ELBOSMC
+evaluated at θ1 = 0.1 with K = 16 using 100 samples.
+
+B
+
+P ROOFS FOR B IAS & I MPLICATIONS ON THE P ROPOSALS
+
+Derivation of (9).
+ZP P (x)
+dx
+Q(x)
+Z
+Z
+Q(x)
+dx
+= Q(x) log ZP dx − Q(x) log
+P (x)
+= log ZP − KL (Q||P ) .
+Z
+
+ELBO =
+
+Q(x) log
+
+(32)
+(33)
+(34)
+
+R
+Proof of Claim 1. Since ẐP (x) ≥ 0, Q(x) ≥ 0 and Q(x)ẐP (x) dx = ZP , we can let the unnormalized target density in Definition 1 be P̃ (x) = Q(x)ẐP (x). Hence, the normalized target density
+is P (x) = Q(x)ẐP (x)/ZP . Substituting these quantities into (8) and (9) yields the two equalities in
+(10).
+Proof of Proposition 1. ( =⇒ ) Substituting for QIS (x1:K ) = PIS (x1:K ), we obtain
+K
+K QK
+Y
+1 X `=1 q(x` |y)
+k
+q(x |y) =
+p(xk |y)
+K
+q(xk |y)
+k=1
+
+(35)
+
+k=1
+
+=
+
+K
+
+1 X 1
+q(x |y) · · · q(xk−1 |y)p(xk |y)q(xk+1 |y) · · · q(xK |y) .
+K
+
+(36)
+
+k=1
+
+Integrating both sides with respect to (x2 , . . . , xK ) over the whole support (i.e. marginalizing out
+everything except x1 ), we obtain:
+"
+#
+K
+X
+1
+1
+1
+1
+q(x |y) =
+p(x |y) +
+q(x |y) .
+(37)
+K
+k=2
+
+1
+
+1
+
+1
+
+Rearranging gives us q(x |y) = p(x |y) for all x .
+
+( ⇐= ) Substituting p(xk |y) = q(xk |y), we obtain
+K
+1 X QIS (x1:K )
+PIS (x1:K ) =
+p(xk |y)
+K
+q(xk |y)
+
+(38)
+
+k=1
+K
+
+=
+
+1 X
+QIS (x1:K )
+K
+
+k=1
+= QIS (x1:K ).
+
+12
+
+(39)
+(40)
+
+Published as a conference paper at ICLR 2018
+
+Proof of Proposition 2. We consider the general sequence of target distributions πt (x1:t )
+(pθ (x1:t |y1:t ) in the case of SSMs), their unnormalized
+versions γt (x1:t ) (pθ (x1:t , y1:t ) in the case
+R
+of SSMs), their normalizing constants Zt = γt (x1:t ) dx1:t (pθ (y1:t ) in the case of SSMs), where
+Z = ZT = p(y1:T ).
+1:K
+1:K
+1:K
+( =⇒ ) It suffices to show that ẐSMC (x1:K
+1:T , a1:T −1 ) = Z for all (x1:T , a1:T −1 ) implies 1 and 2 in
+Proposal 2 due to equation (11).
+1:K
+1:K
+1:K
+We first prove that ẐSMC (x1:K
+1:T , a1:T −1 ) = Z for all (x1:T , a1:T −1 ) implies that the weights
+
+w1 (x1 ) :=
+
+γ1 (x1 )
+q1 (x1 )
+
+wt (x1:t ) :=
+
+γt (x1:t )
+γt−1 (x1:t−1 )qt (xt |x1:t−1 )
+
+(41)
+for t = 2, . . . , T
+
+(42)
+
+are constant with respect to x1:t .
+
+Pick t ∈ {1, . . . , T } and distinct k, ` ∈ {1, . . . , K}. Also, pick x1:t and x0 1:t . Now, consider two
+1:K
+1:K
+1:K
+sets of particle sets (x̄1:K
+1:T , ā1:T −1 ) and (x̃1:T , ã1:T −1 ), illustrated in Figure 6, such that
+ 0
+x τ if κ = ` and τ < t
+
+
+ 0
+x τ if (κ, τ ) = (k, t)
+κ
+x̄τ =
+for τ = 1, . . . , T, κ = 1, . . . , K,
+(43)
+
+x
+if κ = k and τ < t
+
+ τκ
+xτ
+otherwise
+
+` if (κ, τ ) = (k, t − 1) or (k, t)
+āκτ =
+for τ = 1, . . . , T − 1, κ = 1, . . . , K,
+(44)
+κ otherwise
+ 0
+x τ if κ = ` and τ < t
+
+
+
+xτ
+if (κ, τ ) = (k, t)
+x̃κτ =
+for τ = 1, . . . , T, κ = 1, . . . , K,
+(45)
+
+x
+if κ = k and τ < t
+τ
+
+ κ
+xτ
+otherwise
+
+` if (κ, τ ) = (k, t)
+ãκτ =
+for τ = 1, . . . , T − 1, κ = 1, . . . , K.
+(46)
+κ otherwise
+
+`
+k
+
+x01
+
+x02
+
+x1
+
+x2
+
+..
+.
+···
+..
+.
+···
+..
+.
+···
+..
+.
+···
+..
+.
+
+x0t−1
+
+xt−1
+
+x0t
+
+···
+
+`
+
+···
+
+k
+
+x01
+
+x02
+
+x1
+
+x2
+
+..
+.
+···
+..
+.
+···
+..
+.
+···
+..
+.
+···
+..
+.
+
+x0t−1
+
+xt−1
+
+···
+
+xt
+
+···
+
+1:K
+1:K
+1:K
+Figure 6: (Left) particle set (x̄1:K
+1:T , ā1:T −1 ) and (right) particle set (x̃1:T , ã1:T −1 ). Lines indicate
+ancestor indices.
+
+The weights w̄τκ and w̃τκ for the respective particle sets are identical except when (τ, κ) = (t, k)
+where
+w̄tk = wt (x0 1:t ),
+
+(47)
+
+w̃tk = wt (x1:t ).
+
+(48)
+
+1:K
+1:K
+1:K
+0
+Since Ẑ(x̄1:K
+1:T , ā1:T −1 ) = Ẑ(x̃1:T , ã1:T −1 ), we have wt (x 1:t ) = wt (x1:t ). As this holds for any
+arbitrary t and x1:t , it follows that wt (x1:t ) must be constant with respect to x1:t for all t = 1, . . . , T .
+
+13
+
+Published as a conference paper at ICLR 2018
+
+Now, for x1:t , consider the implied proposal by rearranging (41) and (42)
+γ1 (x1 )
+w1
+γt (x1:t )
+qt (xt |x1:t−1 ) =
+γt−1 (x1:t−1 )wt
+q1 (x1 ) =
+
+(49)
+for t = 2, . . . , T,
+
+(50)
+
+where wt := wt (x1:t ) is constant from our previous results. For this to be a normalized density with
+respect to xt , we must have
+Z
+w1 = γ1 (x1 ) dx1 = Z1 ,
+(51)
+and for t = 2, . . . , T :
+γt (x1:t )
+dxt
+γt−1 (x1:t−1 )
+R
+γt (x1:t ) dxt
+=
+γt−1 (x1:t−1 )
+R
+πt (x1:t ) dxt
+Zt
+=
+·
+.
+Zt−1 πt−1 (x1:t−1 )
+Z
+
+wt =
+
+(52)
+(53)
+(54)
+
+R
+πt+1 (x1:t+1 ) dxt+1 and πt (x1:t ) are both normalized densities, we must have πt (x1:t ) =
+Since
+R
+πt+1 (x1:t+1 ) dxt+1 for all t = 1, . . . , T − 1 for all x1:t . For a given t ∈ {1, . . . , T − 1} and x1:t ,
+applying this repeatedly yields
+Z
+Z Z
+Z
+πt (x1:t ) = πt+1 (x1:t+1 ) dxt+1 =
+πt+2 (x1:t+2 ) dxt+2 dxt+1 = · · · = πT (x1:T ) dxt+1:T
+(55)
+such that each πt (x1:t ) must be the corresponding marginal of the final target. We also have
+w1 (x1 ) = Z1 ,
+Zt
+,
+wt (x1:t ) =
+Zt−1
+q1 (x1 ) = π1 (x1 ) = πT (x1 ),
+πt (x1:t )
+πT (x1:t )
+qt (xt |x1:t−1 ) =
+=
+,
+πt−1 (x1:t−1 )
+πT (x1:t−1 )
+
+(56)
+t = 2, . . . , T,
+
+(57)
+(58)
+
+t = 2, . . . , T.
+
+(59)
+
+( ⇐= ) To complete the proof, we now simply substitute identities in 1 and 2 of Proposal 2 back to
+1:K
+1:K
+1:K
+the expression of Ẑ(x1:K
+1:T , a1:T −1 ) to obtain Ẑ(x1:T , a1:T −1 ) = Z.
+
+C
+
+E XPERIMENTS
+
+C.1
+
+VRNN
+
+In the following we give the details of our VRNN architecture. The generative model is given by:
+p(x1:T , h0:T , y1:T ) = p(h0 )
+
+Y
+t
+
+p(xt |ht−1 )p(yt |ht−1 , xt )p(ht |ht−1 , xt , yt )
+
+(60)
+
+where
+p(h0 ) = Normal(h0 ; 0, I)
+p(xt |ht−1 ) = Normal(xt ; µxθ (ht−1 ), σθx (ht−1 )2 )
+
+p(yt |ht−1 , xt ) = Bernoulli(yt ; µyθ (ϕxθ (xt ), ht−1 ))
+p(ht |ht−1 , xt , yt ) = δf (ht−1 ,ϕxθ (xt ),ϕyθ (yt )) (ht )
+14
+
+(61)
+
+Published as a conference paper at ICLR 2018
+
+and the proposal distribution is given by
+2
+
+p(xt |yt , ht−1 ) = Normal(xt ; µpφ (ϕyφ (yt ), ht−1 ), σφp (ϕyφ (yt ), ht−1 ))
+
+(62)
+
+The functions µxθ and σθx are computed by networks with two fully connected layers of size 128
+whose first layer is shared. ϕxθ is one fully connected layer of size 128.
+For visual input, the encoding ϕyθ is a convolutional network with conv-4x4-2-1-32, conv-4x4-2-1-64,
+conv-4x4-2-1-128 where conv-wxh-s-p-n denotes a convolutional network with n filters of size w × h,
+stride s, padding p. Between convolutions we use leaky ReLUs with slope 0.2 as nonlinearity and
+batch norms. The decoding µyθ uses transposed convolutions of the same dimensions but in reversed
+order, however with stride s = 1 and padding p = 0 for the first layer.
+A Gated Recurrent Unit (GRU) is used as RNN and if not stated otherwise ReLUs are used in between
+fully connected layers.
+For the proposal distribution, the functions µpφ and σφp are neural networks with three fully connected
+layers of size 128 that are sharing the first two layers. Sigmoid and softplus functions are used where
+values in (0, 1) or R+ are required. We use a minibatch size of 25.
+For the moving agents dataset we use ADAM with a learning rate of 10−3 .
+A specific feature of the VRNN architecture is that the proposal and the generative model share the
+component ϕyφ,θ . Consequently, we set φ = θ for the parameters belonging to this module and train
+it using gradients for both θ and φ.
+C.2
+
+M OVING AGENTS
+
+In Figure 7 we investigate the quality of the generative model by comparing visual predictions. We
+do so for models learned by IWAE (top) and AESMC (bottom). The models were learned using ten
+particles but for easier visualization we only predict using five particles.
+The first row in each graphic shows the ground truth. The second row shows the averaged predictions
+of all five particles. The next five rows show the predictions made by each particle individually.
+The observations (i.e. the top row) up to t = 19 are shown to the model. Up to this timestep the latent
+values x0:19 are drawn from the proposal distribution q(xt |yt , ht−1 ). From t = 20 onwards the latent
+values x20:37 are drawn from the generative model p(xt |xt−1 ). Consequently, the model predicts the
+partially occluded, stochastic movement over 17 timesteps into the future.
+We note that most particles predict a viable future trajectory. However, the model learned by IWAE is
+not as consistent in the quality of its predictions, often ’forgetting’ the particle. This does not happen
+in every predicted sequence but the behavior shown here is very typical. Models learned by AESMC
+are much more consistent in the quality of their predictions.
+C.3
+
+O PTIMIZING O NLY P ROPOSAL PARAMETERS
+
+We have run experiments where we optimize various ELBO objectives with respect to φ with θ fixed
+in order to see how various objectives have an effect on proposal learning. In particular, we train
+ELBO IS and ELBO SMC with number of particles K ∈ {10, 100, 1000}. Once the training is done, we
+use the trained proposal network to perform inference using both IS and SMC with number of particles
+Ktest ∈ {10, 100, 1000}.
+In Figure 8, we see experimental results for the LGSSM
+qP described in Section 5.1. We measure
+T
+kalman
+− µapprox
+)2 where µkalman
+the quality of the inference network using a proxy
+is
+t
+t
+t=1 (µt
+[x
+]
+the true marginal
+mean
+E
+obtained
+from
+the
+Kalman
+smoothing
+algorithm
+and
+p(x1:T |y1:T ) t
+P
+ 
+PK
+K
+k
+k
+µapprox
+=
+w
+x
+/
+t
+k=1 T t
+k=1 wT is an approximate marginal mean obtained from the proposal parameterized by φ.
+15
+
+Published as a conference paper at ICLR 2018
+
+Figure 7: Visualisation of the learned model. Ground truth observations (top row in each sub figure)
+are only revealed to the algorithm up until t=19 inclusive. The second row shows the prediction
+averaged over all particles, all following rows show the prediction made by a single particle. (Top)
+IWAE. (Bottom) AESMC .
+We see that if we train using ELBOSMC with Ktrain = 1000, the performance for inference using SMC
+(with whichever Ktest ∈ {10, 100, 1000}) is worse than if we train with ELBOIS with any number of
+particles Ktrain ∈ {10, 100, 1000}. Examining the other axes of variation:
+• Increasing Ktest (moving up in Figure 8 (Right)) improves inference.
+
+• Increasing Ktrain (moving to the right in Figure 8 (Right)) worsens inference.
+
+• Among different possible combinations of (training algorithm, testing algorithm), (IS, SMC)
+ (SMC, SMC)  (IS, IS)  (SMC, IS), where we use “a  b” to denote that the combination
+a results in better inference than combination b.
+
+16
+
+Published as a conference paper at ICLR 2018
+
+Mean L2 between approximate inference
+and ground truth
+0
+
+1000
+
+1000
+
+# test particles
+
+ELBO ± 1 std
+
+2000
+3000
+4000
+true log marginal likelihood
+is 10
+is 100
+is 1000
+smc 10
+smc 100
+smc 1000
+
+5000
+6000
+0
+
+200
+
+400
+
+Epoch
+
+600
+
+800
+
+100
+
+10
+
+1000
+
+10
+
+100
+1000
+# train particles
+IS train, IS test
+IS train, SMC test
+SMC train, IS test
+SMC train, SMC test
+
+Figure 8: (Left) Optimizing ELBO with respect
+qP to φ for LGSSM. (Right) The lengths of the squares are
+T
+kalman
+proportional (with a constant factor) to
+− µapprox
+)2 which is a proxy for inference
+t
+t=1 (µt
+quality of φ described in the main text. The larger the square, the worse the inference.
+
+17
+
+

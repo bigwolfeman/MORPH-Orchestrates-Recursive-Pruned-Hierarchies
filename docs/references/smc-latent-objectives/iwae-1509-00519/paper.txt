@@ -1,0 +1,1106 @@
+Under review as a conference paper at ICLR 2016
+
+I MPORTANCE W EIGHTED AUTOENCODERS
+Yuri Burda, Roger Grosse & Ruslan Salakhutdinov
+Department of Computer Science
+University of Toronto
+Toronto, ON, Canada
+{yburda,rgrosse,rsalakhu}@cs.toronto.edu
+
+arXiv:1509.00519v4 [cs.LG] 7 Nov 2016
+
+A BSTRACT
+The variational autoencoder (VAE; Kingma & Welling (2014)) is a recently proposed generative model pairing a top-down generative network with a bottom-up
+recognition network which approximates posterior inference. It typically makes
+strong assumptions about posterior inference, for instance that the posterior distribution is approximately factorial, and that its parameters can be approximated
+with nonlinear regression from the observations. As we show empirically, the
+VAE objective can lead to overly simplified representations which fail to use the
+network’s entire modeling capacity. We present the importance weighted autoencoder (IWAE), a generative model with the same architecture as the VAE, but
+which uses a strictly tighter log-likelihood lower bound derived from importance
+weighting. In the IWAE, the recognition network uses multiple samples to approximate the posterior, giving it increased flexibility to model complex posteriors which do not fit the VAE modeling assumptions. We show empirically that
+IWAEs learn richer latent space representations than VAEs, leading to improved
+test log-likelihood on density estimation benchmarks.
+
+1
+
+I NTRODUCITON
+
+In recent years, there has been a renewed focus on learning deep generative models (Hinton et al.,
+2006; Salakhutdinov & E., 2009; Gregor et al., 2014; Kingma & Welling, 2014; Rezende et al.,
+2014). A common difficulty faced by most approaches is the need to perform posterior inference
+during training: the log-likelihood gradients for most latent variable models are defined in terms
+of posterior statistics (e.g. Salakhutdinov & E. (2009); Neal (1992); Gregor et al. (2014)). One
+approach for dealing with this problem is to train a recognition network alongside the generative
+model (Dayan et al., 1995). The recognition network aims to predict the posterior distribution over
+latent variables given the observations, and can often generate a rough approximation much more
+quickly than generic inference algorithms such as MCMC.
+The variational autoencoder (VAE; Kingma & Welling (2014); Rezende et al. (2014)) is a recently
+proposed generative model which pairs a top-down generative network with a bottom-up recognition
+network. Both networks are jointly trained to maximize a variational lower bound on the data loglikelihood. VAEs have recently been successful at separating style and content (Kingma et al., 2014;
+Kulkarni et al., 2015) and at learning to “draw” images in a realistic manner (Gregor et al., 2015).
+VAEs make strong assumptions about the posterior distribution. Typically VAE models assume that
+the posterior is approximately factorial, and that its parameters can be predicted from the observables
+through a nonlinear regression. Because they are trained to maximize a variational lower bound
+on the log-likelihood, they are encouraged to learn representations where these assumptions are
+satisfied, i.e. where the posterior is approximately factorial and predictable with a neural network.
+While this effect is beneficial, it comes at a cost: constraining the form of the posterior limits the
+expressive power of the model. This is especially true of the VAE objective, which harshly penalizes
+approximate posterior samples which are unlikely to explain the data, even if the recognition network
+puts much of its probability mass on good explanations.
+In this paper, we introduce the importance weighted autoencoder (IWAE), a generative model which
+shares the VAE architecture, but which is trained with a tighter log-likelihood lower bound de1
+
+Under review as a conference paper at ICLR 2016
+
+rived from importance weighting. The recognition network generates multiple approximate posterior samples, and their weights are averaged. As the number of samples is increased, the lower
+bound approaches the true log-likelihood. The use of multiple samples gives the IWAE additional
+flexibility to learn generative models whose posterior distributions do not fit the VAE modeling assumptions. This approach is related to reweighted wake sleep (Bornschein & Bengio, 2015), but
+the IWAE is trained using a single unified objective. Compared with the VAE, our IWAE is able to
+learn richer representations with more latent dimensions, which translates into significantly higher
+log-likelihoods on density estimation benchmarks.
+
+2
+
+BACKGROUND
+
+In this section, we review the variational autoencoder (VAE) model of Kingma & Welling (2014). In
+particular, we describe a generalization of the architecture to multiple stochastic hidden layers. We
+note, however, that Kingma & Welling (2014) used a single stochastic hidden layer, and there are
+other sensible generalizations to multiple layers, such as the one presented by Rezende et al. (2014).
+The VAE defines a generative process in terms of ancestral sampling through a cascade of hidden
+layers:
+X
+p(x|θ) =
+p(hL |θ)p(hL−1 |hL , θ) · · · p(x|h1 , θ).
+(1)
+h1 ,...,hL
+
+Here, θ is a vector of parameters of the variational autoencoder, and h = {h1 , . . . , hL } denotes the
+stochastic hidden units, or latent variables. The dependence on θ is often suppressed for clarity. For
+convenience, we define h0 = x. Each of the terms p(h` |h`+1 ) may denote a complicated nonlinear
+relationship, for instance one computed by a multilayer neural network. However, it is assumed
+that sampling and probability evaluation are tractable for each p(h` |h`+1 ). Note that L denotes
+the number of stochastic hidden layers; the deterministic layers are not shown explicitly here. We
+assume the recognition model q(h|x) is defined in terms of an analogous factorization:
+q(h|x) = q(h1 |x)q(h2 |h1 ) · · · q(hL |hL−1 ),
+
+(2)
+
+where sampling and probability evaluation are tractable for each of the terms in the product.
+In this work, we assume the same families of conditional probability distributions as Kingma &
+Welling (2014). In particular, the prior p(hL ) is fixed to be a zero-mean, unit-variance Gaussian.
+In general, each of the conditional distributions p(h` | h`+1 ) and q(h` |h`−1 ) is a Gaussian with
+diagonal covariance, where the mean and covariance parameters are computed by a deterministic
+feed-forward neural network. For real-valued observations, p(x|h1 ) is also defined to be such a
+Gaussian; for binary observations, it is defined to be a Bernoulli distribution whose mean parameters
+are computed by a neural network.
+The VAE is trained to maximize a variational lower bound on the log-likelihood, as derived from
+Jensen’s Inequality:
+
+
+
+
+p(x, h)
+p(x, h)
+log p(x) = log Eq(h|x)
+≥ Eq(h|x) log
+= L(x).
+(3)
+q(h|x)
+q(h|x)
+Since L(x) = log p(x) − DKL (q(h|x)||p(h|x)), the training procedure is forced to trade off the
+data log-likelihood log p(x) and the KL divergence from the true posterior. This is beneficial, in that
+it encourages the model to learn a representation where posterior inference is easy to approximate.
+If one computes the log-likelihood gradient for the recognition network directly from Eqn. 3, the result is a REINFORCE-like update rule which trains slowly because it does not use the log-likelihood
+gradients with respect to latent variables (Dayan et al., 1995; Mnih & Gregor, 2014). Instead,
+Kingma & Welling (2014) proposed a reparameterization of the recognition distribution in terms
+of auxiliary variables with fixed distributions, such that the samples from the recognition model are
+a deterministic function of the inputs and auxiliary variables. While they presented the reparameterization trick for a variety of distributions, for convenience we discuss the special case of Gaussians,
+since that is all we require in this work. (The general reparameterization trick can be used with our
+IWAE as well.)
+In this paper, the recognition distribution q(h` |h`−1 , θ) always takes the form of a Gaussian
+N (h` |µ(h`−1 , θ), Σ(h`−1 , θ)), whose mean and covariance are computed from the the states of
+2
+
+Under review as a conference paper at ICLR 2016
+
+the hidden units at the previous layer and the model parameters. This can be alternatively expressed
+by first sampling an auxiliary variable ` ∼ N (0, I), and then applying the deterministic mapping
+h` (` , h`−1 , θ) = Σ(h`−1 , θ)1/2 ` + µ(h`−1 , θ).
+(4)
+The joint recognition distribution q(h|x, θ) over all latent variables can be expressed in terms of
+a deterministic mapping h(, x, θ), with  = (1 , . . . , L ), by applying Eqn. 4 for each layer in
+sequence. Since the distribution of  does not depend on θ, we can reformulate the gradient of the
+bound L(x) from Eqn. 3 by pushing the gradient operator inside the expectation:
+
+
+
+
+p(x, h|θ)
+p(x, h(, x, θ)|θ)
+∇θ log Eh∼q(h|x,θ)
+= ∇θ E1 ,...,L ∼N (0,I) log
+(5)
+q(h|x, θ)
+q(h(, x, θ)|x, θ)
+
+
+p(x, h(, x, θ)|θ)
+= E1 ,...,L ∼N (0,I) ∇θ log
+.
+(6)
+q(h(, x, θ)|x, θ)
+Assuming the mapping h is represented as a deterministic feed-forward neural network, for a fixed
+, the gradient inside the expectation can be computed using standard backpropagation. In practice,
+one approximates the expectation in Eqn. 6 by generating k samples of  and applying the Monte
+Carlo estimator
+k
+1X
+∇θ log w (x, h(i , x, θ), θ)
+(7)
+k i=1
+with w(x, h, θ) = p(x, h|θ)/q(h|x, θ). This is an unbiased estimate of ∇θ L(x). We note that
+the VAE update and the basic REINFORCE-like update are both unbiased estimators of the same
+gradient, but the VAE update tends to have lower variance in practice because it makes use of the
+log-likelihood gradients with respect to the latent variables.
+
+3
+
+I MPORTANCE W EIGHTED AUTOENCODER
+
+The VAE objective of Eqn. 3 heavily penalizes approximate posterior samples which fail to explain
+the observations. This places a strong constraint on the model, since the variational assumptions
+must be approximately satisfied in order to achieve a good lower bound. In particular, the posterior
+distribution must be approximately factorial and predictable with a feed-forward neural network.
+This VAE criterion may be too strict; a recognition network which places only a small fraction
+(e.g. 20%) of its samples in the region of high posterior probability region may still be sufficient for
+performing accurate inference. If we lower our standards in this way, this may give us additional
+flexibility to train a generative network whose posterior distributions do not fit the VAE assumptions. This is the motivation behind our proposed algorithm, the Importance Weighted Autoencoder
+(IWAE).
+Our IWAE uses the same architecture as the VAE, with both a generative network and a recognition
+network. The difference is that it is trained to maximize a different lower bound on log p(x). In
+particular, we use the following lower bound, corresponding to the k-sample importance weighting
+estimate of the log-likelihood:
+#
+"
+k
+1 X p(x, hi )
+.
+(8)
+Lk (x) = Eh1 ,...,hk ∼q(h|x) log
+k i=1 q(hi |x)
+Here, h1 , . . . , hk are sampled independently from the recognition model. The term inside the sum
+corresponds to the unnormalized importance weights for the joint distribution, which we will denote
+as wi = p(x, hi )/q(hi |x).
+This is a lower bound on the marginal log-likelihood, as follows from Jensen’s Inequality and the
+fact that the average importance weights are an unbiased estimator of p(x):
+"
+#
+" k
+#
+k
+1X
+1X
+Lk = E log
+wi ≤ log E
+wi = log p(x),
+(9)
+k i=1
+k i=1
+where the expectations are with respect to q(h|x).
+It is perhaps unintuitive that importance weighting would be a reasonable estimator in high dimensions. Observe, however, that the special case of k = 1 is equivalent to the standard VAE objective
+shown in Eqn. 3. Using more samples can only improve the tightness of the bound:
+3
+
+Under review as a conference paper at ICLR 2016
+
+Theorem 1. For all k, the lower bounds satisfy
+log p(x) ≥ Lk+1 ≥ Lk .
+
+(10)
+
+Moreover, if p(h, x)/q(h|x) is bounded, then Lk approaches log p(x) as k goes to infinity.
+Proof. See Appendix A.
+The bound Lk can be estimated using the straightforward Monte Carlo estimator, where we generate
+samples from the recognition network and average the importance weights. One might worry about
+the variance of this estimator, since importance weighting famously suffers from extremely high
+variance in cases where the proposal and target distributions are not a good match. However, as
+our estimator is based on the log of the average importance weights, it does not suffer from high
+variance. This argument is made more precise in Appendix B.
+3.1
+
+T RAINING PROCEDURE
+
+To train an IWAE with a stochastic gradient based optimizer, we use an unbiased estimate of the
+gradient of Lk , defined in Eqn. 8. As with the VAE, we use the reparameterization trick to derive a
+low-variance upate rule:
+"
+∇θ Lk (x) = ∇θ Eh1 ,...,hk
+
+#
+"
+#
+k
+k
+1X
+1X
+log
+wi = ∇θ E1 ,...,k log
+w(x, h(x, i , θ), θ)
+k i=1
+k i=1
+"
+#
+k
+1X
+= E1 ,...,k ∇θ log
+w(x, h(x, i , θ), θ)
+k i=1
+" k
+#
+X
+= E1 ,...,k
+w
+fi ∇θ log w(x, h(x, i , θ), θ) ,
+
+(11)
+
+(12)
+
+(13)
+
+i=1
+
+where 1 , . . . , k are the same auxiliary variables as defined in Section 2 for the VAE, wi =
+w(x, h(x, i , θ), θ) are the importance weights expressed as a deterministic function, and w
+fi =
+Pk
+wi / i=1 wi are the normalized importance weights.
+In the context of a gradient-based learning algorithm, we draw k samples from the recognition
+network (or, equivalently, k sets of auxiliary variables), and use the Monte Carlo estimate of Eqn. 13:
+k
+X
+
+w
+fi ∇θ log w (x, h(i , x, θ), θ) .
+
+(14)
+
+i=1
+
+In the special case of k = 1, the single normalized weight w
+f1 takes the value 1, and one obtains the
+VAE update rule.
+We unpack this update because it does not quite parallel that of the standard VAE.1 The gradient of
+the log weights decomposes as:
+∇θ log w(x, h(x, i , θ), θ) = ∇θ log p(x, h(x, i , θ)|θ) − ∇θ log q(h(x, i , θ)|x, θ).
+
+(15)
+
+The first term encourages the generative model to assign high probability to each h` given h`+1
+(following the convention that x = h0 ). It also encourages the recognition network to adjust the
+hidden representations so that the generative network makes better predictions. In the case of a single
+stochastic layer (i.e. L = 1), the combination of these two effects is equivalent to backpropagation
+in a stochastic autoencoder. The second term of this update encourages the recognition network to
+have a spread-out distribution over predictions. This update is averaged over the samples with weight
+proportional to the importance weights, motivating the name “importance weighted autoencoder.”
+1
+Kingma & Welling (2014) separated out the KL divergence in the bound of Eqn. 3 in order to achieve a
+simpler and lower-variance update. Unfortunately, no analogous trick applies for k > 1. In principle, the IWAE
+updates may be higher variance for this reason. However, in our experiments, we observed that the performance
+of the two update rules was indistinguishable in the case of k = 1.
+
+4
+
+Under review as a conference paper at ICLR 2016
+
+The dominant computational cost in IWAE training is computing the activations and parameter gradients needed for ∇θ log w(x, h(x, i , θ), θ). This corresponds to the forward and backward passes
+in backpropagation. In the basic IWAE implementation, both passes must be done independently for
+each of the k samples. Therefore, the number of operations scales linearly with k. In our GPU-based
+implementation, the samples are processed in parallel by replicating each training example k times
+within a mini-batch.
+One can greatly reduce the computational cost by adding another form of stochasticity. Specifically,
+only the forward pass is needed to compute the importance weights. The sum in Eqn. 14 can be
+stochastically approximated by choosing a single sample i proprtional to its normalized weight w
+fi
+and then computing ∇θ log w(x, h(x, i , θ), θ). This method requires k forward passes and one
+backward pass per training example. Since the backward pass requires roughly twice as many addmultiply operations as the forward pass, for large k, this trick reduces the number of add-multiply
+operations by roughly a factor of 3. This comes at the cost of increased variance in the updates, but
+empirically we have found the tradeoff to be favorable.
+
+4
+
+R ELATED WORK
+
+There are several broad families of approaches to training deep generative models. Some models
+are defined in terms of Boltzmann distributions (Smolensky, 1986; Salakhutdinov & E., 2009). This
+has the advantage that many of the conditional distributions are tractable, but the inability to sample
+from the model or compute the partition function has been a major roadblock (Salakhutdinov &
+Murray, 2008). Other models are defined in terms of belief networks (Neal, 1992; Gregor et al.,
+2014). These models are tractable to sample from, but the conditional distributions become tangled
+due to the explaining away effect.
+One strategy for dealing with intractable posterior inference is to train a recognition network
+which approximates the posterior. A classic approach was the wake-sleep algorithm, used to train
+Helmholtz machines (Dayan et al., 1995). The generative model was trained to model the conditionals inferred by the recognition net, and the recognition net was trained to explain synthetic data
+generated by the generative net. Unfortunately, wake-sleep trained the two networks on different objective functions. Deep autoregressive networks (Gregor et al., 2014) consisted of deep generative
+and recognition networks trained using a single variational lower bound. Neural variational inference and learning (Mnih & Gregor, 2014) is another algorithm for training recognition networks
+which reduces stochasticity in the updates by training a third network to predict reward baselines
+in the context of the REINFORCE algorithm (Williams, 1992). Salakhutdinov & Larochelle (2010)
+used a recognition network to approximate the posterior distribution in deep Boltzmann machines.
+Variational autoencoders (Kingma & Welling, 2014; Rezende et al., 2014), as described in detail in
+Section 2, are another combination of generative and recognition networks, trained with the same
+variational objective as DARN and NVIL. However, in place of REINFORCE, they reduce the
+variance of the updates through a clever reparameterization of the random choices. The reparameterization trick is also known as “backprop through a random number generator” (Williams, 1992).
+One factor distinguishing VAEs from the other models described above is that the model is described
+in terms of a simple distribution followed by a deterministic mapping, rather than a sequence of
+stochastic choices. Similar architectures have been proposed which use different training objectives.
+Generative adversarial networks (Goodfellow et al., 2014) train a generative network and a recognition network which act in opposition: the recognition network attempts to distinguish between
+training examples and generated samples, and the generative model tries to generate samples which
+fool the recognition network. Maximum mean discrepancy (MMD) networks (Li et al., 2015; Dziugaite et al., 2015) attempt to generate samples which match a certain set of statistics of the training
+data. They can be viewed as a kind of adversarial net where the adversary simply looks at the set of
+pre-chosen statistics (Dziugaite et al., 2015). In contrast to VAEs, the training criteria for adversarial
+nets and MMD nets are not based on the data log-likelihood.
+Other researchers have derived log-probability lower bounds by way of importance sampling. Tang
+& Salakhutdinov (2013) and Ba et al. (2015) avoided recognition networks entirely, instead performing inference using importance sampling from the prior. Gogate et al. (2007) presented a variety
+of graphical model inference algorithms based on importance weighting. Reweighted wake-sleep
+5
+
+Under review as a conference paper at ICLR 2016
+
+(RWS) of Bornschein & Bengio (2015) is another recognition network approach which combines
+the original wake-sleep algorithm with updates to the generative network equivalent to gradient ascent on our bound Lk . However, Bornschein & Bengio (2015) interpret this update as following a
+biased estimate of ∇θ log p(x), whereas we interpret it as following an unbiased estimate of ∇θ Lk .
+The IWAE also differs from RWS in that the generative and recognition networks are trained to
+maximize a single objective, Lk . By contrast, the q-wake and sleep steps of RWS do not appear to
+be related to Lk . Finally, the IWAE differs from RWS in that it makes use of the reparameterization
+trick.
+Apart from our approach of using multiple approximate posterior samples, another way to improve
+the flexibility of posterior inference is to use a more sophisticated algorithm than importance sampling. Examples of this approach include normalizing flows (Rezende & Mohamed, 2015) and the
+Hamiltonian variational approximation of Salimans et al. (2015).
+After the publication of this paper the authors learned that the idea of using an importance weighted
+lower bound for training variational autoencoders has been independently explored by Laurent Dinh
+and Vincent Dumoulin, and preliminary results of their work were presented at the 2014 CIFAR
+NCAP Deep Learning summer school.
+
+5
+
+E XPERIMENTAL RESULTS
+
+We have compared the generative performance of the VAE and IWAE in terms of their held-out loglikelihoods on two density estimation benchmark datasets. We have further investigated a particular
+issue we have observed with VAEs and IWAEs, namely that they learn latent spaces of significantly
+lower dimensionality than the modeling capacity they are allowed. We tested whether the IWAE
+training method ameliorates this effect.
+5.1
+
+E VALUATION ON DENSITY ESTIMATION
+
+We evaluated the models on two benchmark datasets: MNIST, a dataset of images of handwritten
+digits (LeCun et al., 1998), and Omniglot, a dataset of handwritten characters in a variety of world
+alphabets (Lake et al., 2013). In both cases, the observations were binarized 28 × 28 images.2 We
+used the standard splits of MNIST into 60,000 training and 10,000 test examples, and of Omniglot
+into 24,345 training and 8,070 test examples.
+We trained models with two architectures:
+1. An architecture with a single stochastic layer h1 with 50 units. In between the observations
+and the stochastic layer were two deterministic layers, each with 200 units.
+2. An architecture with two stochastic layers h1 and h2 , with 100 and 50 units, respectively.
+In between x and h1 were two deterministic layers with 200 units each. In between h1 and
+h2 were two deterministic layers with 100 units each.
+All deterministic hidden units used the tanh nonlinearity. All stochastic layers used Gaussian distributions with diagonal covariance, with the exception of the visible layer, which used Bernoulli
+distributions. An exp nonlinearity was applied to the predicted variances of the Gaussian distributions. The network architectures are summarized in Appendix C.
+All models were initialized with the heuristic of Glorot & Bengio (2010). For optimization, we used
+Adam (Kingma & Ba, 2015) with parameters β1 = 0.9, β2 = 0.999,  = 10−4 and minibaches of
+size 20. The training proceeded for 3i passes over the data with learning rate of 0.001 · 10−i/7 for
+P7
+i = 0 . . . 7 (for a total of i=0 3i = 3280 passes over the data). This learning rate schedule was
+chosen based on preliminary experiments training a VAE with one stochastic layer on MNIST.
+2
+Unfortunately, the generative modeling literature is inconsistent about the method of binarization, and
+different choices can lead to considerably different log-likelihood values. We follow the procedure of Salakhutdinov & Murray (2008): the binary-valued observations are sampled with expectations equal to the real values
+in the training set. See Appendix D for an alternative binarization scheme.
+
+6
+
+Under review as a conference paper at ICLR 2016
+MNIST
+
+OMNIGLOT
+
+k
+
+VAE
+active
+NLL
+units
+
+IWAE
+active
+NLL
+units
+
+VAE
+active
+NLL
+units
+
+IWAE
+active
+NLL
+units
+
+1
+
+1
+5
+50
+
+86.76
+86.47
+86.35
+
+19
+20
+20
+
+86.76
+85.54
+84.78
+
+19
+22
+25
+
+108.11
+107.62
+107.80
+
+28
+28
+28
+
+108.11
+106.12
+104.67
+
+28
+34
+41
+
+2
+
+1
+5
+50
+
+85.33
+85.01
+84.78
+
+16+5
+17+5
+17+5
+
+85.33
+83.89
+82.90
+
+16+5
+21+5
+26+7
+
+107.58
+106.31
+106.30
+
+28+4
+30+5
+30+5
+
+107.56
+104.79
+103.38
+
+30+5
+38+6
+44+7
+
+# stoch.
+layers
+
+Table 1: Results on density estimation and the number of active latent dimensions. For models with two latent
+layers, “k1 +k2 ” denotes k1 active units in the first layer and k2 in the second layer. The generative performance
+of IWAEs improved with increasing k, while that of VAEs benefitted only slightly. Two-layer models achieved
+better generative performance than one-layer models.
+
+For each number of samples k ∈ {1, 5, 50} we trained a VAE with the gradient of L(x) estimted
+as in Eqn. 7 and an IWAE with the gradient estimated as in Eqn. 14. For each k, the VAE and the
+IWAE were trained for approximately the same length of time.
+All log-likelihood values were estimated as the mean of L5000 on the test set. Hence, the reported
+values are stochastic lower bounds on the true value, but are likely to be more accurate than the
+lower bounds used for training.
+The log-likelihood results are reported in Table 1. Our VAE results are comparable to those previously reported in the literature. We observe that training a VAE with k > 1 helped only slightly. By
+contrast, using multiple samples improved the IWAE results considerably on both datasets. Note that
+the two algorithms are identical for k = 1, so the results ought to match up to random variability.
+On MNIST, IWAE with two stochastic layers and k = 50 achieves a log-likelihood of -82.90 on
+the permutation-invariant model on this dataset. By comparison, deep belief networks achieved loglikelihood of approximately -84.55 nats (Murray & Salakhutdinov, 2009), and deep autoregressive
+networks achieved log-likelihood of -84.13 nats (Gregor et al., 2014). Gregor et al. (2015), who
+exploited spatial structure, achieved a log-likelihood of -80.97. We did not find overfitting to be a
+serious issue for either the VAE or the IWAE: in both cases, the training log-likelihood was 0.62 to
+0.79 nats higher than the test log-likelihood. We present samples from our models in Appendix E.
+For the OMNIGLOT dataset, the best performing IWAE has log-likelihood of -103.38 nats, which is
+slightly worse than the log-likelihood of -100.46 nats achieved by a Restricted Boltzmann Machine
+with 500 hidden units trained with persistent contrastive divergence (Burda et al., 2015). RBMs
+trained with centering or FANG methods achieve a similar performance of around -100 nats (Grosse
+& Salakhudinov, 2015). The training log-likelihood for the models we trained was 2.39 to 2.65 nats
+higher than the test log-likelihood.
+
+5.2
+
+L ATENT SPACE REPRESENTATION
+
+We have observed that both VAEs and IWAEs tend to learn latent representations with effective
+dimensions far below their capacity. Our next set of experiments aimed to quantify this effect and
+determine whether the IWAE objective ameliorates this effect.
+If a latent dimension encodes useful information about the data, we would expect its distribution
+to change depending on the observations. Based on this intuition,
+we measured activity of a latent
+
+dimension u using the statistic Au = Covx Eu∼q(u|x) [u] . We defined the dimension u to be active
+if Au > 10−2 . We have observed two pieces of evidence that this criterion is both well-defined and
+meaningful:
+1. The distribution of Au for a trained model consisted of two widely separated modes, as
+shown in Appendix C.
+7
+
+Under review as a conference paper at ICLR 2016
+First stage
+
+Second stage
+
+trained as
+
+NLL
+
+active units
+
+trained as
+
+NLL
+
+active units
+
+Experiment 1
+
+VAE
+
+86.76
+
+19
+
+IWAE, k = 50
+
+84.88
+
+22
+
+Experiment 2
+
+IWAE, k = 50
+
+84.78
+
+25
+
+VAE
+
+86.02
+
+23
+
+Table 2: Results of continuing to train a VAE model with the IWAE objective, and vice versa. Training the
+VAE with the IWAE objective increased the latent dimension and test log-likelihood, while training the IWAE
+with the VAE objective had the opposite effect.
+
+2. To confirm that the inactive dimensions were indeed insignificant to the predictions, we
+evaluated all models with the inactive dimensions removed. In all cases, this changed the
+test log-likelihood by less than 0.06 nats.
+In Table 1, we report the numbers of active units for all conditions. In all conditions, the number of
+active dimensions was far less than the total number of dimensions. Adding more latent dimensions
+did not increase the number of active dimensions. Interestingly, in the two-layer models, the second
+layer used very little of its modeling capacity: the number of active dimensions was always less
+than 10. In all cases with k > 1, the IWAE learned more latent dimensions than the VAE. Since this
+coincided with higher log-likelihood values, we speculate that a larger number of active dimensions
+reflects a richer latent representation.
+Superficially, the phenomenon of inactive dimensions appears similar to the problem of “units dying
+out” in neural networks and latent variable models, an effect which is often ascribed to difficulties
+in optimization. For example, if a unit is inactive, it may never receive a meaningful gradient signal
+because of a plateau in the optimization landscape. In such cases, the problem may be avoided
+through a better initialization. To determine whether the inactive units resulted from an optimization
+issue or a modeling issue, we took the best-performing VAE and IWAE models from Table 1, and
+continued training the VAE model using the IWAE objective and vice versa. In both cases, the model
+was trained for an additional 37 passes over the data with a learning rate of 10−4 .
+The results are shown in Table 2. We found that continuing to train the VAE with the IWAE objective
+increased the number of active dimensions and the test log-likelihood, while continuing to train
+the IWAE with the VAE objective did the opposite. The fact that training with the VAE objective
+actively reduces both the number of active dimensions and the log-likelihood strongly suggests that
+inactivation of the latent dimensions is driven by the objective functions rather than by optimization
+issues. On the other hand, optimization also appears to play a role, as the results in Table 2 are not
+quite identical to those in Table 1.
+
+6
+
+C ONCLUSION
+
+In this paper, we presented the importance weighted autoencoder, a variant on the VAE trained by
+maximizing a tighter log-likelihood lower bound derived from importance weighting. We showed
+empirically that IWAEs learn richer latent representations and achieve better generative performance
+than VAEs with equivalent architectures and training time. We believe this method may improve the
+flexibility of other generative models currently trained with the VAE objective.
+
+7
+
+ACKNOWLEDGEMENTS
+
+This research was supported by NSERC, the Fields Institute, and Samsung.
+
+R EFERENCES
+Ba, J. L., Mnih, V., and Kavukcuoglu, K. Multiple object recognition with visual attention. In International
+Conference on Learning Representations, 2015.
+Bornschein, J. and Bengio, Y. Reweighted wake-sleep. International Conference on Learning Representations,
+2015.
+Burda, Y., Grosse, R. B., and Salakhutdinov, R. Accurate and conservative estimates of MRF log-likelihood
+using reverse annealing. Artificial Intelligence and Statistics, pp. 102–110, 2015.
+
+8
+
+Under review as a conference paper at ICLR 2016
+
+Dayan, P., Hinton, G. E., Neal, R. M., and Zemel, R. S. The Helmholtz machine. Neural Computation, 7:
+889–904, 1995.
+Dziugaite, K. G., Roy, D. M., and Ghahramani, Z. Training generative neural networks via maximum mean
+discrepancy optimization. In Uncertainty in Artificial Intelligence, 2015.
+Glorot, X. and Bengio, Y. Understanding the difficulty of training deep feedforward neural networks. In
+Artificial Intelligence and Statistics, pp. 249–256, 2010.
+Gogate, V., Bidyuk, B., and Dechter, R. Studies in lower bounding probability of evidence using the Markov
+inequality. In Uncertainty in Artificial Intelligence, 2007.
+Goodfellow, I., Pouget-Abadie, J., Mirza, M., Xu, B., Warde-Farley, D., Ozair, S., Courville, A., and Bengio,
+Y. Generative adversarial nets. In Neural Information Processing Systems, 2014.
+Gregor, K., Danihelka, I., Mnih, A., Blundell, C., and Wierstra, D. Deep autoregressive networks. International
+Conference on Machine Learning, 2014.
+Gregor, K., Danihelka, I., Graves, A., Rezende, D. J., and Wierstra, D. DRAW: A recurrent neural network for
+image generation. In International Conference on Machine Learning, pp. 1462–1471, 2015.
+Grosse, R. and Salakhudinov, R. Scaling up natural gradient by sparsely factorizing the inverse fisher matrix.
+In International Conference on Machine Learning, 2015.
+Hinton, G. E., Osindero, S., and Teh, Y. A fast learning algorithm for deep belief nets. Neural Computation,
+2006.
+Kingma, D. and Ba, J. L. Adam: A method for stochastic optimization. In International Conference on
+Learning Representations, 2015.
+Kingma, D. P. and Welling, M. Auto-Encoding Variational Bayes. International Conference on Learning
+Representations, 2014.
+Kingma, D. P., Mohamed, S., Rezende, D. J., and Welling, M. Semi-supervised learning with deep generative
+models. In Neural Information Processing Systems, 2014.
+Kulkarni, T. D., Whitney, W., Kohli, P., and Tenenbaum, J. B. Deep convolutional inverse graphics network.
+arXiv:1503.03167, 2015.
+Lake, B. M., Salakhutdinov, R., and Tenenbaum, J. B. One-shot learning by inverting a compositional causal
+process. In Neural Information Processing Systems, 2013.
+Larochelle, H., Murray I. The neural autoregressive distribution estimator. In Artificial Intelligence and Statistics, pp. 29–37, 2011.
+LeCun, Y., Bottou, L., Bengio, Y., and Haffner, P. Gradient-based learning applied to document recognition.
+Proceedings of the IEEE, 86(11):2278–2324, 1998.
+Li, Y., Swersky, K., and Zemel, R. Generative moment matching networks. In International Conference on
+Machine Learning, pp. 1718–1727, 2015.
+Mnih, A. and Gregor, K. Neural variational inference and learning in belief networks. In International Conference on Machine Learning, pp. 1791–1799, 2014.
+Murray, I. and Salakhutdinov, R. Evaluating probabilities under high-dimensional latent variable models. In
+Neural Information Processing Systems, pp. 1137–1144, 2009.
+Neal, R. M. Connectionist learning of belief networks. Artificial Intelligence, 1992.
+Rezende, D. J. and Mohamed, S. Variational inference with normalizing flows. In International Conference on
+Machine Learning, pp. 1530–1538, 2015.
+Rezende, D. J., Mohamed, S., and Wierstra, D. Stochastic backpropagation and approximate inference in deep
+generative models. International Conference on Machine Learning, pp. 1278–1286, 2014.
+Salakhutdinov, R. and E., Hinton G. Deep Boltzmann machines. In Neural Information Processing Systems,
+2009.
+Salakhutdinov, R. and Larochelle, H. Efficient learning of deep Boltzmann machines. In Artificial Intelligence
+and Statistics, 2010.
+
+9
+
+Under review as a conference paper at ICLR 2016
+
+Salakhutdinov, R. and Murray, I. On the quantitative analysis of deep belief networks. In International Conference on Machine Learning, 2008.
+Salimans, T., Kingma, D. P., and Welling, M. Markov chain Monte Carlo and variational inference: bridging
+the gap. In International Conference on Machine Learning, pp. 1218–1226, 2015.
+Smolensky, P. Information processing in dynamical systems: foundations of harmony theory. In Rumelhart,
+D. E. and McClelland, J. L. (eds.), Parallel Distributed Processing: Explorations in the Microstructure of
+Cognition. MIT Press, 1986.
+Tang, Y. and Salakhutdinov, R. Learning stochastic feedforward neural networks. In Neural Information
+Processing Systems, 2013.
+Williams, R. J. Simple statistical gradient-following algorithms for connectionist reinforcement learning. Machine Learning, 8:229–256, 1992.
+
+A PPENDIX A
+Proof of Theorem 1. We need to show the following facts about the log-likelihood lower bound Lk :
+1. log p(x) ≥ Lk ,
+2. Lk ≥ Lm for k ≥ m,
+3. log p(x) = limk→∞ Lk , assuming p(h, x)/q(h|x) is bounded.
+We prove each in turn:
+1. It follows from Jensen’s inequality that
+"
+#
+" k
+#
+k
+1 X p(x, hi )
+1 X p(x, hi )
+Lk = E log
+≤ log E
+= log p(x)
+k i=1 q(hi |x)
+k i=1 q(hi |x)
+
+(16)
+
+2. Let I ⊂ {1, . . . , k} with |I| = m be a uniformly distributed subset of distinct
+h indices from
+i
+{1, . . . , k}. We will use the following simple observation: EI={i1 ,...,im }
+
+ai1 +...+aim
+m
+
+=
+
+a1 +...+ak
+for any sequence of numbers a1 , . . . , ak .
+k
+
+Using this observation and Jensen’s inequality, we get
+#
+"
+k
+1 X p(x, hi )
+Lk = Eh1 ,...,hk log
+k i=1 q(hi |x)
+
+
+
+m
+X
+p(x, hij )
+1
+
+= Eh1 ,...,hk log EI={i1 ,...,im } 
+m j=1 q(hij |x)
+
+
+
+m
+X
+p(x, hij )
+1
+
+≥ Eh1 ,...,hk EI={i1 ,...,im } log
+m j=1 q(hij |x)
+"
+#
+m
+1 X p(x, hi )
+= Eh1 ,...,hm log
+= Lm
+m i=1 q(hi |x)
+Pk
+
+(17)
+
+(18)
+
+(19)
+
+(20)
+
+p(x,hi )
+i=1 q(hi |x) . If p(h, x)/q(h|x) is bounded, then
+i
+h
+i)
+it follows from the strong law of large numbers that Mk converges to Eq(hi |x) p(x,h
+q(hi |x) =
+
+3. Consider the random variable Mk = k1
+
+p(x) almost surely. Hence Lk = E log[Mk ] converges to log p(x) as k → ∞.
+10
+
+Under review as a conference paper at ICLR 2016
+
+A PPENDIX B
+It is well known that the variance of an unnormalized importance sampling based estimator can
+be extremely large, or even infinite, if the proposal distribution is not well matched to the target
+distribution. Here we argue that the Monte Carlo estimator of Lk , described in Section 3, does not
+suffer from large variance. More precisely, we bound the mean absolute deviation (MAD). While
+this does not directly bound the variance, it would be surprising if an estimator had small MAD yet
+extremely large variance.
+Suppose we have a strictly positive unbiased estimator Ẑ of a positive quantity Z, and we wish to
+use log Ẑ as an estimator of log Z. By Jensen’s inequality, this is a biased estimator, i.e. E[log Ẑ] ≤
+log Z. Denote the bias as δ = log Z − E[log Ẑ]. We start with the observation that log Ẑ is unlikely
+to overestimate log Z by very much, as can be shown with Markov’s Inequality:
+Pr(log Ẑ > log Z + b) ≤ e−b .
+
+(21)
+
+Let (X)+ denote max(X, 0). We now use the above facts to bound the MAD:
+
+h
+i
+ 
+E log Ẑ − E[log Ẑ] = 2E log Ẑ − E[log Ẑ]
++
+
+ 
+= 2E log Ẑ − log Z + log Z − E[log Ẑ]
++
+
+
+
+ 
++ log Z − E[log Ẑ]
+≤ 2E log Ẑ − log Z
++
++
+
+
+
+= 2E log Ẑ − log Z
++ 2δ
++
+Z ∞ 
+
+=2
+Pr log Ẑ − log Z > t dt + 2δ
+Z0 ∞
+≤2
+e−t dt + 2δ
+
+(22)
+(23)
+(24)
+(25)
+(26)
+(27)
+
+0
+
+= 2 + 2δ
+
+(28)
+R∞
+
+Here, (22) is a general formula for the MAD, (26) uses the formula E[Y ] = 0 Pr(Y > t) dt for
+a nonnegative random variable Y , and (27) applies the bound (21). Hence, the MAD is bounded by
+2 + 2δ. In the context of IWAE, δ corresponds to the gap between Lk and log p(x).
+
+A PPENDIX C
+N ETWORK ARCHITECTURES
+Here is a summary of the network architectures used in the experiments:
+q(h1 |x) = N (h1 |µq,1 , diag(σ q,1 ))
+
+x
+
+lin+tanh
+
+lin+tanh
+
+200d
+
+lin
+
+200d
+
+µq,1
+
+lin+exp σ q,1
+q(h2 |h1 ) = N (h2 |µq,2 , diag(σ q,2 ))
+
+h1
+
+lin+tanh
+
+100d
+
+lin+tanh
+
+100d
+
+lin
+
+µq,2
+
+lin+exp σ q,2
+p(h1 |h2 ) = N (h1 |µp,1 , diag(σ p,1 ))
+
+h2
+
+lin+tanh
+
+100d
+
+lin+tanh
+
+100d
+
+lin
+
+µp,1
+
+lin+exp σ p,1
+p(x|h1 ) = Bernoulli(x|µp,0 )
+
+h1
+
+lin+tanh
+
+11
+
+200d
+
+lin+tanh
+
+200d
+
+lin+sigm
+
+µp,0
+
+Under review as a conference paper at ICLR 2016
+
+D ISTRIBUTION OF ACTIVITY STATISTIC
+
+In Section 5.2, we defined the activity statistic Au = Covx Eu∼q(u|x) [u] , and chose a threshold
+of 10−2 for determining if a unit is active. One justification for this is that the distribution of this
+statistic consisted of two widely separated modes in every case we looked at. Here is the histogram
+of log Au for a VAE with one stochastic layer:
+
+12
+10
+
+number of units
+
+8
+6
+4
+2
+0
+
+8
+
+7
+
+6
+
+5
+
+4
+
+3
+
+log variance of µ
+
+2
+
+1
+
+0
+
+1
+
+V ISUALIZATION OF POSTERIOR DISTRIBUTIONS
+
+We show some examples of true and approximate posteriors for VAE and IWAE models trained with
+two latent dimensions. Heat maps show true posterior distributions for 6 training examples, and the
+pictures in the bottom row show the examples and their reconstruction from samples from q(h|x).
+Left: VAE. Middle: IWAE, with k = 5. Right: IWAE, with k = 50. The IWAE prefers less regular
+posteriors and more spread out posterior predictions.
+
+12
+
+Under review as a conference paper at ICLR 2016
+
+A PPENDIX D
+R ESULTS FOR A FIXED MNIST BINARIZATION
+Several previous works have used a fixed binarization of the MNIST dataset defined by Larochelle
+(2011). We repeated our experiments training the models on the 50000 examples from the training
+dataset, and evaluating them on the 10000 examples from the test dataset. Otherwise we used the
+same training procedure and hyperparameters as in the experiments in the main part of the paper.
+The results in table 3 indicate that the conclusions about the relative merits of VAEs and IWAEs are
+unchanged in the new experimental setup. In this setup we noticed significantly larger amounts of
+overfitting.
+VAE
+IWAE
+active
+active
+# stoch.
+layers
+k
+NLL
+units
+NLL
+units
+1
+
+1
+5
+50
+
+88.71
+88.83
+89.05
+
+19
+19
+20
+
+88.71
+87.63
+87.10
+
+19
+22
+24
+
+2
+
+1
+5
+50
+
+88.08
+87.63
+87.86
+
+16+5
+17+5
+17+6
+
+88.08
+86.17
+85.32
+
+16+5
+21+5
+24+7
+
+Table 3: Results on density estimation and the number of active latent dimensions on the fixed binarization
+MNIST dataset. For models with two latent layers, “k1 + k2 ” denotes k1 active units in the first layer and k2
+in the second layer. The generative performance of IWAEs improved with increasing k, while that of VAEs
+benefitted only slightly. Two-layer models achieved better generative performance than one-layer models.
+
+A PPENDIX E
+S AMPLES
+
+13
+
+Under review as a conference paper at ICLR 2016
+
+Table 4: Random samples from VAE (left column) and IWAE with k = 50 (right column) models. Row 1:
+models with one stochastic layer. Row 2: models with two stochastic layers. Samples are represented as the
+means of the corresponding Bernoulli distributions.
+
+14
+
+

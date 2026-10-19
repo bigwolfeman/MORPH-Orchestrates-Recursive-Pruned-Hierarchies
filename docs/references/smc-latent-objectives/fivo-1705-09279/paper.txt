@@ -1,0 +1,2369 @@
+Filtering Variational Objectives
+
+Chris J. Maddison1,3,* , Dieterich Lawson,2,* George Tucker2,*
+Nicolas Heess1 , Mohammad Norouzi2 , Andriy Mnih1 , Arnaud Doucet3 , Yee Whye Teh1
+
+arXiv:1705.09279v3 [cs.LG] 12 Nov 2017
+
+1
+
+DeepMind, 2 Google Brain, 3 University of Oxford
+{cmaddis, dieterichl, gjt}@google.com
+
+Abstract
+When used as a surrogate objective for maximum likelihood estimation in latent
+variable models, the evidence lower bound (ELBO) produces state-of-the-art results.
+Inspired by this, we consider the extension of the ELBO to a family of lower bounds
+defined by a particle filter’s estimator of the marginal likelihood, the filtering
+variational objectives (FIVOs). FIVOs take the same arguments as the ELBO,
+but can exploit a model’s sequential structure to form tighter bounds. We present
+results that relate the tightness of FIVO’s bound to the variance of the particle filter’s
+estimator by considering the generic case of bounds defined as log-transformed
+likelihood estimators. Experimentally, we show that training with FIVO results
+in substantial improvements over training the same model architecture with the
+ELBO on sequential data.
+
+1
+
+Introduction
+
+Learning in statistical models via gradient descent is straightforward when the objective function
+and its gradients are tractable. In the presence of latent variables, however, many objectives become
+intractable. For neural generative models with latent variables, there are currently a few dominant
+approaches: optimizing lower bounds on the marginal log-likelihood [1, 2], restricting to a class of
+invertible models [3], or using likelihood-free methods [4, 5, 6, 7]. In this work, we focus on the
+first approach and introduce filtering variational objectives (FIVOs), a tractable family of objectives
+for maximum likelihood estimation (MLE) in latent variable models with sequential structure.
+Specifically, let x denote an observation of an X -valued random variable. We assume that the
+process generating x involves an unobserved Z-valued random variable z with joint density p(x, z)
+in some family P.R The goal ofMLE is to recover p ∈ P that maximizes the marginal log-likelihood,
+log p(x) = log p(x, z) dz 1 . The difficulty in carrying out this optimization is that the loglikelihood function is defined via a generally intractable integral. To circumvent marginalization,
+a common approach [1, 2] is to optimize a variational lower bound on the marginal log-likelihood
+[8, 9]. The evidence lower bound L(x, p, q) (ELBO) is the most common such bound and is defined
+by a variational posterior distribution q(z|x) whose support includes p’s,
+
+
+p(x, z)
+L(x, p, q) = E log
+= log p(x) − KL(q(z|x) k p(z|x)) ≤ log p(x) .
+(1)
+q(z|x)
+q(z|x)
+L(x, p, q) lower-bounds the marginal log-likelihood for any choice of q, and the bound is tight when
+q is the true posterior p(z|x). Thus, the joint optimum of L(x, p, q) in p and q is the MLE. In practice,
+it is common to restrict q to a tractable family of distributions (e.g., a factored distribution) and to
+*
+
+Equal contribution.
+We reuse p to denote the conditionals and marginals of the joint density.
+
+1
+
+31st Conference on Neural Information Processing Systems (NIPS 2017), Long Beach, CA, USA.
+
+jointly optimize the ELBO over p and q with stochastic gradient ascent [1, 2, 10, 11]. Because of
+the KL penalty from q to p, optimizing (1) under these assumptions tends to force p’s posterior to
+satisfy the factorizing assumptions of the variational family which reduces the capacity of the model
+p. One strategy for addressing this is to decouple the tightness of the bound from the quality of q.
+For example, [12] observed that Eq. (1) can be interpreted as the log of an unnormalized importance
+weight with the proposal given by q, and that using N samples from the same proposal produces a
+tighter bound, known as the importance weighted auto-encoder bound, or IWAE.
+Indeed, it follows from Jensen’s inequality that the log of any unbiased positive Monte Carlo estimator
+of the marginal likelihood results in a lower bound that can be optimized for MLE. The filtering
+variational objectives (FIVOs) build on this idea by treating the log of a particle filter’s likelihood
+estimator as an objective function. Following [13], we call objectives defined as log-transformed
+likelihood estimators Monte Carlo objectives (MCOs). In this work, we show that the tightness
+of an MCO scales like the relative variance of the estimator from which it is constructed. It is
+well-known that the variance of a particle filter’s likelihood estimator scales more favourably than
+simple importance sampling for models with sequential structure [14, 15]. Thus, FIVO can potentially
+form a much tighter bound on the marginal log-likelihood than IWAE.
+The main contributions of this work are introducing filtering variational objectives and a more
+careful study of Monte Carlo objectives. In Section 2, we review maximum likelihood estimation via
+maximizing the ELBO. In Section 3, we study Monte Carlo objectives and provide some of their basic
+properties. We define filtering variational objectives in Section 4, discuss details of their optimization,
+and present a sharpness result. Finally, we cover related work and present experiments showing that
+sequential models trained with FIVO outperform models trained with ELBO or IWAE in practice.
+
+2
+
+Background
+
+We briefly review techniques for optimizing the ELBO as a surrogate MLE objective. We restrict our
+focus to latent variable models in which the model pθ (x, z) factors into tractable conditionals pθ (z)
+and pθ (x|z) that are parameterized differentiably by parameters θ. MLE in these models is then the
+problem of optimizing log pθ (x) in θ. The expectation-maximization (EM) algorithm is an approach
+to this problem which can be seen as coordinate ascent, fully maximizing L(x, pθ , q) alternately in q
+and θ at each iteration [16, 17, 18]. Yet, EM rarely applies in general, because maximizing over q for
+a fixed θ corresponds to a generally intractable inference problem.
+Instead, an approach with mild assumptions on the model is to perform gradient ascent following a
+Monte Carlo estimator of the ELBO’s gradient [19, 10]. We assume that q is taken from a family of
+distributions parameterized differentiably by parameters φ. We can follow an unbiased estimator of the
+ELBO’s gradient by sampling z ∼ qφ (z|x) and updating the parameters by θ0 = θ + η∇θ log pθ (x, z)
+and φ0 = φ + η(log pθ (x, z) − log qφ (z|x))∇φ log qφ (z|x), where the gradients are computed
+conditional on the sample z and η is a learning rate. Such estimators follow the ELBO’s gradient in
+expectation, but variance reduction techniques are usually necessary [10, 20, 13].
+A lower variance gradient estimator can be derived if qφ is a reparameterizable distribution [1, 2, 21].
+Reparameterizable distributions are those that can be simulated by sampling from a distribution
+ ∼ d(), which does not depend on φ, and then applying a deterministic transformation z =
+fφ (x, ). When pθ , qφ , and fφ are differentiable, an unbiased estimator of the ELBO gradient consists
+of sampling  and updating the parameter by (θ0 , φ0 ) = (θ, φ) + η∇(θ,φ) (log pθ (x, fφ (x, )) −
+log qφ (fφ (x, )|x)). Given , the gradients of the sampling process can flow through z = fφ (x, ).
+Unfortunately, when the variational family of qφ is restricted, following gradients of
+−KL(qφ (z|x) k pθ (z|x)) tends to reduce the capacity of the model pθ to match the assumptions
+of the variational family. This KL penalty can be “removed” by considering generalizations of the
+ELBO whose tightness can be controlled by means other than the closenesss of p and q, e.g., [12].
+We consider this in the next section.
+
+3
+
+Monte Carlo Objectives (MCOs)
+
+Monte Carlo objectives (MCOs) [13] generalize the ELBO to objectives defined by taking the log
+of a positive, unbiased estimator of the marginal likelihood. The key property of MCOs is that
+2
+
+they are lower bounds on the marginal log-likelihood, and thus can be used for MLE. Motivated
+by the previous section, we present results on the convergence of generic MCOs to the marginal
+log-likelihood and show that the tightness of an MCO is closely related to the variance of the estimator
+that defines it.
+One can verify that the ELBO is a lower bound by using the concavity of log and Jensen’s inequality,
+
+
+Z
+p(x, z)
+p(x, z)
+E log
+≤ log
+q(z|x) dz = log p(x).
+(2)
+q(z|x)
+q(z|x)
+q(z|x)
+This argument only relies only on unbiasedness of p(x, z)/q(z|x) when z ∼ q(z|x). Thus, we
+can generalize this by considering any unbiased marginal likelihood estimator p̂N (x) and treating
+E[log p̂N (x)] as an objective function over models p. Here N ∈ N indexes the amount of computation
+needed to simulate p̂N (x), e.g., the number of samples or particles.
+Definition 1. Monte Carlo Objectives. Let p̂N (x) be an unbiased positive estimator of p(x),
+E[p̂N (x)] = p(x), then the Monte Carlo objective LN (x, p) over p ∈ P defined by p̂N (x) is
+LN (x, p) = E[log p̂N (x)]
+
+(3)
+
+For example, the ELBO is constructed from a single unnormalized importance weight p̂(x) =
+p(x, z)/q(z|x). The IWAE bound [12] takes p̂N (x) to be N averaged i.i.d. importance weights,
+"
+!#
+N
+1 X p(x, z i )
+IWAE
+LN (x, p, q) =
+E
+log
+(4)
+N i=1 q(z i |x)
+q(z i |x)
+We consider additional examples in the Appendix. To avoid notational clutter, we omit the arguments
+to an MCO, e.g., the observations x or model p, when the default arguments are clear from context.
+Whether we can compute stochastic gradients of LN efficiently depends on the specific form of the
+estimator and the underlying random variables that define it.
+Many likelihood estimators p̂N (x) converge to p(x) almost surely as N → ∞ (known as strong
+consistency). The advantage of a consistent estimator is that its MCO can be driven towards log p(x)
+by increasing N . We present sufficient conditions for this convergence and a description of the rate:
+Proposition 1. Properties of Monte Carlo Objectives. Let LN (x, p) be a Monte Carlo objective
+defined by an unbiased positive estimator p̂N (x) of p(x). Then,
+(a) (Bound) LN (x, p) ≤ log p(x).
+(b) (Consistency) If log p̂N (x) is uniformly integrable (see Appendix for definition) and p̂N (x)
+is strongly consistent, then LN (x, p) → log p(x) as N → ∞.
+(c) (Asymptotic Bias) Let g(N ) = E[(p̂N (x) − p(x))6 ] be the 6th central moment. If the 1st
+inverse moment is bounded, lim supN →∞ E[p̂N (x)−1 ] < ∞, then
+
+
+p
+1
+p̂N (x)
+log p(x) − LN (x, p) = var
++ O( g(N )).
+(5)
+2
+p(x)
+Proof. See the Appendix for the proof and a sufficient condition for controlling the first inverse
+moment when p̂N (x) is the average of i.i.d. random variables.
+In some cases, convergence of the bound to log p(x) is monotonic, e.g., IWAE [12], but this is not
+true in general. The relative variance of estimators, var(p̂N (x)/p(x)), tends to be well studied, so
+property (c) gives us a tool for comparing the convergence rate of distinct MCOs. For example,
+[14, 15] study marginal likelihood estimators defined by particle filters and find that the relative
+variance of these estimators scales favorably in comparison to naive importance sampling. This
+suggests that a particle filter’s MCO, introduced in the next section, will generally be a tighter bound
+than IWAE.
+3
+
+Algorithm 1 Simulating LFIVO
+(x1:T , p, q)
+N
+1: F IVO(x1:T , p, q, N ):
+N
+2: {w0i }N
+i=1 = {1/N }i=1
+3: for t ∈ {1, . . . , T } do
+4:
+for i ∈ {1, . . . , N } do
+i
+5:
+zti ∼ qt (zt |x1:t , z1:t−1
+)
+i
+i
+6:
+z1:t = CONCAT(z1:t−1
+, zti )
+
+P
+
+N
+i
+i
+i=1 wt−1 αt (z1:t )
+
+
+
+7:
+
+p̂t =
+
+8:
+9:
+
+p̂N (x1:t ) = p̂N (x1:t−1 )p̂t
+i
+i
+N
+{wti }N
+i=1 = {wt−1 αt (z1:t )/p̂t }i=1
+
+4
+
+if resampling criteria satisfied by {wti }N
+i=1 then
+i
+i i
+N
+{wti , z1:t
+}N
+=
+RSAMP
+({w
+,
+z
+}
+t 1:t i=1 )
+i=1
+12: return log p̂N (x1:T )
+10:
+11:
+
+13: RSAMP({wi , z i }N
+i=1 ):
+14: for i ∈ {1, . . . , N } do
+15:
+a ∼ Categorical({wi }N
+i=1 )
+16:
+yi = za
+1
+17: return { N
+, y i }N
+i=1
+
+Filtering Variational Objectives (FIVOs)
+
+The filtering variational objectives (FIVOs) are a family of MCOs defined by the marginal likelihood
+estimator of a particle filter. For models with sequential structure, e.g., latent variable models of audio
+and text, the relative variance of a naive importance sampling estimator tends to scale exponentially
+in the number of steps. In contrast, the relative variance of particle filter estimators can scale more
+favorably with the number of steps—linearly in some cases [14, 15]. Thus, the results of Section 3
+suggest that FIVOs can serve as tighter objectives than IWAE for MLE in sequential models.
+Let our observations be sequences of T X -valued random variables denoted x1:T , where xi:j ≡
+(xi , . . . , xj ). We also assume that the data generation process relies on a sequence of T unobserved
+Z-valued latent variables denoted z1:T . We focus on sequential latent variable models that factor as a
+QT
+series of tractable conditionals, p(x1:T , z1:T ) = p1 (x1 , z1 ) t=2 pt (xt , zt |x1:t−1 , z1:t−1 ).
+A particle filter is a sequential Monte Carlo algorithm, which propagates a population of N weighted
+particles for T steps using a combination of importance sampling and resampling steps, see Alg. 1.
+In detail, the particle filter takes as arguments an observation x1:T , the number of particles N , the
+model distribution p, and a variational posterior q(z1:T |x1:T ) factored over t,
+q(z1:T |x1:T ) =
+
+T
+Y
+
+qt (zt |x1:t , z1:t−1 ) .
+
+(6)
+
+t=1
+i
+i
+i
+i
+The particle filter maintains a population {wt−1
+, z1:t−1
+}N
+i=1 of particles z1:t−1 with weights wt−1 .
+i
+i
+At step t, the filter independently proposes an extension zt ∼ qt (zt |x1:t , z1:t−1 ) to each particle’s
+i
+i
+trajectory z1:t−1
+. The weights wt−1
+are multiplied by the incremental importance weights,
+i
+αt (z1:t
+)=
+
+i
+pt (xt , zti |x1:t−1 , z1:t−1
+)
+,
+i
+i
+qt (zt |x1:t , z1:t−1 )
+
+(7)
+
+and renormalized. If the current weights wti satisfy a resampling criteria, then a resampling step is
+i
+performed and N particles z1:t
+are sampled in proportion to their weights from the current population
+with replacement. Common resampling schemes include resampling at every step and resampling
+PN
+if the effective sample size (ESS) of the population ( i=1 (wti )2 )−1 drops below N/2 [22]. After
+i
+resampling the weights are reset to 1. Otherwise, the particles z1:t
+are copied to the next step along
+with the accumulated weights. See Fig. 1 for a visualization.
+Instead of viewing Alg. 1 as an inference algorithm, we treat the quantity E[log p̂N (x1:T )] as an
+objective function over p. Because p̂N (x1:T ) is an unbiased estimator of p(x1:T ), proven in the
+Appendix and in [23, 24, 25, 26], it defines an MCO, which we call FIVO:
+Definition 2. Filtering Variational Objectives. Let log p̂N (x1:T ) be the output of Alg. 1 with inputs
+(x1:T , p, q, N ), then LFIVO
+(x1:T , p, q) = E[log p̂N (x1:T )] is a filtering variational objective.
+N
+p̂N (x1:T ) is a strongly consistent estimator [23, 24]. So if log p̂N (x1:T ) is uniformly integrable, then
+LFIVO
+(x1:T , p, q) → log p(x1:T ) as N → ∞. Resampling is the distinguishing feature of LFIVO
+; if
+N
+N
+resampling is removed, then FIVO reduces to IWAE. Resampling does add an amount of immediate
+variance, but it allows the filter to discard low weight particles with high probability. This has the
+4
+
+log p̂1
+
+log p̂2
+
+log p̂3
+
+z11
+
+z21
+
+z31
+
+z13
+
+z22
+
+z32
+
+z12
+
+z23
+
+z33
+
+i
+resample {z1:3
+}3i=1 ∼ w3i
+
+log p̂1
+
+log p̂2
+
+log p̂3
+
+z21
+
+z24
+z22
+
+log p̂4 ∇ log w3i
+
+log p̂4
+
+z23
+
+i
+propose z4i ∼ q4 (z4 |x1:4 , z1:3
+)
+
+z12
+
+∇ log p̂4
+
+z42
+z22
+
+z32
+
+gradients
+
+Figure 1: Visualizing FIVO; (Left) Resample from particle trajectories to determine inheritance in next
+step, (middle) propose with qt and accumulate loss log p̂t , (right) gradients (in the reparameterized
+case) flow through the lattice, objective gradients in solid red and resampling gradients in dotted blue.
+effect of refocusing the distribution of particles to regions of higher mass under the posterior, and in
+some sequential models can reduce the variance from exponential to linear in the number of time
+steps [14, 15]. Resampling is a greedy process, and it is possible that a particle discarded at step t,
+could have attained a high mass at step T . In practice, the best trade-off is to use adaptive resampling
+schemes [22]. If for a given x1:T , p, q a particle filter’s likelihood estimator improves over simple
+importance sampling in terms of variance, we expect LFIVO
+to be a tighter bound than L or LIWAE
+.
+N
+N
+4.1
+
+Optimization
+
+The FIVO bound can be optimized with the same stochastic gradient ascent framework used for
+the ELBO. We found in practice it was effective simply to follow a Monte Carlo estimator of the
+biased gradient E[∇(θ,φ) log p̂N (x1:T )] with reparameterized zti . This gradient estimator is biased,
+as the full FIVO gradient has three kinds of terms: it has the term E[∇θ,φ log p̂N (x1:T )], where
+∇θ,φ log p̂N (x1:T ) is defined conditional on the random variables of Alg. 1; it has gradient terms for
+every distribution of Alg. 1 that depends on the parameters; and, if adaptive resampling is used, then
+it has additional terms that account for the change in FIVO with respect to the decision to resample.
+In this section, we derive the FIVO gradient when zti are reparameterized and a fixed resampling
+schedule is followed. We derive the full gradient in the Appendix.
+In more detail, we assume that p and q are parameterized in a differentiable way by θ and φ. Assume
+that q is from a reparameterizable family and that zti of Alg. 1 are reparameterized. Assume that we
+use a fixed resampling schedule, and let I(resampling at step t) be an indicator function indicating
+whether a resampling occured at step t. Now, LFIVO
+depends on the parameters via log p̂N (x1:T ) and
+N
+the resampling probabilities wti in the density. Thus, ∇(θ,φ) LFIVO
+=
+N
+
+
+XT XN
+p̂N (x1:T )
+E ∇(θ,φ) log p̂N (x1:T ) +
+I(resampling at step t) log
+∇(θ,φ) log wti (8)
+t=1
+i=1
+p̂N (x1:t )
+Given a single forward pass of Alg. 1 with reparameterized zti , the terms inside the expectation form
+a Monte Carlo estimator of Eq. (8). However, the terms from resampling events contribute to the
+majority of the variance of the estimator. Thus, the gradient estimator that we found most effective
+in practice consists only of the gradient ∇(θ,φ) log p̂N (x1:T ), the solid red arrows of Figure 1. We
+explore this experimentally in Section 6.3.
+4.2
+
+Sharpness
+
+As with the ELBO, FIVO is a variational objective taking a variational posterior q as an argument.
+An important question is whether FIVO achieves the marginal log-likelihood at its optimal q. We can
+only guarantee this for models in which z1:t−1 and xt are independent given x1:t−1 .
+Proposition 2. Sharpness of Filtering Variational Objectives. Let LFIVO
+(x1:T , p, q) be a FIVO, and
+N
+q ∗ (x1:T , p) = argmaxq LFIVO
+(x
+,
+p,
+q).
+If
+p
+has
+independence
+structure
+such that p(z1:t−1 |x1:t ) =
+1:T
+N
+p(z1:t−1 |x1:t−1 ) for t ∈ {2, . . . , T }, then
+q ∗ (x1:T , p)(z1:T ) = p(z1:T |x1:T ) and
+
+LFIVO
+(x1:T , p, q ∗ (x1:T , p)) = log p(x1:T ) .
+N
+
+Proof. See Appendix.
+5
+
+Most models do not satisfy this assumption, and deriving the optimal q in general is complicated by
+the resampling dynamics. For the restricted the model class in Proposition 2, the optimal qt does
+not condition on future observations xt+1:T . We explored this experimentally with richer models
+in Section 6.4, and found that allowing qt to condition on xt+1:T does not reliably improve FIVO.
+This is consistent with the view of resampling as a greedy process that responds to each intermediate
+distribution as if it were the final. Still, we found that the impact of this effect was outweighed by the
+advantage of optimizing a tighter bound.
+
+5
+
+Related Work
+
+The marginal log-likelihood is a central quantity in statistics and probability, and there has long been
+an interest in bounding it [27]. The literature relating to the bounds we call Monte Carlo objectives
+has typically focused on the problem of estimating the marginal likelihood itself. [28, 29] use Jensen’s
+inequality in a forward and reverse estimator to detect the failure of inference methods. IWAE [12] is
+a clear influence on this work, and FIVO can be seen as an extension of this bound. The ELBO enjoys
+a long history [8] and there have been efforts to improve the ELBO itself. [30] generalize the ELBO
+by considering arbitrary operators of the model and variational posterior. More closely related to
+this work is a body of work improving the ELBO by increasing the expressiveness of the variational
+posterior. For example, [31, 32] augment the variational posterior with deterministic transformations
+with fixed Jacobians, and [33] extend the variational posterior to admit a Markov chain.
+Other approaches to learning in neural latent variable models include [34], who use importance
+sampling to approximate gradients under the posterior, and [35], who use sequential Monte Carlo
+to approximate gradients under the posterior. These are distinct from our contribution in the sense
+that for them inference for the sake of estimation is the ultimate goal. To our knowledge the idea
+of treating the output of inference as an objective in and of itself, while not completely novel, has
+not been fully appreciated in the literature. Although, this idea shares inspiration with methods that
+optimize the convergence of Markov chains [36].
+We note that the idea to optimize the log estimator of a particle filter was independently and
+concurrently considered in [37, 38]. In [37] the bound we call FIVO is cast as a tractable lower bound
+on the ELBO defined by the particle filter’s non-parameteric approximation to the posterior. [38]
+additionally derive an expression for FIVO’s bias as the KL between the filter’s distribution and a
+certain target process. Our work is distinguished by our study of the convergence of MCOs in N ,
+which includes FIVO, our investigation of FIVO sharpness, and our experimental results on stochastic
+RNNs.
+
+6
+
+Experiments
+
+In our experiments, we sought to: (a) compare models trained with ELBO, IWAE, and FIVO bounds
+in terms of final test log-likelihoods, (b) explore the effect of the resampling gradient terms on FIVO,
+(c) investigate how the lack of sharpness affects FIVO, and (d) consider how models trained with
+FIVO use the stochastic state. To explore these questions, we trained variational recurrent neural
+networks (VRNN) [39] with the ELBO, IWAE, and FIVO bounds using TensorFlow [40] on two
+benchmark sequential modeling tasks: natural speech waveforms and polyphonic music. These
+datasets are known to be difficult to model without stochastic latent states [41].
+The VRNN is a sequential latent variable model that combines a deterministic recurrent neural network (RNN) with stochastic latent states zt at each step. The observation distribution over xt is conditioned directly on zt and indirectly on z1:t−1 via the RNN’s state
+ht (zt−1 , xt−1 , ht−1 ). For a length T sequence, the model’s posterior factors into the conditionQT
+als t=1 pt (zt |ht (zt−1 , xt−1 , ht−1 ))gt (xt |zt , ht (zt−1 , xt−1 , ht−1 )), and the variational posterior
+QT
+factors as t=1 qt (zt |ht (zt−1 , xt−1 , ht−1 ), xt ). All distributions over latent variables are factorized
+Gaussians, and the output distributions gt depend on the dataset. The RNN is a single-layer LSTM
+and the conditionals are parameterized by fully connected neural networks with one hidden layer
+of the same size as the LSTM hidden layer. We used the residual parameterization [41] for the
+variational posterior.
+6
+
+N
+
+Bound
+
+Nottingham
+
+JSB
+
+MuseData
+
+Piano-midi.de
+
+4
+
+ELBO
+IWAE
+FIVO
+
+-3.00
+-2.75
+-2.68
+
+-8.60
+-7.86
+-6.90
+
+-7.15
+-7.20
+-6.20
+
+-7.81
+-7.86
+-7.76
+
+8
+
+ELBO
+IWAE
+FIVO
+
+-3.01
+-2.90
+-2.77
+
+-8.61
+-7.40
+-6.79
+
+-7.19
+-7.15
+-6.12
+
+16
+
+ELBO
+IWAE
+FIVO
+
+-3.02
+-2.85
+-2.58
+
+-8.63
+-7.41
+-6.72
+
+-7.18
+-7.13
+-5.89
+
+TIMIT
+N
+
+Bound
+
+64 units
+
+256 units
+
+4
+
+-7.83
+-7.84
+-7.45
+
+ELBO
+IWAE
+FIVO
+
+0
+-160
+5,691
+
+10,438
+11,054
+17,822
+
+8
+
+-7.85
+-7.79
+-7.43
+
+ELBO
+IWAE
+FIVO
+
+2,771
+3,977
+6,023
+
+9,819
+11,623
+21,449
+
+16
+
+ELBO
+IWAE
+FIVO
+
+1,676
+3,236
+8,630
+
+9,918
+13,069
+21,536
+
+Table 1: Test set marginal log-likelihood bounds for models trained with ELBO, IWAE, and FIVO.
+FIVO
+FIVO
+For ELBO and IWAE models, we report max{L, LIWAE
+128 , L128 }. For FIVO models, we report L128 .
+Pianoroll results are in nats per timestep, TIMIT results are in nats per sequence relative to ELBO
+with N = 4. For details on our evaluation methodology and absolute numbers see the Appendix.
+For FIVO we resampled when the ESS of the particles dropped below N/2. For FIVO and IWAE we
+used a batch size of 4, and for the ELBO, we used batch sizes of 4N to match computational budgets
+(resampling is O(N ) with the alias method). For all models we report bounds using the variational
+posterior trained jointly with the model. For models trained with FIVO we report LFIVO
+128 . To provide
+FIVO
+strong baselines, we report the maximum across bounds, max{L, LIWAE
+128 , L128 }, for models trained
+with ELBO and IWAE. Additional details in the Appendix.
+6.1
+
+Polyphonic Music
+
+We evaluated VRNNs trained with the ELBO, IWAE, and FIVO bounds on 4 polyphonic music
+datasets: the Nottingham folk tunes, the JSB chorales, the MuseData library of classical piano and
+orchestral music, and the Piano-midi.de MIDI archive [42]. Each dataset is split into standard train,
+valid, and test sets and is represented as a sequence of 88-dimensional binary vectors denoting the
+notes active at the current timestep. We mean-centered the input data and modeled the output as a set
+of 88 factorized Bernoulli variables. We used 64 units for the RNN hidden state and latent state size
+for all polyphonic music models except for JSB chorales models, which used 32 units. We report
+bounds on average log-likelihood per timestep in Table 1. Models trained with the FIVO bound
+significantly outperformed models trained with either the ELBO or the IWAE bounds on all four
+datasets. In some cases, the improvements exceeded 1 nat per timestep, and in all cases optimizing
+FIVO with N = 4 outperformed optimizing IWAE or ELBO for N = {4, 8, 16}.
+6.2
+
+Speech
+
+The TIMIT dataset is a standard benchmark for sequential models that contains 6300 utterances
+with an average duration of 3.1 seconds spoken by 630 different speakers. The 6300 utterances are
+divided into a training set of size 4620 and a test set of size 1680. We further divided the training
+set into a validation set of size 231 and a training set of size 4389, with the splits exactly as in
+[41]. Each TIMIT utterance is represented as a sequence of real-valued amplitudes which we split
+into a sequence of 200-dimensional frames, as in [39, 41]. Data preprocessing was limited to mean
+centering and variance normalization as in [41]. For TIMIT, the output distribution was a factorized
+Gaussian, and we report the average log-likelihood bound per sequence relative to models trained
+with ELBO. Again, models trained with FIVO significantly outperformed models trained with IWAE
+or ELBO, see Table 1.
+6.3
+
+Resampling Gradients
+
+All models in this work (except those in this section) were trained with gradients that did not include
+the term in Eq. (8) that comes from resampling steps. We omitted this term because it has an outsized
+effect on gradient variance, often increasing it by 6 orders of magnitude. To explore the effects of this
+term experimentally, we trained VRNNs with and without the resampling gradient term on the TIMIT
+and polyphonic music datasets. When using the resampling term, we attempted to control its variance
+7
+
+10 1
+
+4
+
+10 0
+
+2
+
+KL Divergence
+
+Train Log-likelihood
+
+6 1e4
+
+0
+2
+4
+
+8
+
+0
+
+1
+
+2
+
+3
+
+4
+
+1M Gradient Updates
+
+5
+
+FIVO
+IWAE
+ELBO
+
+10 -2
+10 -3
+10 -4
+
+Without Resampling Gradient Term
+With Resampling Gradient Term
+
+6
+
+10 -1
+
+10 -5
+
+6
+
+0
+
+10
+
+20
+
+30
+
+40
+
+1k Gradient Updates
+
+50
+
+60
+
+Figure 2: (Left) Graph of LFIVO
+128 over training comparing models trained with and without the
+resampling gradient terms on TIMIT with N = 4. (Right) KL divergence from q(z1:T |x1:T ) to
+p(z1:T ) for models trained on the JSB chorales with N = 16.
+Bound
+
+Nottingham
+
+JSB
+
+MuseData
+
+Piano-midi.de
+
+TIMIT
+
+ELBO
+ELBO+s
+
+-2.40
+-2.59
+
+-5.48
+-5.53
+
+-6.54
+-6.48
+
+-6.68
+-6.77
+
+0
+-925
+
+IWAE
+IWAE+s
+
+-2.52
+-2.37
+
+-5.77
+-4.63
+
+-6.54
+-6.47
+
+-6.74
+-6.74
+
+1,469
+2,630
+
+FIVO
+FIVO+s
+
+-2.29
+-2.34
+
+-4.08
+-3.83
+
+-5.80
+-5.87
+
+-6.41
+-6.34
+
+6,991
+9,773
+
+Table 2: Train set marginal log-likelihood bounds for models comparing smoothing (+s) and nonFIVO
+smoothing variational posteriors. We report max{L, LIWAE
+128 , L128 } for ELBO and IWAE models
+FIVO
+and L128 for FIVO models. All models were trained with N = 4. Pianoroll results are in nats per
+timestep, TIMIT results are in nats per sequence relative to non-smoothing ELBO. For details on our
+evaluation methodology and absolute numbers see the Appendix.
+using a moving-average baseline linear in the number of timesteps. For all datasets, models trained
+without the resampling gradient term outperformed models trained with the term by a large margin
+on both the training set and held-out data. Many runs with resampling gradients failed to improve
+beyond random initialization. A representative pair of train log-likelihood curves is shown in Figure
+2 — gradients without the resampling term led to earlier convergence and a better solution. We stress
+that this is an empirical result — in principle biased gradients can lead to divergent behaviour. We
+leave exploring strategies to reduce the variance of the unbiased estimator to future work.
+6.4
+
+Sharpness
+
+FIVO does not achieve the marginal log-likelihood at its optimal variational posterior q ∗ , because the
+optimal q ∗ does not condition on future observations (see Section 4.2). In contrast, ELBO and IWAE
+are sharp, and their q ∗ s depend on future observations. To investigate the effects of this, we defined a
+smoothing variant of the VRNN in which q takes as additional input the hidden state of a deterministic
+RNN run backwards over the observations, allowing q to condition on future observations. We trained
+smoothing VRNNs using ELBO, IWAE, and FIVO, and report evaluation on the training set (to
+isolate the effect on optimization performance) in Table 2 . Smoothing helped models trained with
+IWAE, but not enough to outperform models trained with FIVO. As expected, smoothing did not
+reliably improve models trained with FIVO. Test set performance was similar, see the Appendix for
+details.
+6.5
+
+Use of Stochastic State
+
+A known pathology when training stochastic latent variable models with the ELBO is that stochastic
+states can go unused. Empirically, this is associated with the collapse of variational posterior
+q(z|x) network to the model prior p(z) [43]. To investigate this, we plot the KL divergence from
+q(z1:T |x1:T ) to p(z1:T ) averaged over the dataset (Figure 2). Indeed, the KL of models trained with
+8
+
+ELBO collapsed during training, whereas the KL of models trained with FIVO remained high, even
+while achieving a higher log-likelihood bound.
+
+7
+
+Conclusions
+
+We introduced the family of filtering variational objectives, a class of lower bounds on the log
+marginal likelihood that extend the evidence lower bound. FIVOs are suited for MLE in neural latent
+variable models. We trained models with the ELBO, IWAE, and FIVO bounds and found that the
+models trained with FIVO significantly outperformed other models across four polyphonic music
+modeling tasks and a speech waveform modeling task. Future work will include exploring control
+variates for the resampling gradients, FIVOs defined by more sophisticated filtering algorithms, and
+new MCOs based on differentiable operators like leapfrog operators with deterministically annealed
+temperatures. In general, we hope that this paper inspires the machine learning community to take a
+fresh look at the literature of marginal likelihood estimators—seeing them as objectives instead of
+algorithms for inference.
+Acknowledgments
+We thank Matt Hoffman, Matt Johnson, Danilo J. Rezende, Jascha Sohl-Dickstein, and Theophane
+Weber for helpful discussions and support in this project. A. Doucet was partially supported by the
+EPSRC grant EP/K000276/1. Y. W. Teh’s research leading to these results has received funding
+from the European Research Council under the European Union’s Seventh Framework Programme
+(FP7/2007-2013) ERC grant agreement no. 617071.
+
+References
+[1] Diederik P Kingma and Max Welling. Auto-encoding variational Bayes. ICLR, 2014.
+[2] Danilo Jimenez Rezende, Shakir Mohamed, and Daan Wierstra. Stochastic backpropagation
+and approximate inference in deep generative models. ICML, 2014.
+[3] Laurent Dinh, Jascha Sohl-Dickstein, and Samy Bengio. Density estimation using real nvp.
+arXiv preprint arXiv:1605.08803, 2016.
+[4] Ian Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu, David Warde-Farley, Sherjil
+Ozair, Aaron Courville, and Yoshua Bengio. Generative adversarial nets. In NIPS, 2014.
+[5] Sebastian Nowozin, Botond Cseke, and Ryota Tomioka. f-gan: Training generative neural
+samplers using variational divergence minimization. arXiv preprint arXiv:1606.00709, 2016.
+[6] Dustin Tran, Rajesh Ranganath, and David M Blei. Deep and hierarchical implicit models.
+arXiv preprint arXiv:1702.08896, 2017.
+[7] Shakir Mohamed and Balaji Lakshminarayanan. Learning in implicit generative models. arXiv
+preprint arXiv:1610.03483, 2016.
+[8] Michael I Jordan, Zoubin Ghahramani, Tommi S Jaakkola, and Lawrence K Saul. An introduction to variational methods for graphical models. Machine learning, 37(2):183–233,
+1999.
+[9] Matthew J. Beal. Variational algorithms for approximate Bayesian inference. 2003.
+[10] Rajesh Ranganath, Sean Gerrish, and David Blei. Black box variational inference. In AISTATS,
+2014.
+[11] Alp Kucukelbir, Dustin Tran, Rajesh Ranganath, Andrew Gelman, and David M Blei. Automatic
+differentiation variational inference. arXiv preprint arXiv:1603.00788, 2016.
+[12] Yuri Burda, Roger Grosse, and Ruslan Salakhutdinov. Importance weighted autoencoders.
+ICLR, 2016.
+[13] Andriy Mnih and Danilo J Rezende. Variational inference for Monte Carlo objectives. arXiv
+preprint arXiv:1602.06725, 2016.
+[14] Frédéric Cérou, Pierre Del Moral, and Arnaud Guyader. A nonasymptotic theorem for unnormalized Feynman–Kac particle models. Ann. Inst. H. Poincaré B, 47(3):629–649, 2011.
+9
+
+[15] Jean Bérard, Pierre Del Moral, and Arnaud Doucet. A lognormal central limit theorem for
+particle approximations of normalizing constants. Electron. J. Probab., 19(94):1–28, 2014.
+[16] Arthur P Dempster, Nan M Laird, and Donald B Rubin. Maximum likelihood from incomplete
+data via the EM algorithm. J. R. Stat. Soc. Ser. B Stat. Methodol., pages 1–38, 1977.
+[17] CF Jeff Wu. On the convergence properties of the EM algorithm. Ann. Stat., pages 95–103,
+1983.
+[18] Radford M Neal and Geoffrey E Hinton. A view of the EM algorithm that justifies incremental,
+sparse, and other variants. In Learning in graphical models, pages 355–368. Springer, 1998.
+[19] Matthew D Hoffman, David M Blei, Chong Wang, and John William Paisley. Stochastic
+variational inference. Journal of Machine Learning Research, 14(1):1303–1347, 2013.
+[20] Andriy Mnih and Karol Gregor. Neural variational inference and learning in belief networks.
+arXiv preprint arXiv:1402.0030, 2014.
+[21] Yarin Gal. Uncertainty in Deep Learning. PhD thesis, University of Cambridge, 2016.
+[22] Arnaud Doucet and Adam M. Johansen. A tutorial on particle filtering and smoothing: Fifteen
+years later. In D. Crisan and B. Rozovsky, editors, The Oxford Handbook of Nonlinear Filtering,
+pages 656–704. Oxford University Press, 2011.
+[23] Pierre Del Moral. Feynman-Kac formulae: genealogical and interacting particle systems with
+applications. Springer Verlag, 2004.
+[24] Pierre Del Moral. Mean field simulation for Monte Carlo integration. CRC Press, 2013.
+[25] Christophe Andrieu, Arnaud Doucet, and Roman Holenstein. Particle Markov chain Monte
+Carlo methods. J. R. Stat. Soc. Ser. B Stat. Methodol., 72(3):269–342, 2010.
+[26] Michael K Pitt, Ralph dos Santos Silva, Paolo Giordani, and Robert Kohn. On some properties
+of Markov chain Monte Carlo simulation methods based on the particle filter. J. Econometrics,
+171(2):134–151, 2012.
+[27] Martin J Wainwright, Michael I Jordan, et al. Graphical models, exponential families, and
+variational inference. Foundations and Trends in Machine Learning, 1(1–2):1–305, 2008.
+[28] Roger B Grosse, Zoubin Ghahramani, and Ryan P Adams. Sandwiching the marginal likelihood
+using bidirectional Monte Carlo. arXiv preprint arXiv:1511.02543, 2015.
+[29] Yuri Burda, Roger Grosse, and Ruslan Salakhutdinov. Accurate and conservative estimates of
+MRF log-likelihood using reverse annealing. In AISTATS, 2015.
+[30] Rajesh Ranganath, Dustin Tran, Jaan Altosaar, and David Blei. Operator variational inference.
+In NIPS, 2016.
+[31] Danilo Jimenez Rezende and Shakir Mohamed. Variational inference with normalizing flows.
+ICML, 2015.
+[32] Diederik P Kingma, Tim Salimans, Rafal Jozefowicz, Xi Chen, Ilya Sutskever, and Max Welling.
+Improved variational inference with inverse autoregressive flow. In NIPS, 2016.
+[33] Tim Salimans, Diederik Kingma, and Max Welling. Markov chain Monte Carlo and variational
+inference: Bridging the gap. In ICML, 2015.
+[34] Jörg Bornschein and Yoshua Bengio. Reweighted wake-sleep. ICLR, 2015.
+[35] Shixiang Gu, Zoubin Ghahramani, and Richard E Turner. Neural adaptive sequential Monte
+Carlo. In NIPS, 2015.
+[36] Yoshua Bengio, Li Yao, Guillaume Alain, and Pascal Vincent. Generalized denoising autoencoders as generative models. In NIPS, 2013.
+[37] Christian A Naesseth, Scott W Linderman, Rajesh Ranganath, and David M Blei. Variational
+sequential Monte Carlo. arXiv preprint arXiv:1705.11140, 2017.
+[38] Tuan Anh Le, Maximilian Igl, Tom Jin, Tom Rainforth, and Frank Wood. Auto-encoding
+sequential Monte Carlo. arXiv preprint arXiv:1705.10306, 2017.
+[39] Junyoung Chung, Kyle Kastner, Laurent Dinh, Kratarth Goel, Aaron C Courville, and Yoshua
+Bengio. A recurrent latent variable model for sequential data. In NIPS, 2015.
+10
+
+[40] Martín Abadi, Ashish Agarwal, Paul Barham, Eugene Brevdo, Zhifeng Chen, Craig Citro,
+Greg S Corrado, Andy Davis, Jeffrey Dean, Matthieu Devin, et al. Tensorflow: Large-scale
+machine learning on heterogeneous distributed systems. arXiv preprint arXiv:1603.04467,
+2016.
+[41] Marco Fraccaro, Søren Kaae Sønderby, Ulrich Paquet, and Ole Winther. Sequential neural
+models with stochastic layers. In NIPS, 2016.
+[42] Nicolas Boulanger-Lewandowski, Yoshua Bengio, and Pascal Vincent. Modeling temporal
+dependencies in high-dimensional sequences: Application to polyphonic music generation and
+transcription. ICML, 2012.
+[43] Samuel R Bowman, Luke Vilnis, Oriol Vinyals, Andrew M Dai, Rafal Jozefowicz, and Samy
+Bengio. Generating sentences from a continuous space. arXiv preprint arXiv:1511.06349,
+2015.
+[44] Eric Veach and Leonidas J Guibas. Optimally combining sampling techniques for Monte Carlo
+rendering. In Proceedings of the 22nd annual conference on Computer graphics and interactive
+techniques, pages 419–428. ACM, 1995.
+[45] Siddhartha Chib. Marginal likelihood from the Gibbs output. Journal of the American Statistical
+Association, 90(432):1313–1321, 1995.
+[46] Xiao-Li Meng and Wing Hung Wong. Simulating ratios of normalizing constants via a simple
+identity: a theoretical exploration. Statistica Sinica, pages 831–860, 1996.
+[47] Andrew Gelman and Xiao-Li Meng. Simulating normalizing constants: From importance
+sampling to bridge sampling to path sampling. Statistical science, pages 163–185, 1998.
+[48] Radford M Neal. Annealed importance sampling. Statistics and computing, 11(2):125–139,
+2001.
+[49] Radford M Neal. Estimating ratios of normalizing constants using linked importance sampling.
+arXiv preprint math/0511216, 2005.
+[50] John Skilling. Nested sampling for general Bayesian computation. Bayesian analysis, 1(4):833–
+859, 2006.
+[51] Víctor Elvira, Luca Martino, David Luengo, and Mónica F Bugallo. Generalized multiple
+importance sampling. arXiv preprint arXiv:1511.03095, 2015.
+[52] Pierre Del Moral, Arnaud Doucet, and Ajay Jasra. Sequential Monte Carlo samplers. J. R. Stat.
+Soc. Ser. B Stat. Methodol., 68(3):411–436, 2006.
+[53] Xavier Glorot and Yoshua Bengio. Understanding the difficulty of training deep feedforward
+neural networks. In AISTATS, 2010.
+[54] Diederik Kingma and Jimmy Ba. Adam: A method for stochastic optimization. ICLR, 2015.
+
+11
+
+Appendix to Filtering Variational Objectives
+Other Examples of MCOs.
+There is an extensive literature on marginal likelihood estimators [44, 45, 46, 47, 48, 49, 50]. Each
+defines an MCO, and we consider two in more detail, annealed importance sampling [48] and multiple
+importance sampling [44, 51]. Let x denote an observation of an X -valued random variable generated
+in a process with an unobserved Z-valued random variable z. Let p(x, z) be the joint density.
+Annealed Importance Sampling MCO. Annealed importance sampling (AIS) is a generalization
+of importance sampling [48]. We present an MCO derived from a special case of the AIS algorithm.
+Let q(z|x) be a variational posterior distribution and let βi be a sequence of real numbers for
+i ∈ {1, . . . , N + 1} such that 0 ≤ βi ≤ 1 and β1 = 0 and βN +1 = 1. Let Ti (z 0 |z, x) be a Markov
+transition distribution whose stationary distribution is proportional to q(z|x)1−βi p(x, z)βi . Then for
+z1 ∼ q(z|x) and zi ∼ Ti (z 0 |zi−1 , x) for i ∈ {2, . . . , N } we have the following unbiased estimator,
+"N 
+#
+Y p(x, zi ) βi+1 −βi
+E[p̂N (x)] = E
+= p(x)
+(9)
+q(zi |x)
+i=1
+Notice two things. First, there is no assumption that the states zi are at equilibrium, and second, we
+did not require a transition operator keeping p(x, z) as an invariant distribution. All together, we can
+define the AIS MCO,
+"N
+#
+X
+p(x,
+z
+)
+i
+N
+LAIS
+(βi+1 − βi ) log
+(10)
+N (x, q, {Ti }i=2 , p) = E
+q(zi |x)
+i=1
+This is a sharp objective, if we take q as the true posterior, q(z|x) = p(z|x), and Ti (z 0 |z, x) =
+δ(z 0 − z) to be the Dirac delta copy operator. The difficulty in applying this MCO is finding Ti , which
+are scalable and easy to optimize. Generalizations of the AIS procedure have been proposed in [52].
+The resulting Sequential Monte Carlo samplers procedures also provide an unbiased estimator of the
+marginal likelihood and are structurally identical to the particle algorithm presented in this paper.
+Multiple Importance Sampling MCO. Multiple importance sampling (MIS) [44] is another
+generalization of importance sampling. Let qi (z|x) be N possibly distinct variational posterior
+PN
+distributions and wi (x) ≥ 0 be such that i=1 wi (x) = 1. There are a variety of distinct estimators
+that could be formed from the qi [51]. We present just one. Let zi ∼ qi (z|x), then we have the
+following unbiased estimator
+"N
+#
+X
+wi (x)p(x, zi )
+E[p̂N (x)] = E
+= p(x)
+(11)
+PN
+j=1 wj (x)qj (zi |x)
+i=1
+Notice that the latent sample zi ∼ qi (z|x) is evaluated under all qi ’s. One can view this as a
+PN
+Rao-Blackwellized estimator corresponding to the mixture distribution i=1 wi (x)qi (z|x). All
+together,
+"
+!#
+N
+X
+w
+(x)p(x,
+z
+)
+i
+i
+N
+N
+LMIS
+(12)
+PN
+N (x, {qi }i=1 , {wi }i=1 , p) = E log
+j=1 wj (x)qj (zi |x)
+i=1
+Again, this objective is sharp, if we take any qi (z|x) = p(z|x) and wi (x) = 1. The difficulty in
+making this objective more useful is optimizing it in a way that distinguishes the qi and assigns the
+appropriate wi .
+Proof of Proposition 1.
+Let E[p̂N (x)] = p(x) and define LN (x, p) = E[log p̂N (x)] as the Monte Carlo objective defined by
+p̂N (x).
+(a) By the concavity of log and Jensen’s inequality,
+LN (x, p) = E[log p̂N (x)] ≤ log E[p̂N (x)] = log p(x)
+12
+
+(b) Assume
+a.s.
+
+• p̂N (x) is strongly consistent, i.e. p̂N (x) −→ p(x) as N → ∞.
+• log p̂N (x) is uniformly integrable. That is, let (Ω, F, µ) be the probability space on
+which log p̂N (x) is defined. The random variables {log p̂N (x)}∞
+N =1 are uniformly
+integrable if E[| log p̂N (x)|] < ∞ and if for any  > 0, there exists δ > 0, such that
+for all N and E ∈ F, µ(E) < δ implies E[| log p̂N (x)|I(E)] < , where I(E) is an
+indicator function of the set E.
+Then by continuity of log, log p̂N (x) converges almost surely to log p(x). By Vitali’s
+convergence theorem (using the uniform integrability assumption), we get LN (x, p) =
+E[log p̂N (x)] → log p(x) as N → ∞.
+(c) Let g(N ) = E[(p̂N (x) − p(x))6 ], and assume lim supN →∞ E[(p̂N (x))−1 ] < ∞. Define
+the relative error
+∆=
+
+p̂N (x) − p(x)
+p(x)
+
+(13)
+
+Then the bias log p(x) − LN (x, p) = −E[log(1 + ∆)]. Now, Taylor expand log(1 + ∆)
+about 0,
+
+Z ∆
+1
+1 2
+− 1 + x dx
+(14)
+log(1 + ∆) = ∆ − ∆ +
+2
+1+x
+0
+Z ∆ 2 
+1
+x
+= ∆ − ∆2 +
+dx
+(15)
+2
+1+x
+0
+and in expectation
+1
+−E[log(1 + ∆)] = ∆2 − E
+2
+
+"Z
+0
+
+∆
+
+x2
+1+x
+
+
+
+#
+dx
+
+(16)
+
+Our aim is to show
+"Z
+E
+0
+
+∆
+
+#
+x2
+dx ∈ O(g(N )1/2 )
+1+x
+
+In particular, by Cauchy-Schwarz
+
+
+"Z 
+#
+1/2
+1/2 Z
+
+Z ∆
+∆
+∆
+x2
+1
+
+E
+x4 dx
+dx ≤ E 
+dx
+2
+1+x
+0
+0
+0 (1 + x)
+"
+#
+1/2
+1/2
+∆
+∆5
+=E
+1+∆
+5
+"
+#
+1/2
+1/2
+1
+∆6
+=E
+1+∆
+5
+
+(17)
+
+(18)
+
+(19)
+
+(20)
+
+and again by Cauchy-Schwarz
+≤
+
+ 
+E
+
+1
+1+∆
+
+1/2   6 1/2
+∆
+E
+.
+5
+
+(21)
+
+This concludes the proof.
+Controlling the first inverse moment.
+We provide a sufficient condition that guarantees that the inverse moment of the average of i.i.d.
+random variables is bounded, a condition used in Proposition 1 (c). Intuitively, this is a fairly weak
+condition, because it only requires that the mass in an arbitrarily small neighbourhood of zero is
+bounded.
+13
+
+PN
+Lemma 3. Let wi be i.i.d. positive random variables and p̂N (x) = N1 i=1 wi . If there exist
+
+1
+.
+M, C,  > 0 such that P(wi < w) ≤ Cw1+ for w ∈ [0, M ), then E[p̂N (x)−1 ] ≤ C M + M
+Proof. Let M, C,  > 0 be such that P(wi < w) ≤ Cw1+ for w ∈ [0, M ). We proceed in two cases.
+If N = 1, then
+Z ∞
+E[p̂N (x)−1 ] =
+P(w1−1 > u) du
+0
+Z ∞
+=
+P(w1 < 1/u) du
+0
+
+Z ∞
+P(w1 < w)
+P(w1 < w)
+dw
++
+dw
+2
+w
+w2
+M
+0
+Z M
+Z ∞
+Cw1+
+1
+≤
+dw
++
+dw
+2
+2
+w
+w
+0
+M
+M
+1
+=C
++
+
+M
+Z M
+
+=
+
+For N > 1, we show that E[p̂N (x)−1 ] ≤ E[p̂1 (x)−1 ], so the same condition is sufficient for any N .
+The AM-GM inequality tells us that
+!1/N
+N
+N
+Y
+X wi
+≥
+wi
+N
+i=1
+i=1
+so
+
+E[p̂N (x)−1 ] ≤ E 
+
+N
+Y
+
+!−1/N 
+wi
+
+
+
+i=1
+
+=
+
+N
+Y
+
+h
+i
+−1/N
+E wi
+
+i=1
+
+h
+iN
+−1/N
+= E w1
+and by Lyapunov’s inequality, we have
+≤E
+
+
+
+−1/N
+
+w1
+
+N 
+
+= E[p̂1 (x)−1 ]
+
+This concludes the proof.
+Unbiasedness of p̂N (x1:T ) from the particle filter.
+We sketch an argument that the random variable p̂N (x1:T ) defined by Algorithm 1 is an unbiased
+estimator of the marginal likelihood p(x1:T ). This is a well-known fact [23, 52, 25, 26], and our
+sketch is based on [25]. The strategy is to cast the particle filter’s estimator p̂N (x1:T ) as a single
+importance weight over an extended space. The lack of bias in the particle filter therefore reduces
+to the unbiasedness of importance sampling. Key to this is identifying the target and proposal
+distributions in the extended space. The target distribution is called “conditional sequential Monte
+Carlo”, Algorithm 2. The proposal distribution is the particle filter itself, Algorithm 1.
+We argue that it is enough to consider just an arbitrary fixed (non-adaptive) resampling schedule
+that always resamples at step T . First, consider adaptive resampling criteria, i.e. criteria that are
+deterministic functions of the weights wti . For such criteria the joint density of random variables in
+Algorithm 1 will be piecewise continuous, composed of 2T regions corresponding to a sequence
+of resample/no-resample decisions. This density has a form on each piece that is exactly the same
+as the density for some fixed resampling schedule. Moreover, it is globally normalized, because
+of the sequential structure of the filter. Because Algorithm 2 makes the same decisions, it also is
+partitioned along the same sets and each piece has the same fixed resampling schedule. Thus, it is
+14
+
+Algorithm 2 Conditional SMC
+P
+
+
+
+N
+i
+i
+i=1 wt−1 αt (z1:t )
+i
+i
+N
+{wti }N
+i=1 = {wt−1 αt (z1:t )/p̂t }i=1
+
+1: CSMC(x1:T , p, q, N ):
+10:
+2: y1:T ∼ p(z1:T |x1:T )
+11:
+3: j = 1
+12:
+N
+4: {w0i }N
+i=1 = {1/N }i=1
+13:
+5: for t ∈ {1, . . . , T } do
+14:
+j
+= y1:t
+6:
+z1:t
+15:
+7:
+for i 6= j do
+i
+8:
+zti ∼ qt (zt |x1:t , z1:t−1
+)
+i
+i
+9:
+z1:t = CONCAT(z1:t−1
+, zti )
+
+p̂t =
+
+if resampling criteria satisfied by {wti }N
+i=1 then
+i
+i i
+N
+{wti , z1:t
+}N
+i=1 = RSAMP ({wt , z1:t }i=1 )
+j ∼ Uniform{1, . . . , N }
+j
+z1:t
+= y1:t
+
+enough to consider only a fixed resampling schedule. Second, notice that in the final step, step T ,
+of Algorithms 1 and 2 resampling has no effect on p̂N (x1:T ). Thus, we assume that the resampling
+criteria of Algorithms 1 and 2 at step T is set to always resample. All together it is safe to assume
+a fixed resampling schedule with R resampling events, 1 ≤ R ≤ T , at steps kr ∈ {1, . . . , T } for
+r ∈ {0, . . . , R} with kR = T and k0 = 0.
+Now we derive the joint density of Algorithm 1 and 2 taken at each iteration after possibly resampling.
+To avoid notational clutter we let g, f (omitting their arguments) represent the densities of the
+variables in Algorithms 1 and 2. Technically, we should also be keeping track of the indices that
+i
+T
+indicate the inheritance of the resampling step. So, let the random variables {{wti , z1:t
+}N
+i=1 }t=1 be
+the particles before resampling and s(i) ∈ {1, . . . , N } be the index that is selected for inheritance of
+the ith particle after resampling. Then the density corresponding to Algorithm 1 is
+g=
+
+R Y
+N
+Y
+r=1 i=1
+
+For Algorithm 2,
+
+R
+Y
+Y
+ ws(i)
+f=
+kr
+r=1
+
+i6=j
+
+kr
+Y
+
+s(i)
+
+wkr
+
+i
+qk (zki |x1:k , z1:k−1
+)
+
+
+
+kr
+Y
+k=kr−1 +1
+
+(22)
+
+k=kr−1 +1
+
+1
+i
+qk (zki |x1:k , z1:k−1
+) 
+N
+
+kr
+Y
+
+
+j
+p(zkj |x1:T , z1:k−1
+)
+
+(23)
+
+k=kr−1 +1
+
+These densities are normalized, so Eg [f /g] = 1. Thus, our goal is to show p̂N (x1:T ) = p(x1:T )f /g.
+Q
+Qkr
+Qkr
+j
+j
+R
+i
+i
+−1
+Y ( i6=j wks(i)
+k=kr−1 +1 qk (zk |x1:k , z1:k−1 ))(N
+k=kr−1 +1 p(zk |x1:T , z1:k−1 ))
+r
+p(x1:T )
+=
+QN
+s(i) Qkr
+i
+i
+r=1
+i=1 wkr
+k=kr−1 +1 qk (zk |x1:k , z1:k−1 )
+(24)
+Q
+k
+j
+j
+r
+R
+Y N −1 k=k
+p(zk |x1:T , z1:k−1 )
+r−1 +1
+p(x1:T )
+=
+(25)
+Q
+kr
+j
+j
+j
+r=1 wkr
+k=kr−1 +1 qk (zk |x1:k , z1:k−1 )
+and pushing in the marginal likelihood
+Qkr
+j
+R
+Y
+N −1 k=k
+p(zkj , xk |x1:k−1 , z1:k−1
+)
+r−1 +1
+Q
+k
+j
+r
+wkj r k=k
+q (zkj |x1:k , z1:k−1
+)
+r=1
+r−1 +1 k
+i
+Now, letting αk (z1:k
+)=
+
+(26)
+
+i
+i
+p(zk
+,xk |x1:k−1 ,z1:k−1
+)
+one can show that for this sequence of resampling
+i |x
+i
+qk (zk
+1:k ,z1:k−1 )
+
+times the weight wkj r telescopes into
+Qkr
+j
+k=k
++1 αk (z1:k )
+j
+wkr = PN Qkr−1
+r
+i
+i=1
+k=kr−1 +1 αk (z1:k )
+and the estimator p̂N (x1:T ) =
+
+(27)
+
+QT
+
+t=1 p̂t telescopes into
+R
+Y
+
+
+
+N
+
+X
+1
+p̂N (x1:T ) =
+N i=1
+r=1
+
+15
+
+kr
+Y
+k=kr−1 +1
+
+
+i
+αk (z1:k
+)
+
+(28)
+
+and thus
+Qkr
+j
+R
+Y
+p(zkj , xk |x1:k−1 , z1:k−1
+)
+N −1 k=k
+f
+r−1 +1
+p(x1:T ) =
+Qkr
+j
+j
+j
+g
+wk
+r=1
+k=k
++1 qk (zk |x1:k , z1:k−1 )
+r−1
+
+r
+
+=
+
+R
+Y
+N −1
+
+(29)
+
+kr
+Y
+
+j
+r=1 wkr k=kr−1 +1
+
+kr
+N
+R
+Y
+1 X Y
+=
+N i=1
+r=1
+
+j
+αk (z1:k
+)
+
+(30)
+
+
+i
+αk (z1:k
+) = p̂N (x1:T ).
+
+(31)
+
+k=kr−1 +1
+
+The result follows. An intuitive way to understand this result is the following: Algorithm 2 matches
+the distribution of every random variable in the particle filter except it interleaves a true posterior
+sample into the set of particles with uniform probability. The only mismatch in the densities are
+the normalization terms of the resampling probabilities of that privileged posterior sample, with
+PN Qkr
+i
+αk (z1:k
+) coming from the filter’s resampling and terms N from conditional
+terms i=1 k=k
+r−1 +1
+SMC’s resampling. Of course, we never run Algorithm 2, it just serves to define the target density.
+Gradients of LFIVO
+(x1:T , p, q).
+N
+We formulate unbiased gradients of LFIVO
+(x1:T , p, q) by considering Algorithm 1 as a method for
+N
+simulating FIVO. We consider the cases when the sampling of zti is and is not reparameterized. We
+also consider the case where we make adaptive resampling decisions.
+First, we assume that the decision to resample is not adaptive (i.e., depends in some way on the
+random variables already produced until that point in Algorithm 1), and are fixed ahead of time.
+When the sampling zti is not reparameterized there are three terms to the gradient: (1) the gradients
+of log p̂N (x1:T ) with respect to the parameters conditional on the latent states, (2) gradients of the
+densities qt with respect to their parameters, and (3) gradients of the resampling probabilities with
+respect to the parameters. All together, the following is a gradient of FIVO,
+h
+XT XN 
+p̂N (x1:T )
+i
+E ∇θ,φ log p̂N (x1:T ) +
+log
+∇φ log qt,φ (zti |x1:t , z1:t−1
+)+
+t=1
+i=1
+p̂N (x1:t−1 )
+i (32)
+p̂N (x1:T )
+I(resampling at step t) log
+∇θ,φ log wti
+p̂N (x1:t )
+where I(A) is an indicator function. If zti is reparameterized, then the first and third terms suffice for
+an unbiased gradient,
+
+
+XT XN
+p̂N (x1:T )
+i
+E ∇θ,φ log p̂N (x1:T ) +
+I(resampling at step t) log
+∇θ,φ log wt
+(33)
+t=1
+i=1
+p̂N (x1:t )
+In this work we only considered reparameterized qt s, and we dropped the terms of the gradient that
+arise from resampling.
+Second, when the decision to resample is adaptive, the domain of the random variables involved
+in simulating log p̂N (x1:T ) can be partitioned into 2T regions, over each of which the density is
+differentiable. Between those regions, the density experiences a jump discontinuity. Thus, there
+are additional terms to the gradient of LFIVO
+(x1:T , p, q) that correspond to the change in the regions
+N
+of continuity as the parameters change. These terms can be written as surface integrals over the
+boundaries of the regions. We drop these terms in practice.
+Proof of Proposition 2.
+Assume p(z1:t−1 |x1:t ) = p(z1:t−1 |x1:t−1 ) for all t ∈ {2, . . . , T }. We will show LFIVO
+(x1:T , p, q) =
+N
+log p(x1:T ) at q(zt |z1:t−1 , x1:t ) = p(zt |z1:t−1 , x1:t ). We will do this by induction, showing that
+every particle has a constant weight and that p̂N (x1:T ) = p(x1:T ) is a constant. For t = 1 we have
+α1i (z1 ) =
+
+p1 (x1 , z1 )
+= p1 (x1 )
+p(z1 |x1 )
+16
+
+(34)
+
+Thus, all particles have the same weight and p̂1 = p1 (x1 ). Now for any t we have that the weights
+must be 1/N since the particles all have the same weight and
+pt (xt , zt |z1:t−1 , x1:t−1 )
+p(zt |z1:t−1 , x1:t )
+p(z1:t , x1:t )
+=
+p(z1:t−1 , x1:t−1 )p(zt |z1:t−1 , x1:t )
+p(x1:t )
+p(z1:t |x1:t )
+=
+p(x1:t−1 ) p(z1:t−1 |x1:t−1 )p(zt |z1:t−1 , x1:t )
+p(x1:t )
+p(z1:t |x1:t )
+=
+p(x1:t−1 ) p(z1:t−1 |x1:t )p(zt |z1:t−1 , x1:t )
+p(x1:t )
+=
+p(x1:t−1 )
+
+αti (z1:t ) =
+
+(35)
+(36)
+(37)
+(38)
+(39)
+
+and thus,
+p̂N (x1:T ) = p1 (x1 )
+
+T
+Y
+
+p(x1:t )
+= p(x1:T )
+p(x1:t−1 )
+t=2
+
+(40)
+
+Implementation details
+We initialized weights using the Xavier initialization [53] and used the Adam optimizer [54] with a
+batch size of 4. During training, we did not truncate sequences and performed full backpropagation
+through time for all datasets. For the results presented in Sections 6.1 and 6.2 we performed a grid
+search over learning rates {3 × 10−4 , 1 × 10−4 , 3 × 10−5 , 1 × 10−5 } and picked the run and early
+stopping step by the validation performance.
+Evaluation and Comparison of Bounds
+Comparing models trained with different log-likelihood lower bounds is challenging because calculating the actual log-likelihood is intractable. Burda et al. [12] showed that the IWAE bound is at least
+as tight as the ELBO and monotonically increases with N . This suggests comparing models based on
+the IWAE bound evaluated with a large N . However, we found that IWAE and ELBO bounds tended
+to diverge for models trained with FIVO.
+Although FIVO is not provably a tighter bound than the ELBO or IWAE, our experiments suggest
+that this tends to be the case in practice. In Figure 3, we plotted all three bounds over training for
+a representative experiment. All plots use the same model architecture, but the training objective
+changes in each panel. For the model trained with IWAE, the FIVO and IWAE bounds are tighter than
+their counterparts on the model trained with ELBO, suggesting that the model trained with IWAE is
+superior. The ELBO bound evaluated on the model trained with IWAE, however, is lower than its
+counterpart on the model trained with the ELBO. For the model trained with FIVO, both IWAE and
+ELBO bounds seem to diverge, but the FIVO bound outperforms the FIVO bounds on both of the
+other models. As in the figure, we generally found that the same model evaluated with FIVO, IWAE,
+and ELBO produced values descending in that order.
+We suspect that q distributions trained under the FIVO bound are more entropic than those trained
+under ELBO or IWAE because of the resampling operation. During training under FIVO, q is able to
+propose state transitions that could poorly explain the observations because the bad states will be
+resampled away without harming the final bound value. Then, when a FIVO-trained q is evaluated
+with ELBO or IWAE it proposes poor states that are not resampled away, leading to a poor final bound
+value. Conversely, qs trained with ELBO and IWAE are not able to fully leverage the resampling
+operation when evaluated with the FIVO bound.
+Because of this behavior, we chose to optimistically evaluate models trained with IWAE and ELBO
+by reporting the maximum across all the bounds. For models trained with FIVO, we reported only the
+FIVO bound. We felt this evaluation scheme provided the strongest comparison to existing bounds.
+17
+
+Trained with FIVO
+
+2.5
+
+Trained with IWAE
+
+Trained with ELBO
+
+Test Set Log-likelihood
+
+3.0
+3.5
+4.0
+4.5
+5.0
+5.5
+
+FIVO
+IWAE
+ELBO
+
+6.0
+6.5
+7.0
+
+0
+
+50
+
+100 150 200 250 300 350 0
+
+1k Gradient Updates
+
+100
+
+200
+
+300
+
+400
+
+1k Gradient Updates
+
+0
+
+20
+
+40
+
+60
+
+80 100 120 140 160
+
+1k Gradient Updates
+
+Figure 3: Comparison of ELBO, IWAE, and FIVO bounds. We plot the ELBO (L), IWAE (LIWAE
+128 ),
+and FIVO (LFIVO
+)
+test
+log-likelihood
+lower
+bounds
+for
+a
+fixed
+model
+architecture
+trained
+with
+FIVO
+128
+(left), IWAE (middle), and ELBO (right). The models are VRNNs trained on the Nottingham dataset
+with 64 units, N = 16, and learning rate 3 × 10−5 .
+Evaluating TIMIT Log-Likelihoods
+We reported log-likelihood scores for TIMIT relative to an ELBO baseline instead of raw loglikelihoods. Previous papers (e.g., [39, 41]) report the log-likelihood of data that have been mean
+centered and variance normalized, but it would be more proper to report the results on the unstandardized data. Specifically, if the training set has mean µ and variance σ 2 and the model outputs µ̂
+and σ̂ 2 , then the un-standardized test data would be evaluated under a N (µ̂σ + µ, σ̂ 2 σ 2 ) distribution.
+Log-likelihoods produced by these approaches differ by a constant offset that depends on σ. Because
+the offset is a function of only training set statistics, it does not affect relative comparison between
+methods. Because of this we chose to report log-likelihoods relative to a baseline instead of absolute
+numbers. Absolute numbers calculated on standardized data are reported in Tables 3, 4, and 5 to
+allow for comparisons with other papers.
+
+18
+
+Nottingham
+
+JSB
+
+MuseData
+
+Piano-midi.de
+
+N
+
+Bound
+
+Train
+
+Test
+
+Train
+
+Test
+
+Train
+
+Test
+
+Train
+
+Test
+
+4
+
+ELBO
+IWAE
+FIVO
+
+-2.54
+-1.72
+-1.35
+
+-3.00
+-2.75
+-2.68
+
+-4.99
+-4.81
+-4.59
+
+-8.60
+-7.86
+-6.90
+
+-6.20
+-5.86
+-5.64
+
+-7.15
+-7.20
+-6.20
+
+-6.26
+-6.25
+-5.73
+
+-7.81
+-7.86
+-7.76
+
+8
+
+ELBO
+IWAE
+FIVO
+
+-2.65
+-1.59
+-1.46
+
+-3.01
+-2.90
+-2.77
+
+-4.94
+-4.47
+-5.41
+
+-8.61
+-7.40
+-6.79
+
+-5.85
+-6.23
+-5.02
+
+-7.19
+-7.15
+-6.12
+
+-6.20
+-5.71
+-5.69
+
+-7.83
+-7.84
+-7.45
+
+16
+
+ELBO
+IWAE
+FIVO
+
+-2.06
+-2.12
+-1.33
+
+-3.02
+-2.85
+-2.58
+
+-5.08
+-4.86
+-4.45
+
+-8.63
+-7.41
+-6.72
+
+-6.22
+-6.54
+-5.44
+
+-7.18
+-7.13
+-5.89
+
+-6.71
+-5.17
+-5.08
+
+-7.85
+-7.79
+-7.43
+
+Table 3: Train and test set marginal log-likelihood bounds for VRNNs trained on the polyphonic
+FIVO
+FIVO
+music datasets. We report max{L, LIWAE
+128 , L128 } for ELBO and IWAE models and L128 for FIVO
+models. VRNNs trained on the JSB Chorales used 32 units, all other models used 64 units.
+TIMIT
+64 units
+
+256 units
+
+N
+
+Bound
+
+Train
+
+Test
+
+Train
+
+Test
+
+4
+
+ELBO
+IWAE
+FIVO
+
+40,237
+40,939
+46,911
+
+41,236
+41,076
+46,927
+
+51,688
+52,284
+59,180
+
+51,674
+52,290
+59,058
+
+8
+
+ELBO
+IWAE
+FIVO
+
+42,892
+43,713
+47,343
+
+44,007
+45,213
+47,259
+
+49,872
+52,827
+61,080
+
+51,055
+52,859
+62,685
+
+16
+
+ELBO
+IWAE
+FIVO
+
+43,175
+43,331
+48,685
+
+42,912
+44,472
+49,866
+
+51,490
+53,797
+61,929
+
+51,154
+54,305
+62,772
+
+Table 4: Train and test set log likelihood bounds for VRNNs trained on the TIMIT dataset with
+FIVO
+different bounds and numbers of particles. We report max{L, LIWAE
+128 , L128 } for ELBO and IWAE
+FIVO
+models and L128 for FIVO models. These results were calculated on data that was standardized
+(mean-centered and scaled to unit variance) using training set statistics.
+
+Nottingham
+
+JSB
+
+MuseData
+
+Piano-midi.de
+
+TIMIT
+
+Bound
+
+Train
+
+Test
+
+Train
+
+Test
+
+Train
+
+Test
+
+Train
+
+Test
+
+Train
+
+Test
+
+ELBO
+ELBO+s
+
+-2.95
+-2.91
+
+-2.40
+-2.59
+
+-8.68
+-8.64
+
+-5.48
+-5.53
+
+-7.52
+-7.51
+
+-6.54
+-6.48
+
+-7.86
+-7.87
+
+-6.68
+-6.77
+
+41805
+40743
+
+40757
+39832
+
+IWAE
+IWAE+s
+
+-3.03
+-2.83
+
+-2.52
+-2.37
+
+-8.61
+-8.15
+
+-5.77
+-4.63
+
+-7.55
+-7.33
+
+-6.54
+-6.47
+
+-7.84
+-7.81
+
+-6.74
+-6.74
+
+42174
+44294
+
+42226
+43387
+
+FIVO
+FIVO+s
+
+-2.87
+-2.92
+
+-2.29
+-2.34
+
+-7.06
+-6.91
+
+-4.08
+-3.83
+
+-6.55
+-6.68
+
+-5.80
+-5.87
+
+-7.75
+-7.80
+
+-6.41
+-6.34
+
+49653
+52644
+
+47748
+50530
+
+Table 5: Train and test set log-likelihood bounds comparing smoothing and non-smoothing models.
+FIVO
+FIVO
+We report max{L, LIWAE
+128 , L128 } for ELBO and IWAE models and L128 for FIVO models. All
+−5
+models were trained with N = 4 and a learning rate of 3 × 10 . The JSB Chorales model used 32
+units and the Musedata model used 256 units. All other models used 64 units. TIMIT results were
+calculated on data that was standardized (mean-centered and scaled to unit variance) using training
+set statistics.
+
+19
+
+

@@ -1,0 +1,2115 @@
+Variational Sequential Monte Carlo
+
+arXiv:1705.11140v2 [stat.ML] 21 Feb 2018
+
+Christian A. Naesseth
+Linköping University
+
+Scott W. Linderman
+Columbia University
+
+Abstract
+Many recent advances in large scale probabilistic
+inference rely on variational methods. The success of variational approaches depends on (i) formulating a flexible parametric family of distributions, and (ii) optimizing the parameters to
+find the member of this family that most closely
+approximates the exact posterior. In this paper
+we present a new approximating family of distributions, the variational sequential Monte Carlo
+(VSMC) family, and show how to optimize it in
+variational inference. VSMC melds variational inference (VI) and sequential Monte Carlo (SMC),
+providing practitioners with flexible, accurate,
+and powerful Bayesian inference. The VSMC family is a variational family that can approximate
+the posterior arbitrarily well, while still allowing for efficient optimization of its parameters.
+We demonstrate its utility on state space models,
+stochastic volatility models for financial data, and
+deep Markov models of brain neural circuits.
+
+1
+
+Introduction
+
+Complex data like natural images, text, and medical records
+require sophisticated models and algorithms. Recent advances in these challenging domains have relied upon variational inference (VI) [Kingma and Welling, 2014, Hoffman
+et al., 2013, Ranganath et al., 2016a]. Variational inference excels in quickly approximating the model posterior,
+yet these approximations are only useful insofar as they
+are accurate. The challenge is to balance faithful posterior
+approximation and fast optimization.
+We present a new approximating family of distributions
+called variational sequential Monte Carlo (VSMC). VSMC
+blends VI and sequential Monte Carlo (SMC) [Stewart and
+McCarty, 1992, Gordon et al., 1993, Kitagawa, 1996], proProceedings of the 21st International Conference on Artificial Intelligence and Statistics (AISTATS) 2018, Lanzarote, Spain. PMLR:
+Volume 84. Copyright 2018 by the author(s).
+
+Rajesh Ranganath
+New York University
+
+David M. Blei
+Columbia University
+
+viding practitioners with a flexible, accurate, and powerful
+approximate Bayesian inference algorithm. VSMC is an efficient algorithm that can approximate the posterior arbitrarily
+well.
+Standard SMC approximates a posterior distribution of latent
+variables with N weighted particles iteratively drawn from
+a proposal distribution. The idea behind variational SMC is
+to view the parameters of the proposal as indexing a family
+of distributions over latent variables. Each distribution in
+this variational family corresponds to a particular choice of
+proposal; to sample the distribution, we run SMC to generate
+a set of particles and then randomly select one with probability proportional to its weight. Unlike typical variational
+families, the VSMC family trades off fidelity to the posterior
+with computational complexity: its accuracy increases with
+the number of particles N , but so does its computational
+cost.
+We develop the VSMC approximating family, derive its corresponding variational lower bound, and design a stochastic
+gradient ascent algorithm to optimize its parameters. We
+connect VSMC to the importance weighted auto-encoder
+(IWAE) [Burda et al., 2016] and show that the IWAE lower
+bound is a special case of the VSMC bound. As an illustration, consider approximating the following posterior with
+latent variables x1:T and observations y1:T ,
+p(x1:T | y1:T ) =
+
+T
+Y
+
+N (xt ; 0, 1) N (yt ; x2t , 1)/p(y1:T ).
+
+t=1
+
+This is a toy Gaussian state space model (SSM) where the
+observed value at each time step depends on the square
+of the latent state. Figure 1c shows the approximating
+power of VSMC versus that of the IWAE and of standard
+variational Bayes (VB). As the length of the sequence T
+increases, naïve importance sampling effectively collapses
+to use only a single particle. VSMC on the other hand maintains a diverse set of particles and thereby achieves a significantly tighter lower bound of the log-marginal likelihood
+log p(y1:T ).
+We focus on inference in state space and time series models,
+but emphasize that VSMC applies to any sequence of probabilistic models, just like standard SMC [Del Moral et al.,
+2006, Doucet and Johansen, 2009, Naesseth et al., 2014].
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+(a)
+
+VSMC
+
+(b)
+
+IWAE
+
+(c)
+ELBO
+
+particle
+
+particle
+
+0
+100
+200
+
+VB
+IWAE
+
+300
+
+VSMC
+
+logp(y1 : T)
+0
+
+time
+
+25
+
+50
+
+75
+
+100
+
+time
+
+time
+
+Figure 1: Comparing VSMC and the IWAE. (a) VSMC constructs a weighted set of particle trajectories using SMC and then
+samples one according to the final weight. Here, the size of the dot is proportional to the weight, wti ; the gray arrows denote
+the ancestors, ait−1 ; and the blue arrows denote the chosen path, b1:T . (b) IWAE does the same, but without resampling. This
+leads to particle degeneracy as time increases—only one particle has nonneglible weight at time T . (c) The ELBO suffers
+from this degeneracy: all are comparable when T is small, but as time increases the IWAE provides minimal improvement
+over standard VB, whereas VSMC still achieves nearly the true marginal likelihood.
+In Section 5, we demonstrate the advantages of VSMC on
+both simulated and real data. First, we show on simulated
+linear Gaussian SSM data that VSMC can outperform the
+(locally) optimal proposal [Doucet et al., 2001, Doucet and
+Johansen, 2009]. Then we compare VSMC with IWAE for
+a stochastic volatility model on exchange rates from financial markets. We find that VSMC achieves better posterior
+inferences and learns more efficient proposals. Finally, we
+study recordings of macaque monkey neurons using a probabilistic model based on recurrent neural networks. VSMC
+reaches the same accuracy as IWAE, but does so with less
+computation.
+Related Work Much effort has been dedicated to learning good proposals for SMC [Cornebise, 2009]. Guarniero
+et al. [2017] adapt proposals through iterative refinement.
+Naesseth et al. [2015] uses a Monte Carlo approximation
+to the (locally) optimal proposal [Doucet and Johansen,
+2009]. Gu et al. [2015] learn proposals by minimizing the
+Kullback-Leibler (KL) from the posterior to proposal using
+SMC samples; this strategy can suffer from high variance
+when the initial SMC proposal is poor. Paige and Wood
+[2016] learn proposals by forward simulating and inverting
+the model. In contrast to all these methods, VSMC optimizes
+the proposal directly with respect to KL divergence from
+the SMC sampling process to the posterior.
+VSMC uses auxillary variables in a posterior approximation.
+This relates to work in VI, such as Hamiltonian VI [Salimans et al., 2015], variational Gaussian processes [Tran
+et al., 2016], hierarchical variational models [Ranganath
+et al., 2016b], and deep auxiliary variational auto-encoders
+[Maaløe et al., 2016]. Another approach uses a sequence of
+invertible functions to transform a simple variational approximation to a complex one [Rezende and Mohamed, 2015,
+Dinh et al., 2014]. All of these rich approximations can be
+embedded inside VSMC to build more flexible proposals.
+
+Archer et al. [2015], Johnson et al. [2016] develop variational inference for state space models with conjugate dynamics, while Krishnan et al. [2017] develop variational
+approximations for models with nonlinear dynamics and
+additive Gaussian noise. In contrast, VSMC is agnostic to
+the distributional choices in the dynamics and noise.
+Importance weighted auto-encoders [Burda et al., 2016]
+obtain the same lower bound as variational importance sampling (VIS), a special case of VSMC. However, VIS provides
+a new interpretation that enables a more accurate variational
+approximation; this relates to another interpretation of IWAE
+by Cremer et al. [2017], Bachman and Precup [2015]. Variational particle approximations [Saeedi et al., 2014] also
+provide variational approximation that improve with the
+number of particles, but they are restricted to discrete latent
+variables.
+Finally, the log-marginal likelihood lower bound (6) was
+developed concurrently and independently by Maddison
+et al. [2017] and Le et al. [2017]. The difference with our
+work lies in how we derive the bound and the implications
+we explore. Maddison et al. [2017], Le et al. [2017] derive
+the bound using Jensen’s inequality on the SMC expected
+log-marginal likelihood estimate, focusing on approximate
+marginal likelihood estimation of model parameters. Rather,
+we derive (6) as a tractable lower bound to the exact evidence lower bound (ELBO) for the new variational family
+VSMC. In addition to a lower bound on the log-marginal likelihood, this view provides a new variational approximation
+to the posterior.
+
+2
+
+Background
+
+We begin by introducing the foundation for variational sequential Monte Carlo (VSMC). Let p(x1:t , y1:t ) be a sequence of probabilistic models for latent (unobserved) x1:t
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+and data y1:t , with t = 1, . . . , T . In Bayesian inference, we are interested in computing the posterior distribution p(x1:T | y1:T ). Two concrete examples, both from
+the time-series literature, are hidden Markov models and
+state space models [Cappé et al., 2005]. In both cases, the
+joint density factorizes as
+p(x1:T , y1:T ) = f (x1 )
+
+T
+Y
+
+f (xt | xt−1 )
+
+t=2
+
+T
+Y
+
+resample
+
+g(yt | xt ),
+
+t=1
+
+where f is the prior on x, and g is the observation (data)
+distribution. For most models computing the posterior
+p(x1:T | y1:T ) is computationally intractable, and we need
+approximations such as VI and SMC. Here we construct
+posterior approximations that combine these two ideas.
+In the following sections, we review variational inference
+and sequential Monte Carlo, develop a variational approximation based on the samples generated by SMC, and develop
+a tractable objective to improve the quality of the SMC variational approximation. For concreteness, we focus on the
+state space model above. But we emphasize that VSMC
+applies to any sequence of probabilistic models, just like
+standard SMC [Del Moral et al., 2006, Doucet and Johansen,
+2009, Naesseth et al., 2014].
+Variational Inference In variational inference we postulate an approximating family of distributions with variational parameters λ, q(x1:T ; λ). Then we minimize a divergence, often the KL divergence, between the approximating
+family and the posterior so that q(x1:T ; λ) ≈ p(x1:T | y1:T ).
+This minimization is equivalent to maximizing the ELBO
+[Jordan et al., 1999],
+L(λ) = Eq(x1:T ;λ) [log p(x1:T , y1:T ) − log q(x1:T ; λ)] .
+(1)
+VI turns posterior inference into an optimization problem.
+
+Sequential Monte Carlo SMC is a sampling method
+designed to approximate a sequence of distributions,
+p(x1:t | y1:t ) for t = 1 . . . T with special emphasis on the
+posterior p(x1:T | y1:T ). For a thorough introduction to SMC
+see Doucet and Johansen [2009], Doucet et al. [2001], Schön
+et al. [2015].
+To approximate p(x1:t | y1:t ) SMC uses weighted samples,
+p(x1:t | y1:t ) ≈ pb(x1:t | y1:t ) ,
+
+with probability proportional to the importance weights
+j
+wt−1
+; next we propose new values, append them to the end
+of the trajectory, and reweight as follows:
+
+N
+X
+
+wi
+P t ` δxi1:t ,
+` wt
+i=1
+
+(2)
+
+where δX is the Dirac measure at X.
+We construct the weighted set of particles sequentially for
+t = 1, . . . , T . At time t = 1 we use standard importance
+sampling xi1 ∼ r(x1 ). For t > 1, we start each step by
+resampling auxiliary ancestor variables ait−1 ∈ {1, . . . , N }
+
+ait−1 ∼ Categorical(wt−1/
+j
+
+P
+
+`
+` wt−1
+
+)
+
+ait−1
+
+propose
+
+xit ∼ r(xt | xt−1 ),
+
+append
+
+t−1
+xi1:t = (x1:t−1
+, xit ),
+
+reweight
+
+t−1
+wti = f (xt | xt−1 ) g(yt | xt )/r(xit | xt−1
+).
+
+ai
+
+i
+
+ai
+t−1
+
+i
+
+ai
+
+We refer to the final particles (samples) xi1:T as trajectories.
+Panels (a) and (b) of Figure 1 show sets of weighted trajectories. The size of the dots represents the weights wti and the
+arrows represent the ancestors ait−1 . Importance sampling
+omits the resampling step, so each ancestor is given by the
+corresponding particle for the preceding time step.
+The trajectories xi1:T and weights wTi define the SMC approximation to the posterior. Critically, as we increase the
+number of particles, the posterior approximation becomes
+arbitrarily accurate. SMC also yields an unbiased estimate
+of the marginal likelihood,
+pb(y1:T ) =
+
+T
+N
+Y
+1 X
+
+N i=1
+t=1
+
+wti .
+
+(3)
+
+This estimate will play an important role in the VSMC objective.
+The proposal distribution r(xt | xt−1 ) is the key design
+choice. A common choice is the model prior f —it is known
+as the bootstrap particle filter (BPF) [Gordon et al., 1993].
+However, proposing from the prior often leads to a poor
+approximation for a small number of particles, especially
+if xt is high-dimensional. Variational SMC addresses this
+shortcoming; it learns parameterized proposal distributions
+for efficient inference.
+
+3
+
+Variational Sequential Monte Carlo
+
+We develop VSMC, a new class of variational approximations based on SMC. We first define how to sample from the
+VSMC family and then derive its distribution. Though generating samples is straightforward, the density is intractable.
+To this end, we derive a tractable objective, a new lower
+bound to the ELBO, that is amenable to stochastic optimization. Then, we present an algorithm to fit the variational
+parameters. Finally, we explore how to learn model parameters using variational expectation-maximization.
+To sample from the VSMC family, we run SMC (with the
+proposals parameterized by variational parameters λ) and
+then sample once from the empirical approximation of the
+posterior (2). Because the proposals r(xt | xt−1 ; λ) depend
+on λ, so does the SMC empirical approximation. Algorithm 1
+summarizes the generative process for the VSMC family.
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+Algorithm 1 Variational Sequential Monte Carlo
+Require: Targets p(x1:t , y1:t ), proposals r(xt | xt−1 ; λ),
+and number of particles N .
+1: for i = 1 . . . N do
+2:
+Simulate xi1 from r(x1 ; λ)
+i
+i
+3:
+Set w1i = f (x1 ) g(y1 | x1 )/r(xi1 ;λ)
+4: end for
+5: for t = 2 . . . T do
+6:
+for i = 1 . . . N do
+7:
+
+The surrogate ELBO. To derive a tractable objective, we
+develop a lower bound to the ELBO that is also amenable to
+stochastic optimization. It is
+wj
+
+Simulate ait−1 with Pr(ait−1 = j) = P t−1
+w`
+`
+
+t−1
+
+e
+L(λ) ,
+
+ai
+
+8:
+
+t−1
+Simulate xit from r(xt | xt−1
+; λ)
+
+9:
+
+t−1
+Set xi1:t = (x1:t−1
+, xit )
+
+Ee
+φ(x1:N ,a1:N
+1:t
+
+1:t−1 ;λ)
+
+log
+
+N
+
+1 X i
+w
+N i=1 t
+
+!#
+
+(6)
+
+i
+
+10:
+11:
+end for
+12: end for
+j P
+13: Simulate bT with Pr(bT = j) = wT/ ` wT`
+bT
+14: return x1:T , x1:T
+
+e
+We call L(λ)
+the surrogate ELBO. It is a lower bound to the
+true ELBO for VSMC or, equivalently, an upper bound on the
+KL divergence. The following theorem formalizes this fact:
+Theorem 1 (Surrogate ELBO). The surrogate ELBO (6), is
+a lower bound to the ELBO (1) when q is defined by (5), i.e.
+
+The variational distribution q(x1:T ; λ) marginalizes out all
+the variables produced in the sampling process, save for the
+output sample x1:T . This marginal comes from the joint
+distribution of all variables generated by VSMC,
+ N
+Y
+i=1
+
+{z
+
+step 2
+
+}
+
+  bT 
+ait−1
+wt−1
+w
+ait−1
+i
+P ` r(xt | xt−1 ; λ) P T ` .
+·
+` wt−1 |
+` wT
+t=2 i=1 |
+{z
+} | {z
+}
+{z }
+T
+Y N
+Y
+
+step 8
+
+(4)
+
+step 13
+
+(We have annotated this equation with the steps from the
+algorithm.) In this joint, the final output sample is defined by
+T
+extracting the bT -th trajectory x1:T = xb1:T
+. Note that the
+data y1:T enter via the weights and (optionally) the proposal
+distribution. This joint density is easy to calculate, but
+for variational inference we need the marginal distribution
+of x1:T . We derive this next.
+b
+
+Let bt , at t+1 for t ≤ T − 1 denote the ancestors for
+the trajectory x1:T returned by Algorithm 1. Furthermore,
+let ¬b1:T be all particle indices not equal to (b1 , . . . , bT ),
+i.e. exactly all the particles that were not returned by Algo1:T
+rithm 1. Then the marginal distribution of x1:T = xb1:T
+=
+bT
+b1
+b2
+(x1 , x2 , . . . , xT ) is given by the following proposition.
+Proposition 1. The VSMC approximation on x1:T is
+q(x1:T | y1:T ; λ)
+
+
+= p(x1:T , y1:T ) Eφex¬b1:T ,a¬b1:T −1 ;λ pb(y1:T )−1 . (5)
+1:T −1
+
+Proof. See the supplementary material A.1.
+
+e
+log p(y1:T ) ≥ L(λ) ≥ L(λ).
+Proof. See the supplementary material A.2.
+The surrogate ELBO is the expected SMC log-marginal likelihood estimate. We can estimate it unbiasedly as a byproduct
+of sampling from the VSMC variational approximation (Algorithm 1). We run the algorithm and use the estimate to
+perform stochastic optimization of the surrogate ELBO.
+
+
+
+r(xi1 ; λ) ·
+
+|
+
+1:T
+
+"
+
+= E [log pb(y1:T )]
+
+ai
+
+at−1
+t−1
+i
+i
+Set wti = f (xt | xt−1 ) g(yt | xt )/r(xit | xt−1
+;λ)
+
+step 7
+
+T
+X
+t=1
+
+ai
+
+e 1:N , a1:N , bT ; λ) =
+φ(x
+1:T
+1:T −1
+
+This has an intuitive form: the density of the variational posterior is equal to the exact joint times the expected inverse
+of the normalization constant (c.f. (3)). While we can estimate this expectation with Monte Carlo, it yields a biased
+estimate of log q(x1:T | y1:T ; λ) and the ELBO (1).
+
+Stochastic Optimization. While the expectations in the
+surrogate ELBO are still not available in closed form, we can
+estimate it and its gradients with Monte Carlo. This admits
+a stochastic optimization algorithm for finding the optimal
+variational parameters of the VSMC family.
+We assume the proposals r(xt | xt−1 ; λ) are reparameterizable, i.e., we can simulate from r by setting xt = h(xt−1 , εt ; λ), εt ∼ s(εt ) for some distribution
+s not a function of λ. With this assumption, rewrite the gradient of (6) by using the reparameterization trick [Kingma
+and Welling, 2014, Rezende et al., 2014],
+∇e
+L(λ) = grep + gscore
+
+(7)
+
+grep = E [∇ log pb(y1:T )] ,
+h
+i
+e 1:N | ε1:N ; λ) .
+gscore = E log pb(y1:T )∇ log φ(a
+1:T −1
+1:T
+This expansion follows from the product rule, just as in
+the generalized reparameterizations of Ruiz et al. [2016]
+and Naesseth et al. [2017]. Note that all xit , implicit in the
+weights wti and pb(y1:T ) are now replaced with their reparameterizations h(· ; λ). The ancestor variables are discrete and
+cannot be reparameterized—this can lead to high variance
+in the score function term, gscore from (7).
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+In Section 5, we empirically assess the impact of ignoring
+gscore for optimization. We empirically study optimizing
+with and without the score function term for a small state
+space model where standard variance reduction techniques,
+explained below, are sufficient. We lower the variance using
+Rao-Blackwellization [Robert and Casella, 2004, Ranganath
+et al., 2014], noting that the ancestor variables at−1 have no
+effect on weights prior to time t,
+gscore =
+
+
+
+ait−1
+T
+N
+X
+X
+w
+pb(y1:T ) 
+E log
+∇ log P t−1`  .
+p
+b
+(y
+)
+1:t−1
+` wt−1
+t=2
+i=1
+
+(8)
+
+Furthermore,
+we
+use
+the
+score
+function
+e 1:N | ε1:N ; λ) with an estimate of the fu∇ log φ(a
+1:T −1
+1:T
+ture log average weights as a control variate [Ranganath
+et al., 2014].
+We found that ignoring the score function term gscore (8)
+from the ancestor variables, leads to faster convergence and
+very little difference in final ELBO. This corresponds to
+approximating the gradient of Le by
+∇e
+L(λ) ≈ E [∇ log pb(y1:T )] = grep .
+
+(9)
+
+This is the gradient we propose to use for optimizing the
+variational parameters of VSMC. See the supplementary material A.3 for more details, where we also provide a general
+score function-like estimator and the control variates.
+Algorithm. We now describe the full algorithm to optimize the VSMC variational approximation. We form stochasb L(λ)
+e
+tic gradients ∇
+by estimating (9) using a single sample
+from s(·) e
+φ(· | · ; λ). The sample is obtained as a byproduct
+of sampling VSMC (Algorithm 1). We use the step-size
+sequence Adam [Kingma and Ba, 2015] or ρn proposed by
+Kucukelbir et al. [2017],
+
+√ −1
+ρn = η · n−1/2+δ · 1 + sn
+,
+
+2
+b L(λ
+e n ) + (1 − t)sn−1 ,
+sn = t ∇
+(10)
+where n is the iteration number. We set δ = 10−16 and
+t = 0.1, and we try different values for η. Algorithm 2
+summarizes this optimization algorithm.1
+Variational Expectation Maximization. Suppose the
+target distribution of interest p(x1:T | y1:T ; θ) has a set of
+unknown parameters θ. We can fit the parameters using variational expectation-maximization (VEM) [Beal and Ghahramani, 2003]. The surrogate ELBO is updated accordingly
+log p(y1:T ; θ) ≥ L̃(λ, θ)
+
+(11)
+
+1
+Reference implementation using Adam is available at
+github.com/blei-lab/variational-smc.
+
+Algorithm 2 Stochastic Optimization for VSMC
+Require: Data y1:T , model p(x1:T , y1:T ), proposals
+r(xt | xt−1 ; λ), number of particles N
+Ensure: Variational parameters λ?
+1: repeat
+b L(λ
+e n ) given by (9)
+2:
+Estimate the gradient ∇
+n
+3:
+Compute stepsize ρ with (10)
+b L(λ
+e n)
+4:
+Update λn+1 = λn + ρn ∇
+5: until convergence
+
+where the normalization constant p(y1:T ; θ) is now a function of the parameters θ. Note that the expression for L̃(λ, θ)
+is exactly the same as (6), but where the weights (and potentially proposals) now include a dependence on the model
+parameters θ. Analogously, the reparameterization gradients have the same form as (9). We can maximize (11), with
+respect to both θ and λ, using stochastic optimization. With
+data subsampling, VSMC extends to large-scale datasets of
+conditionally independent sequences [Hoffman et al., 2013,
+Titsias and Lázaro-Gredilla, 2014].
+
+4
+
+Perspectives on Variational SMC
+
+We give some perspectives on VSMC. First, we consider
+the VSMC special cases of N = 1 and T = 1. For N = 1,
+VSMC reduces to a structured variational approximation:
+there is no resampling and the variational distribution is
+exactly the proposal. For T = 1, VSMC leads to a special
+case we call variational importance sampling, and a reinterpretation of the IWAE [Burda et al., 2016], which we explore
+further in the first half of this section.
+Then, we think of sampling from VSMC as sampling a highly
+optimized SMC approximation. This means many of the
+theoretical SMC results developed over the past 25 years can
+be adapted for VSMC. We explore some examples in the
+second half of this section.
+Variational Importance Sampling (VIS). The case
+where T = 1 is SMC without any resampling, i.e., importance sampling. The corresponding special case of VSMC
+is VIS. The surrogate ELBO for VIS is exactly equal to the
+IWAE lower bound [Burda et al., 2016].
+This equivalence provides new intuition behind the IWAE’s
+variational approximation on the latent variables. If we want
+to make use of the approximation q(x1:T ; λ? ) learned with
+the IWAE lower bound, samples from the latent variables
+should be generated with Algorithm 1, i.e. VIS. For VIS it is
+possible to show that the surrogate ELBO is always tighter
+than the one obtained by standard VB (equivalent to VIS
+with N = 1) [Burda et al., 2016]. This result does not carry
+over to VSMC, i.e. we can find cases when the resampling
+creates a looser bound compared to standard VB or VIS.
+However, in practice the VSMC lower bound outperforms
+
+Density
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+0.45
+0.40
+0.35
+0.30
+0.25
+0.20
+0.15
+0.10
+0.05
+0.00
+
+p(x|y)
+r(x;λ )
+q(x;λ )
+
+6
+
+4
+
+2
+
+0
+
+2
+
+4
+
+6
+
+x
+Figure 2: Example of VIS q(x ; λ) approximating a multimodal p(x | y) with a Gaussian proposal r(x ; λ).
+the VIS lower bound.
+Figure 2 provides a simple example of VIS applied to a
+multimodal p(x | y) ∝ N (x ; 0, 1) N (y ; x2 /2, ex/2 ) with a
+normal proposal r(x ; λ) = N (x ; µ, σ 2 ) and a kernel density estimate of the corresponding variational approximation
+q(x ; λ). The number of particles is N = 10. Standard VB
+with a Gaussian approximation only captures one of the two
+modes; which one depends on the initialization. We see that
+even a simple proposal can lead to a very flexible posterior
+approximation. This property is also inherited by the more
+general T > 1 case, VSMC.
+Theoretical Properties. The normalization constant estimate of the SMC sampler, pb(y1:T ), is unbiased [Del Moral,
+2004, Pitt et al., 2012, Naesseth et al., 2014]. This, together with Jensen’s inequality, implies that the surrogate ELBO E[log pb(y1:T )] is a lower bound to log p(y1:T ).
+If log pb(y1:T ) is uniformly integrable it follows [Del Moral,
+2004], as N → ∞, that
+e
+L(λ)
+= L(λ) = log p(y1:T ).
+This fact means that the gap in Theorem 1 disappears and
+the distribution of the trajectory returned by VSMC will tend
+to the true target distribution p(x1:T | y1:T ). A bound on the
+KL divergence gives us the rate
+
+ c(λ)
+KL q(x1:T ; λ) p(x1:T | y1:T ) ≤
+,
+N
+for some constant c(λ) < ∞. This is a special case of a
+“propagation of chaos” result from Del Moral [2004, Theorem 8.3.2].
+We can arrive at this result informally by studying (5): as
+the number of particles increases, the marginal likelihood
+estimate will converge to the true marginal likelihood and
+the variational posterior will converge to the true posterior.
+Huggins and Roy [2017] provide further bounds on various divergences and metrics between SMC and the target
+distribution.
+
+VSMC and T . Like SMC , variational sequential Monte
+Carlo scales well with T .
+Bérard et al. [2014]
+show a central limit theorem for the SMC approximation log pb(y1:T ) − log p(y1:T ) with N = bT , where b > 0,
+as T → ∞. Under the same conditions as in that work, and
+assuming that log pb(y1:T ) is uniformly integrable, we can
+show that
+
+
+
+
+pb(y1:T )
+KL q(x1:T ; λ) p(x1:T | y1:T ) ≤ −E log
+p(y1:T )
+2
+σ (λ)
+−−−−→
+, 0 < σ 2 (λ) < ∞.
+T →∞
+2b
+
+The implication for VSMC is significant. We can make
+the variational approximation arbitrarily accurate by setting N ∝ T , even as T goes to infinity. The supplement
+shows that this holds in practice; see A.4 for the toy example
+from Figure 1. We emphasize that neither standard VB nor
+IWAE ( VIS) have this property.
+
+5
+
+Empirical Study
+
+Linear Gaussian State Space Model The linear Gaussian SSM is a ubiquitous model of time series data that
+enjoys efficient algorithms for computing the exact posterior. We use this model to study the convergence properties
+and impact of biased gradients for VSMC. We further use
+it to confirm that we learn good proposals. We compare to
+the bootstrap particle filter (BPF), which uses the prior as
+a proposal, and the (locally) optimal proposal that tilts the
+prior with the likelihood.
+The model is
+xt = Axt−1 + vt ,
+yt = Cxt + et ,
+where vt ∼ N (0, Q), et ∼ N (0, R), and x1 ∼ N (0, I).
+The log-marginal likelihood log p(y1:T ) can be computed
+using the Kalman filter.
+We study the impact of the biased gradient (9) for optimizing
+the surrogate ELBO (6). First, consider a simple scalar model
+with A = 0.5, Q = 1, C = 1, R = 1, and T = 2. For the
+proposal we use r(xt | xt−1 ; λ) = N (xt ; λ + 0.5xt−1 , 1),
+with x0 ≡ 0. Figure 3 (left) shows the mean and spread
+of estimates of gscore (8), with control variates, and grep (9),
+as a function of λ for four randomly generated datasets.
+The optimal setting of λ is where the sum of the means is
+equal to zero. Ignoring the score function term gscore (8)
+will lead to a perturbation of the optimal λ. However, even
+for this simple model, the variance of the score function
+term (red) is several orders of magnitude higher than that
+of the reparameterization term (blue), despite the variance
+reduction techniques of Section 3. This variance has a
+significant impact on the convergence speed of the stochastic
+optimization.
+
+f
+
+3
+
+2
+
+1
+
+0
+
+1
+
+2
+
+3
+
+log pb(y)∇logφ(a)
+∇log pb(y)
+f
+
+3
+
+2
+
+1
+
+λ
+
+1
+
+2
+
+log pb(y)∇logφ(a)
+∇log pb(y)
+
+λ
+
+1
+
+3
+
+30
+
+log pb(y)∇logφ(a)
+∇log pb(y)
+f
+
+20
+2
+
+2 4
+
+6
+
+8 10 12 14
+
+3
+
+2
+
+1
+
+0
+
+λ
+
+1
+
+2
+
+3
+
+VSMC (grep)
+VSMC (grep + gscore)
+log p(y1 :T)
+0
+
+140
+160
+180
+200
+220
+240
+260
+280
+
+VSMC (grep)
+VSMC (grep + gscore)
+log p(y1 :T)
+0
+
+2 4
+
+6
+
+8 10 12 14
+
+Iterations (103 )
+
+2 4
+
+6
+
+8 10 12 14
+
+Iterations (103 )
+
+dx = 10, dy = 3, C dense
+
+10
+
+f
+
+0
+
+VSMC (grep)
+VSMC (grep + gscore)
+log p(y1 :T)
+
+λ
+
+0
+
+1
+
+240
+260
+280
+300
+320
+340
+360
+380
+
+Iterations (103 )
+
+10
+
+2
+
+95
+100
+105
+110
+115
+120
+125
+0
+
+20
+
+3
+
+dx = 25, dy = 1, C dense
+
+3
+
+ELBO
+
+20
+15
+10
+5
+0
+5
+10
+15
+20
+
+0
+
+dx = 10, dy = 1, C sparse
+
+ELBO
+
+log pb(y)∇logφ(a)
+∇log pb(y)
+
+20
+10
+0
+10
+20
+30
+40
+
+dx = 25, dy = 25, C sparse
+
+ELBO
+
+25
+20
+15
+10
+5
+0
+5
+10
+15
+
+ELBO
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+400
+450
+500
+550
+600
+650
+700
+750
+
+VSMC (grep)
+VSMC (grep + gscore)
+log p(y1 :T)
+0
+
+2 4
+
+6
+
+8 10 12 14
+
+Iterations (103 )
+
+Figure 3: (Left) Mean and spread of the stochastic gradient components gscore (8) and grep (9), for the scalar linear Gaussian
+model on four randomly generated datasets, where the number of particles is N = 2. (Right) Log-marginal likelihood
+(log p(y1:T )) and ELBO as a function of iterations for VSMC with biased gradients (blue) or unbiased gradients (red). Results
+for four different linear Gaussian models.
+Table 1: ELBO for BPF, SMC with (locally) optimal proposal,
+Next, we study the magnitude of the perturbation, and its efand VSMC. The true log-marginal likelihood is given by
+fect on the surrogate ELBO. We generate data with T = 10,
+|i−j|+1
+log p(y1:T ) = −236.9.
+(A)ij = α
+for α = 0.42, Q = I, and R = I. We explored several settings of dx = dim(xt ), dy = dim(yt ), and
+BPF
+Optimal SMC
+VSMC
+C. Sparse C measures the first dy components of xt , and
+ELBO
+−6701.4
+−253.4
+−237.8
+dense C has randomly generated elements Cij ∼ N (0, 1).
+Figure 3 (right) shows the true log-marginal likelihood and
+ELBO as a function of iteration. It shows VSMC with biased
+the true log-marginal likelihood. We further emphasize that
+gradients (blue) and unbiased gradients (red). We choose
+the optimal proposal is unavailable for most models.
+the proposal
+
+r(xt | xt−1 ; λ) = N xt | µt + diag(βt )Axt−1 , diag(σt2 ) . Stochastic Volatility A common model in financial
+econometrics is the (multivariate) stochastic volatility
+
+T
+model [Chib et al., 2009]. The model is
+with λ = µt , βt , σt2 t=1 , and set the number of particles
+to N = 4. Note that while the gradients are biased, the
+xt = µ + φ(xt−1 − µ) + vt ,
+resulting ELBO is not. We can see that the final VSMC
+x 
+t
+ELBO values are very similar, regardless of whether we
+yt = β exp
+et ,
+2
+train with biased or unbiased gradients. However, biased
+where vt ∼ N (0, Q), et ∼ N (0, I), x1 ∼ N (µ, Q), and
+gradients converge faster. Thus, we use biased gradients in
+θ = (µ, φ, Q, β). (In the multivariate case, multiplication is
+the remainder of our experiments.
+element-wise.) Computing log p(y1:T ; θ) and its gradients
+Next, we study the effect of learning the proposal using
+for this model is intractable, we study the VEM approximaVSMC compared with standard proposals in the SMC literation to find the unknown parameters θ. We compare VSMC
+ture. The most commonly used is the BPF, sampling from
+with IWAE and structured VI. For the proposal in VSMC and
+the prior f . We also consider the so-called optimal proposal,
+IWAE we choose
+r ∝ f · g, which minimizes the variance of the incremenr(xt | xt−1 ; λ, θ) ∝ f (xt | xt−1 ; θ) N (xt ; µt , Σt ),
+tal importance weights [Doucet and Johansen, 2009]. Table 1 shows results for a linear Gaussian SSM when T = 25,
+with variational parameters λ = (µ1 , . . . , µT , Σ1 , . . . , ΣT ).
+Q = 0.12 I, R = 1, dx = 10, and dy = 1. Because of the
+We define the variational
+QT approximation for structured VI to
+relatively high-dimensional state, BPF exhibits significant
+be q(x1:T ; λ, θ) = t=1 r(xt | xt−1 ; λ, θ).
+bias whereas the optimal proposal SMC performs much better. VSMC outperforms them both, learning an accurate
+We study 10 years of monthly returns (9/2007 to 8/2017)
+proposal that results in an ELBO only 0.9 nats lower than
+for the exchange rate of 22 international currencies with
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+1080
+
+Table 2: ELBO for the stochastic volatility model with
+T = 119 on exchange rate data. We compare VSMC (this
+paper) with IWAE and structured VI.
+ELBO
+
+Structured VI
+
+6905.1
+6911.2
+6921.6
+6912.4
+6935.8
+6913.3
+6936.6
+
+IWAE
+
+N =4
+
+VSMC
+IWAE
+
+N =8
+
+VSMC
+
+N = 16
+
+IWAE
+VSMC
+
+1180
+1200
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Iterations (103 )
+
+In theory we can improve the bound of both IWAE and VSMC
+by increasing the number of samples N . This means we
+can first learn proposals using only a few particles N , for
+computational efficiency. Then, at test time, we can increase
+N as needed for improved accuracy. We study the impact of
+increasing the number of samples for VSMC and IWAE using
+fix θ? and λ? optimized with N = 16. Figure 4 shows that
+the gain for IWAE is limited, whereas for VSMC it can be
+significant.
+
+Figure 5: The estimated ELBO of the neural population test
+data as a function of iterations for VSMC (this paper) and
+IWAE, for dx = {3, 5, 10} and T = 21.
+ics and observations. The model is
+xt = µθ (xt−1 ) + exp (σθ (xt−1 )/2) vt ,
+yt ∼ Poisson (exp (ηθ (xt ))) ,
+where vt ∼ N (0, I), x0 ≡ 0, and µ, σ, η are neural networks parameterized by θ. The multiplication in the transition dynamics is element-wise. This is a deep Markov
+model [Krishnan et al., 2017].
+For inference we use the following proposal for both VSMC
+and IWAE,
+r(xt | xt−1 , yt ; λ) ∝ N (xt ; µxλ (xt−1 ), exp (σλx (xt−1 )))
+× N (xt ; µyλ (yt ), exp (σλy (yt ))) ,
+
+6960
+6950
+
+ELBO
+
+IWAE dx = 3
+IWAE dx = 5
+IWAE dx = 10
+VSMC dx = 3
+VSMC dx = 5
+VSMC dx = 10
+
+1140
+1160
+
+respect to US dollars. The data is from the Federal Reserve
+System. Table 2 reports the optimized ELBO (higher is better) for different settings of the number of particles/samples
+N = {4, 8, 16}. VSMC outperforms the competing methods
+with almost 0.2 nats per time-step.
+
+6940
+
+VSMC
+IWAE
+
+6930
+6920
+6910
+
+1120
+
+ELBO
+
+Method
+
+1100
+
+where µx , σ x , µy , σ y are neural networks parameterized
+by λ, and the proposal factorizes over the components
+of xt . Figure 5 illustrates the result for dx = {3, 5, 10}
+with N = 8. VSMC gets to the same ELBO faster.
+
+6
+100
+
+200
+
+300
+
+400
+
+500
+
+N
+Figure 4: The estimated ELBO for VSMC (this paper) and
+IWAE , with confidence bands, as a function of the number
+of particles N for fix θ? , λ? .
+
+Deep Markov Model An important problem in neuroscience is understanding dynamics of neural circuits. We
+study a population of 105 motor cortex neurons simultaneously recorded in a macaque monkey as it performed
+reaching movements [c.f. Gao et al., 2016]. In each trial,
+the monkey reached toward one of fourteen targets; each
+trial is T = 21 time steps long. We train on 700 trials and
+test on 84.
+We use recurrent neural networks to model both the dynam-
+
+Conclusions
+
+We introduced the variational sequential Monte Carlo
+(VSMC) family, a new variational approximating family that
+provides practitioners with a flexible, accurate, and powerful approximate Bayesian inference algorithm. VSMC melds
+variational inference (VI) and sequential Monte Carlo (SMC).
+This results in a variational approximation that lets us tradeoff fidelity to the posterior with computational complexity.
+
+Acknowledgements
+Christian A. Naesseth is supported by CADICS, a Linnaeus
+Center, funded by the Swedish Research Council (VR).
+Scott W. Linderman is supported by the Simons Foundation
+SCGB-418011. This work is supported by ONR N0001411-1-0651, DARPA PPAML FA8750-14-2-0009, the Alfred
+P. Sloan Foundation, and the John Simon Guggenheim Foundation.
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+References
+E. Archer, I. Memming Park, L. Buesing, J. Cunningham,
+and L. Paninski. Black box variational inference for state
+space models. arXiv:1511.07367, Nov. 2015.
+P. Bachman and D. Precup. Training deep generative models:
+Variations on a theme. In NIPS Approximate Inference
+Workshop, 2015.
+M. J. Beal and Z. Ghahramani. The variational Bayesian
+EM algorithm for incomplete data: with application to
+scoring graphical model structures. Bayesian statistics,
+2003.
+Y. Burda, R. Grosse, and R. Salakhutdinov. Importance
+weighted autoencoders. In International Conference on
+Learning Representations, 2016.
+J. Bérard, P. Del Moral, and A. Doucet. A lognormal central
+limit theorem for particle approximations of normalizing
+constants. Electronic Journal of Probability, 2014.
+O. Cappé, E. Moulines, and T. Rydén. Inference in Hidden
+Markov Models. Springer-Verlag New York, 2005.
+S. Chib, Y. Omori, and M. Asai. Multivariate Stochastic
+Volatility, pages 365–400. Springer Berlin Heidelberg,
+Berlin, Heidelberg, 2009.
+J. Cornebise. Adaptive Sequential Monte Carlo Methods.
+PhD thesis, University Pierre and Marie Curie–Paris 6,
+2009.
+C. Cremer, Q. Morris, and D. Duvenaud. Reinterpreting
+importance-weighted autoencoders. arXiv:1704.02916,
+Apr. 2017.
+P. Del Moral. Feynman-Kac Formulae: Genealogical and
+interacting particle systems with applications. SpringerVerlag New York, 2004.
+P. Del Moral, A. Doucet, and A. Jasra. Sequential monte
+carlo samplers. Journal of the Royal Statistical Society:
+Series B (Statistical Methodology), 2006.
+L. Dinh, D. Krueger, and Y. Bengio. Nice: Non-linear
+independent components estimation. arXiv:1410.8516,
+2014.
+A. Doucet and A. M. Johansen. A tutorial on particle filtering and smoothing: Fifteen years later. Handbook of
+nonlinear filtering, 12(656-704):3, 2009.
+A. Doucet, N. De Freitas, and N. Gordon. An introduction
+to sequential Monte Carlo methods. In Sequential Monte
+Carlo methods in practice. Springer-Verlag New York,
+2001.
+
+Y. Gao, E. W. Archer, L. Paninski, and J. P. Cunningham.
+Linear dynamical neural population models through nonlinear embeddings. In Advances in Neural Information
+Processing Systems, 2016.
+N. J. Gordon, D. J. Salmond, and A. F. M. Smith. Novel
+approach to nonlinear/non-Gaussian Bayesian state estimation. Radar and Signal Processing, IEE Proceedings
+F, 140(2):107 –113, Apr. 1993.
+S. Gu, Z. Ghahramani, and R. E. Turner. Neural adaptive sequential Monte Carlo. In Advances in Neural Information
+Processing Systems, 2015.
+P. Guarniero, A. M. Johansen, and A. Lee. The iterated auxiliary particle filter. Journal of the American Statistical
+Association, 112(520):1636–1647, 2017.
+M. D. Hoffman, D. M. Blei, C. Wang, and J. Paisley.
+Stochastic variational inference. Journal of Machine
+Learning Research, 14:1303–1347, May 2013.
+J. H. Huggins and D. M. Roy. Sequential Monte Carlo
+as approximate sampling: bounds, adaptive resampling via ∞-ESS, and an application to particle Gibbs.
+arXiv:1503.00966v2, Mar. 2017.
+M. Johnson, D. K. Duvenaud, A. Wiltschko, R. P. Adams,
+and S. R. Datta. Composing graphical models with neural
+networks for structured representations and fast inference.
+In Advances in Neural Information Processing Systems,
+2016.
+M. I. Jordan, Z. Ghahramani, T. S. Jaakkola, and L. K.
+Saul. An introduction to variational methods for graphical
+models. Machine Learning, 37(2):183–233, Nov. 1999.
+D. P. Kingma and J. Ba. Adam: A method for stochastic
+optimization. In International Conference on Learning
+Representations, 2015.
+D. P. Kingma and M. Welling. Auto-encoding variational
+Bayes. In International Conference on Learning Representations, 2014.
+G. Kitagawa. Monte Carlo filter and smoother for nonGaussian nonlinear state space models. Journal of computational and graphical statistics, 5(1):1–25, 1996.
+R. Krishnan, U. Shalit, and D. Sontag. Structured inference
+networks for nonlinear state space models. In Thirty-First
+AAAI Conference on Artificial Intelligence, 2017.
+A. Kucukelbir, D. Tran, R. Ranganath, A. Gelman, and
+D. M. Blei. Automatic differentiation variational inference. Journal of Machine Learning Research, 18(1):
+430–474, Jan. 2017. ISSN 1532-4435.
+T. A. Le, M. Igl, T. Jin, T. Rainforth, and F. Wood. AutoEncoding Sequential Monte Carlo. arXiv:1705.10306,
+May 2017.
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+L. Maaløe, C. K. Sønderby, S. K. Sønderby, and O. Winther.
+Auxiliary deep generative models. In International Conference on Machine Learning, 2016.
+
+A. Saeedi, T. D. Kulkarni, V. Mansinghka, and S. Gershman. Variational particle approximations. arXiv preprint
+arXiv:1402.5715, 2014.
+
+C. J. Maddison, D. Lawson, G. Tucker, N. Heess,
+M. Norouzi, A. Mnih, A. Doucet, and Y. Whye Teh.
+Filtering variational objectives. In Advances in Neural
+Information Processing Systems, 2017.
+
+T. Salimans, D. P. Kingma, and M. Welling. Markov chain
+Monte Carlo and variational inference: Bridging the gap.
+In International Conference on Machine Learning, 2015.
+
+C. A. Naesseth, F. Lindsten, and T. B. Schön. Sequential
+Monte Carlo for graphical models. In Advances in Neural
+Information Processing Systems, 2014.
+C. A. Naesseth, F. Lindsten, and T. B. Schön. Nested sequential Monte Carlo methods. In International Conference
+on Machine Learning, 2015.
+C. A. Naesseth, F. J. R. Ruiz, S. W. Linderman, and D. M.
+Blei. Reparameterization gradients through acceptancerejection sampling algorithms. In Proceedings of the 20th
+International Conference on Artificial Intelligence and
+Statistics, 2017.
+B. Paige and F. Wood. Inference networks for sequential
+Monte Carlo in graphical models. In International Conference on Machine Learning, 2016.
+M. K. Pitt, R. dos Santos Silva, P. Giordani, and R. Kohn.
+On some properties of Markov chain Monte Carlo simulation methods based on the particle filter. Journal of
+Econometrics, 2012.
+R. Ranganath, S. Gerrish, and D. M. Blei. Black box variational inference. In Artificial Intelligence and Statistics,
+2014.
+R. Ranganath, A. Perotte, N. Elhadad, and D. Blei. Deep survival analysis. In Proceedings of the 1st Machine Learning for Healthcare Conference, pages 101–114, 2016a.
+R. Ranganath, D. Tran, and D. M. Blei. Hierarchical variational models. In International Conference on Machine
+Learning, 2016b.
+D. J. Rezende and S. Mohamed. Variational inference with
+normalizing flows. In International Conference on Machine Learning, 2015.
+D. J. Rezende, S. Mohamed, and D. Wierstra. Stochastic
+backpropagation and approximate inference in deep generative models. In International Conference on Machine
+Learning, 2014.
+C. Robert and G. Casella. Monte Carlo Statistical Methods.
+Springer Texts in Statistics. Springer, 2004.
+F. J. R. Ruiz, M. K. Titsias, and D. M. Blei. The generalized reparameterization gradient. In Advances in Neural
+Information Processing Systems, 2016.
+
+T. B. Schön, F. Lindsten, J. Dahlin, J. Wågberg, C. A. Naesseth, A. Svensson, and L. Dai. Sequential Monte Carlo
+methods for system identification. In Proceedings of the
+17th IFAC Symposium on System Identification (SYSID),
+Oct 2015.
+L. Stewart and P. McCarty, Jr. Use of Bayesian belief networks to fuse continuous and discrete information for
+target recognition, tracking, and situation assessment. In
+Proc. SPIE, volume 1699, pages 177–185, 1992.
+M. Titsias and M. Lázaro-Gredilla. Doubly stochastic variational Bayes for non-conjugate inference. In Proceedings
+of the 31st International Conference on Machine Learning, 2014.
+D. Tran, R. Ranganath, and D. M. Blei. The variational
+Gaussian process. In International Conference on Learning Representations, 2016.
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+A
+
+Variational Sequential Monte Carlo – Supplementary Material
+
+A.1
+
+Proof of Proposition 1
+
+We start by noting that the distribution of all random variables generated by the VSMC algorithm is given by
+i
+
+at−1
+N
+T Y
+N
+bT
+Y
+Y
+wt−1
+ait−1
+i
+e 1:N , a1:N , bT ; λ) = PwT
+P
+r(xit |xt−1
+; λ).
+φ(x
+r(x
+;
+λ)
+·
+1:T
+1:T −1
+1
+`
+`
+` wT i=1
+` wt−1
+t=2 i=1
+
+(12)
+
+e 1:T ; λ) = Eb [φ(x
+e b1:T , b1:T ; λ)]. A key observation is
+We are interested in the marginal distribution q(x1:T ; λ) , φ(x
+1:T
+1:T
+that the distribution of b1:T | x1:T , the conditional distribution of the ancestral path of the returned particle, is uniform on
+T
+{1, . . . , N } . Thus we get
+q(x1:T ; λ) =
+
+e b1:T , b1:T ; λ)
+φ(x
+1
+1:T
+= −T
+e
+N
+φ(b1:T | x1:T ; λ)
+
+Z
+
+X
+
+¬b1:T −1
+¬b1:T
+1:T
+1:T
+e
+φ(xb1:T
+, x¬b
+1:T , a1:T −1 ; λ) dx1:T ,
+
+(13)
+
+−b
+−1
+a1:T1:T
+−1
+
+where
+1
+N −T
+
+e b1:T , x¬b1:T , a¬b1:T −1 ; λ)
+φ(x
+1:T
+1:T
+1:T −1
+i
+
+at−1
+T
+N
+T
+Y wt−1
+Y N
+Y
+Y w bt
+w1b1
+ait−1
+bt−1
+bt
+b1
+t
+i
+P ` r(xt | xt−1 ; λ) ·
+P ` r(xit |xt−1
+r(x1 ; λ) ·
+= N P ` r(x1 ; λ)
+; λ)
+` w1
+` wt
+` wt−1
+t=2 i=1
+t=2
+i=1
+T
+
+i6=bt
+
+i6=b1
+
+= p(xb11 , y1 )
+
+T
+Y
+
+b1:t
+p(x1:t
+, y1:t )
+
+T
+Y
+
+1
+P
+1
+
+b1:t−1
+t=2 p(x1:t−1 , y1:t−1 ) t=1 N
+
+b1:T
+= p(x1:T
+, y1:T )
+
+T
+Y
+1
+t=1 N
+
+1
+P
+
+`
+` wt
+
+`
+` wt
+
+·
+
+N
+Y
+
+r(xi1 ; λ) ·
+
+i=1
+i6=b1
+
+ai
+
+T
+Y
+Y N
+
+w t−1
+ait−1
+P t−1` r(xit |xt−1
+; λ)
+` wt−1
+t=2 i=1
+i6=bt
+
+¬b
+
+1:T −1
+1:T
+·e
+φ(x¬b
+1:T , a1:T −1 ; λ).
+
+We insert the above expression in (13) and we get
+b1:T
+q(x1:T ; λ) = p(x1:T
+, y1:T )
+
+X
+
+N
+T
+Y
+1 X
+
+Z
+
+N i=1
+t=1
+
+¬b
+
+−1
+a1:T1:T
+−1
+
+!−1
+
+
+b1:T
+
+= p(x1:T
+, y1:T )Eφ(x
+e ¬b1:T ,a¬b1:T −1 ;λ)
+1:T
+
+¬b
+
+¬b1:T
+1:T −1
+1:T
+·e
+φ(x¬b
+1:T , a1:T −1 ; λ) dx1:T
+
+wti
+
+1:T −1
+
+T
+N
+Y
+1 X
+
+N i=1
+t=1
+
+!−1 
+wti
+
+.
+
+(14)
+
+
+A.2
+
+Proof of Theorem 1
+
+The evidence lower bound (ELBO), using the above result about the distribution of q(x1:T ; λ), is given by
+L(λ) = Eq(x1:T ;λ) [log p(x1:T , y1:T ) − log q(x1:T ; λ)]
+"
+Z (
+b1:T
+=−
+p(x1:T , y1:T )Eφ(x
+e ¬b1:T ,a¬b1:T −1 ;λ) QT
+1:T
+
+1:T −1
+
+t=1 N
+
+"
+· log E e
+¬b
+¬b
+QT
+φ(x 1:T ,a 1:T −1 ;λ)
+1:T
+
+1:T −1
+
+1
+PN
+1
+
+t=1 N
+
+#
+
+1
+PN
+1
+
+i
+i=1 wt
+
+i
+i=1 wt
+
+·
+
+#)
+1:T
+dxb1:T
+.
+
+(15)
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+Note that −t log t is a concave function for t > 0, this means by the conditional Jensen’s inequality we have −E[t] log E[t] ≥
+−E[t log t]. If we apply this to (15) we get
+"
+!#
+Z
+T
+N
+1:T
+p(xb1:T
+, y1:T ) X
+1 X i
+1:T
+log
+wt
+L(λ) ≥ E e
+dxb1:T
+¬b
+¬b
+QT 1 PN
+−1
+φ(x1:T1:T ,a1:T1:T
+;λ)
+i
+N
+−1
+w
+i=1 t t=1
+t=1 N
+i=1
+!#
+" T
+N
+X
+X
+1
+e
+wti
+= Ee
+= L(λ),
+log
+1:N
+φ(x1:N
+1:T ,a1:T −1 ;λ)
+N
+t=1
+i=1
+e 1:N , a1:N ; λ).
+where the last step follows because q(x1:T ; λ) is the marginal of φ(x
+1:T
+1:T −1
+A.3
+
+
+
+Stochastic Optimization
+
+For the control variates we use
+T
+X
+
+ct Es(·)φ(·|·
+e
+;λ)
+
+t=2
+
+"N
+X
+
+N
+`
+X wt−1
+ait−1
+`
+P
+∇ log wt−1
+−
+m ∇ log wt−1
+w
+t−1
+m
+i=1
+`=1
+
+#
+
+where
+ct = Es(·) e
+φ(·|· ;λ)
+
+" T
+X
+
+N
+
+1 X i
+w0
+N i=1 t
+
+log
+
+t0 =t
+
+!#
+.
+
+In practice we use a stochastic estimate of ct .
+For T = 2 we can use a leave-one-out estimator of the ancestor variable score function gradient
+"
+!#
+!
+PN
+N
+N
+X
+X
+N − 1 `=1 w2`
+w1`
+ai1
+`
+P
+Es(·) e
+.
+∇ log w1 −
+P
+m ∇ log w1
+φ(·|· ;λ) log
+j
+N
+m w1
+j6=i w2
+i=1
+`=1
+
+Score Function Gradient Below we provide the derivation of a score function-like estimator that is applicable in very
+general settings. However, we have found that in practice the variance tends to be quite high.
+e
+∇L(λ)
+= ∇Eφ(x
+e 1:N ,a1:N
+1:T
+
+= Ee
+φ(x1:N ,a1:N
+1:T
+
+[log pb(y1:T )]
+h
+i
+1:N
+1:N
+e
+∇
+log
+p
+b
+(y
+)
++
+log
+p
+b
+(y
+)∇
+log
+φ(x
+,
+a
+;
+λ)
+,
+1:T
+1:T
+1:T
+1:T −1
+;λ)
+
+1:T −1 ;λ)
+
+1:T −1
+
+with
+∇ log pb(y1:T ) = ∇
+
+T
+X
+
+N
+
+log
+
+t=1
+
+1 X i
+w
+N i=1 t
+
+!
+=
+
+T X
+N
+X
+
+wi
+P t ` ∇ log wti ,
+` wt
+t=1 i=1
+
+and
+1:N
+∇ log e
+φ(x1:N
+1:T , a1:T −1 ; λ)
+"
+"
+##
+N
+T
+N
+X
+X
+X
+i
+i
+a
+a
+t−1
+t−1
+`
+`
+∇ log r(xit |xt−1
+; λ) + ∇ log wt−1
+−
+w̄t−1
+∇ log wt−1
+.
+=
+∇ log r(xi1 ; λ) +
+i=1
+
+A.4
+
+t=2
+
+`=1
+
+Scaling With Dimension
+
+In this section we study how the methods compare on a simple toy model defined by
+p(x1:T , y1:T ) =
+
+T
+Y
+t=1
+
+N (xt ; 0, 1)N (yt ; x2t , 1).
+
+Christian A. Naesseth, Scott W. Linderman, Rajesh Ranganath, David M. Blei
+
+0
+50
+100
+
+VB
+IWAE
+VSMC
+logp(y1 :T)
+
+50
+100
+150
+
+150
+
+ELBO
+
+ELBO
+
+0
+
+VB
+IWAE
+VSMC
+logp(y1 :T)
+
+200
+
+200
+250
+300
+
+250
+
+350
+300
+350
+
+400
+0
+
+20
+
+40
+
+60
+
+Dimension T
+
+(a) λIWAE = λ?VB
+
+80
+
+100
+
+450
+
+0
+
+20
+
+40
+
+60
+
+Dimension T
+
+80
+
+100
+
+(b) λIWAE = λ?VSMC
+
+Figure 6: ELBO, for standard VB, IWAE, and VSMC, as a function of the dimension T of a toy problem. Here we set the
+number of samples in IWAE and VSMC to be N = 2T .
+We study the data set yt = 3, ∀t. Figure 6 shows the result when we let the number of samples in importance weighted
+auto-encoder (IWAE) (variational importance sampling (VIS)) and VSMC grow with the dimension N = 2T . For low T
+the optimal parameters for IWAE are close to λ?VSMC . On the other hand for high T , the optimal parameters for IWAE are
+close to those of standard variational Bayes (VB), i.e. λ?VB . Figure 6 indicates that just by letting N ∝ T , VSMC can achieve
+arbitrarily good approximation of p(x1:T | y1:T ) even if T → ∞. This holds, under some regularity conditions, even if
+p(x1:T , y1:T ) is a state space model [Bérard et al., 2014]. This asymptotic approximation property is not satisfied by VIS,
+we see in Figure 6 that the approximation deteriorates as T increases. Note that this does not hold if the dimension of the
+latent space, i.e. dim(xt ), tends to infinity rather than the number of time points T .
+
+
