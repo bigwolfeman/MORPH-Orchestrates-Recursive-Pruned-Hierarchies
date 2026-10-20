@@ -1,0 +1,1036 @@
+                                                                          Think Shallow, Solve Deep:
+                                                          Controlling Recurrent Dynamics for Reliable Test-Time Depth
+                                                        Ivan Viakhirev1,2 , Kirill Borodin3,4,5 , Amirah Almutairi6 , Serguei Barannikov7 ,
+                                                                             Maxim Abramov1 , Grach Mkrtchian3,5
+                                                                         1
+                                                                          FRC RAS, Saint-Petersburg, Russia 2 ITMO, Saint-Petersburg, Russia
+                                                                3
+                                                                    lab260, Moscow, Russia 4 BitmanagerAI, Dubai, UAE 5 MTUCI, Moscow, Russia
+                                                                             6
+                                                                               KAU, Jeddah, Saudi Arabia 7 CNRS, IMJ-PRG, Paris, France
+
+                                                                       Abstract
+
+
+
+
+arXiv:2608.18222v1 [cs.LG] 18 Aug 2026
+                                                                                                                 test-time depth, and intervene on it directly.
+                                           Recurrent-depth reasoners aim to solve harder problems by it-            Our experiments cover a leave-one-out ablation of
+                                           erating their update longer at test time, but additional iterations   a controlled-recurrence recipe (CoRe) and seven re-
+                                           can improve, preserve, or degrade an answer. We show that a           implemented architectures, all trained under one protocol:
+                                           measurable property of the trained operator, its finite-time dy-      fixed, unaugmented data, 800 examples per tier, three seeds
+                                           namical regime (estimated as settling, marginal, or drifting),        (three headline arms re-seeded to n≈20). The difficulty lad-
+                                           indicates which of these occurs. We give a sufficient condi-          ders come in two kinds (Sec. 3.1): ladders that enlarge the
+                                           tion for depth-safety: once an operator’s per-step displacement       input, where success turns on size-invariance rather than
+                                           is small relative to the decoder margin, the decoded answer           dynamics, and fixed-size ladders that only deepen the com-
+                                           cannot change under further iterations. Empirically, on algo-         putation.
+                                           rithmic tasks trained from 800 unaugmented examples per
+                                           difficulty tier, settling operators do not degrade with added            On the latter the regime predicts the effect of additional
+                                           depth, and on some tasks convert it into higher accuracy on           iterations: settling operators convert it (Sudoku 0.19 → 0.34)
+                                           harder unseen instances (Sudoku, 0.19 to 0.34 past the train-         or hold their never-trained plateau (0.92 on reachability)
+                                           ing horizon). A single terminal fixed-point objective moves the       while marginal and drifting ones stay flat, collapse, or decay;
+                                           regime and the depth behavior together: removing it induces           which architecture settles is task-dependent (on carry it is
+                                           drift and removes the gains, and adding it to a generic recur-        a TRM-style attention recurrence, not CoRe); and one ter-
+                                           rence yields depth-safe extrapolation on carry propagation.           minal objective term switches the regime in both directions
+                                           We give four operational criteria for useful test-time depth,         (Fig. 2, Fig. 3).
+                                           use them to catalogue failure modes, and, as a consistency
+                                           check, apply the same measurements to Huginn-3.5B, which                 Our contributions:
+                                           falls in the non-settling family.
+                                                                                                                 1. An operational account of useful test-time depth: four
+                                                                                                                    criteria with measurable failure cases, and a proposition
+                                                               1      Introduction                                  fixing what measured settling guarantees (depth-safety,
+                                         Recurrent-depth reasoners, networks that apply the same                    and a bound on adaptive-stabilization time) and what stays
+                                         block repeatedly to “think longer” on harder inputs, are an in-            empirical (Sec. 5). A measurement suite logs spectral,
+                                         creasingly popular answer to how small models might reason.                dynamical, information-flow, and topological signals for
+                                         Yet the Tiny Recursive Model (Jolicoeur-Martineau 2025)                    every run.
+                                         solves Sudoku only after ∼1000-fold augmentation (without               2. The dynamical regime predicts the fate of test-time
+                                         it, the same recurrence scores 0.00 under our protocol); HRM               depth: settling operators are depth-safe and, on some
+                                         (Wang et al. 2025) depends on augmentation similarly; and                  tasks, convert depth, while marginal and drifting opera-
+                                         at 3.5B parameters, Huginn’s extra recurrence yields only                  tors fail one or both; across our campaign each failure
+                                         marginal gains that quickly plateau (Geiping et al. 2025;                  falls into one of four measurable modes, and the spectral
+                                         Lu et al. 2025). In all three the architecture has a loop, but             and topological signatures agree run-by-run (Secs. 5, 6).
+                                         training does not make it behave like an algorithm: added iter-
+                                         ations do not reliably improve accuracy on harder instances.            3. One training term changes both the regime and depth
+                                             A recurrent reasoner is an iterated map zt+1 = f (zt , x),             behavior: the terminal fixed-point objective, removed,
+                                         and whether iterating longer helps is a property of that map’s             turns settling into drift and removes conversion or safety
+                                         finite-time dynamics: whether the state settles toward an                  with the architecture unchanged; added to an alternative
+                                         input-dependent fixed point, stays marginal, or diverges. A                recurrence, it produces both where added depth had pre-
+                                         rich theory of such maps exists (Sec. 2), yet reasoning archi-             viously degraded the model (Sec. 5.4). We apply the same
+                                         tectures are designed, trained, and scaled without measuring               instruments to Huginn-3.5B (Sec. 7), where they place it
+                                         any of it, compensating with augmentation and parameters.                  in the non-settling family, and a label-free objective de-
+                                         We make that dynamical regime the object of study: we mea-                 rived from the same taxonomy repairs its depth-safety
+                                         sure it on every trained operator, ask what it predicts about              (digit copying 0.00→1.00) without installing conversion.
+                    2    Related Work                                                harder = larger graph             harder = deeper reachability
+                                                                                        (12 → 16 nodes)                      (16 nodes fixed)
+Recurrent-depth reasoners. TRM (Jolicoeur-Martineau                        1.0                 trained tier (dashed)
+                                                                           0.8
+2025) and HRM (Wang et al. 2025) solve hard puzzles                        0.6
+                                                                                                                                           CoRe
+with tiny recurrent cores but rely on ∼1000× augmenta-                EM                                                                   TRM-style
+                                                                           0.4                                                             generic
+tion; Huginn-3.5B (Geiping et al. 2025) scales latent recur-               0.2              first unseen size: zero
+                                                                           0.0
+rence to 3.5B. Input recall (Bansal et al. 2022), easy-to-hard                   3             16   32    64   128      3           16   32    64     128
+iteration (Schwarzschild et al. 2021), and constraint-graph                          test-time iterations hc                test-time iterations hc
+message passing (Palm, Paquet, and Winther 2018) supply
+recipe components (cf. Esteves, Vasco, and Melo 2024; Knut-         Figure 1: Two notions of “harder,” one task family. Left:
+son et al. 2024). Equilibrium Reasoners (Huang, Geng, and           larger graphs, competent on trained sizes (dashed), transfer
+Kolter 2026) hypothesize reasoning arises from learned at-          nothing. Right: same-size, deeper instances, where settling
+tractors; we measure who learns one and flip it causally.           models generalize and plateau.
+Kohli et al. (2026) see grokking-like transitions behaviorally
+(cf. Chen 2026; Zhu et al. 2025), and Lu et al. (2025) little
+latent chain-of-thought in Huginn; we supply the instruments           Finally, persistent homology and topology divergence
+that see both on the inference map. Closest, Labovich (2026)        (Barannikov 1994; Barannikov et al. 2022) ask whether latent
+analyzes fixed-point stability of looped transformers theo-         trajectories loop, drift, or settle; we test three of its hypothe-
+retically; we measure the trained loop’s dynamics per run,          ses at campaign scale (Sec. 6).
+across architectures, and switch them causally.
+Dynamics of iterated maps in deep learning. Dynam-
+                                                                                        3      Setup and Methodology
+ical isometry (Saxe, McClelland, and Ganguli 2014; Pen-             3.1      Problem statement and the axis we isolate
+nington, Schoenholz, and Ganguli 2017), deep equilibrium            A weight-tied reasoner is an iterated map zt+1 = fθ (zt , x)
+models (Bai, Kolter, and Koltun 2019), and non-normal               trained for Ttrain iterations on a fixed distribution of easier
+transient dynamics in RNNs (Kerg et al. 2019; Orhan and             instances. We ask: when does increasing the test-time iter-
+Pitkow 2020; Tarnowski 2020) supply the map-level the-              ation budget hc > Ttrain (i) preserve acquired competence
+ory. Anil et al. (2022) showed that path independence cor-          and (ii) convert into accuracy on harder, out-of-distribution
+relates with upward generalization in equilibrium models            instances?
+and requires weight tying and input injection, corroborating           Two readings of “harder” must be separated; the question
+our recall-ablation collapse; our R4 (Sec. 5.1) is its single-      above is well-posed under only one. On a fixed-input-size
+initialization face. Our delta: a failure taxonomy across           ladder only the number of rounds a reference algorithm needs
+the full ablation×architecture matrix, a training-objective         grows, so extra iterations are exactly the demanded resource;
+switch with two distinguishable consequences (conversion            on a size/length ladder success is instead governed by the
+vs. depth-safety), and the spectral-anisotropy separation of        operator’s invariance to input size, a property orthogonal to
+settled-into-an-algorithm from merely-settled.                      its dynamics. Figure 1 makes the distinction concrete on one
+   Adaptive halting has its own lineage (Graves 2016; Banino,       task family. All extrapolation claims therefore live on fixed-
+Balaguer, and Blundell 2021); our R2 differs in demanding           input-size ladders; size/length generalization appears only as
+that adaptivity convert to correctness (Sec. 5.1). Edge-of-         scope.
+stability (Cohen et al. 2021) concerns the training-loss Hes-
+sian, not the inference map. A line of work imposes a dynam-        3.2      Tasks, difficulty ladders, fixed data
+ical property a priori: Bai, Koltun, and Kolter (2021) stabilize    Three fixed-input-size ladders with deterministic oracle-
+DEQ equilibria by regularizing the update’s Jacobian, and re-       round counts carry the primary experiments:
+cent reasoners follow, including enforced convergence to sta-        • Sudoku: 9×9; hole fraction 0.2 → 0.7, training tiers
+ble equilibria (Es’kin and Smorkalov 2026), spectral-radius            0.2/0.35/0.5;
+regularization (Yang et al. 2026), and stability-constrained         • reachability: 16 nodes; exact BFS depth 2 → 12, reach-
+adaptive depth (Movahedi et al. 2026). We instead measure              able fraction constant by construction;
+which properties are learned, show that σmax -control specif-        • addition: 2×32 bits, interleaved; longest carry run 2 →
+ically fails (Sec. 6), and explain ρ-control’s success from the        28.
+non-normal structure of trained operators.
+                                                                    Maze/sorting ladders probe the boundary; size/length ladders
+Delayed generalization and progress measures. On                    support Sec. 3.1; ARC-1/2 (transductive, no augmentation
+small algorithmic datasets, generalization can arrive long af-      (Chollet 2019)) is supporting only. Training uses easy tiers
+ter the training loss saturates (Power et al. 2022), the general-   only (rounds well below Ttrain ), 800 unique unaugmented
+izing circuit forming gradually, trackable by hidden progress       examples per tier; evaluation covers the full ladder (256 fixed
+measures before behavior (Nanda et al. 2023; Barak et al.           per tier); splits are materialized once, shared byte-for-byte;
+2022), in competition with a cheaper memorizing circuit             three seeds per configuration.
+(Varma et al. 2023). Our algorithm-versus-coverage ques-               One      run     =    one     trained    checkpoint      per
+tion transfers this competition to the inference map; Sec. 6.2      task×configuration×seed (evaluations over tiers and
+reports which quantities behave as progress measures for            depths are repeated observations; parity is excluded as
+recurrent reasoners.                                                chance-level for every arm). The headline aggregate is
+exact-match accuracy (EM; the fraction of complete outputs         Input recall: keep the problem in the loop. All models
+satisfying the correctness rule below) on the first unseen         condition on the embedded input once per step; the recipe re-
+difficulty tier, at the training depth and at the best test-time   injects it before each update (Bansal et al. 2022). Removing
+depth (Table 1); means over all unseen tiers are lower and         only this extra injection collapses the trained operator to
+never mixed with it.                                               an identity (σmax = 1.0000 to four decimals, EM 0.00):
+                                                                   the loop discovers an input-insensitive identity solution; the
+3.3   Metrics: validity oracle and exact match                     reinforced injection makes the fixed point strongly input-
+                                                                   dependent, the minimal requirement for the limit to encode
+Sudoku puzzles with many holes admit multiple valid so-            an answer.
+lutions, so exact match against the generator’s reference
+solution is ill-posed. We score a prediction correct if and        Structured message passing: the computation graph is
+only if it is a valid completion of the input (validity oracle),   the constraint graph. Our step mixes states along rows,
+alongside reference match emref . A solution counter quanti-       columns, and boxes (task-appropriate neighborhoods else-
+fies the ill-posedness: the uniquely-solvable fraction per tier    where) (Palm, Paquet, and Winther 2018). Removing it keeps
+is 1.00/0.91/0.50/0.06/0.00; on unseen-hard Sudoku the             the model able to settle (the no-structure arm contracts hard-
+valid/reference gap is 5.5× (0.34 vs. 0.062; Sec. 5 confronts      est of all) and it still scores 0.00: settling is necessary, not
+the surplus). Aggregates are per-puzzle exact match (never         sufficient. Structure buys what the loop computes; dynamics
+per-cell, which saturates misleadingly) and solve steps (the       control buys that it converges.
+first iteration at which the decoded answer stops changing);
+on reachability and addition the oracle-round count is de-         Fixed-point objective: make the answer a fixed point.
+terministic from the input, so adaptivity is checked against       We penalize the displacement of the final update at the su-
+required rounds directly, free of Sudoku’s caveat.                 pervised horizon, ∥zT − zT −1 ∥ = aT ∥f (zT −1 , x) − zT −1 ∥,
+                                                                   i.e. the fixed-point residual evaluated at the penultimate state,
+3.4   Protocol, test-time depth, architectures                     scaled by the learned update gate. This teaches the map to
+                                                                   make its answer a fixed point (the gate does not trivially sat-
+All ladder models train at 16 recurrent steps with deep su-        isfy the penalty by closing; Appendix J). This is the principal
+pervision (4 supervised unrolls), AdamW, gradient clipping         objective term evaluated by ablation: removing only this term
+0.5, batch 64, 4–8k steps (task-dependent), d=256; at eval-        leaves the architecture, data, and σmax (≈5.6) intact but flips
+uation we sweep test-time depth hc ∈ {3, 16, 32, 64, 128},         the trained regime from settle to drift (λmax −0.06 → +0.10,
+the “think longer” axis (per-task settings in the appendix).       Kaplan–Yorke dimension 0 → 8), and extrapolation dies
+We compare mechanisms, not checkpoints. Seven archi-               (0.34 → 0.03 on unseen-hard Sudoku): the attractor is what
+tectures (TRM-style (Jolicoeur-Martineau 2025), UT/URM             makes “think longer” safe: iterations beyond the horizon ap-
+(Dehghani et al. 2019), FPRM (Movahedi et al. 2026),               proach the answer instead of leaving it (Sec. 5).
+EqR, DEQ (Bai, Kolter, and Koltun 2019), Neural GPU
+(Kaiser and Sutskever 2016), SE-RRM) are re-implemented            Remaining stabilizers and their measured scope. The
+at matched size and budget and trained on the identical data       remaining components survive ablation with their means in-
+files, protocol, seeds, and logging as every ablation arm (not     tact and are claimed only for what they measurably buy (Ap-
+authors’ checkpoints). The one pretrained model, Huginn-           pendix F, Table 3). Orthogonal initialization (Saxe, McClel-
+3.5B, is measured via forward hooks (measure-only; Sec. 7).        land, and Ganguli 2014) leaves accuracy unchanged (0.34
+                                                                   vs. 0.34) but selects a different solution family (weight stable
+3.5   The measurement toolkit                                      rank ≈70–89 vs. 20–30); the adaptive update magnitude and
+                                                                   gradient clipping buy seed stability (extrapolation s.d. 0.001
+Every run logs, at the trained model on held-out inputs,           vs. 0.023; ±0.01 vs. ±0.13) at task-dependent cost (reacha-
+five families of signal: spectral (step-Jacobian σmax , ρ,         bility trainability 0.99 vs. 0.69); deep supervision the same.
+Henrici non-normality (Henrici 1962), random-probe gain);          One popular component fails scrutiny: a lower learning rate is
+dynamical (top-8 finite-time Lyapunov spectrum via Benettin        not essential: the higher-LR ablation outperforms the recipe
+QR (Benettin et al. 1980), σeff = exp(λmax ), Kaplan–Yorke         (0.42 vs. 0.34), so we report LR as “matched to scale” and
+dimension, fixed-point residual, settle ratio); information-       keep the pre-registered headline. The recipe’s effect comes
+flow (logit-lens rank of the correct answer (Belrose et al.        from recall, structure, and the fixed-point objective.
+2023)); topological (Ripser (Bauer 2021): Betti bars, wind-
+ing, effective dimension); and training-time ranks (full inven-
+tory and estimator scope in the appendix). Regime labels:
+                                                                   5     Why Some Networks Learn Recursion, and
+settle (λmax < − 0.05), marginal (|λmax | ≤ 0.05), drift                             Some Do Not
+(λmax >0.05).                                                      5.1    What we mean by learned recursion
+          4    The Recipe, Mechanistically                         We use four operational criteria for whether a trained model
+                                                                   makes useful and safe use of test-time depth on a task family.
+Each recipe component removes one measured way for                 The criteria are behavioral and do not by themselves establish
+the loop to avoid becoming an algorithm; we present each           that a particular algorithm was learned; a model meets them
+through its ablation failure (Sec. 5).                             if all four hold:
+R1 Extrapolation by iteration. On instances harder than any-        1/µ (Appendix A). Branch (a) makes R4 depth-safety and
+   thing seen in training, accuracy increases with test-time        the adaptive-timing half of R2 consequences of measured
+   iterations beyond the training depth. (Ruled out: distribu-      settling (while decay persists), not of correctness, so settle-
+   tional coverage, whose depth curve is flat.)                     but-wrong remains possible, and both R1 and R2’s conver-
+R2 Difficulty-adaptive stabilization that converts. The suffix-     sion requirement stay empirical. Branch (b) is the formal
+   stabilization step (the earliest iteration after which the de-   definition of guess-freezing, whose premise Huginn meets
+   coded answer never changes through the evaluation hori-          (Sec. 7). The rest of Secs. 5–6 measures the premises and
+   zon) tracks instance difficulty and the stabilized answer        consequences of Proposition 1 on small controlled models,
+   is correct. (This is a retrospective diagnostic, not an on-      and Sec. 7 shows branch (b) at scale.
+   line halting rule. Counterfeit: any non-degenerate map’s
+   latents move longer on harder inputs, so adaptivity alone        5.2   Test-time depth across ladders and
+   proves nothing.)                                                       architectures
+R3 Incremental computation. The correct answer forms grad-          Across the three primary ladders, three regularities emerge in
+   ually across iterations, visible as a monotone descent of        the depth curves (Table 1, Figure 2; each run colored only by
+   its logit-lens rank. (Counterfeit: guess-then-polish, with       measured regime, boundary dotted, the appendix aggregates
+   the answer present at step 1.)                                   by regime).
+R4 Convergent answer. The decoded answer converges: fur-               Learnability is not the bottleneck: most arms fit training
+   ther iterations neither change nor degrade it. The strong        (EM ≥ 0.97 in 32/51 cells of Table 3); rows below the com-
+   form is a latent fixed point (σeff <1, residual → 0); the        petence gate (EM < 0.3) are excluded from extrapolation
+   weak form (answer frozen while the latent moves in direc-        verdicts.
+   tions the readout ignores) is realized by carry-transport           Conversion tracks the regime, not the architecture: on
+   solutions (Sec. 5.4); cf. path independence (Anil et al.         Sudoku the settling recipe family reaches 0.34±0.04 (vari-
+   2022). (Ruled out: depth-fragility and guess-freezing, the       ants up to 0.42; pre-registered headline kept); on reachabil-
+   latter formalized by Prop. 1(b), both excluded by conjunc-       ity (whose ladder tops out below the horizon, so beyond-
+   tion with R1–R3.)                                                horizon conversion is not in play) the settling family gener-
+                                                                    alizes to never-trained depths (0.92±0.10) on a flat plateau;
+   The criteria are deliberately behavioral (none mentions a        on carry the settling run is TRM-style (0.82±0.16: its at-
+ spectrum or an exponent), while the dynamical quantities of        tention step realizes the carry algorithm our local mixing
+ Sec. 3.5 are measured independently of them; that the two          cannot, its halting time nearly matching the oracle’s carry
+ coincide run-by-run is this paper’s empirical claim. A model       length), while marginal runs rise then collapse (UT/URM
+ with high accuracy that fails R1–R4 uses recurrence without        0.95@32 → 0.05@128). TRM also shows the link within
+ measurable benefit from added depth: the extra iterations          its Sudoku seeds: the settling seeds extrapolate while near-
+ do not contribute, and the solution is typically obtained by       marginal ones do not.
+ coverage (cf. Varma et al. 2023).
+                                                                       Augmentation cuts both ways: applied to our TRM re-
+   One relation among the four is not empirical but forced,
+                                                                    implementation (its native data regime, 2× budget) it lifts
+ and it fixes what “measured settling” can and cannot buy.
+                                                                    Sudoku to 0.16 and recovers a previously unsuccessful seed,
+ Proposition 1 (stabilization dichotomy). Let δt = ∥zt+1 −          an optimization aid (no claims about TRM’s ceiling); applied
+ zt ∥ be the per-step displacement (the quantity the settle ratio   to the recipe it leaves training tiers and the settling regime
+ measures), let the decision margin µ(zt ) be the largest r         intact but collapses extrapolation (0.34 → 0.05) while flat-
+ with the decoder
+           P         g constant on the open ball B(zt , r), and     tening the Lyapunov spectrum (Sec. 6.2): coverage neither
+ let Rt = u≥t δu be the remaining path length. (a) If Rt <          needs nor builds the anisotropic operator that extrapolation
+ µ(zt ), then g(zs ) = g(zt ) for all s ≥ t. (b) If Rt = ∞, no      runs on.
+ finite window of answer-constancy certifies the next step; this       Each ablation damages the property it targets: the
+ can occur even when δu → 0.                                        fixed-point objective is analyzed causally in Sec. 5.4; remov-
+ Proof. (a) For any s ≥ t, the triangle inequality gives            ing structure or recall removes trainability itself (reachability
+                                                                    0.99 → 0.15). Across the 304 original-ladder runs, all 19 ex-
+                           s−1
+                           X                                        trapolating constraint-propagation runs are non-drift (λmax
+            ∥zs − zt ∥ ≤         δu ≤ Rt < µ(zt ),           (1)    median −0.047 vs. +0.009, p=7×10−6 ).
+                           u=t
+
+ so zs lies in the margin ball of zt and g(zs ) = g(zt ),           5.3   One task, every way to fail it
+ uniformly in s. (b) The map f (z) = z − (c, 0, . . . ) with        The patterns of Table 1 become mechanically transparent
+ g = sign(z (1) ) and generic c, D has δt = c > 0, so Rt = ∞,       on Sudoku, where the target algorithm (constraint propa-
+ yet the answer holds for ⌊D/c⌋ steps and then flips, with D        gation) is known. The full recipe passes all four criteria:
+ arbitrary; a divergent sum with δu → 0 (e.g. δu = 1/u)             it climbs from 0.00 (shallow) and 0.19 (training depth) to
+ behaves likewise. □                                                0.34/0.11 on unseen tiers 3/4 (R1); solve steps grow mono-
+ The premise of (a) is measured, not assumed: Rt is the tail of     tonically (2.8 → 19.6), commensurate with oracle rounds
+ the logged displacement, and geometric decay gives an ex-          where propagation terminates and monotone on the 94%-
+ plicit freeze time growing with the transient scale and with       under-determined hard tiers (R2); rank decreases monotoni-
+                                                                      settle (λmax < −0.05)       marginal (|λmax| ≤ 0.05)        drift (λmax > 0.05)   boundary (|λmax| < 0.02)
+
+
+
+
+                EM, first unseen tier
+                                                      Sudoku (hole fraction)                                 Reachability (BFS depth)                                Addition (carry length)
+                                        1.0                                                                                                 CoRe                                        TRM-style
+                                                                                                                                                                                             UT/URM: rises,
+                                                                                                                     EqR (dotted): slow decay                                                collapses
+                                        0.5                                          CoRe
+                                                                                                                              no fp: peak, then decay
+                                                                      no fp-objective
+                                        0.0
+                                              3                16     32        64      128         3                   16      32       64      128       3                   16    32         64   128
+                                                      test-time iterations hc                                  test-time iterations hc                                test-time iterations hc
+
+
+
+Figure 2: Depth curves behind Table 1: EM on the first unseen tier; one line = one run, colored by measured regime (boundary
+dotted, drift dash-dotted): settling runs rise and plateau, marginal rise and collapse or stay flat, drifting decay here or on deeper
+tiers (Sec. 5.4); which architecture settles differs per ladder.
+
+                                                             Sudoku (hole fraction)                                          Reachability (path length)                                 Addition (carry length)
+                                                   learn ↑          extrapolate ↑             overthink ↓        learn ↑             extrapolate ↑      overthink ↓           learn ↑           extrapolate ↑   overthink ↓
+CoRe (full recipe)                                   1.00       0.19→ 0.34 ±0.04                   0              0.98          0.92→ 0.92 ±0.10               0               0.99    0.13→ 0.17 ±0.15      0.05
+ − structure                                         0.00              —                          n/a          0.15 ±0.02             —                       n/a             = CoRe (no spatial structure on 1-D)
+ − extra input injection                          0.29 ±0.01           —                          n/a             0.23                —                       n/a           0.04 ±0.02       —                n/a
+ − fixed-point objective                             1.00       0.01→ 0.03 ±0.01                 0.04             1.00          0.97→ 0.97 ±0.02             0.37†             1.00    0.14→ 0.15 ±0.02     0.81†
+generic recurrence                                   0.00              —                          n/a          0.17 ±0.01             —                       n/a              1.00    0.11→ 0.12 ±0.02     0.84†
+TRM-style                                         0.94 ±0.18    0.14→ 0.21 ±0.11                   0           0.70 ±0.17       0.55→ 0.56 ±0.22             0.01              1.00    0.80→ 0.82 ±0.15      0.02
+UT/URM                                            0.97 ±0.06       0.00→ 0.00                    0.18          0.43 ±0.09       0.28→ 0.28 ±0.07             0.09           0.99 ±0.02 0.66→ 0.72 ±0.21     0.59†
+FPRM                                              0.53 ±0.40    0.00→ 0.01 ±0.01                 0.04          0.31 ±0.05       0.20→ 0.20 ±0.03             0.11           0.82 ±0.26 0.27→ 0.28 ±0.25     0.80†
+EqR                                                  1.00       0.01→ 0.01 ±0.01                 0.13          0.99 ±0.01       0.88→ 0.89 ±0.03             0.24†             1.00    0.12→ 0.12 ±0.03     0.72†
+DEQ                                                  1.00          0.00→ 0.00                      0           0.26 ±0.04             —                       n/a           0.99 ±0.01 0.19→ 0.47 ±0.19      0.07
+Neural GPU                                           0.00              —                          n/a          0.76 ±0.08       0.54→ 0.54 ±0.11             0.68†              —            —                —
+
+Table 1: Three questions, kept separate (mean±sd): the primary ablations and all architectures (Appendix F, Table 3 for six
+further ablations, none switching mode). learn ↑: in-distribution EM at best depth. extrapolate ↑: first-unseen-tier EM at training
+depth → best over hc ≤128, selected per run on the evaluation set (R1 conversion). Bold = best value per column, ties included
+(max for learn/extrapolate, min for overthink; gated cells excluded). overthink ↓: worst over tiers of best EM − EM@128 († =
+severe ≥0.2 loss, undesirable). EM<0.3 fails the competence gate: extrapolate/overthink are n/a (nothing to convert or lose).
+Reachability’s rounds stay below the training depth, so its middle column is generalization+safety, not conversion; “—” marks
+undefined or gated cells. Naming per Sec. 4. CoRe, −fixed-point objective, and TRM-style cells carry n≈20 seeds, architecture
+rows n=10, the remaining ablation rows n=3.
+
+
+cally toward zero (0.33 → 0.05; R3); and all eight estimated                                                                     5.4          Depth-safety and overthinking: R4 in both
+leading exponents are negative (strong-form R4).                                                                                              forms
+                                                                                                                                 The clearest intervention is Figure 3: removing the terminal
+   Is a legal completion of an under-determined board still                                                                      fixed-point objective, which jointly moves the regime and
+“harder”? It is partly a different competence (constraint                                                                        the depth behavior (i.e. whether the premise of Prop. 1(a)
+satisfaction, not unique deduction), so we split the credit:                                                                     is met), destroys a different half of the thesis per ladder. On
+reference-EM covers essentially every uniquely determined                                                                        Sudoku it destroys conversion (the drifting ablation never
+tier-3 puzzle (0.062 vs. 0.059 uniquely solvable), and the                                                                       rises, 0.34 → 0.03); on reachability it leaves the peak (0.97)
+validity surplus is not free (every baseline scores 0.00 under                                                                   but destroys safety (the drifting run loses up to 0.37 EM by
+the same oracle), arrives through iteration, and recurs on the                                                                   hc =128 while the settling recipe holds 0.92 → 0.92). The in-
+ambiguity-free reachability ladder.                                                                                              tervention also runs constructively: adding only this term to
+                                                                                                                                 the unchanged generic recurrence turns the architecture carry
+   Every other outcome in the campaign is a specific, mea-                                                                       propagation destroys (overthink 0.91) into a depth-safe ex-
+surable violation: identity (no-recall: instant convergence to                                                                   trapolator (best 0.88, 18 seeds, damage 0); UT/URM moves
+“do nothing”, σmax =1.0000, EM 0.00); marginal (generic,                                                                         the same way on Sudoku (0 → 0.16–0.19) and FPRM on
+UT/URM, FPRM: an exactly normal, norm-preserving wan-                                                                            carry, while EqR does not respond (it hard-wires this penalty
+der that fits easy tiers, depth curves flat or declining);                                                                       at a weight whose residual never resolves; Appendix K)
+drift (no fixed-point objective: λmax =+0.10, extra steps                                                                        and DEQ stops fitting training altogether (10/10 seeds), the
+hurt); settle-but-wrong (no-structure; TRM on ARC: dynam-                                                                        boundaries of the intervention.
+ics right, fixed point wrong, settling isotropically, spread                                                                        The payoff requires a latent attractor, not a frozen output: a
+≤0.08, where true learners are anisotropic, the instrument of                                                                    control penalizing only the decoded answer’s change (latent
+Sec. 6.2); full numbers in Appendix F. The remaining abla-                                                                       free) yields neither conversion nor safety (Sudoku extrapo-
+tion arms degrade gradually rather than switching mode, the                                                                      lates to 0.00, latent never settling; reachability peaks then
+sense in which recall, structure, and the fixed-point objective                                                                  decays, worst-tier damage up to 1.00; Appendix K), and a
+are the necessary components.                                                                                                    weight sweep shows depth-safety turning on precisely at the
+                                                    Sudoku (recipe): removing it                  Reachability (recipe): removing it               Addition-carry (alt.\ arch.): adding it
+
+
+
+
+               EM, first unseen tier
+                                                       removes conversion                              degrades with depth                           creates conversion and safety
+                                       1.0
+                                                 with fp-objective                                                                                 generic + fp-objective
+                                                 without                                                                                           generic (unchanged)
+                                       0.5                                                        with fp-objective
+                                                                                                  without
+                                       0.0
+                                             3                   16      32        64   128   3                   16      32        64   128   3                   16       32       64      128
+                                                         test-time iterations hc                          test-time iterations hc                          test-time iterations hc
+
+
+
+Figure 3: One training term, three consequences (mean and seed range, first unseen tier). Removing the fixed-point objective
+destroys conversion (Sudoku, left) or safety (reachability, middle); adding only this term to the unchanged generic recurrence
+creates both on addition-carry (right): 0.12 → 0.88, damage 0.91 → 0.
+
+
+settling crossing, with conversion growing as the weight rises                                                         top singular value is a transient amplification, not an asymp-
+further; settling is necessary, not sufficient.                                                                        totic rate (ρ<1); random-probe gain stays ≤1, so computation
+   Training deeper (Ttrain =32) shows a same-direction gain                                                            lives in a thin amplifying cone inside a globally contracting
+past its own horizon (0.43±0.03@32 → 0.48±0.03@128;                                                                    map. A typical-gain sweep (Bai, Koltun, and Kolter (2021)’s
+n=15 seeds): a longer horizon does not substitute for test-                                                            regularizer as a probe) confirms it: pinning the typical gain
+time iteration (pre-registered T =16 stays the headline).                                                              at its decaying level is harmless; forcing it to expand (τ ≥2)
+Without an attractor a model can reach a correct answer tran-                                                          blows σmax to 14–33 and destroys training (Appendix D).
+siently but not keep iterating safely: branch (b) of Prop. 1,                                                          Regularizing ρ (asymptotics only) is the control that helps
+the operational meaning of overthinking.                                                                               at scale (Yang et al. 2026); non-normality alone does not
+   R4 is about the answer: a size-ladder experiment (off the                                                           (Neural GPU drifts to zero at σmax /ρ=17.7).
+extrapolation axis, Sec. 3.1) shows why the latent fixed point
+is R4’s strong, not only, form: on addition-by-length the                                                              6.2          What the full corpus adds
+generic recurrence freezes its answer within ∼5 steps while                                                            Spectral anisotropy: the signature that separates algo-
+its latent never settles (σeff =1.02, weak-form R4), yet on pre-                                                       rithms from mere convergence. The shape of the Lya-
+fix sums the same statistics give depth-fragility (1.00 → 0.65;                                                        punov spectrum is the strongest single predictor we mea-
+Appendix I). So latent spectra alone cannot separate weak-                                                             sured: algorithm-learners develop a structured spectrum, a
+form R4 from depth-fragility; the difference lives in answer                                                           hierarchy of contraction rates (CoRe on Sudoku: spread
+space, where R4 is stated.                                                                                             λ1 −λ8 =0.41), while every failure mode is spectrally de-
+   The strong form makes “think longer” a safe default:                                                                generate: eight nearly identical exponents, whether pinned
+among all 164 competent runs, not one of the 17 settling runs                                                          at zero (identity), at +0.02 (marginal), or at −0.17 (no-
+loses more than 0.004 EM to depth, while 30% marginal and                                                              structure: settled hard, isotropically); Appendix C overlays
+22% drifting lose more than 0.1, up to 0.98 (Neural GPU                                                                the full landscape.
+on mazes, p=10−3 ). Two notes: under a task×configuration                                                                 The spread alone predicts extrapolation with AUC 0.846
+cluster bootstrap the safety separation survives (excess un-                                                           across 304 runs, the best single dynamical quantity we mea-
+safe 0.14, CI [0.06, 0.24]) while pooled conversion is not                                                             sured though on par with training accuracy itself (0.851): a
+cluster-significant (conversion rests on the depth curves and                                                          corpus-level correlate whose value is the within-settle sepa-
+the causal switch), and the ±0.05 threshold is not load-                                                               ration, not a universal discriminator (reachability’s extrapo-
+bearing (Appendix E). On tasks where the recipe fails out-                                                             lators settle at spreads 0.07–0.14).
+right (addition, sort), its own rank curves rise with iterations
+                                                                                                                          The Kaplan–Yorke dimension is bimodal (47% exactly 0,
+(0.74 → 0.94), the information-level image of drift; the same
+                                                                                                                       48% saturated), giving R4’s strong form its practical reading:
+fates reappear behaviorally at 7B (Sec. 7.2).
+                                                                                                                       a learner of recursion has all eight estimated leading expo-
+   In sum: learning recursion is passing R1–R4, and across                                                             nents negative. Within the settling regime the spread sepa-
+the corpus the runs that do so are consistently settling-but-                                                          rates runs that settled into an algorithm from runs that merely
+barely and strongly non-normal, with the settling architecture                                                         settled (AUC 0.872, p=10−3 ), a distinction no other instru-
+differing by task.                                                                                                     ment could make, including on TRM-trained ARC models
+                                                                                                                       (settled, flat, wrong); the augmentation control of Sec. 5.2
+       6   The Shape of Learned Recursion                                                                              is the same flattening shown causally. We read this as func-
+6.1   Hypotheses and the non-normality account                                                                         tional differentiation: an iterated algorithm needs directions
+                                                                                                                       with different jobs (one instrument-level exception in Ap-
+A topology-first program (Barannikov et al. 2022) predicts                                                             pendix N).
+settle/loop/drift classes (H1), winding tracking depth (H2),
+and that a purely contracting map cannot count (H3). Ver-                                                              Three further regularities (Appendix N). Live spectra
+dicts (Appendix D): H1 settle/drift ubiquitous and causally                                                            and post-hoc geometry agree run-by-run (σeff vs. settling
+separable, loops nowhere; H2 unsupported (solvers move ra-                                                             r=0.75, n=325; replicated ρ=0.69, n=1,206); topology
+dially, 99th-pct |winding| 0.71 turn); H3 supported, with a                                                            sees compactness, not loops (92/24/2% across regimes;
+sharpened mechanism.                                                                                                   per-instance AUC 0.80–0.98, Remark 1); and the algo-
+   Why is σmax a correlate but not a lever (Prop. 2)? Success-                                                         rithm forms late (rank 33→53 while siblings stay flat), the
+ful operators are strongly non-normal (σmax /ρ ≈ 4–5.4): the                                                           inference-map face of delayed generalization (Sec. 2); dash-
+                                     Huginn 3.5B, latent:    R1-Distill 7B, tokens:    Qwen2.5 7B, tokens:              Mistral 7B, tokens:
+                                    depth converts nothing     rises, then falls           inverse-U                  degrades solved tasks
+
+                   accuracy
+                              1.0        chain-2/4/6              chain-6                   last-digit 2d                 chain-2
+                              0.5
+                              0.0
+                                     4            16   64    0        256       512   0         256         512       0         256     512
+                                     recurrence budget r     thinking-token budget    thinking-token budget           thinking-token budget
+
+
+Figure 4: Recurrence at scale, one prompt bank. Left: a latent depth knob (Huginn-3.5B) saturates without converting depth.
+Right three: token-budget knobs on open 7B reasoners (bold = illustrative family, n=40/point); none shows the settling fate.
+
+
+board in Appendix M.                                                                  7.2    Token recurrence: the same fates
+                                                                                      Chain-of-thought gives a reasoner its own depth knob; on one
+               7        Recurrence at Scale                                           prompt bank three open models reproduce the non-settling
+                                                                                      fates (Figure 4): the distilled reasoner is destroyed by more
+This section tests the taxonomy at scale, then repairs a depth                        of the budget it needs (0.82 → 0.00) and the non-reasoning
+pathology of a pretrained recurrent LLM with a label-free ob-                         model degraded by thinking it does not need (1.0 → 0.47;
+jective. Huginn-3.5B (Geiping et al. 2025) iterates the same                          a shared failure shape, not mechanism identity; Chen et al.
+block on its latent state; a chain-of-thought reasoner iterates                       2024; Su et al. 2025; Sui et al. 2025). Both substrates over-
+in token space, where only behavior compares; neither is a                            think; the case for latent depth is the handle: only the latent
+performance baseline.                                                                 loop exposes a state one can measure and repair (Sec. 7.1).
+
+7.1   Latent recurrence: Huginn-3.5B                                                                              8       Limitations
+R1/R3 are answered in prior work: recurrence 4 → 32 yields                            Synthetic generators. Sudoku boards come from one con-
+marginal gains far below chain-of-thought (Figure 4, left),                           struction’s symmetry orbit, so the headline is extrapolation
+no structured latent chain found (Lu et al. 2025).                                    on that generator; the matching reachability plateau shows
+   R4: across per-token latent trajectories on 7 task cate-                           the claim does not rest on Sudoku’s scoring. Controlled
+gories (2,585 tokens), not one settles (σeff =1.000±0.003;                            protocol. Budget-matched re-implementations estimate no
+layer normalization pins only the radial direction, not the                           ceiling, which isolates the regime from tuning confounds;
+read displacement): normalized-marginal. R2: the answer                               producing a settling operator is not guaranteed (on mazes,
+freezes, but freezing does not track difficulty: guess-freezing                       a seed lottery); where obtained, the outcome follows the
+(Prop. 1b), not a computation completing (Appendix G; Lu                              regime. Small scale. Models are tiny and tasks synthetic,
+et al. 2025); by R1–R4 the loop gains nothing from added                              yet the same instruments place Huginn-3.5B in the marginal
+depth.                                                                                family; the scale repair (Sec. 7.1) is operation-family-scoped,
+                                                                                      one checkpoint. Mediation. We identify the objective as
+   The base’s depth is unsafe, not just inert: on procedural                          the causal lever and the latent attractor as its needed tar-
+single-token probes accuracy peaks shallow and collapses                              get (answer-only control, Sec. 5.4), not the regime as sole
+(carry: 0.69 at r=8, 0.00 for r≥32), every input freezing                             mediator; finite-time estimates bound adjectives, not regime
+onto the same wrong token. A settling event itself, guess-                            separations (Appendix E).
+freezing evades answer-stability halting; a 30-example depth
+calibration recovers the peak at the price of labels and a
+per-task depth the repair below does not need (Appendix H).                                                       9       Conclusion
+                                                                                      Learned recursion is a dynamical property: a non-normal
+Repairing depth-safety without labels. Guided by the                                  operator settling in an attractor the objective creates and
+taxonomy, a rank-16 LoRA adapter on the recurrent core is                             structure aligns with the task; failures fall into four measur-
+trained with one label-free latent objective: pull deep states,                       able modes. Depth-safety is provable at small displacement
+r∼U [16, 128], toward the frozen base’s own shallow state                             (Prop. 1); conversion stays empirical and task-dependent.
+at r=8 (two synthetic anchor domains, 2,000 steps); the                               The measurements, and the repair they prescribe, carry to
+fixed-point term itself does not transfer to this scale, only                         3.5B: whether added depth helps is a measurable property of
+its latent-anchoring form (Appendix H). The patch restores                            the dynamics.
+depth-safety, not new capability, on tasks never seen in train-
+ing: digit copying, lost by the base at r≥4, reaches 1.00±0.00                                                         References
+at r=128 with input-dependent answers (10/10 seeds); letter
+repetition recovers 0.00→0.51±0.13 (a carry plateau: stabi-                           Anil, C.; Pokle, A.; Liang, K.; Treutlein, J.; Wu, Y.; Bai, S.;
+lization only; Appendix H). Conversion never appears, and                             Kolter, J. Z.; and Grosse, R. 2022. Path Independent Equi-
+the depth-hard pointer-chase task stays unlearnable under                             librium Models Can Better Exploit Test-Time Computation.
+every intervention tried, making the no-benefit-from-depth                            In Advances in Neural Information Processing Systems.
+verdict causal; transfer follows the anchors’ operation fam-                          Bai, S.; Kolter, J. Z.; and Koltun, V. 2019. Deep Equilib-
+ily across alphabets, with two failure laws measurable in                             rium Models. In Advances in Neural Information Processing
+advance (Appendix H).                                                                 Systems.
+Bai, S.; Koltun, V.; and Kolter, J. Z. 2021. Stabilizing Equi-   Geiping, J.; McLeish, S.; Jain, N.; Kirchenbauer, J.; Singh,
+librium Models by Jacobian Regularization. In International      S.; Bartoldson, B. R.; Kailkhura, B.; Bhatele, A.; and Gold-
+Conference on Machine Learning.                                  stein, T. 2025. Scaling up Test-Time Compute with Latent
+Banino, A.; Balaguer, J.; and Blundell, C. 2021. PonderNet:      Reasoning: A Recurrent Depth Approach. arXiv preprint
+Learning to Ponder. arXiv preprint arXiv:2107.05407.             arXiv:2502.05171.
+Bansal, A.; Schwarzschild, A.; Borgnia, E.; Emam, Z.;            Graves, A. 2016. Adaptive Computation Time for Recurrent
+Huang, F.; Goldblum, M.; and Goldstein, T. 2022. End-            Neural Networks. arXiv preprint arXiv:1603.08983.
+to-end Algorithm Synthesis with Recurrent Networks: Ex-          Henrici, P. 1962. Bounds for Iterates, Inverses, Spectral
+trapolation without Overthinking. In Advances in Neural          Variation and Fields of Values of Non-normal Matrices. Nu-
+Information Processing Systems.                                  merische Mathematik, 4: 24–40.
+Barak, B.; Edelman, B. L.; Goel, S.; Kakade, S.; Malach,         Huang, B.; Geng, Z.; and Kolter, J. Z. 2026. Equilibrium
+E.; and Zhang, C. 2022. Hidden Progress in Deep Learn-           Reasoners: Learning Attractors Enables Scalable Reasoning.
+ing: SGD Learns Parities Near the Computational Limit. In        arXiv preprint arXiv:2605.21488.
+Advances in Neural Information Processing Systems.               Jolicoeur-Martineau, A. 2025. Less is More: Recur-
+Barannikov, S. 1994. The Framed Morse Complex and Its            sive Reasoning with Tiny Networks.            arXiv preprint
+Invariants. Advances in Soviet Mathematics, 21: 93–115.          arXiv:2510.04871.
+Barannikov, S.; Trofimov, I.; Balabin, N.; and Burnaev, E.       Kaiser, L.; and Sutskever, I. 2016. Neural GPUs Learn Al-
+2022. Representation Topology Divergence: A Method for           gorithms. arXiv preprint arXiv:1511.08228.
+Comparing Neural Network Representations. In Interna-            Kerg, G.; Goyette, K.; Puelma Touzel, M.; Gidel, G.;
+tional Conference on Machine Learning.                           Vorontsov, E.; Bengio, Y.; and Lajoie, G. 2019. Non-normal
+Bauer, U. 2021. Ripser: Efficient Computation of Vietoris–       Recurrent Neural Network (nnRNN): Learning Long Time
+Rips Persistence Barcodes. Journal of Applied and Compu-         Dependencies While Improving Expressivity with Transient
+tational Topology, 5: 391–423.                                   Dynamics. In Advances in Neural Information Processing
+Belrose, N.; Furman, Z.; Smith, L.; Halawi, D.; Ostrovsky, I.;   Systems.
+McKinney, L.; Biderman, S.; and Steinhardt, J. 2023. Elic-       Knutson, B.; Chyba Rabeendran, A.; Ivanitskiy, M.; Pet-
+iting Latent Predictions from Transformers with the Tuned        tyjohn, J.; Diniz-Behn, C.; Wu Fung, S.; and McKenzie, D.
+Lens. arXiv preprint arXiv:2303.08112.                           2024. On Logical Extrapolation for Mazes with Recurrent
+Benettin, G.; Galgani, L.; Giorgilli, A.; and Strelcyn, J.-M.    and Implicit Networks. arXiv preprint arXiv:2410.03020.
+1980. Lyapunov Characteristic Exponents for Smooth Dy-           Kohli, H.; Parthasarathy, S.; Sun, H.; and Yao, Y. 2026. Loop,
+namical Systems and for Hamiltonian Systems; A Method            Think, & Generalize: Implicit Reasoning in Recurrent-Depth
+for Computing All of Them. Meccanica, 15: 9–30.                  Transformers. arXiv preprint arXiv:2604.07822.
+Chen, H.-H. 2026. Thinking Deeper, Not Longer: Depth-            Labovich, A. 2026. Stability and Generalization in Looped
+Recurrent Transformers for Compositional Generalization.         Transformers. arXiv preprint arXiv:2604.15259.
+arXiv preprint arXiv:2603.21676.                                 Lu, W.; Yang, Y.; Lee, K.; Li, Y.; and Liu, E. 2025. Latent
+Chen, X.; Xu, J.; Liang, T.; He, Z.; Pang, J.; Yu, D.; Song,     Chain-of-Thought? Decoding the Depth-Recurrent Trans-
+L.; Liu, Q.; Zhou, M.; Zhang, Z.; Wang, R.; Tu, Z.; Mi, H.;      former. arXiv preprint arXiv:2507.02199.
+and Yu, D. 2024. Do NOT Think That Much for 2+3=?                Movahedi, S.; Milovanović, V.; Feigin, S. L.; Theus, A.;
+On the Overthinking of o1-Like LLMs. arXiv preprint              Hofmann, T.; Boeva, V.; Rusch, T. K.; and Orvieto, A. 2026.
+arXiv:2412.21187.                                                Fixed-Point Reasoners: Stable and Adaptive Deep Looped
+Chollet, F. 2019. On the Measure of Intelligence. arXiv          Transformers. arXiv preprint arXiv:2606.18206.
+preprint arXiv:1911.01547.                                       Nanda, N.; Chan, L.; Lieberum, T.; Smith, J.; and Steinhardt,
+Cohen, J.; Kaur, S.; Li, Y.; Kolter, J. Z.; and Talwalkar,       J. 2023. Progress Measures for Grokking via Mechanistic
+A. 2021. Gradient Descent on Neural Networks Typically           Interpretability. In International Conference on Learning
+Occurs at the Edge of Stability. In International Conference     Representations.
+on Learning Representations.                                     Orhan, A. E.; and Pitkow, X. 2020. Improved Memory in
+Dehghani, M.; Gouws, S.; Vinyals, O.; Uszkoreit, J.; and         Recurrent Neural Networks with Sequential Non-normal Dy-
+Kaiser, L. 2019. Universal Transformers. In International        namics. arXiv preprint arXiv:1905.13715.
+Conference on Learning Representations.                          Palm, R. B.; Paquet, U.; and Winther, O. 2018. Recurrent
+Es’kin, V. A.; and Smorkalov, M. E. 2026. Dynamical Sys-         Relational Networks. In Advances in Neural Information
+tems Theory Behind a Hierarchical Reasoning Model. arXiv         Processing Systems.
+preprint arXiv:2603.22871.                                       Pennington, J.; Schoenholz, S. S.; and Ganguli, S. 2017. Res-
+Esteves, B.; Vasco, M.; and Melo, F. S. 2024. NeuralSolver:      urrecting the Sigmoid in Deep Learning through Dynamical
+Learning Algorithms for Consistent and Efficient Extrapola-      Isometry: Theory and Practice. In Advances in Neural Infor-
+tion Across General Tasks. arXiv preprint arXiv:2402.15393.      mation Processing Systems.
+Power, A.; Burda, Y.; Edwards, H.; Babuschkin, I.; and
+Misra, V. 2022. Grokking: Generalization Beyond Over-
+fitting on Small Algorithmic Datasets. arXiv preprint
+arXiv:2201.02177.
+Saxe, A. M.; McClelland, J. L.; and Ganguli, S. 2014. Exact
+Solutions to the Nonlinear Dynamics of Learning in Deep
+Linear Neural Networks. In International Conference on
+Learning Representations.
+Schwarzschild, A.; Borgnia, E.; Gupta, A.; Huang, F.;
+Vishkin, U.; Goldblum, M.; and Goldstein, T. 2021. Can
+You Learn an Algorithm? Generalizing from Easy to Hard
+Problems with Recurrent Networks. In Advances in Neural
+Information Processing Systems.
+Su, J.; Healey, J.; Nakov, P.; and Cardie, C. 2025. Between
+Underthinking and Overthinking: An Empirical Study of
+Reasoning Length and Correctness in LLMs. arXiv preprint
+arXiv:2505.00127.
+Sui, Y.; Chuang, Y.-N.; Wang, G.; Zhang, J.; Zhang, T.;
+Yuan, J.; Liu, H.; Wen, A.; Zhong, S.; Zou, N.; Chen, H.;
+and Hu, X. 2025. Stop Overthinking: A Survey on Effi-
+cient Reasoning for Large Language Models. arXiv preprint
+arXiv:2503.16419.
+Tarnowski, W. 2020. Transient Amplification in Balanced
+Neural Networks. arXiv preprint arXiv:2011.08215.
+Varma, V.; Shah, R.; Kenton, Z.; Kramár, J.; and Kumar,
+R. 2023. Explaining Grokking Through Circuit Efficiency.
+arXiv preprint arXiv:2309.02390.
+Wang, G.; Li, J.; Sun, Y.; Chen, X.; Liu, C.; Wu, Y.; Lu,
+M.; Song, S.; and Abbasi Yadkori, Y. 2025. Hierarchical
+Reasoning Model. arXiv preprint arXiv:2506.21734.
+Yang, X.-W.; Han, Z.-Y.; Zhang, X.-H.; Wei, W.-D.; Shao, J.-
+J.; Guo, L.-Z.; and Li, Y.-F. 2026. Stabilizing Recurrent Dy-
+namics for Test-Time Scalable Latent Reasoning in Looped
+Language Models. arXiv preprint arXiv:2605.26733.
+Zhu, R.-J.; Peng, T.; Cheng, T.; Qu, X.; Huang, J.; Zhu, D.;
+Wang, H.; et al. 2025. A Survey on Latent Reasoning. arXiv
+preprint arXiv:2507.06203.
+                                                    Supplementary Material
+
+             A     Propositions and proofs                                     B            Analysis populations (run-flow)
+This section gives the geometric-decay corollary of Propo-           Different analyses use different corpora; Table 2 defines each
+sition 1, the trajectory-informativeness remark, and Proposi-        population and the unit of analysis, so counts that differ
+tion 2 (all referenced from the main text). Notation as in the       across the paper (e.g. 17 settling runs in the depth-safety
+main text: δPt =∥zt+1 −zt ∥, decision margin µ(z), remaining         analysis vs. larger settling counts elsewhere) are traceable to
+path Rt = u≥t δu ; g is the (argmax) decoder.                        distinct campaigns rather than inconsistency. One run = one
+                                                                     trained checkpoint (task×configuration×seed); tiers, depths,
+Corollary 1 (explicit freeze time under geometric decay).            and stored trajectory files are repeated observations within a
+If δu ≤ Cγ u with γ<1, then Rt ≤ Cγ t /(1−γ), and by                 run, not independent replications.
+Proposition 1(a) the decoded answer is frozen for all t ≥ t⋆ ,
+where                                                                 Corpus                                  Runs                   Used for
+                      l              .       m
+          t⋆ = max 0, log (1−γ)  C
+                                    µ   log 1
+                                            γ    ,                    Original ladders 304 total; Depth-safety       separation
+                                                                      (LOO + architec- 164 com- (main Sec. 5) and Fig. 5;
+obtained by solving Cγ t /(1−γ) < µ (open ball, strict).              tures)           petent (17 anisotropy AUC; non-drift
+                                                                                       settle / 129 extrapolator count
+The freeze time grows with the transient scale C (longer
+                                                                                       marginal /
+propagation) and with 1/µ (smaller margin, harder instance);                           18 drift)
+with γ=e−|λ| the leading order is t⋆ ∼ |λ|−1 log(1/(|λ|µ)),
+i.e. decreasing in the contraction rate, so this is a monotone        Fixed-size ladders 246                                         Table 1, depth curves (main
+                                                                      (primary)                                                      Fig. 2), headline conversion
+heuristic, not an equality. A cross-check on the fixed-size                                                                          numbers
+corpus: among settling competent runs, solve steps correlate
+with 1/|λmax | on reachability (Spearman 0.56, p=10−3 ) and           Trajectory topology 325 files                                  σeff ↔settling (r=0.75);
+weakly, non-significantly on Sudoku/carry, as expected since          (original)                                                     per-instance confidence
+C and µ also vary per instance and task.                              Trajectory topology 1,206 files Rank replication (Spearman
+                                                                      (fixed-size)                    ρ=0.69); Betti-1 shares
+Remark 1 (trajectory informativeness is regime-
+conditional). In branch (a) the certified freeze time is
+                                                                     Table 2: Population and unit of analysis for each corpus.
+bounded by a decreasing function of the margin, so per-
+                                                                     Counts differ by design; the depth-safety statistic and the
+trajectory statistics encode instance geometry; in branch (b)
+                                                                     regime figure below both use the original-ladder competent
+the freeze step is an entry time into a level set of g and carries
+                                                                     corpus (164 runs).
+no such information. This is a statement about information,
+not success (a large margin can surround a confidently wrong
+state). Empirically, on the settling subset of the fixed-size cor-
+                                                                     B.1     Regime-to-outcome aggregate view
+pus (n=132 trajectory files with both correct and incorrect
+examples), the correct-minus-incorrect gap in settle ratio,          Figure 5 aggregates the 164 competent original-ladder runs
+path length, and effective dimension is directional and sig-         (the same population as the main-text depth-safety statistic)
+nificant (Wilcoxon p=3.4×10−9 , 4.5×10−7 , 3.9×10−11 );              by measured regime. Settling runs carry the higher median
+on the marginal subset the gaps vanish (medians ≈ 0); and            depth conversion, and overthinking damage concentrates in
+on Huginn (marginal) the freeze step does not separate cor-          the non-settling regimes; conversion is task-dependent and,
+rect from incorrect within a difficulty rung (p≈0.9). This is        pooled, not cluster-significant (main text), so the figure is
+the mechanism behind the per-instance confidence read-out            descriptive of this corpus, not a pooled significance claim.
+of the main text (Sec. P); the two use different corpora and
+                                                                                depth conversion:                                           overthinking damage:
+tests, so their p-values are not comparable.                               EM(best) − EM(training depth)                                    EM(best) − EM(@128)
+                                                                     1.0                                                       1.0
+
+Proposition 2 (transient/asymptotic decoupling, single
+linearization). For a fixed step Jacobian J with top right           0.5                                                       0.5
+
+singular vector v,
+                                                                                     0.04                                                                          0.01             0.01
+                                                                     0.0                               0.00             0.00   0.0               0.00
+
+    ∥Jv∥ = σmax (J),          ρ(J) < 1 ⇒ ∥J t ∥ → 0           (2)           settle
+                                                                           (n=17)
+                                                                                            marginal
+                                                                                            (n=129)
+                                                                                                                drift
+                                                                                                              (n=18)
+                                                                                                                                        settle
+                                                                                                                                       (n=17)
+                                                                                                                                                        marginal
+                                                                                                                                                        (n=129)
+                                                                                                                                                                            drift
+                                                                                                                                                                          (n=18)
+
+
+give the one-step amplification and, by Gelfand’s formula,
+the asymptotic decay. Thus for a non-normal J a large tran-          Figure 5: Regime → outcome on the 164 competent original-
+sient gain σmax coexists with asymptotic contraction; clamp-         ladder runs (dot = run, bar = median; n per regime in axis
+ing σmax removes the transient that carries the computation,         labels). Left: depth conversion, EM(best)−EM at training
+whereas constraining ρ leaves it intact. This is elementary          depth on the first unseen tier. Right: overthinking damage,
+and concerns one linearization step; the thin-cone geome-            worst over tiers of EM(best)−EM@128. Settling runs show
+try across the trajectory (main text Sec. 6) is measured, not        no overthinking tail; marginal and drifting runs do.
+implied by it.
+   C     The Sudoku ablation landscape in two                                      Jacobian regularizer of Bai, Koltun, and Kolter (2021), re-
+                    instruments                                                    purposed here as a probe of the learned geometry rather than
+                                                                                   a stabilizer) confirms this geometry from both sides. Pin-
+Figure 6 overlays every Sudoku arm in the two instruments                          ning the typical gain at its natural, decaying level (τ =0.5)
+behind the anisotropy and crystallization claims of the main                       is harmless: training and extrapolation intact (0.26–0.36),
+text (Secs. 5–6).                                                                  the thin amplifying cone untouched (σmax still ≈4), while
+                                                                                   forcing typical directions to expand (τ ≥2) destabilizes the
+              CoRe                  generic               recipe variants
+                                                                                   operator (σmax blows up to 14–33) and destroys training it-
+              TRM-style             −fixed-point          others                   self. Intermediate targets already degrade seed-wise: at τ =1
+         (a) Lyapunov spectrum                     (b) rank of correct answer      one seed in three collapses to 0.004 while the others extrap-
+                   failures: flat                                                  olate normally (0.37). Random directions must decay; only
+                                            1.5
+   0.0                                                          generic            the thin cone may amplify. Regularizing the spectral radius ρ
+                                                                                   (constraining asymptotics while leaving the transient intact)
+                                            1.0                                    is likewise the control that helps at scale (Yang et al. 2026).
+ −0.2
+
+                          CoRe:
+                          anisotropic       0.5             −recall: frozen           E    Non-normality account and estimator
+ −0.4
+                                                                    CoRe                          scope: full statements
+                                            0.0
+         1          4                   8          0           32             64
+                                                                                   Why is σmax a correlate but not a lever? Successful oper-
+              exponent index                               iteration
+                                                                                   ators have σmax /ρ ≈ 4–5.4 (Henrici index 0.08–0.10 on
+                                                                                   Sudoku): they are strongly non-normal, so their top singu-
+                                                                                   lar value measures a transient, feedforward amplification
+Figure 6: The Sudoku ablation landscape (all arms overlaid;                        each step applies to fresh input, not an asymptotic growth
+colored = narrative-central operators, light blue = recipe                         rate (which is ρ<1). Clamping σmax therefore removes the
+variants, gray = others). (a) Lyapunov spectra: learners are                       amplification that carries the computation; regularizing ρ
+anisotropic; every failure family is flat. (b) Logit-lens rank of                  (Yang et al. 2026) constrains only the asymptotics, which
+the correct answer (hardest training tier): CoRe crystallizes                      is exactly the part that should be controlled. Two refine-
+to ≈0, generic bounces, the identity ablation is frozen. Depth                     ments from direct measurement: first, random-probe tran-
+curves for these arms are in the main text; the training-time                      sient gain stays ≤1 for the recipe even though σmax ≈5, so
+formation view is in Sec. O.                                                       the amplified subspace is thin: random perturbations decay
+                                                                                   monotonically, and computation lives in a low-dimensional
+                                                                                   amplifying cone inside a globally contracting map. (Worst-
+    D        Trajectory-topology hypotheses: full                                  case gain requires directed probes; random probes measure
+                                                                                   the typical case, a methodological point we make explicit.)
+                          statements                                               Second, non-normality without convergence control does not
+A topology-first research program (Barannikov et al. 2022)                         help: Neural GPU reaches σmax /ρ=17.7, drifts, and scores
+predicts that reasoning trajectories fall into settle / loop / drift               zero. The recipe’s role is to put strong non-normality inside
+classes (H1), that winding of the trajectory tracks reasoning                      a settling envelope.
+depth (H2), and that a purely contracting map cannot im-
+plement counting-like computation (H3). Our corpus gives                           Scope of the estimates
+verdicts:                                                                          Beyond the instruments named in the main text, the per-run
+   H1: two of three regimes observed; the third is absent.                         inventory includes trajectory length, Koopman/DMD dom-
+Settle and drift are ubiquitous and sharply separable (main                        inant frequencies, a Kolmogorov–Sinai entropy proxy, and
+text Sec. 5), and the regime axis is causal via the fixed-point                    gradient statistics at the five training checkpoints; trajecto-
+switch; loops are not observed anywhere, with median total                         ries are stored PCA-reduced to 64 components (metrics use
+H1 persistence 0.000 in every regime and Koopman/DMD                               full d=256 latents). We state what each quantity is, so it is
+dominant frequencies are ≈0 across the corpus.                                     read for no more than it measures. The Lyapunov “spectrum”
+   H2: not supported in this task class. The 99th percentile                       is the top eight finite-time exponents (Benettin QR on held-
+of |winding| is 0.71 of a turn, extrapolators included: prop-                      out inputs), not the full d=256 spectrum: “all exponents
+agation solvers move radially toward their fixed point, not                        negative” is a statement about those eight, and a Kaplan–
+rotationally (task classes with cyclic state may differ). The                      Yorke dimension of eight is censored at that cutoff, not an
+same holds at scale: on Huginn-3.5B, |winding|>1 occurs                            attractor dimension. Eigenvalue-based quantities (Henrici in-
+for only 0.08% of the 2,585 measured token trajectories.                           dex, numerical and pseudospectral radius) are computed on
+   H3: supported, with a sharpened mechanism. The suc-                             projected blocks and read as sampled, not exact, normality.
+cessful operator is not globally contracting: it contracts on                      σeff = exp(λmax ) is a re-expression of the Lyapunov estimate,
+average (σeff <1) while strongly expanding along a thin sub-                       not independent corroboration of it. Topological quantities
+space (σmax ≈4–5), which is where the computation lives                            are computed on PCA-reduced trajectories (median 98.5%
+(main text Sec. 6). A regularizer sweep that drives the typi-                      variance retained). None of these change the regime sepa-
+cal (random-direction) Jacobian gain toward a target τ (the                        rations, which are large; they bound the adjectives, not the
+verdicts.                                                            full configuration.
+   The regime-label threshold |λmax |≤0.05 is likewise not
+load-bearing: relabeling the corpus at thresholds 0.02, 0.05,        The base pathology. On procedural single-token probes
+and 0.10 orders the median depth conversion of the three             the pretrained model’s accuracy peaks at a shallow, task-
+regimes identically. As a corpus-level prediction detail, the        dependent recurrence (r∗ ∈[2, 24]; carry ≈8, digit-copy 2,
+Lyapunov spread’s AUC 0.846 for extrapolation compares               index-digit 24) and then collapses: carry 0.31 (r=4) →
+with 0.390 for |λmax | alone: extrapolators are not the most         0.69 (r=8) → 0.00 (r≥32), copy dead from r=4, letter-
+contracting models.                                                  repeat 0.56 → 0.00. At depth every input freezes onto one
+                                                                     input-independent wrong token, so the failure is a settling
+             F     Full leave-one-out table                          event (Proposition 1b). Consequently answer-agreement
+                                                                     halting cannot detect it: stopping when the decoded answer
+Table 3 extends the main text’s Table 1 with every recipe
+                                                                     stops changing recovers 0.56 on carry against 0.74 for an
+ablation (none of the six additional arms switches dynamical
+                                                                     oracle fixed depth, and always-deep inference yields 0.00; a
+mode; they degrade gracefully) and the SE-RRM baseline
+                                                                     30-example calibration of a fixed depth recovers the peak.
+(fails the competence gate everywhere it was run). Column
+definitions are identical to the main text.                          Repair objective. A rank-16 LoRA adapter on the re-
+                                                                     current core is trained with the single loss ∥z(x, r) −
+     G     Huginn-3.5B: measurement details                          zbase (x, t∗ )∥/∥zbase (x, t∗ )∥ on the answer position,
+R2 within-family detail. On the last-digit ladder the me-            r∼U [16, 128], teacher t∗ =8, learning rate 10−5 , 2,000 steps,
+dian freezing step is 12/12/10/12 across operand sizes (1–4          no task labels; anchors are two synthetic domains (smallest-
+digits): stabilization does not track difficulty within a fam-       digit, first-letter). Held-out results over 10 seeds: digit-copy
+ily either, not only across them (main text Sec. 7). On the          0.00 → 1.00±0.00 at r=128 (all seeds input-dependent
+chain ladder (first rung within competence) accuracy decays          by prediction entropy); letter-repeat 0.00 → 0.51±0.13;
+0.72/0.40/0.23 while the freezing step stays put and plateaus        carry tier 8 plateau 0.60±0.04 (tiers 2/16: 0.48/0.53) with
+by r≈8–16.                                                           largely input-independent answers, which we count as sta-
+                                                                     bilization, not restored computation. An 11-domain anchor
+Probe scope. The behavioral probes are small (304
+                                                                     variant reaches carry 0.68±0.10 (4/9 seeds input-dependent)
+prompts) and test the R1–R4 criteria, not model ranking; the
+                                                                     and holds copy at 0.93 when evaluated at r=256; the two-
+base model is prompted zero-shot, so absolute accuracies
+                                                                     domain recipe is verified to r=128. A single first-letter an-
+are lower bounds. Across the 2,585 per-token trajectories the
+                                                                     chor gives the best carry plateau we observed (0.60–0.96
+effective dimension still tracks task category (2.23 → 2.68,
+                                                                     deep; two seeds, one clearly input-dependent).
+trivial to multistep), so the iteration is not inert; the bounded,
+orbit-like trajectories are consistent with what the model’s         Transfer follows the anchors’ operation, across symbol al-
+authors report (Geiping et al. 2025).                                phabets. A single word-morphology anchor (pluralization,
+The layer-normalization objection, in full. Is σeff =1.000           which echoes its stem) restores copying in digits (0.98±0.00)
+not simply what layer normalization enforces in a pre-norm           and letters (0.89±0.08), input-dependent in 6/6 seeds; car-
+transformer? Partly, yes, and we lean on it accordingly. Nor-        rier cross-tests are diagonal (smallest-digit repairs digit-copy
+malization pins the radial direction of the state, so a Lyapunov     1.00 but letter-repeat only 0.06; first-letter repairs letter-
+estimate near zero is partially expected regardless of what          repeat 0.45 but digit-copy 0.25). Non-echo anchors restore
+the map computes, and we do not rest the verdict on it. The          nothing: a fact-association anchor with a stronger base peak
+verdict rests on trajectory displacement, which normaliza-           than pluralization’s (0.27 vs. 0.17) repairs 0.00, and random-
+tion does not fix: an operator settling toward a fixed point on      string corpora likewise, so the operation, not anchor strength,
+the norm shell would show per-step displacement decaying             carries the transfer.
+to zero, and none of the 2,585 measured token trajectories
+does: the latent keeps traveling at an undiminished rate while       Two failure laws, measurable in advance. (i) Anchor va-
+the decoded answer sits frozen (answer freezing at median            lidity: domains the base itself cannot perform poison the
+3–5 changes; main text Sec. 7). This is exactly the premise          mix. Adding four counting domains (base near-chance) to
+of Proposition 1(b): a frozen answer with non-vanishing dis-         the two-anchor recipe drops copy from 1.00 to 0.50±0.15;
+placement carries no depth-safety guarantee. Normalization           an association domain the base scores 0.00 on drives the
+explains why marginality is the default for this architecture        pluralization anchor’s copy transfer from 0.98 to 0.00. A 30-
+family; it does not explain why training never leaves it; our        example base scan of each candidate anchor gates this before
+small-scale constructive experiment (main text Sec. 5) shows         training. (ii) Mirror interference: a near-duplicate template
+a single objective term suffices to leave it when the objective      of an anchor with contrary semantics is damaged by state
+asks.                                                                capture, not semantic capture: with a smallest-digit anchor,
+                                                                     largest-digit falls 0.58 → 0.06–0.09 deep (90% of its deep
+                                                                     answers are not digits at all), and the damage tracks the twin’s
+ H     Repairing depth-safety at scale: protocol,                    share of the training mix; last-letter’s peak falls 0.13 → 0.00
+             transfer laws, negative arms                            under a first-letter anchor while a non-twin anchor keeps it at
+All runs in this section were pre-committed before execution         0.14. With no twins among the anchors, no evaluation task
+(protocol files in the repository); every result file encodes its    is damaged.
+                                     Sudoku (hole fraction)                   Reachability (path length)                     Addition (carry length)
+                             learn        extrapolate      overthink     learn         extrapolate     overthink     learn         extrapolate    overthink
+CoRe (full recipe)            1.00      0.19→ 0.34 ±0.04        0         0.98      0.92→ 0.92 ±0.10       0          0.99    0.13→ 0.17 ±0.15     0.05
+ − structure                  0.00         0.00→ 0.00          0       0.15 ±0.02   0.08→ 0.08 ±0.03       0        = CoRe (no spatial structure on 1-D)
+ − extra input injection   0.29 ±0.01      0.00→ 0.00           0         0.23         0.17→ 0.17          0       0.04 ±0.02    0.00→ 0.00         0
+ − fixed-point objective      1.00      0.01→ 0.03 ±0.01      0.04        1.00      0.97→ 0.97 ±0.02     0.37         1.00    0.14→ 0.15 ±0.02     0.81
+ − orthogonal init            1.00      0.19→ 0.34 ±0.03        0         1.00      0.96→ 0.96 ±0.01     0.05         1.00    0.18→ 0.32 ±0.28       0
+ − adaptive step              1.00      0.11→ 0.24 ±0.17        0      0.69 ±0.03   0.43→ 0.45 ±0.18     0.11         1.00    0.39→ 0.40 ±0.06     0.01
+ − deep supervision           1.00      0.13→ 0.37 ±0.04        0         0.99      0.93→ 0.94 ±0.02     0.07      0.99 ±0.01 0.10→ 0.27 ±0.22     0.01
+ − grad clip                  1.00      0.10→ 0.31 ±0.10        0      0.57 ±0.15   0.34→ 0.34 ±0.19     0.05      0.99 ±0.01 0.08→ 0.12 ±0.04     0.62
+ lr 3·10−4 → 10−3             1.00      0.21→ 0.42 ±0.01        0         1.00      0.98→ 0.98 ±0.01       0       0.99 ±0.01 0.27→ 0.58 ±0.37     0.03
+ answer+latent objective      1.00      0.20→ 0.34 ±0.04        0         1.00      0.95→ 0.95 ±0.02     0.01         1.00    0.07→ 0.11 ±0.04     0.03
+generic recurrence            0.00         0.00→ 0.00           0      0.17 ±0.01   0.07→ 0.11 ±0.02     0.13         1.00    0.11→ 0.12 ±0.02     0.84
+TRM-style                  0.94 ±0.18   0.14→ 0.21 ±0.11        0      0.70 ±0.17   0.55→ 0.56 ±0.22     0.01         1.00    0.80→ 0.82 ±0.15     0.02
+UT/URM                     0.97 ±0.06      0.00→ 0.00         0.18     0.43 ±0.09   0.28→ 0.28 ±0.07     0.09      0.99 ±0.02 0.66→ 0.72 ±0.21     0.59
+FPRM                       0.53 ±0.40   0.00→ 0.01 ±0.01      0.04     0.31 ±0.05   0.20→ 0.20 ±0.03     0.11      0.82 ±0.26 0.27→ 0.28 ±0.25     0.80
+EqR                           1.00      0.01→ 0.01 ±0.01      0.13     0.99 ±0.01   0.88→ 0.89 ±0.03     0.24         1.00    0.12→ 0.12 ±0.03     0.72
+DEQ                           1.00         0.00→ 0.00           0      0.26 ±0.04   0.16→ 0.16 ±0.03     0.24      0.99 ±0.01 0.19→ 0.47 ±0.19     0.07
+Neural GPU                    0.00         0.00→ 0.00           0      0.76 ±0.08   0.54→ 0.54 ±0.11     0.68          —             —              —
+SE-RRM                        0.00         0.00→ 0.00           0          —               —              —            —             —              —
+
+Table 3: Full leave-one-out and architecture table (mean±sd; architecture rows n=10 seeds, CoRe/−fixed-point/TRM-style
+n≈20, other ablations and SE-RRM 3); column definitions as in main text Table 1. learn: in-distribution EM at best depth.
+extrapolate: first-unseen-tier EM at training depth → best over hc ≤128. overthink: worst over tiers of best EM − EM@128
+(bold ≥0.2); “—” marks arm undefined or not run.
+
+
+What never appears: conversion. No treated model ex-                                size-axis result, not an R1 claim) with an answer frozen
+ceeds the base’s peak competence at any depth, in any arm.                          within ∼5 steps, while its latent never settles (σeff =1.02,
+The depth-hard pointer-chase task (iterated single-cycle per-                       still moving at the last step): the carry front travels through
+mutation, S=10) is unlearnable in-distribution under LoRA                           the state in directions the readout ignores (weak-form R4).
+rank 16–128 and full-core tuning at learning rates 3·10−6 –                         On prefix sums the same operator statistics (σeff =1.02,
+10−4 (accuracy at chance, and never increasing with r).                             λmax =+0.02, spectrally indistinguishable from the addition
+The fixed-point loss itself does not transfer to this scale:                        twin) fail R4: the generic net learns the training tier better
+trained alongside the task it merely freezes an already-frozen                      than the recipe (1.00 vs. 0.23 at depth 16) and is then de-
+loop, and trained alone it collapses the model to a constant                        stroyed by test-time depth (1.00 → 0.65 on the same tier,
+answer at every dose we tried, while as little as 50 gen-                           0.56 → 0.04 on the next), while the recipe’s weaker solution
+tle steps already flatten the base’s depth profile. Where a                         is depth-stable (0.23 → 0.26).
+trained arm does show settling together with high flat ac-
+                                                                                    Strict R2 on a deterministic oracle. The TRM-style
+curacy (e.g., a task-trained control at 0.84 on carry with
+                                                                                    model’s halting on addition-carry tracks the oracle’s carry
+displacement 10−5 ), the answers are identical across tiers
+                                                                                    length nearly one-to-one: 16-round carry chains stop at 14.5–
+and depths, an input-independent constant rather than com-
+                                                                                    15.1 solve steps (main text Sec. 5).
+petence. Behavioral distillation from the base’s peak depth
+(a per-domain teacher) repairs a seven-task battery in-mix
+(5/5 pre-committed criteria; the per-domain teacher matters                           J    The fixed-point objective’s gate does not
+for copy 0.65 vs. 0.00 and largest-digit 0.62 vs. 0.41 against                                              cheat
+a uniform teacher) but never holds the deep tail on held-out                        The fixed-point penalty is scaled by the learned update gate
+domains; only the frozen latent anchor transfers.                                   aT , so the gate could in principle satisfy the penalty by
+                                                                                    closing (aT → 0) without the map learning a fixed point.
+Seed variance and a label-free selector. Depth-contract
+                                                                                    Trained recipes do not do this: they keep a small but nonzero
+training inherits the model’s stochastic latent initialization;
+                                                                                    terminal update and difficulty-adaptive solve steps, unlike the
+where seeds vary (the 11-domain variant), degenerate seeds
+                                                                                    flat-at-2.0 solve steps of the identity mode (Sec. L).
+are detectable without labels by prediction entropy at depth
+(top-class fraction ≥0.85): the selector keeps 9/10 seeds
+on copy (mean 0.90, dropping exactly the dead seed). The                              K     Objective interventions: dose, matched
+two-anchor recipe required no selection (10/10).                                                   control, beyond-horizon
+                                                                                    These experiments support the causal analysis of main text
+I   Weak-form R4: the full natural experiment                                       Sec. 5.4; protocols were committed before the runs (Sec. R).
+The size-ladder experiment separating the two forms of an-                          Answer-stabilization control (isolating the latent attrac-
+swer convergence (main text Sec. 5): on addition-by-length                          tor). We train the recipe with the residual penalty redi-
+the generic recurrence length-generalizes (0.83 → 0.86; a                           rected from the latent to the decoded answer (penalizing
+∥readout(zT ) − readout(zT −1 )∥, leaving the latent free).        necessary, not sufficient).
+This freezes the output without asking the latent to con-
+verge. It reproduces neither payoff: on Sudoku it fits its easy    Beyond-horizon conversion on a deterministic oracle.
+training tiers (hardest train tier only 0.18–0.30) and extrapo-    To test conversion strictly past the training horizon we re-
+lates to 0.00 on all three seeds, with the latent never settling   train at Ttrain =8 and evaluate on oracle depths that exceed it
+(λmax =+0.03–0.07); on reachability it matches the recipe’s        (carry length up to 28, i.e. 3.5× the horizon). Across 25 seeds
+unseen-tier peak (0.91–0.95) but is then destroyed by depth        the at-horizon tier (carry-8) converts on 17 (mean EM 0.59),
+(worst-tier overthinking damage 0.99–1.00, versus 0.00 for         but the strictly-beyond-horizon tiers do not convert: the 16-
+the latent-settling recipe). The payoff therefore requires the     round tier exceeds EM 0.5 on 1 of 25 seeds (mean 0.06) and
+latent fixed point the objective creates, not answer freezing.     the 28-round tier on none (mean 0.02). An initial five-seed
+                                                                   run had a single seed convert the deep tiers (0.88/0.46); this
+Dose-response of the objective weight. Sweeping the ob-            did not replicate at scale, so we make no strictly-beyond-
+jective coefficient (three seeds each; the headline weight is      horizon conversion claim on carry. What is robust strictly
+0.05): carry propagation, generic recurrence: at weight 0 the      past the horizon is depth-safety: the settling recipe holds a
+operator drifts (λmax =+0.04), with depth damage 0.87–0.93         flat plateau where its no-fixed-point twin peaks higher and
+and conversion only 0.09–0.14; at 0.005 the exponent crosses       then collapses (the safety contrast is sharper than the conver-
+into settling and the damage vanishes (0 of 3 unsafe) while        sion contrast, as at Ttrain =16).
+conversion is still small; at 0.02 conversion appears (0.60–
+0.97); at 0.05–0.2 it saturates (≈0.88, matching the headline;
+3-seed dose points). Adding the objective thus fixes both the                   L     Failure-mode portraits
+damage and the missing conversion; depth-safety switches           Full quantitative portraits of the four failure modes (main
+on at the settling crossing, and conversion then grows with        text Sec. 5):
+weight.                                                               The identity mode (no-recall): the loop converges instantly
+   Sudoku, recipe: weights 0.01 and 0.05 are comparable            to “do nothing” (σmax =1.0000; solve steps 2.0 flat, the only
+(extrapolation 0.32–0.41), weight 0.2 suppresses it (0.05–         arm with no difficulty-adaptivity at all; rank curve frozen).
+0.16), and weight 1.0 over-contracts into a deep settle            R2–R4 all fail in the most degenerate way; accuracy 0.00.
+(λmax =−0.26–−0.36) with perfect training accuracy but                The marginal mode (generic recurrence, UT/URM,
+zero extrapolation. Settling is necessary but not sufficient:      FPRM, SE-RRM): the trained operator is close to
+the useful target is the slowest rate that still settles.          normal and norm-preserving (Henrici departure 0.000,
+   EqR, native weight: the same over-dose boundary appears         σmax =ρ=1.000), with a near-zero-to-weakly-positive λmax
+architecturally. EqR hard-wires this penalty at weight 0.1,        sitting at or just above the marginal band (values around
+yet on these ladders its residual never resolves (the train-       +0.05–0.07 straddle the marginal/drift threshold: these op-
+ing loss plateaus at the penalty term while in-distribution        erators are the least settled non-drift family, not cleanly in-
+EM is perfect), and the model overthinks instead of convert-       terior to marginal), saturated Kaplan–Yorke dimension, and
+ing (Table 3). With the native term removed, the unchanged         positive entropy proxy. Latents wander a high-dimensional
+backbone converges and converts (carry 0.68→1.00±0.01,             filament (trajectory effective dimension ≈1.1, path length
+Sudoku 0.14→0.34±0.04; n=10 each), the trained operator            ∼15k); rank curves stay high and non-monotone. On the
+settling on its own on carry. The objective pays only where        original ladders these models fit easy tiers (UT/URM reaches
+the penalty can actually be driven down; a hard-wired weight       0.56 training-tier EM on those tasks; on the fixed-size lad-
+over a residual that stays large buys neither safety nor con-      ders of Table 1 the same family reaches 0.97; the two figures
+version.                                                           are different corpora, Sec. B) but R1 fails: their depth curves
+Constructive transfer across architectures. Re-seeded to           are flat or declining.
+n=10 per cell, adding only the fixed-point term (weight 0.05)         The drift mode (no fixed-point objective): non-normality
+to the two marginal architectures flips the measured regime        survives (σmax =5.6) but λmax = + 0.10 (σeff 0.94 → 1.11
+seed-by-seed: on carry and reachability every UT/URM and           relative to the recipe); the trajectory is ten times longer than
+FPRM control run has λmax >0 and every +fp run λmax <0             the recipe’s, entropy is the highest measured, and extra test-
+(40/40 runs), and overthinking is repaired wherever there          time steps actively hurt (R4 fails with consequences for R1:
+is competence to protect (carry damage 0.59 → 0.17 for             0.33 → 0.04).
+UT/URM, 0.80 → 0.14 for FPRM). Conversion does not                    The settle-but-wrong mode (no-structure; TRM on ARC):
+come along automatically: it rises on FPRM (0.28 → 0.49)           the dynamics are right, as no-structure contracts hardest of
+but falls on UT/URM (0.72 → 0.54), and on reachability             all arms; TRM on ARC settles with λmax = − 0.21 and
+the term costs trainability itself (learn 0.43 → 0.18 and          σmax =30–60), but the fixed point does not encode the solu-
+0.31 → 0.13, below the competence gate). DEQ marks the             tion (EM 0.00 and 0.013 respectively). Convergence control
+other boundary: its control already settles on carry (λmax <0,     cannot substitute for an inductive bias aligned with the algo-
+10/10), and adding the term stops training from fitting at         rithm (main text Sec. 4). Spectrally these runs settle isotrop-
+all (10/10 seeds). Under the intervention the regime and           ically (Lyapunov spread ≤0.08), whereas true algorithm-
+depth-safety move together on foreign architectures, so the        learners settle anisotropically (spread 0.2–0.4); the instru-
+arm’s identity does not carry them; conversion stays task-         ment that separates this mode from success is developed in
+and architecture-dependent, as in the main text (settling is       main text Sec. 6.
+           M     Practitioner’s dashboard                            Anisotropy: instrument-level exception. The no-adastep
+Table 4: what to monitor while training a recursive model,           arm extrapolates with a compressed Lyapunov spectrum,
+what each pathology looks like, and which recipe component           since adaptive update scaling may deform the measurement,
+treats it (main text Sec. 6).                                        so the anisotropy claim is read as a corpus regularity, not a
+                                                                     per-run guarantee.
+ Signal                Diagnosis                Fix                  History in the spectrum. Isometrically initialized mod-
+ σmax → 1.0000,        identity fixed point     extra input injec-   els end with double-to-triple the weight stable rank of their
+ solve steps flat      (“do nothing”)           tion (recall)        ablation at indistinguishable accuracy so persistent spectral
+ Henrici →       0,    normal       marginal    structured step;     differences can encode history, not just competence.
+ σmax =ρ=1,     KY     wander      (coverage    fixed-point ob-
+ saturated             learner)                 jective                              O   Training-time formation
+ λmax >0, trajectory   drift; depth will hurt   fixed-point   ob-    Figure 7: hidden-feature rank across the five training check-
+ length exploding      at test time             jective              points. Arms that will extrapolate grow rank late; the no-
+ settles but EM = 0;   settled    isotropi-     inductive     bias   fixed-point ablation finds its shortcut early and stays flat
+ flat Lyapunov spec-   cally: converged to      (structure) / less   (main text Sec. 6). This is the inference-map face of de-
+ trum (λ1 −λ8 <0.1)    a non-algorithm          augmentation,        layed generalization: as in grokking (Power et al. 2022), the
+                                                not more dynam-      generalizing solution forms long after the loss is low, visible
+                                                ics control          in hidden progress measures before behavior (Nanda et al.
+ all eight estimated   learned recursion        none needed          2023; Barak et al. 2022), competing with a cheaper memo-
+ leading exponents                                                   rizing solution (Varma et al. 2023), the coverage solutions
+ < 0, rank curve                                                     of the main text. The quantities a grokking analysis would
+ monotone ↓, EM                                                      monitor on the training map (rank, spectral structure) are ex-
+ rises with depth                                                    actly the ones that diagnose the trained inference map. Within
+ seed-to-seed   EM     missing step-size        adaptive updates;    the same runs, correct examples additionally live on lower-
+ variance ≫            adaptation / clip-       clip                 dimensional, more compact trajectories (p=3.5×10−10 and
+                       ping                                          p=2.3×10−6 within-run; Sec. P).
+
+Table 4: Signal → diagnosis → fix: what to monitor while                                 hidden-feature rank across checkpoints
+training a recursive model, the pathology each pattern indi-
+cates, and the recipe component that treats it.                              200
+
+                                                                             150
+
+                                                                             100
+    N     Corpus regularities: full statements                                                              CoRe: late growth
+                                                                                50
+One settle axis, measured two independent ways. Live                                                                   −fp: flat
+
+spectral measurements and post-hoc trajectory geometry                           0
+
+agree run-by-run: σeff correlates with trajectory settling at                                  101        102           103
+r=0.75 (n=325, p=4×10−60 ) on the original campaign and                                              training step
+
+replicates on the fixed-size-ladder corpus as a rank correla-
+tion (Spearman ρ=0.69, n=1,206; rank-based because a few             Figure 7: Hidden-feature rank across training checkpoints
+deeply-settled runs distort a Pearson estimate).                     (Sudoku; colors as in the main text).
+Regime statistics. Across the 304 original-ladder runs the
+19 extrapolating runs on constraint-propagation tasks sep-
+arate from the rest on both dynamical axes: λmax (median                    P        Per-instance confidence read-out
+−0.047 vs. +0.009, p=7×10−6 ) and Kaplan–Yorke dimen-                The per-instance predictor of the main text (Sec. 6) is a lo-
+sion (0 vs. 8, p=2.6×10−5 ).                                         gistic read-out of five per-trajectory quantities (settling ratio,
+Topology. A settled cloud is compact, a drifting one a fila-         effective dimension, path length, winding, Koopman magni-
+ment: the near-zero-persistence Betti-1 bar count is positive        tude) with grouped cross-validation over runs (no run leaks
+for 92% of settle-regime trajectory files versus 24% marginal        across folds). Cross-validated AUC: 0.80 (Sudoku), 0.91
+and 2% drift. Within the same run, correct examples live on          (reachability), 0.98 (size-Sudoku); correct examples settle
+lower-dimensional, more compact trajectories (Sec. P).               more, on shorter, lower-dimensional paths (p=3.5×10−10
+                                                                     and p=2.3×10−6 within-run).
+Formation caveats. Mid-training hidden-state stable rank
+predicts final extrapolation at AUC 0.774, but arm identity
+partially confounds, so it is a monitoring candidate, not a                              Q      Data generation
+law; and we do not claim the canonical delayed test-accuracy         Every generator is deterministic given a seed, verifies its
+jump of grokking (the checkpoint grid is too coarse). See            oracle-round invariant on each instance at generation time,
+also Sec. O.                                                         and materializes splits once that are shared byte-for-byte
+across arms. We describe the three primary fixed-size lad-            that each campaign’s protocol, arm list, and headline choice
+ders; the remaining generators follow the same contract (fixed        were committed to version control before the corresponding
+length, vocabulary, and grid across a ladder, with only the           run and fixed there rather than chosen after inspecting re-
+oracle-round count growing) and are included in the code              sults; we say “pre-committed” rather than “pre-registered”
+supplement.                                                           because the commits are not timestamped by a third party.
+Sudoku (hole fraction). For each instance we draw a com-              Availability. An anonymized code supplement accompa-
+plete valid 9×9 solution by randomized backtracking, then             nies the submission: generator code and materialized splits
+blank a fraction h of the 81 cells chosen uniformly at random         with checksums, exact seeds and per-arm configurations, the
+(⌊81h⌋ cells set to the blank token). The givens are exactly the      measurement and estimator code with the numerical set-
+un-blanked solution cells, so every puzzle is consistent with         tings of Sec. E, architecture implementations, per-run and
+its solution by construction. Difficulty is the hole fraction         per-example logs, and scripts that regenerate every table and
+h (training 0.2/0.35/0.5, evaluation 0.2–0.7). Uniqueness is          figure. It also lists the eight runs that fell back to a halved
+not enforced at generation: we compute the uniquely-solvable          batch after an out-of-memory event, with their effective bud-
+fraction per tier (1.00/0.91/0.50/0.06/0.00) with an ex-              gets.
+haustive solver and score predictions with the validity ora-
+cle, reporting reference match alongside. The deterministic-          task               difficulty                   train      eval       steps
+oracle ladders below have no such ambiguity.                          Fixed-size ladders (depth axis; primary)
+                                                                      sudoku             hole fraction         0.2,0.35,0.5    0.2–0.7       8k
+Reachability (BFS depth). Undirected graphs on N =16                  reach_pathlen      BFS depth                  2,3       2,3,5,8,12     4k
+nodes with a fixed reachable set of R=13. From a source               addition_carry
+                                                                      maze_pathlen
+                                                                                         carry-run len
+                                                                                         path length
+                                                                                                                    2,4
+                                                                                                                   6,12
+                                                                                                                             2,4,8,16,28
+                                                                                                                            6,12,24,48,80
+                                                                                                                                             4k
+                                                                                                                                             6k
+we build d non-empty layers, place at least one edge from             sort_disorder      displacement               2,4      2,4,8,16,24     4k
+each node to the previous layer, and add adjacent-layer edges         maze_pathlen_m path length (matched)         8,12     8,12,16,24,32    6k
+                                                                      sort_disorder_m displacement (matched)        2,4       2,4,6,8,12     4k
+with probability 0.25, so the BFS depth of every reachable
+node equals its layer index and the farthest is exactly d. The        Size/length ladders (scope; main text Sec. 3)
+                                                                      sudoku_size        board size                      9      4,9,16,25    6k
+remaining N − R=3 nodes form a separate component (in-                reachability       #nodes                        8,12    8,12,16,24    4k
+ternal edge probability 0.4), so the reachable fraction R/N           maze               grid size                    11,15   11,15,21,31    6k
+                                                                      addition           operand bits                  8,16       8–128      4k
+is constant across tiers and carries no base-rate signal. Node        prefix             bit length                   32,64      32–512      4k
+identities are permuted at random, and each instance is veri-         parity             bit length                   32,64      32–512      4k
+fied (BFS depth = d) before it is kept. Difficulty is the exact       sort               length                        8,16    8,16,32,64    4k
+BFS depth d (training 2, 3; evaluation 2, 3, 5, 8, 12). The in-
+put is the flattened adjacency with the source marked on its          Table 5: Per-task difficulty parameter, training/evaluation
+diagonal; the target is the per-node reachable bit.                   tiers (parameter values), and training-step budget. All other
+                                                                      hyperparameters are shared (text above).
+Addition (carry-run length). Two 32-bit operands in an
+interleaved least-significant-bit-first encoding (L=64; sum
+bit i at position 2i, odd positions padding), which keeps the
+carry chain strictly local. Difficulty is the longest run c of con-
+secutive live carries: we plant one generate-then-propagate
+cascade of length exactly c and absorb any accidental longer
+run, verifying c by carry simulation. The oracle-round count
+equals c (a local ripple needs c sequential steps) and is re-
+computable from the input. As pre-committed, the fraction
+of propagate columns grows with c, as the hole fraction does
+along the Sudoku ladder.
+
+              R     Reproducibility details
+Every configuration trains at 16 recurrent steps with deep
+supervision (4 supervised unrolls), AdamW at learning rate
+3×10−4 , gradient clipping 0.5, batch 64, hidden width
+d=256, 800 unique unaugmented examples per difficulty tier,
+and three seeds; evaluation uses 256 fixed examples per tier
+and sweeps test-time depth hc ∈ {3, 16, 32, 64, 128}. Data
+files are materialized once and shared byte-for-byte across ev-
+ery arm and architecture. Table 5 lists, per task, the difficulty
+parameter, the training and evaluation tiers (as parameter
+values), and the training-step budget. Eight runs fell back to
+a halved batch after an out-of-memory event and continued
+from there; the actual batch size is logged per run, so no
+run silently changes budget. By “pre-committed” we mean
+

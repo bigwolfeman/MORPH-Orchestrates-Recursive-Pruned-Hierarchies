@@ -1,0 +1,874 @@
+                                               Squeezing More from Limited Data with Recursive Transformers
+
+
+                                                            Serdar Gülbahar     Lukas Edman         Alexander Fraser
+                                                                         Technical University of Munich
+
+
+
+
+                                                               Abstract                                 constrained by the supply of high-quality human-
+                                                                                                        generated text (Villalobos et al., 2024).
+                                             Pre-training under limited data requires a dif-
+
+
+
+
+arXiv:2608.26973v1 [cs.CL] 27 Aug 2026
+                                             ferent view of scaling than web-scale language
+                                                                                                            Human language learners are exposed to far less
+                                             modeling. With a fixed data budget but rela-               linguistic input than today’s language models, and
+                                             tively abundant compute, increasing parameter              the BabyLM Challenge is designed around this idea
+                                             count helps only up to an optimal scale; be-               by evaluating pre-training under developmentally
+                                             yond that point, models overfit and generaliza-            motivated budgets such as 10M or 100M words
+                                             tion worsens. We study this behavior across                (Gilkerson et al., 2017; Hu et al., 2024). Naturally,
+                                             10M–100M word pre-training budgets, two cor-               it is a controlled testbed for us to study how models
+                                             pora, and multiple downstream evaluations,
+                                                                                                        should be designed when data is scarce.
+                                             and find that optimal size depends strongly
+                                             on both the data budget and the downstream                     We argue that standard Transformers scale down
+                                             target. We argue that standard Transformers                poorly to this setting. Scaling down standard
+                                             scale down poorly to this setting, because em-             Transformers reduces parameter count, but it also
+                                             beddings consume a large fraction of the pa-               changes the balance among vocabulary maps, block
+                                             rameter budget and per-token computation is                capacity, and computational depth. At small scales,
+                                             tied to representational capacity. To address              a fixed vocabulary size means embeddings and the
+                                             this coupling, we study recursive Transformers,            LM head can dominate the parameter budget, and
+                                             reusing a shared block across depth to scale
+                                             compute, together with factorized embeddings
+                                                                                                        the computation applied to each token can become
+                                             to reduce vocabulary-map parameters. We train              too limited. This couples per-token computation
+                                             three recursive models and find that they out-             to representational capacity, even though in this
+                                             perform standard Transformers at 10M and                   setting we would like to control them separately.
+                                             100M words, while remaining competitive with               We therefore explore architectural ways to break
+                                             BabyLM Challenge 2025 winners.                             this coupling: factorized embeddings reduce the
+                                                                                                        parameters spent on vocabulary maps, while recur-
+                                         1   Introduction
+                                                                                                        sive weight sharing lets us increase computational
+                                         Most work on language model pre-training has                   depth without a proportional increase in parameter
+                                         been developed in the web-scale regime, where                  count. We refer to the resulting model family as
+                                         performance is often improved by scaling model                 RecursiveGPT.
+                                         size, compute, and data together (Kaplan et al.,                   We study the following research questions:
+                                         2020; Hoffmann et al., 2022). Here, we consider
+                                                                                                           • What sort of bottlenecks make standard lan-
+                                         a different setting: pre-training under a limited
+                                                                                                             guage model architectures scale down poorly
+                                         data budget but relatively abundant compute, where
+                                                                                                             to limited-data pre-training budgets?
+                                         web-scale scaling intuitions do not carry over. In
+                                         limited-data training, more parameters cannot be                  • How does optimal model size depend on the
+                                         paired with more data, so increasing model size                     data budget and downstream evaluation tar-
+                                         changes the bias–variance tradeoff. This makes                      get?
+                                         model size itself a regularization choice.
+                                                                                                           • Can recursive Transformers provide a better
+                                            This setting is scientifically interesting because it
+                                                                                                             path for scaling compute under limited data?
+                                         is closer to developmentally motivated data budgets
+                                         (Hu et al., 2024), and practically important because           To study these questions, we run experiments span-
+                                         continued scaling of foundation models may be                  ning data budgets from 10M to 100M words and
+
+                                                                                                    1
+model sizes from 13M to 1.2B parameters, across              can spend most of its parameters on token embed-
+two corpora and multiple benchmarks. Our results             dings rather than on the computation performed at
+show that data-constrained pre-training behaves dif-         each layer.
+ferently from the web-scale regime: the optimal                 Prior work has explored a training-dynamics ap-
+model size depends strongly on both the amount of            proach to this problem, keeping models overparam-
+data and the downstream evaluation, and standard             eterized while controlling overfitting through ag-
+architectures scale down poorly.                             gressively tuned training recipes, including weight
+   Our central claim is that limited-data pre-training       decay far above standard pre-training practice and,
+benefits from architectures that decouple repre-             in later stages, ensembles of independently trained
+sentational capacity from per-token computation;             models (Kim et al., 2026). We instead explore an
+our goal is not to improve compute efficiency, but           architectural approach to solving this problem, de-
+to provide another compute scaling axis that lets            signing the model itself to be better-matched to the
+us squeeze out more performance out of limited               data-constrained regime.
+data. RecursiveGPT provides a simple instance
+of this principle. Empirically, RecursiveGPT uses            2.1   BabyLM Challenge
+this additional computation to outperform standard           The BabyLM Challenge (Hu et al., 2024) studies
+Transformers at both 10M and 100M word bud-                  language model pre-training under developmen-
+gets, while remaining competitive with BabyLM                tally plausible data budgets. Its standard tracks
+Challenge 2025 winners.                                      restrict training to at most 10M or 100M words for
+   We view RecursiveGPT as a useful architec-                10 epochs, but do not restrict FLOPs; making it a
+tural pathway for scaling up compute under fixed             useful benchmark for the limited-data setting we
+data, while remaining orthogonal to more special-            consider.
+ized data-efficient training methods, such as those             The 2025 challenge ranked systems separately
+used in BabyLM. We openly release the training               by track and by NLP-task versus human-likeness
+pipeline.1                                                   metrics. The NLP track is most relevant for our
+                                                             evaluations; its strict-small winner, AMLM hard
+2       Background                                           decay, is a masked language model that adapts
+We focus on the regime where data, rather than               the masking distribution during training (Edman
+computation, is the binding constraint. With a               and Fraser, 2025). Other strong systems combined
+fixed corpus but relatively abundant compute, pa-            causal and masked objectives or used diffusion-
+rameter count becomes a form of regularization:              style masked language modeling (Charpentier and
+larger models can fit the training corpus more eas-          Samuel, 2024; Kosmopoulou et al., 2025; Charpen-
+ily, so the natural scaling direction is often to re-        tier et al., 2025).
+duce the number of trainable parameters. This                   Two evaluations used by the challenge that we
+creates a tension with compute. The same knobs               also use later are BLiMP (Warstadt et al., 2020) and
+that usually buy more computation, such as larger            COMPS (Misra et al., 2023). For comparisons to
+width, greater depth, or more passes over the data,          BabyLM 2025 models later, we also report BLiMP
+also tend to increase the risk of overfitting. At            Supplement, EWoK (Ivanova et al., 2025), and En-
+the BabyLM scale, this compute-abundant view is              tity Tracking (Kim and Schuster, 2023), which we
+not merely hypothetical. In the 10M-word setting,            treat as supplementary because they appear to be
+competitive models can be trained in minutes on              noisier and are less central to our research ques-
+a single GPU (see Appendix D), making it natural             tions.
+to ask, in the spirit of “The Bitter Lesson” (Sutton,        2.2   Recursive Transformers
+2019), how to allocate more compute.
+                                                             A simple way to untie per-token computation from
+   Another layer to this tension is scaling down
+                                                             representational capacity is to share weights across
+standard language model architectures. If vocab-
+                                                             depth. Recursive Transformers do this by replac-
+ulary size is held fixed, reducing the hidden di-
+                                                             ing a stack of independently parameterized blocks
+mension shrinks the Transformer blocks roughly
+                                                             with repeated applications of a shared transition
+quadratically, while the embedding matrix shrinks
+                                                             function. Increasing recurrent depth therefore adds
+only linearly. As a result, a small language model
+                                                             computation between the embedding layer and the
+    1
+        github.com/serdardoesml/recursive-lm                 output head without adding another full set of block
+
+                                                         2
+parameters. This idea connects several strands of               Standard Embeddings      Factorized Embeddings
+
+prior work.
+   The Universal Transformer applies a self-
+attentive transition recurrently across depth, op-
+tionally with adaptive halting, and was motivated
+by combining the parallelism of Transformers with
+a recurrent inductive bias (Dehghani et al., 2019).
+                                                          Figure 1: Standard embeddings use a single V ×
+ALBERT later showed that factorized embeddings
+                                                          H matrix, while factorized embeddings introduce an
+and cross-layer parameter sharing can greatly re-         embedding-size bottleneck by mapping tokens through
+duce the parameter count of BERT-style encoders           an E-dimensional space before projecting to the H-
+(Lan et al., 2020). Deep Equilibrium Models push          dimensional hidden space. This reduces embedding
+weight-tied depth further by solving for the fixed        parameter count when E ≪ H and can act as a useful
+point of an effectively infinite-depth network, in-       regularizer.
+cluding self-attention variants (Bai et al., 2019).
+More recent recursive-Transformer work has used           den state ht to vocabulary logits by
+layer tying and lightweight depth-specific adapta-
+tion to compress pretrained language models (Bae                   HeadFE (ht ) = ht Wproj Wunembed ,
+et al., 2025), while depth-recurrent language mod-
+                                                          where, for the output head, Wproj ∈ RH×E and
+els, such as AbbIE and Huginn, study recurrent
+                                                          Wunembed ∈ RE×V . When E ≪ H, each factor-
+unrolling as a way to scale latent test-time com-
+                                                          ized vocabulary map uses O(V E + EH) param-
+putation (Aleksandrov et al., 2025; Geiping et al.,
+                                                          eters instead of O(V H) while leaving the hidden
+2026).
+                                                          size unchanged. This lets us prevent vocabulary
+   Recent small recursive reasoning models illus-
+                                                          maps from dominating the parameter count at very
+trate the same low-data principle outside language
+                                                          small scales by reducing E independently of H.
+modeling. HRM and TRM solve supervised puz-
+                                                          When we choose E = H, we set Wproj = IH ,
+zle tasks by applying compact recurrent modules
+                                                          recovering the standard embedding or output-head
+repeatedly to achieve strong generalization from
+                                                          parameterization.
+small training sets (Wang et al., 2025; Jolicoeur-
+Martineau, 2025).                                         3     Optimal Scale for Standard
+                                                                Transformers Under Data Scarcity
+2.3   Factorized Embeddings
+Factorized embedding parameterization unties the          3.1    Scaling Experiment Setup
+embedding size E from the Transformer hidden              We first study optimal scale with standard, non-
+size H. In the standard parameterization, the input       recursive Transformers. All models use 12 layers,
+embedding matrix has size V × H, where V is the           and we sweep hidden sizes from 256 to 3072. To
+vocabulary size. ALBERT introduced factorized             keep embeddings from dominating the parameter
+embeddings for parameter efficiency, replacing this       budget at the smallest scales, we use factorized em-
+matrix with two smaller matrices of size V × E            beddings for the three smallest models, setting E
+and E × H (Lan et al., 2020). Equivalently, to-           to 96, 192, and 352 for H = 256, 384, and 512,
+kens are first mapped into an E-dimensional em-           respectively. The H=384, E=192 pairing is sup-
+bedding space and are then projected into the H-          ported by the factorized-embedding sweep in Ap-
+dimensional hidden space used by the Transformer.         pendix E. For all larger models, we set E = H. We
+Concretely, for a one-hot token vector xt , we com-       train on 10M, 25M, 50M, and 100M-word budgets
+pute                                                      for 10 epochs using two corpora: the BabyLM base-
+                                                          line corpus used by GPT-BERT (Charpentier and
+        EmbedFE (xt ) = xt Wemb Wproj .                   Samuel, 2024), and Nemotron-ClimbMix (Diao
+                                                          et al., 2026). Every 10M words corresponds to
+Here EmbedFE denotes the factorized embedding
+                                                          roughly 13M BPE tokens. Within each corpus,
+map, Wemb ∈ RV ×E is the token embedding ma-
+                                                          smaller budgets are constructed as nested, shuffled
+trix, and Wproj ∈ RE×H projects into the Trans-
+                                                          subsets of larger ones, so scaling dataset size does
+former hidden space. We use the same factorization
+                                                          not intentionally change the data mixture. We defer
+for the untied language-model head, mapping a hid-
+                                                          the exact architecture specification to Appendix B.
+
+                                                      3
+Figure 2: Optimal scale with standard Transformers on the BabyLM baseline corpus across three representative
+evaluations. The preferred parameter count depends on the downstream target: BLiMP saturates relatively early,
+LAMBADA becomes more scale-favoring as dataset size grows, and COMPS continues to benefit from larger
+models at moderate and high data budgets.
+
+
+   We report three representative evaluations in Fig-
+ure 2: BLiMP (Warstadt et al., 2020), LAMBADA
+pass@5 (Paperno et al., 2016), and COMPS (Misra
+et al., 2023). BLiMP and COMPS are evaluated
+using the BabyLM evaluation pipeline (BabyLM,
+2025). BLiMP is a set of 67 English minimal-
+pair datasets targeting grammatical phenomena in
+syntax, morphology, and semantics. COMPS is
+a minimal-pair benchmark for conceptual prop-
+erty knowledge and property inheritance, testing
+whether models assign plausible properties to con-          Figure 3: Final training loss for the standard-model
+cepts and generalize them across category relations.        optimal-scale sweep on the BabyLM baseline corpus.
+                                                            The x-axis uses the same parameter counts as Figure 2.
+LAMBADA is a benchmark for broad discourse un-
+                                                            All data subsets use the same tokenizer and vocabulary,
+derstanding in which models must predict a missing          so losses are directly comparable. Training loss keeps
+final word from a passage-level context. We evalu-          falling even when downstream performance saturates or
+ate it using pass@5 under gold-prefix scoring: at           declines.
+each continuation position, conditioned on the true
+preceding tokens, the reference token must appear
+among the model’s top-5 predictions; multi-token            concepts and properties and apply them across cat-
+continuations must satisfy this at every position.          egory relations. This makes the task more depen-
+                                                            dent on memorized semantic knowledge from the
+3.2   Scaling Behavior by Evaluation                        pre-training corpus. Larger models may therefore
+Performance is clearly non-monotonic in parameter           continue to improve on COMPS because additional
+count, but the pattern differs substantially across         parameters provide useful associative capacity even
+evaluations, as illustrated by Figure 2. BLiMP im-          after broader generalization gains have tapered off.
+proves with scale and then mostly saturates, with           This again shows that the optimal scale depends
+the clearest signs of overfitting appearing at the          strongly on the downstream target.
+smallest data budgets. In contrast, COMPS contin-              LAMBADA asks the model to predict a held-out
+ues to benefit from larger parameter counts across          word from the preceding context. Its examples are
+much of the range we test, especially at 50M and            constructed so that the target word is predictable
+100M words, including in regions where BLiMP                from the semantic context of the full passage, but
+and low-budget LAMBADA have already flattened               not from short-range cues alone. This format re-
+or begun to decline.                                        mains close to the language-modeling objective,
+   One plausible explanation is that COMPS tests            which may explain why its scaling curves are com-
+conceptual property knowledge and property inheri-          paratively smooth.
+tance: the model must encode associations between              The corresponding final training losses decrease
+
+
+                                                        4
+steadily with parameter count (Figure 3), so the
+downstream declines at small data budgets occur
+                                                                             LM Head
+despite better training fit and are consistent with
+overfitting rather than optimization failure.
+   The same qualitative picture appears on Climb-
+Mix: preferred parameter ranges remain broadly                                  MLP
+stable despite shifts in absolute scores, suggesting
+that scale is determined more by data budget and                            Norm    Bias
+
+evaluation target than by corpus choice (Appendix
+Figure 6).                                                                    Attention
+   These results reveal a central obstacle for com-                         Norm    Bias
+pute scaling under fixed data. Once model size
+exceeds the data-dependent optimum, spending ad-
+ditional compute by adding parameters no longer                             Embeddings
+reliably improves generalization and can instead
+amplify overfitting. Progress in this regime may
+therefore benefit from an alternative scaling axis:
+increasing per-token computation without propor-           Figure 4: RecursiveGPT architecture. Tokens are pro-
+                                                           cessed by applying a shared Transformer block R times.
+tionally increasing the number of trainable parame-
+                                                           Each recurrent step r uses separate normalization and
+ters.                                                      bias parameters for depth conditioning.
+4   RecursiveGPT Architecture
+We use recursive weight sharing as an architectural        computation without introducing another full set of
+response to this compute-scaling problem. The ar-          block parameters.
+chitecture is a recursive causal decoder inspired by          Each step still has its own parameterized RM-
+ALBERT (Lan et al., 2020), in which a shared               SNorm modules for the attention sublayer, MLP
+Transformer block is applied recurrently across            sublayer, and QK normalization, with additional
+depth. Due to optimization difficulties with recur-        learned biases on the first two. These per-step
+sive weight sharing, and also to explicitly control        normalization parameters act as lightweight depth
+depth, we keep the design deliberately simple and          conditioning, and the learned biases in particular
+use a fixed number of recurrent steps. We return           function as a lightweight depth embedding, anal-
+to these tradeoffs in Section 6. We refer to this          ogous to the recurrent-step timing signal used by
+model family as RecursiveGPT. Our approach is              Dehghani et al. (2019), while most of the block
+illustrated in Figure 4. Following the Universal           parameters are shared.
+Transformer view of depth recurrence (Dehghani                Unless otherwise stated, RecursiveGPT uses the
+et al., 2019), we describe the model as repeated           same architectural and training details as the stan-
+application of a single causal decoder transition,         dard models described in Appendix B; the key ar-
+initialized by the factorized embedding map and            chitectural change is that the recurrent block shares
+read out with the factorized head from Section 2.3:        weights across depth. One exception is the feed-
+                                                           forward sublayer: we use an unusually high expan-
+                                                           sion factor of 16, because MLP neuron count scales
+     h(0) = EmbedFE (xt ),                                 linearly with hidden size whereas total parameter
+     h(r) = Fθ (h(r−1) ; ϕr ),   r = 1, . . . , R,         count scales quadratically, so simply scaling the
+                                                           hidden size to the desired parameter count would
+       yt = HeadFE (h(R) ).
+                                                           leave the model with too few feed-forward neu-
+Here Fθ is the shared Transformer block, θ con-            rons. This matters because feed-forward neurons
+tains the attention and MLP weights reused at ev-          can be interpreted as an associative memory over
+ery recurrent step, ϕr denotes the lightweight step-       key–value pairs (Zhong et al., 2025).
+specific normalization parameters, and yt denotes
+the next-token logits produced by the factorized
+language-model head. In contrast to a standard
+R-layer Transformer, increasing R therefore adds
+
+                                                       5
+                                                                    pared with 45.07 for the best standard model from
+                                                                    Section 3 and 44.93 for an unfactorized standard
+                                                                    model with the same hidden size. Table 1 compares
+                                                                    recursive models against standard alternatives at
+                                                                    both 10M and 100M words. All scores are aver-
+                                                                    aged over seeds 0, 1, and 2. Training-time and
+                                                                    FLOP estimates for these models are reported in
+                                                                    Appendix D.
+                                                                       Overall, the recursive models are highly com-
+                                                                    petitive; in the 10M-word setting, our recursive
+Figure 5: Average accuracy for recursive models
+                                                                    model outperforms both standard models on all
+with (H, E)=(640, 192) trained with recurrent depth
+R swept from 4 to 32 on the 10% subset of the 100M
+                                                                    three evaluations. At 100M words, the compact
+BabyLM-baseline corpus from the optimal scale experi-               124.0M-parameter RecursiveGPT + FE model per-
+ment in Section 3. The horizontal reference lines mark              forms well on BLiMP, exceeding the 1.22B stan-
+the three-seed average scores from Table 1 for the best             dard model while using about 10% as many param-
+standard model and an unfactorized standard model with              eters, but trails it on COMPS, LAMBADA, and av-
+the same hidden size.                                               erage score. Scaling the recursive model to 404.1M
+                                                                    parameters yields RecursiveGPT-Large, which uses
+5   Results                                                         substantially higher compute and reaches the best
+                                                                    average score among our models while still being
+For the recursive experiments, we train three Re-                   smaller than the 1.22B standard baseline. Together,
+cursiveGPT configurations: (H, E)=(640, 192)                        these results show that recursion provides a useful
+with R=16, (H, E)=(1408, 768) with R=24, and                        compute-scaling axis under limited data.
+(H, E)=(2560, 2560) with R=24. The first con-
+figuration is trained at 10M words, while the other                 5.1    Comparison to BabyLM 2025 winners
+two are trained at 100M words. Because of com-                      Table 2 compares our recursive models with strong
+pute constraints, the 100M-word recursive models                    BabyLM 2025 baselines at both 10M and 100M
+remain well below the optimal scale identified in                   words on BLiMP, BLiMP Supplement, EWoK, En-
+Section 3. These models use the same datasets as                    tity Tracking, and COMPS. The baselines are the
+the BabyLM Challenge GPT-BERT baselines2 at                         causal GPT-BERT models3 and AMLM hard de-
+the corresponding budgets, so that the results are                  cay, the winning masked language model in the
+directly comparable to those baselines. Separately,                 10M-word NLP track.
+for the recurrent-depth sweep and comparisons to                       GPT-BERT is a hybrid causal/masked-language-
+standard models, we use the same configuration as                   modeling approach rather than a plain decoder-only
+the 10M model but train on the 10% subset of the                    baseline (Charpentier and Samuel, 2024; Charp-
+100M BabyLM-baseline corpus used in the scal-                       entier et al., 2025). AMLM hard decay keeps a
+ing experiments, enabling direct comparison to the                  masked-language-modeling objective, but changes
+standard-model sweep. We analyze the prediction                     the masking distribution during training based on
+depth of our largest configuration in Appendix C.                   which tokens the model already predicts well (Ed-
+   Figure 5 shows that, for the 27.6M-parameter                     man and Fraser, 2025). Our goal is not to compete
+recursive model trained on the 10% subset of the                    with these specialized recipes, but to establish Re-
+100M BabyLM-baseline corpus from the optimal                        cursiveGPT as a strong architectural blueprint.
+scale experiments, the average score across the                        For this comparison, the recursive models use the
+three evaluations improves with recurrent depth up                  same datasets as GPT-BERT at the corresponding
+to depth 16 and then declines slightly. The trend is                budgets; the 10M model is therefore trained on the
+therefore not monotonic: additional recurrent steps                 BabyLM 10M corpus rather than the 10% subset
+increase computation, but they can also make op-                    used for the depth sweep.
+timization more difficult. The strongest recursive                     At 10M words, RecursiveGPT achieves the
+setting reaches an average score of 46.16, com-                     strongest BLiMP and EWoK scores, while AMLM
+    2
+      The models compared here are not the ones introduced in
+                                                                    achieves the strongest COMPS and average scores.
+the GPT-BERT paper, which do not satisfy the 10-epoch limit,           3
+                                                                        Causal refers to the causal-focus model evaluated in
+but the ones submitted to BabyLM 2025.                              causal mode.
+
+
+                                                                6
+  Word Budget     Model                          Params        BLiMP    COMPS      LAMBADA p@5         Average
+  10M             Standard                       41.1M          68.97    52.88        12.93             44.93
+  10M             Standard + FE                  28.7M          70.09    52.62        12.48             45.07
+  10M             RecursiveGPT + FE (R=16)       27.6M          70.95    52.96        13.48             45.80
+  100M            Standard                       1.22B          79.71    60.65        50.04             63.47
+  100M            RecursiveGPT + FE (R=24)       124.0M         80.06    58.70        47.01             61.92
+  100M            RecursiveGPT-Large (R=24)      404.1M         80.70    60.31        50.77             63.93
+
+Table 1: Comparison between standard and recursive models at 10M and 100M words. FE denotes factorized
+embeddings and R denotes recurrent depth. The 10M rows include the best standard model from Section 3 with
+H=384, an unfactorized H=384, E=384 model, and a depth-16 recursive model with factorized embeddings, all
+trained on the same 10% subset of the 100M BabyLM-baseline corpus used in the standard-model sweep. All rows
+are averaged over seeds 0, 1, and 2. The 100M standard row reports the best standard model by average score.
+Evaluation scores are reported as percentages; Average is the arithmetic mean across the three evaluations.
+
+ Word Budget     Model                Params     BLiMP      BLiMP S.    EWoK     Entity T.   COMPS      Average
+ 10M             GPT-BERT (Causal)    31.0M       71.70      63.20      49.50     34.60       52.80      54.36
+ 10M             AMLM Hard Decay      34.7M       71.40      59.20      51.00     44.20       54.20      56.00
+ 10M             RecursiveGPT + FE    27.6M       72.21      58.28      52.01     24.51       53.33      52.07
+ 100M            GPT-BERT (Causal)    120.0M      79.30      70.40      52.30     30.90       58.30      58.24
+ 100M            RecursiveGPT + FE    124.0M      80.06      70.82      54.74     34.42       58.70      59.75
+ 100M            RecursiveGPT-Large   404.1M      80.70      70.75      54.97     32.67       60.31      59.88
+
+Table 2: Comparison to the BabyLM 2025 GPT-BERT causal baselines (Charpentier and Samuel, 2024), the
+highest-scoring causal models on both tracks (Charpentier et al., 2025), and AMLM hard decay, the winning masked
+language model in the 10M-word NLP track (Edman and Fraser, 2025). RecursiveGPT scores are averaged over
+seeds 0, 1, and 2. Entity T. denotes Entity Tracking, and BLiMP S. denotes BLiMP Supplement. Scores are reported
+as percentages; Average is the arithmetic mean across the five evaluations.
+
+
+The main weak point for RecursiveGPT is Entity             ble 1, suggesting that the embedding bottleneck
+Tracking, but we treat that benchmark with caution:        is especially useful for the recursive model at this
+even GPT-BERT scores higher on Entity Track-               scale. The difference in the normalization ablation
+ing at 10M words than at 100M words, which                 is smaller, indicating that depth conditioning is less
+is counterintuitive for a data-scaling comparison.         important than we anticipated.
+At 100M words, both RecursiveGPT models out-
+perform GPT-BERT on every reported benchmark               5.3    Compute-Matched Standard
+and on the overall average. RecursiveGPT-Large                    Transformers
+gives the best BLiMP, EWoK, COMPS, and aver-               The standard-model sweep shows that, under fixed
+age scores, while the smaller RecursiveGPT + FE            data, increasing parameter count beyond the best
+model is slightly stronger on BLiMP Supplement             scale reduces downstream performance. Another
+and Entity Tracking. Overall, the recursive archi-         axis of scaling compute is epoch count. We test this
+tecture remains competitive with strong BabyLM             by matching the FLOPs of the RecursiveGPT mod-
+models for both tracks.                                    els by training standard models for more epochs.
+                                                           We show that this results in degraded performance
+5.2   Ablations                                            at both word budgets in Appendix F.
+Table 3 ablates two components of the 10M-word
+depth-16 RecursiveGPT model from Table 1, us-              6     Discussion
+ing the same 10% subset of the 100M BabyLM-                The comparisons to BabyLM winners in Sec-
+baseline corpus. Sharing normalization parameters          tion 5.1 should not be read as positioning recursive
+across recurrent steps slightly improves BLiMP,            Transformers against specialized training recipes
+but reduces the other two evaluation scores and the        or objectives. Our contribution is architectural: fac-
+overall average. Removing factorized embeddings            torized embeddings and recursive weight sharing
+hurts substantially, even when reducing the size of        address parameter allocation and compute-depth
+the model further to match parameter counts. The           coupling, providing a pathway for scaling up com-
+drop is larger than the corresponding gap between          pute under fixed data. These architectural changes
+factorized and unfactorized standard models in Ta-         are largely orthogonal to the specialized training
+
+
+                                                       7
+  Variant                                       Params         BLiMP      COMPS       LAMBADA p@5         Average
+  RecursiveGPT + FE (H, E)=(640, 192)           27.6M           70.85      53.16         14.46             46.16
+  Shared norm parameters                        27.6M           71.38      52.83         13.97             46.06
+  No Factorized Embeddings (H=640)              56.7M           68.13      52.75         13.81             44.90
+  No Factorized Embeddings (H=384)              30.5M           68.70      52.41         11.17             44.09
+
+Table 3: Ablations of the 10M-word depth-16 RecursiveGPT model trained on the 10% subset of the 100M
+BabyLM-baseline corpus with seed 0. FE denotes factorized embeddings. Shared norm parameters shares the
+normalization parameters across recurrent steps instead of using step-specific normalization and bias. No FE
+removes factorized input and output vocabulary maps. Scores are reported as percentages; Average is the arithmetic
+mean across the three evaluations.
+
+
+techniques used in GPT-BERT and AMLM hard                      7     Conclusion
+decay. We therefore view RecursiveGPT as a use-
+                                                               We studied language model pre-training in a data-
+ful architectural base on which more specialized
+                                                               limited, compute-abundant regime. Across 10M–
+data-efficient training methods can be built.
+                                                               100M word budgets, two corpora, and multiple
+    Recursive weight sharing makes optimization
+                                                               evaluations, standard decoder-only Transformers
+more delicate. Because the same block is applied
+                                                               often show non-monotonic performance with pa-
+many times, small changes in the recurrent transi-
+                                                               rameter count, and the best model size depends on
+tion can be amplified across depth; at the same time,
+                                                               both the data budget and the downstream target.
+if the transition is too close to an identity or a fixed
+                                                                  This behavior reflects an architectural mismatch.
+point, additional recurrent steps may add little use-
+                                                               Under a fixed data budget, the usual ways of giv-
+ful computation. This tension is consistent with the
+                                                               ing a standard Transformer more compute also add
+depth sweep in Figure 5, where performance im-
+                                                               trainable capacity, and pushing along this coupled
+proves up to R=16 and then drops slightly at larger
+                                                               scaling axis eventually hurts performance. Recur-
+depths. It is also related to known stability issues in
+                                                               siveGPT addresses this mismatch by turning re-
+deep Transformers, where residual-branch depen-
+                                                               current depth into a compute-scaling axis that is
+dence can amplify parameter perturbations during
+                                                               decoupled from parameter count. This lets us scale
+training (Liu et al., 2020). Recent work has ana-
+                                                               up compute and extract more performance from the
+lyzed this stability problem by treating recursive ar-
+                                                               available data at both budgets we evaluate.
+chitectures as dynamical systems over the residual
+                                                                  RecursiveGPT is also competitive with strong
+stream and linking instability to residual explosion,
+                                                               BabyLM 2025 models, improving over the causal
+loss spikes, and large injection-parameter spectral
+                                                               GPT-BERT baseline on all 100M-word evaluations
+norms (Prairie et al., 2026).
+                                                               and remaining close to the best 10M-word mod-
+    Recursive Transformers also make it possible to
+                                                               els despite using a simple causal objective. More
+control computation dynamically. Adaptive com-
+                                                               broadly, our results suggest that limited-data pre-
+putation time (ACT) lets recurrent models learn
+                                                               training should be treated as its own scaling regime:
+when to halt (Graves, 2016), so easier token posi-
+                                                               rather than simply shrinking web-scale architec-
+tions could use less compute at inference. During
+                                                               tures, we should develop methods whose inductive
+batched Transformer training, savings are less di-
+                                                               biases and scaling behavior are better matched to
+rect because token positions are processed in par-
+                                                               the constraints of limited data.
+allel and the batch typically runs until the deepest
+active position halts. Depth scheduling is a simpler           7.1    Future Work
+training-time alternative, starting with fewer recur-
+                                                               An immediate next step is to combine recursive ar-
+rent steps and increasing depth later. As discussed
+                                                               chitectures with the specialized objectives and train-
+in Section 4, we do not use either technique here,
+                                                               ing recipes that have proven effective in BabyLM.
+but Appendix C shows that many predictions set-
+                                                               The design space of recursion itself is also much
+tle before the final recurrent step, suggesting that
+                                                               broader than the single-block, fixed-depth mod-
+adaptive or scheduled computation could reduce
+                                                               els studied here. Adaptive halting, depth schedul-
+cost in future recursive models.
+                                                               ing, partial sharing, and richer depth-conditioning
+                                                               mechanisms could preserve the benefits of recur-
+                                                               rence while reducing training and inference cost.
+
+
+                                                           8
+Limitations                                                   Lizhang Chen, Jonathan Li, Kaizhao Liang, Baiyu Su,
+                                                                Cong Xie, Chen Liang, Ni Lao, and qiang liu. 2026.
+Our hyperparameter tuning for experiments was                   Cautious weight decay. In The Fourteenth Interna-
+limited. We tuned learning rates, optimizer settings,           tional Conference on Learning Representations.
+and architectural details locally to obtain stable and        Tri Dao. 2024. Flashattention-2: Faster attention with
+competitive runs, but did not retune hyperparam-                 better parallelism and work partitioning. In The
+eters separately for every combination of corpus,               Twelfth International Conference on Learning Repre-
+data budget, model size, and recurrent depth. Such               sentations.
+a full search would be computationally infeasible             Mostafa Dehghani, Stephan Gouws, Oriol Vinyals,
+with our resources.                                            Jakob Uszkoreit, and Lukasz Kaiser. 2019. Universal
+   Our study also covers only a small part of the              transformers. In International Conference on Learn-
+recursive Transformer design space. Our models                 ing Representations.
+use a single shared block, a fixed number of re-              Shizhe Diao, Yu Yang, Yonggan Fu, Xin Dong,
+current steps, and simple per-depth conditioning                Dan SU, Markus Kliegl, ZIJIA CHEN, Peter Bel-
+parameters. Without efficiency mechanisms such                  cak, Yoshi Suhara, Hongxu Yin, Mostofa Patwary,
+                                                                Yingyan Celine Lin, Jan Kautz, and Pavlo Molchanov.
+as adaptive computation time or depth scheduling,
+                                                                2026. Nemotron-CLIMB: Clustering-based iterative
+increasing recurrent depth substantially increases              data mixture bootstrapping for language model pre-
+training and inference cost.                                    training. In The Thirty-ninth Annual Conference on
+                                                                Neural Information Processing Systems Datasets and
+                                                                Benchmarks Track.
+References
+                                                              Lukas Edman and Alexander Fraser. 2025. Mask and
+Preslav Aleksandrov, Meghdad Kurmanji, Fernando                 you shall receive: Optimizing masked language mod-
+  Garcia Redondo, David O’Shea, William Shen, Alex              eling for pretraining BabyLMs. In Proceedings of
+  Iacob, Lorenzo Sani, Xinchi Qiu, Nicola Cancedda,             the First BabyLM Workshop, pages 445–453, Suzhou,
+  and Nicholas D. Lane. 2025. AbbIE: Autoregressive             China. Association for Computational Linguistics.
+  block-based iterative encoder for efficient sequence
+  modeling. arXiv preprint arXiv:2507.08567.                  Jonas Geiping, Sean Michael McLeish, Neel Jain, John
+                                                                Kirchenbauer, Siddharth Singh, Brian R. Bartold-
+BabyLM. 2025.      BabyLM challenge evalua-                     son, Bhavya Kailkhura, Abhinav Bhatele, and Tom
+  tion pipeline.  https://github.com/babylm/                    Goldstein. 2026. Scaling up test-time compute with
+  evaluation-pipeline-2025. GitHub repository.                  latent reasoning: A recurrent depth approach. In The
+                                                                Thirty-ninth Annual Conference on Neural Informa-
+Sangmin Bae, Adam Fisch, Hrayr Harutyunyan, Ziwei               tion Processing Systems.
+  Ji, Seungyeon Kim, and Tal Schuster. 2025. Relaxed
+  recursive transformers: Effective parameter sharing         Jill Gilkerson, Jeffrey A. Richards, Steven F. Warren, Ju-
+  with layer-wise loRA. In The Thirteenth Interna-                dith K. Montgomery, Charles R. Greenwood, D. Kim-
+  tional Conference on Learning Representations.                  brough Oller, John H. L. Hansen, and Terrance D.
+                                                                  Paul. 2017. Mapping the early language environ-
+Shaojie Bai, J. Zico Kolter, and Vladlen Koltun. 2019.            ment using all-day recordings and automated analy-
+  Deep equilibrium models. In Proceedings of the                  sis. American Journal of Speech-Language Pathol-
+  33rd International Conference on Neural Information             ogy, 26(2):248–265.
+  Processing Systems, Red Hook, NY, USA. Curran
+  Associates Inc.                                             Alex Graves. 2016. Adaptive computation time
+                                                                for recurrent neural networks. arXiv preprint
+Lucas Charpentier, Leshem Choshen, Ryan Cotterell,              arXiv:1603.08983.
+  Mustafa Omer Gul, Michael Y. Hu, Jing Liu, Jaap
+  Jumelet, Tal Linzen, Aaron Mueller, Candace Ross,           Alex Henry, Prudhvi Raj Dachapally, Shubham Shan-
+  Raj Sanjay Shah, Alex Warstadt, Ethan Gotlieb                 taram Pawar, and Yuxuan Chen. 2020. Query-key
+  Wilcox, and Adina Williams. 2025. Findings of                 normalization for transformers. In Findings of the
+  the third BabyLM challenge: Accelerating language             Association for Computational Linguistics: EMNLP
+  modeling research with cognitively plausible data. In         2020, pages 4246–4253, Online. Association for
+  Proceedings of the First BabyLM Workshop, pages               Computational Linguistics.
+  399–420, Suzhou, China. Association for Computa-
+  tional Linguistics.                                         Jordan Hoffmann, Sebastian Borgeaud, Arthur Mensch,
+                                                                 Elena Buchatskaya, Trevor Cai, Eliza Rutherford,
+Lucas Georges Gabriel Charpentier and David Samuel.              Diego de Las Casas, Lisa Anne Hendricks, Johannes
+  2024. GPT or BERT: why not both? In The 2nd                    Welbl, Aidan Clark, Tom Hennigan, Eric Noland,
+  BabyLM Challenge at the 28th Conference on Com-                Katie Millican, George van den Driessche, Bogdan
+  putational Natural Language Learning, pages 262–               Damoc, Aurelia Guy, Simon Osindero, Karen Si-
+  283, Miami, FL, USA. Association for Computa-                  monyan, Erich Elsen, and 3 others. 2022. Training
+  tional Linguistics.
+
+
+                                                          9
+  compute-optimal large language models. In Proceed-            models with frequency-informed training. In Pro-
+  ings of the 36th International Conference on Neu-             ceedings of the First BabyLM Workshop, pages 531–
+  ral Information Processing Systems, NIPS ’22, Red             539, Suzhou, China. Association for Computational
+  Hook, NY, USA. Curran Associates Inc.                         Linguistics.
+Michael Y. Hu, Aaron Mueller, Candace Ross, Ad-               Zhenzhong Lan, Mingda Chen, Sebastian Goodman,
+  ina Williams, Tal Linzen, Chengxu Zhuang, Ryan                Kevin Gimpel, Piyush Sharma, and Radu Soricut.
+  Cotterell, Leshem Choshen, Alex Warstadt, and                 2020. ALBERT: A lite BERT for self-supervised
+  Ethan Gotlieb Wilcox. 2024. Findings of the sec-              learning of language representations. In 8th Inter-
+  ond BabyLM challenge: Sample-efficient pretraining            national Conference on Learning Representations,
+  on developmentally plausible corpora. In The 2nd              ICLR 2020, Addis Ababa, Ethiopia, April 26-30,
+  BabyLM Challenge at the 28th Conference on Com-               2020. OpenReview.net.
+  putational Natural Language Learning, pages 1–21,
+  Miami, FL, USA. Association for Computational Lin-          Zichong Li, Liming Liu, Chen Liang, Weizhu Chen,
+  guistics.                                                     and Tuo Zhao. 2025. Normuon: Making muon more
+                                                                efficient and scalable. Preprint, arXiv:2510.05491.
+Anna A. Ivanova, Aalok Sathe, Benjamin Lipkin, Un-
+  nathi U. Kumar, Setayesh Radkani, Thomas H. Clark,          Liyuan Liu, Xiaodong Liu, Jianfeng Gao, Weizhu Chen,
+  Carina Kauf, Jennifer Hu, R. T. Pramod, Gabriel               and Jiawei Han. 2020. Understanding the difficulty
+  Grand, Vivian C. Paulun, Maria Ryskina, Ekin                  of training transformers. In Proceedings of the 2020
+  Akyürek, Ethan G. Wilcox, Nafisa Rashid, Leshem               Conference on Empirical Methods in Natural Lan-
+  Choshen, Roger Levy, Evelina Fedorenko, Joshua                guage Processing (EMNLP), pages 5747–5763, On-
+  Tenenbaum, and Jacob Andreas. 2025. Elements of               line. Association for Computational Linguistics.
+  world knowledge ( EWoK ): A cognition-inspired
+  framework for evaluating basic world knowledge in           Kanishka Misra, Julia Rayz, and Allyson Ettinger. 2023.
+  language models. Transactions of the Association for          COMPS: Conceptual minimal pair sentences for test-
+  Computational Linguistics, 13:1245–1270.                      ing robust property knowledge and its inheritance in
+                                                                pre-trained language models. In Proceedings of the
+Alexia Jolicoeur-Martineau. 2025. Less is more: Re-             17th Conference of the European Chapter of the As-
+  cursive reasoning with tiny networks. Preprint,               sociation for Computational Linguistics, pages 2928–
+  arXiv:2510.04871.                                             2949, Dubrovnik, Croatia. Association for Computa-
+                                                                tional Linguistics.
+Keller Jordan, Yuchen Jin, Vlado Boza, Jiacheng You,
+  Franz Cesista, Laker Newhouse, and Jeremy Bern-             nostalgebraist. 2020.  Interpreting gpt: the
+  stein. 2024. Muon: An optimizer for hidden layers             logit    lens.      https://www.lesswrong.
+  in neural networks.                                           com/posts/AcKRB8wDpdaN6v6ru/
+                                                                interpreting-gpt-the-logit-lens.
+Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B.
+   Brown, Benjamin Chess, Rewon Child, Scott Gray,            Denis Paperno, Germán Kruszewski, Angeliki Lazari-
+   Alec Radford, Jeffrey Wu, and Dario Amodei. 2020.            dou, Ngoc Quan Pham, Raffaella Bernardi, Sandro
+   Scaling laws for neural language models. Preprint,           Pezzelle, Marco Baroni, Gemma Boleda, and Raquel
+   arXiv:2001.08361.                                            Fernández. 2016. The LAMBADA dataset: Word
+                                                                prediction requiring a broad discourse context. In
+Andrej Karpathy. 2025. rustbpe: The missing tiktoken            Proceedings of the 54th Annual Meeting of the As-
+  training code. https://github.com/karpathy/                   sociation for Computational Linguistics (Volume 1:
+  rustbpe. GitHub repository.                                   Long Papers), pages 1525–1534, Berlin, Germany.
+                                                                Association for Computational Linguistics.
+Konwoo Kim, Suhas Kotha, Percy Liang, and Tatsunori
+  Hashimoto. 2026. Pre-training under infinite com-           Hayden Prairie, Zachary Novack, Taylor Berg-
+  pute. In The Fourteenth International Conference on           Kirkpatrick, and Daniel Y. Fu. 2026. Parcae: Scal-
+  Learning Representations.                                     ing laws for stable looped language models. arXiv
+                                                                preprint arXiv:2604.12946.
+Najoung Kim and Sebastian Schuster. 2023. Entity
+  tracking in language models. In Proceedings of the          Zihan Qiu, Zekun Wang, Bo Zheng, Zeyu Huang,
+  61st Annual Meeting of the Association for Compu-             Kaiyue Wen, Songlin Yang, Rui Men, Le Yu, Fei
+  tational Linguistics (Volume 1: Long Papers), pages           Huang, Suozhi Huang, Dayiheng Liu, Jingren Zhou,
+  3835–3855, Toronto, Canada. Association for Com-              and Junyang Lin. 2026. Gated attention for large lan-
+  putational Linguistics.                                       guage models: Non-linearity, sparsity, and attention-
+                                                                sink-free. In The Thirty-ninth Annual Conference on
+Diederik P. Kingma and Jimmy Ba. 2014.         Adam:            Neural Information Processing Systems.
+  A method for stochastic optimization.        CoRR,
+  abs/1412.6980.                                              Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan,
+                                                                 Wen Bo, and Yunfeng Liu. 2024. Roformer: En-
+Despoina Kosmopoulou, Efthymios Georgiou, Vaggelis               hanced transformer with rotary position embedding.
+  Dorovatas, Georgios Paraskevopoulos, and Alexan-               Neurocomput., 568(C).
+  dros Potamianos. 2025. Masked diffusion language
+
+
+                                                         10
+Richard S. Sutton. 2019.    The bitter lesson.
+  http://www.incompleteideas.net/IncIdeas/
+  BitterLesson.html.
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+  Uszkoreit, Llion Jones, Aidan N. Gomez, Łukasz
+  Kaiser, and Illia Polosukhin. 2017. Attention is all
+  you need. In Proceedings of the 31st International
+  Conference on Neural Information Processing Sys-
+  tems, NIPS’17, page 6000–6010, Red Hook, NY,
+  USA. Curran Associates Inc.
+Pablo Villalobos, Anson Ho, Jaime Sevilla, Tamay Be-
+  siroglu, Lennart Heim, and Marius Hobbhahn. 2024.
+  Position: will we run out of data? limits of llm scal-
+  ing based on human-generated data. In Proceed-
+  ings of the 41st International Conference on Machine
+  Learning, ICML’24. JMLR.org.
+Guan Wang, Jin Li, Yuhao Sun, Xing Chen, Changling
+  Liu, Yue Wu, Meng Lu, Sen Song, and Yasin Ab-
+  basi Yadkori. 2025. Hierarchical reasoning model.
+  Preprint, arXiv:2506.21734.
+Alex Warstadt, Alicia Parrish, Haokun Liu, Anhad Mo-
+  hananey, Wei Peng, Sheng-Fu Wang, and Samuel R.
+  Bowman. 2020. BLiMP: The benchmark of linguis-
+  tic minimal pairs for English. Transactions of the
+  Association for Computational Linguistics, 8:377–
+  392.
+
+Shu Zhong, Mingyu Xu, Tenglong Ao, and Guang
+  Shi. 2025. Understanding transformer from the
+  perspective of associative memory.   Preprint,
+  arXiv:2505.19488.
+
+
+
+
+                                                           11
+Figure 6: Optimal scale on ClimbMix across the same three evaluations shown in Figure 2. As in the BabyLM
+baseline corpus, the preferred parameter count depends on both dataset size and evaluation target.
+A    ClimbMix Scaling Curves                                 sublayers are zero-initialized. Embeddings are un-
+                                                             tied from the language-model head; where used,
+Figure 6 shows the same three evaluations on
+                                                             both input embeddings and output heads follow
+ClimbMix. Preferred parameter ranges remain
+                                                             the ALBERT-style factorized projection idea (Lan
+broadly stable, while absolute scores shift: the best
+                                                             et al., 2020). We use a vocabulary size of 32768
+BLiMP scores stay within 1.2 points of those on the
+                                                             with a BPE tokenizer trained using rustbpe (Karpa-
+BabyLM-baseline corpus, the best COMPS scores
+                                                             thy, 2025) on the corresponding full corpus used to
+are consistently higher, with a maximum gain of
+                                                             construct the training subset.
+1.6 points, and LAMBADA pass@5 is lower by 1.9
+                                                                Training used a two-group optimizer. Trans-
+points at 10M words and 9.4 points at 100M words.
+                                                             former block parameters were optimized with
+Thus, the dependence on data budget and evalua-
+                                                             Muon (Jordan et al., 2024) augmented with neuron-
+tion target remains qualitatively similar across the
+                                                             wise adaptive learning rates (Li et al., 2025), us-
+two corpora.
+                                                             ing learning rate 0.02, momentum 0.95, second-
+B   Architecture Details                                     moment coefficient 0.95, and weight decay 0.1.
+                                                             Embeddings, normalization parameters, and other
+The standard parameter/data sweep uses a 12-layer            auxiliary parameters were optimized with Adam
+decoder-only causal Transformer architecture fol-            (Kingma and Ba, 2014) using learning rate 0.005,
+lowing Vaswani et al. (2017). Each model con-                β = (0.9, 0.95), ϵ = 10−10 , and weight decay
+sists of independent Transformer blocks, with no             0.005. In both groups we used cautious weight
+recursive weight sharing or mixture-of-experts lay-          decay (Chen et al., 2026), applying decay only to
+ers. Each block uses a pre-norm residual structure,          coordinates where the parameter and update direc-
+causal self-attention, and a dense two-layer ReLU 2          tions are aligned. Learning rates used 50 warmup
+feed-forward sublayer.                                       steps, followed by a constant phase and then a lin-
+   Attention uses fused QKV projections with an at-          ear cooldown to 0 over the final 20% of training
+tention head size of 64, rotary position embeddings          steps. Gradients were clipped to norm 2.0 and
+(RoPE; Su et al. (2024)), and query-key normaliza-           training used bfloat16 autocasting. All runs used
+tion (Henry et al., 2020). To support packed train-          an effective global batch size of 32768 tokens and
+ing without allowing tokens to attend across doc-            random seed 0. Multi-seed runs used seeds 0, 1,
+ument boundaries, we use variable-length causal              and 2. All individual models were trained on a
+attention computed with FlashAttention 2 kernels             single NVIDIA A100 80GB GPU, except for the
+(Dao, 2024). We also apply a learned per-head                100M-word RecursiveGPT models, which were
+sigmoid gate to the scaled dot-product attention             trained on four such GPUs.
+output, following gated attention for LLMs (Qiu
+et al., 2026). This is intended to reduce reliance
+on attention sinks, since our setup does not insert
+a BOS token or other special token that the model
+could use as an attention sink.
+   Output projections in both the attention and MLP
+
+
+                                                        12
+Figure 7: Histogram of settle depths for the depth-24 RecursiveGPT-Large model. “All tokens” includes all 65,536
+analyzed token positions; “last tokens” includes only the final token of each sampled document.
+
+
+
+
+Figure 8: Prediction dynamics across recurrent depth. Final agreement measures whether the current top-1 prediction
+matches the depth-24 prediction; stable from depth measures whether it matches the depth-24 prediction and stays
+fixed through all later depths.
+C    Prediction Depth and Adaptive                              current depths. The largest masses for all tokens are
+     Computation                                                at depths 24 (19.1%), 14 (13.5%), and 23 (10.8%),
+                                                                with a similar pattern for last-token positions.
+We analyze the R=24 RecursiveGPT-Large model
+                                                                   Figure 8 suggests that adaptive halting could
+trained on 100M words using 65,536 tokens from
+                                                                save substantial inference compute. Among all
+randomly chosen training documents. At each re-
+                                                                tokens, about half are already stable by depth 16,
+current depth, we read the intermediate hidden
+                                                                70.1% by depth 22, and 80.9% by depth 23. Thus
+states through the model’s own output head and
+                                                                roughly four out of five tokens settle before the
+record the resulting top-1 predictions (analogous to
+                                                                final recurrent step, and only 29.9% need the last
+the logit lens; nostalgebraist, 2020). For each token
+                                                                two depths.
+position, we define its settle depth as the earliest
+recurrent depth whose top-1 prediction matches the
+final depth-24 prediction and remains unchanged
+thereafter. We report results for all token positions,
+and separately for the last token in each document.
+   Figure 7 shows that, even without ACT or an ex-
+plicit incentive to predict early, the model naturally
+learns to lock in its final prediction at particular re-
+
+
+                                                           13
+ Word Budget     Model                          Params        Neff            A100-time         Est. train FLOPs
+ 10M             Standard                       41.1M       15.97M             9 Minutes             1.25e16
+ 10M             Standard + FE                  28.7M       16.12M             9 Minutes             1.26e16
+ 10M             RecursiveGPT + FE (R=16)       27.6M       236.32M           21 Minutes             1.84e17
+ 100M            Standard                       1.22B        1.021B       17 hours 33 Minutes        7.96e18
+ 100M            RecursiveGPT + FE (R=24)       124.0M       1.716B       22 Hours 36 Minutes        1.34e19
+ 100M            RecursiveGPT-Large (R=24)      404.1M       5.665B       64 Hours 24 Minutes        4.42e19
+
+Table 4: Compute costs for the models in Table 1. Params is the total number of trainable parameters, including
+the input and output vocabulary maps. Neff is the non-vocabulary parameter count effectively executed per token.
+Estimated training FLOPs use 6Neff T (Kaplan et al., 2020). A100 time excludes initial compilation and is summed
+over devices for multi-GPU runs.
+
+D    Compute Cost                                          E     Factorized-Embedding Sweep
+For fixed model dimensions, compute scales ap-
+                                                            E    Embed    Total BLiMP COMPS LAMBADA Average
+proximately linearly with recurrent depth:                  64    4.2M   20.2M 70.51   51.96   9.79  44.09
+                                                           128    8.5M   24.5M 69.79   52.33  12.49  44.87
+            F (R) ≈ Ffixed + RFblock .                     192   12.7M   28.7M 70.09   52.62  12.48  45.07
+                                                           256   17.0M   32.9M 69.02   52.55  12.43  44.67
+                                                           320   21.2M   37.2M 69.25   52.31  13.01  44.86
+We make this relationship explicit below through           384   25.2M   41.1M 68.97   52.88  12.93  44.93
+the effective parameter count and the 6N T FLOP
+                                                           Table 5: Factorized-embedding sweep on the 10M-word
+estimate.
+                                                           setting with hidden size fixed at H=384. Embed and To-
+   Table 4 distinguishes the total parameter count,        tal report vocabulary-map (input embedding plus output
+which includes the input and output vocabulary             head) and total parameter counts; scores are percentages
+maps, from Neff , the parameter count used in the          averaged over seeds 0, 1, and 2, LAMBADA is evalu-
+FLOP estimate. Following the non-vocabulary con-           ated as pass@5, and Average is the arithmetic mean of
+vention of Kaplan et al. (2020), Neff excludes the         the scores.
+vocabulary maps but includes the dense embedding-
+to-hidden and hidden-to-embedding projections.                In Table 5, we evaluate factorized embeddings
+   We estimate training FLOPs as 6Neff T . All mod-        by sweeping E while keeping H = 384 fixed for
+els are trained for 10 epochs, giving T ≈130M BPE          a standard model trained on 10M words, report-
+tokens for the 10M-word setting and T ≈1.3B for            ing averages over seeds 0, 1, and 2. The final
+the 100M-word setting. For standard models, Neff           row at E = 384 is the unfactorized input/output
+counts every non-vocabulary parameter once. For            vocabulary-map case. This sweep does not iden-
+recursive models, we use                                   tify a precise optimum, and the differences be-
+                                                           tween nearby settings are small. E=192 gives the
+ Neff = RNshared block + Nstep-specific + Nfixed ,         highest average score, E=64 gives the strongest
+                                                           BLiMP score, E=320 gives the strongest LAM-
+so only the shared block is multiplied by R; step-         BADA pass@5 score, and unfactorized gives the
+specific normalization and bias parameters and             strongest COMPS score. We therefore identify
+fixed projections are counted once. The 6N T val-          E=192 as a balanced choice rather than a defini-
+ues are approximate, so Table 4 also reports mea-          tive optimum. In the RecursiveGPT ablations in
+sured A100 time.                                           Section 5.2, we find that the benefit from factorized
+                                                           embeddings is more substantial, suggesting that
+                                                           this effect becomes clearer as we scale up compute.
+
+
+
+
+                                                      14
+ Budget   Model                       Params   Epochs   Est. train FLOPs    BLiMP    COMPS    LAMBADA   Average
+ 10M      Standard + FE               28.7M        10             1.26e16    70.09    52.62     12.48    45.07
+ 10M      Standard + FE               28.7M       146             1.84e17    63.11    51.31     10.00    41.47
+ 10M      RecursiveGPT + FE (R=16)    27.6M        10             1.84e17    70.95    52.96     13.48    45.80
+ 100M     Standard                    1.22B        10             7.96e18    79.71    60.65     50.04    63.47
+ 100M     Standard                    1.22B        50             3.98e19    74.63    58.74     36.68    56.68
+ 100M     RecursiveGPT-Large (R=24)   404.1M       10             4.42e19    80.70    60.31     50.77    63.93
+
+Table 6: Standard Transformers trained for additional epochs compared with the original 10-epoch baselines and
+recursive models. Estimated training FLOPs follow the calculation in Appendix D. Scores are percentages averaged
+over seeds 0, 1, and 2; LAMBADA is pass@5, and Average is the arithmetic mean of BLiMP, COMPS, and
+LAMBADA.
+
+F   Compute Matching with Additional
+    Epochs
+To test whether the additional compute used by Re-
+cursiveGPT can instead be allocated to repeated
+passes over the training corpus, we train the se-
+lected standard baselines for additional epochs. Ta-
+ble 6 compares them with the original 10-epoch
+baselines and recursive models on the three evalua-
+tions used in our main comparison. At 10M words,
+we train for 146 epochs, approximately matching
+the estimated training FLOPs of RecursiveGPT. At
+100M words, we train for 50 epochs.
+   Additional epochs reduce the average score from
+45.07 to 41.47 at 10M words and from 63.47 to
+56.68 at 100M words. This degradation is con-
+sistent with overfitting and shows that, in our ex-
+periments, neither increasing standard-model size
+nor allocating additional compute through repeated
+passes over the fixed data matches the performance
+of RecursiveGPT.
+
+
+
+
+                                                        15
+

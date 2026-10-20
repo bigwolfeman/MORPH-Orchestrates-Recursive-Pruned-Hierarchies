@@ -1,0 +1,754 @@
+                                                                  Stabilizing Recurrent Dynamics for Test-Time
+                                                              Scalable Latent Reasoning in Looped Language Models
+
+
+                                                         Xiao-Wen Yang * 1 2 Zi-Yu Han * 1 2 Xi-Hua Zhang 1 2 Wen-Da Wei 1 2 Jie-Jing Shao 1
+                                                                                   Lan-Zhe Guo 1 3 Yu-Feng Li 1 2
+
+
+                                                                    Abstract
+
+
+
+
+arXiv:2605.26733v1 [cs.LG] 26 May 2026
+                                                                                                                                                           P er
+                                                                                                                                                                  f or
+                                                Looped Language Models (LoopLMs) enable ef-                                                                              ma
+                                                                                                                                                                              n ce
+                                                                                                                                        Performance Peak                             D et
+                                                                                                                                                                                            e r io
+                                                ficient latent reasoning through depth recurrence,                                                                                                   rat
+                                                                                                                                                                                                           ion
+
+                                                yet exhibit unreliable test-time scaling behav-
+                                                ior: performance often peaks at a certain iter-
+                                                ation depth and then collapses with further re-
+                                                currence. Through latent dynamics analysis, we                      Figure 1. Performance of Ouro-1.4B (Zhu et al., 2025b) on
+                                                find an inherent trade-off between stability and                    GSM8K across different recurrent steps.
+                                                effectiveness in existing architectures and strate-                 computational resources during inference, has become a
+                                                gies. By conceptualizing reasoning as uncer-                        prominent research focus. The dominant paradigm for test-
+                                                tainty reduction, we propose that convergence                       time scaling relies on generating extensive outputs, typically
+                                                toward stable fixed points while preserving ef-                     through chain-of-thought reasoning (Wei et al., 2022) or
+                                                fectiveness represents a promising way. To this                     by sampling multiple candidate solutions and selecting the
+                                                end, we propose STARS (STAbility-driven Re-                         optimal one (Wang et al., 2022; Yao et al., 2024). Recently,
+                                                current Scaling), a training framework that con-                    looped language models (LoopLMs) (Geiping et al., 2025;
+                                                strains latent states to approach asymptotically                    Zhu et al., 2025b) have gained attention as a promising al-
+                                                stable fixed points. This is realized via efficient                 ternative paradigm. By employing depth-recurrence with
+                                                Jacobian Spectral Radius Regularization with ran-                   shared parameters, such models emulate human-like latent
+                                                dom loop sampling, enabling STARS to maxi-                          reasoning processes (Zhu et al., 2025a). Its advantages
+                                                mize effectiveness while ensuring rigorous stabil-                  include improved computational efficiency, as increased rea-
+                                                ity. Experiments on arithmetic tasks show that                      soning effort does not entail longer context windows during
+                                                STARS achieves reliable test-time scaling, and                      inference. Moreover, continuous latent representations may
+                                                on complex mathematical reasoning it substan-                       offer higher information bandwidth than discrete tokens.
+                                                tially mitigates performance degradation as re-                     Ideally, such architectures should allow for test-time scal-
+                                                currence depth increases while also improving                       able reasoning without expanding the model’s parameter
+                                                peak performance. Code is available at: https:                      count, where increased recurrent iterations lead to progres-
+                                                //github.com/njuyxw/STARS.                                          sively refined latent representations (Geiping et al., 2025).
+                                                                                                                    However, our study reveals that if improperly designed, the
+                                                                                                                    current LoopLMs often suffer from unreliable scaling be-
+                                         1. Introduction                                                            havior. Experiments demonstrate that instead of achieving
+                                         Enhancing the complex reasoning capabilities of Large Lan-                 progressive improvements with more computation, perfor-
+                                         guage Models (LLMs) through test-time scaling (Zhang                       mance often exhibits a peak at a certain iteration depth and
+                                         et al., 2024; 2025b), which involves allocating additional                 deteriorates sharply or even collapses entirely as iterations
+                                                                                                                    further increase (Figure 1). This phenomenon indicates that
+                                            1
+                                             State Key Laboratory of Novel Software Technology, Nanjing             direct supervised fine-tuning fails to equip the model with
+                                         University, Nanjing, China 2 School of Artificial Intelligence, Nan-       a test-time scalable reasoning capability through depth re-
+                                         jing University, Nanjing, China 3 School of Intelligence Science
+                                         and Technology, Nanjing University, Nanjing, China. Correspon-             currence. Instead, the model tends to overfit to the specific
+                                         dence to: Yu-Feng Li <liyf@nju.edu.cn>.                                    recurrent iteration during training.
+
+                                         Proceedings of the 43 rd International Conference on Machine               To demystify these scaling failures, we pivot to a dynami-
+                                         Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026               cal systems perspective to conduct a systematic diagnostic
+                                         by the author(s).                                                          study of LoopLM’s latent trajectories. This analysis allows
+
+                                                                                                                1
+            Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+us to uncover a fundamental, yet previously overlooked,                soning (Zhang et al., 2025b). Conventional approaches
+irreconcilable trade-off between effectiveness and stability           primarily rely on explicit reasoning, where models gener-
+in current designs. We find that the stability of the latent           ate natural language intermediate steps such as Chain-of-
+trajectory is largely determined by where normalization is             Thought prompting (Wei et al., 2022) to solve complex tasks.
+placed. Internal normalization (e.g., Pre-Norm) maintains              Further gains have been achieved through search-based
+information flow (effectiveness) but causes hidden states to           strategies, including majority voting (Wang et al., 2022),
+grow exponentially, leading to trajectory divergence. Con-             Tree-of-Thoughts (ToT) (Yao et al., 2024), and Monte Carlo
+versely, External normalization (e.g., Post-Norm) ensures              Tree Search (MCTS) (Yang et al., 2022), which allow the
+bounded states (stability) but often fails to perform deep             exploration of multiple reasoning paths. However, these
+reasoning. Our experiments show that common remedies,                  methods remain inherently constrained by the bandwidth
+such as auxiliary Prelude/Coda layers, L2 regularization, or           and efficiency of natural language generation. Inspired by
+random loop sampling, cannot totally resolve this deadlock.            the human tendency to reason through internal steps rather
+                                                                       than producing immediate verbal outputs (Zelikman et al.,
+A key insight of this paper is that test-time scalable la-
+                                                                       2024), recent work has pursued latent reasoning, which
+tent reasoning must satisfy both effectiveness and stability.
+                                                                       shifts computation from discrete tokens into latent represen-
+We argue that reasoning is an iterative process of reducing
+                                                                       tations (Zhu et al., 2025a). This approach is more compu-
+uncertainty and refining thoughts. In terms of dynamics,
+                                                                       tationally efficient and better suited for abstract reasoning.
+this means the hidden states should converge toward an
+                                                                       Coconut (Hao et al., 2024) employing continuous thought
+effective and stable fix point. If a system is effective but
+                                                                       tokens derived from previous hidden states is a typical tech-
+unstable, the thoughts become chaotic; if it is stable but
+                                                                       nique. Approaches such as SIM-CoT (Wei et al., 2025) and
+ineffective, the thoughts remain shallow. To achieve this,
+                                                                       others (Mohtashami et al., 2023; Shen et al., 2025; Cheng &
+we propose STARS (STAbility-driven Recurrent Scaling), a
+                                                                       Van Durme, 2024; Zhang et al., 2025a) share similar ideas.
+unified training framework that integrates Jacobian Spectral
+                                                                       Nevertheless, these approaches essentially remain forms of
+Radius Regularization (JSRR) with random loop sampling.
+                                                                       test-time scaling along the sequential dimension.
+According to the Lyapunov Linearization Theorem, the sta-
+bility of a nonlinear system is determined by the spectral
+radius of its Jacobian matrix. STARS mathematically com-               Recurrent Transformers and LoopLM. Unlike methods
+pels the model to converge toward asymptotically stable                that scale sequence length, a newer paradigm of latent rea-
+fixed points by constraining this spectral radius during train-        soning focuses on scaling model depth through recurrence
+ing. To ensure that the framework is practical for large-scale         and parameter sharing. Universal Transformer (Dehghani
+LLMs, we avoid the prohibitive cost of direct eigenvalue               et al., 2018) pioneered dynamic recurrence across layers,
+calculation. Instead, STARS employs a lightweight and                  establishing depth-adaptive computation as an alternative
+efficient estimation scheme by combining single-step power             to fixed-depth transformers. Subsequent research (Giannou
+iteration with Jacobian-vector products (JVP). By applying             et al., 2023; Yang et al., 2023; Fan et al., 2024) have in-
+random loop sampling, STARS optimizes both effectiveness               vestigated their potential benefits through theoretical and
+and stability of latent trajectories on a global scale, enabling       small-scale empirical analyses. Recent studies (Geiping
+more robust test-time scaling.                                         et al., 2025; Zhu et al., 2025b; Du et al., 2025; McLeish
+                                                                       et al., 2025) have extended the recurrent Transformer ar-
+We evaluate the effectiveness of our proposed method                   chitecture into language models. Huginn (Geiping et al.,
+through two experimental setups: basic arithmetic tasks                2025) trained a 3.5B model from scratch, while Ouro (Zhu
+on randomly initialized Transformers (Vaswani et al., 2017)            et al., 2025b) introduced a more capable LoopLM, enabling
+and fine-tuning pre-trained LoopLM on complex mathe-                   it to compete with mainstream open-source LLMs. As a
+matical reasoning tasks. Results show that on arithmetic               typical latent reasoning approach, LoopLM is expected to
+tasks, our method achieves fully reliable test-time scaling.           demonstrate test-time scaling. However, we find that rather
+On mathematical reasoning tasks, it demonstrates more ro-              than producing progressive gains with increased compu-
+bust performance compared to baselines. For instance, on               tation, performance typically peaks at a specific iteration
+GSM8K, while Ouro-1.4B experiences a 20.47% drop from                  depth and declines sharply beyond it. This phenomenon
+its peak performance after 8 recurrent steps, our method               is especially pronounced in Ouro models. Existing studies
+degrades by only 8.26%. Moreover, our approach improves                lack a thorough analysis of LoopLM training design, par-
+peak performance by 4.01% on GSM8K at the same time.                   ticularly regarding latent dynamics. While DEQ (Bai et al.,
+                                                                       2019; 2021) examined the dynamics of looped networks,
+2. Related Work                                                        their architectures and training algorithms differ from stan-
+                                                                       dard language models. Therefore, investigating the latent
+Test time scaling and latent reasoning. Test-time com-                 dynamics in modern LoopLMs is crucial to address their
+pute scaling is a critical frontier for enhancing LLM rea-             unreliable scaling behavior.
+
+                                                                   2
+               Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+3. Preliminaries                                                        Formally, a set A ⊂ RD is an attractor for the dynamics
+                                                                        induced by Φθ if there exists a neighbourhood U ⊃ A     such
+3.1. Looped Language Models                                             that, for every state h(t) ∈ U, limt→∞ dist h(t) , A = 0,
+In contrast to traditional deep architectures that stack distinct       where dist(·, A) denotes the distance to A. Intuitively, at-
+layers, a looped language model leverages weight-sharing                tractors are regions of latent space toward which the model’s
+by iteratively applying a recurrent block ML . The architec-            internal representations evolve during reasoning. A fixed
+ture is defined as:                                                     point is a particularly important type of attractor. A state
+                                                                        h⋆ ∈ RD is a fixed point if Φθ (h⋆ ) = h⋆ . Once the la-
+ F (t) (·) = lmhead ◦ coda ◦ M
+                             |
+                               L
+                                     · · ◦ ML} ◦prelude(·),
+                                 ◦ ·{z                                  tent trajectory reaches such a state, further applications of
+                                    t iterations                        the recurrent block leave the representation unchanged. In
+                                                                        LoopLM, fixed points correspond to stable internal represen-
+where ◦ denotes function composition and,
+                                                                        tations that signify the completion of the reasoning process.
+• prelude : RM ×|V | → RM ×d maps a sequence of M                       A fixed point h⋆ is locally asymptotically stable if there
+  tokens to d-dimensional embeddings as a preprocess of                 exists ϵ > 0 such that for every h(t) with ∥h(t) − h⋆ ∥ < ϵ,
+  the input text.                                                       limt→∞ h(t) = h⋆ . Such stable fixed points are desirable
+• ML : RM ×d → RM ×d denotes a stack of L causal                        for reasoning tasks, as they guarantee convergence rather
+  transformer layers (TθL ◦ · · · ◦ Tθ1 ) with hidden size d.           than oscillation or divergence when inference is extended.
+• coda : RM ×d → Rd transforms the final iterative repre-
+  sentations for the output layer.                                      4. Recurrent Dynamics of LoopLM
+• lmhead : Rd → R|V | projects the output back to the
+  vocabulary of size V for generation.                                  To delve into the core factors governing the intrinsic dynam-
+                                                                        ics of LoopLM, this section presents a series of systematic
+For a special case where t = 1, the architecture reduces to a
+                                                                        diagnostic experiments. Section 4.1 first outlines the spe-
+standard non-looped model F (1) ≡ F . For a training batch
+                                                                        cific experimental setup. Subsequently, Section 4.2 analyzes
+D = {x(i) }N  i=1 , we define the standard cross-entropy loss           the impact of critical architectural components on reasoning
+at t iterations as:
+                                                                        instability in recurrent models. Finally, Section 4.3 explores
+                      N M −1
+                        i                                               potential strategies for scalable latent reasoning.
+         (t)      1 X X          (t) (i)   (i) 
+        LSFT =            − log pθ xℓ+1 | x1:ℓ               (1)
+                  N i=1
+                          ℓ=1                                           4.1. Experimental Setup
+                                               (t)
+where the conditional probability is given by pθ (· | x1:ℓ ) =          Our study is grounded in a controlled environment designed
+                   (t)                                                  to make latent dynamics observable. We utilize multi-digit
+softmax(lmhead(hℓ )). Here, x1:ℓ represents the prefix of
+               (t)                                                      addition as an idealized testbed for analyzing iterative algo-
+length ℓ, and hℓ denotes the hidden state at position ℓ after
+                                                                        rithmic reasoning.
+t recursive iterations.
+
+3.2. Latent Reasoning as a Dynamical System                             Task description. The models are trained on 4-digit by
+                                                                        4-digit addition problems (e.g., “1234 + 5678 = 6912”)
+The iterative computation in LoopLM naturally defines a                 using a vocabulary consisting of digits, arithmetic operators,
+discrete-time dynamical system in latent space. For a given             and special tokens. The training dataset comprises 100,000
+input x, after initial embedding, the recurrent transformation          samples which are randomly generated, a scale sufficient
+yields the evolution                                                    to preclude rote memorization and compel the model to
+                                                                        learn a generalized addition algorithm. The choice of 4-
+           h(t+1) = Φθ (h(t) ),     t = 0, 1, 2, . . . ,     (2)
+                                                                        digit addition balances computational constraints with task
+where h(t) ∈ RD (D = M · d) denotes the flattened la-                   complexity: while 2-digit addition offers a trivial sample
+tent state at iteration t and Φθ := ML is the deterministic             space (104 combinations), 4-digit addition presents a vastly
+nonlinear map parametrized by θ. The trajectory is the se-              larger space (108 combinations), providing a sufficiently
+quence (h(0) , h(1) , . . . ). From this perspective, test-time         complex landscape for analysis and posing a non-trivial
+scaling corresponds to extending the trajectory length of               challenge for non-pretrained Transformers.
+the system, increasing the number of iterations t without
+changing parameters. The success of such scaling therefore              Model architecture. We employ a standard GPT-style
+depends on the long-term behavior of the trajectory.                    Transformer block (Vaswani et al., 2017; Radford et al.,
+                                                                        2019) as a minimal recurrent unit (L = 1), realizing the
+Attractor and fixed points. In dynamical systems theory,                looped model through the recursive iteration of this unit.
+an attractor describes the long-term evolution of a system.             This architectural choice eliminates confounding variables
+
+                                                                    3
+            Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+
+
+
+          Figure 2. Left: Structural Diagrams. Right: Visualization showing accuracy evolution and latent state dynamics.
+
+
+associated with deep, heterogeneous stacked layers, en-              Our experiments reveal an inherent design dilemma within
+abling us to isolate performance variations as direct con-           recurrent Transformer architectures. As visualized in Figure
+sequences of iteratively applying a single, well-defined state       2, the specific choice of normalization operator exerts mini-
+transition function. The unit hyperparameters are set to             mal influence on the model’s latent dynamics; conversely,
+dmodel = 512, nheads = 8, and dff = 1024.                            the structural placement of the normalization layer is the
+                                                                     determining factor, precipitating two distinct failure modes.
+Evaluation details. For the static architecture analysis,
+models are trained with a fixed loop iteration count of
+Ttrain = 4. During evaluation, we sweep the test-time it-               Finding 1: The specific normalization operator has
+eration count (Ttest ) across a broad spectrum. Our primary             negligible impact on model dynamics, whereas the
+                                                                        structural placement of the layer dictates the system’s
+focus is to characterize the evolution of system stability              evolutionary behavior.
+and internal state trajectories when Ttest diverges from, and
+specifically exceeds, the training horizon Ttrain . We then
+perform PCA on the sequence of latent states and project
+them onto a two-dimensional space spanned by the first two           In the internal normalization system, we observe that while
+principal components for visualization.                              performance is maintained throughout the training horizon
+                                                                     and brief subsequent extrapolations, it deteriorates as test
+4.2. Static Architecture Analysis                                    iterations increase. The PCA trajectories exhibit massive
+                                                                     scaling, indicating that the hidden states gradually drift away
+4.2.1. I MPACTS OF N ORM S TRUCTURE D ESIGN                          from the effective structural manifold, resulting in perfor-
+                                                                     mance collapse. Specifically, in the Pre-Norm formulation
+The architectural configuration of the recurrent unit funda-
+                                                                     (xl+1 = xl + f (Norm(xl ))), the residual connection estab-
+mentally dictates the evolution of information flow. We con-
+                                                                     lishes an information highway (He et al., 2016), transmitting
+duct a comparative analysis of three normalization variants
+                                                                     the previous state to the next timestamp without attenuation.
+Layer Normalization (Ba et al., 2016), RMSNorm (Zhang &
+                                                                     However, the update vector f (Norm(xl )) is directly accu-
+Sennrich, 2019), and SimpleNorm (defined as normalization
+                                                                     mulated onto the backbone stream. Without a constraint
+without learnable affine parameters) across four structural
+                                                                     mechanism after the residual addition, the norm of the hid-
+positions. Our choice of normalization placement: Pre-,
+                                                                     den state tends to grow without bound. This creates a pos-
+Post-, Pre-Sandwich, and Post-Sandwich (see Figure 2), is
+                                                                     itive feedback loop where the state magnitude amplifies
+primarily motivated by its substantial impact on training
+                                                                     linearly with iterations, eventually diverging from the func-
+stability and model performance, as established in prior re-
+                                                                     tional data manifold. Conversely, in external normalization
+search (Xiong et al., 2020; Bai et al., 2021). This yields a
+                                                                     system, although the model sustains performance for only
+total of twelve distinct architecture combinations.
+                                                                     a short duration during testing, the latent dynamics remain
+Based on these formulations, we categorize the architectures         bounded, as evidenced by the compact scale of the PCA
+into two distinct system types: internal normalization sys-          projections. As test iterations progress, both system types
+tem, where the residual connection remains outside the nor-          eventually converge towards attractor. Consequently, cur-
+malization scope (Pre-Norm and Pre-SandwichNorm), and                rent normalization architectures impose a trade-off between
+external normalization system, where the residual stream             system stability and effective information propagation, with
+is encapsulated within the final normalization scope (Post-          neither paradigm achieving test-time scalable latent reason-
+Norm and Post-SandwichNorm).                                         ing.
+
+                                                                 4
+             Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+
+
+
+Figure 3. Left: The top panel analyzes the impact of adding non-recurrent layers, while the bottom panel assesses the effect of introducing
+L2 regularization. Right: This panel evaluates the random loop strategy across distributions and parameter sets (detailed in Table 1).
+
+
+                                                                        Table 1. Hyperparameter settings for random loop distributions.
+   Finding 2: Internal normalization system allows                      Range indicates the clipping bounds [min, max].
+   strong information to flow through the residual back-
+   bone. This maintains early performance, but can lead                   Distribution     Set 1 Configuration     Set 2 Configuration
+   to instability and divergent states. External normal-
+   ization system constrains the residual stream, which                   Log-Normal       µ = 2.62, σ = 0.60       µ = 2.00, σ = 0.70
+   ensures stable boundaries, but causes the system to                                        range: [1, 40]          range: [1, 100]
+   settle into poor states that degrade its performance.                  Poisson                λ=5                      λ = 10
+                                                                                              range: [1, 30]           range: [1, 30]
+                                                                          Uniform             range: [1, 10]           range: [1, 40]
+4.2.2. I MPACTS OF P RELUDE AND C ODA L AYERS
+A natural consideration is whether incorporating non-
+recurrent layers before and after the recurrent block, similar          4.3. Attempted Methods for Scalable Latent Reasoning
+to the approach in Huginn (Geiping et al., 2025), can alle-
+viate these limitations. To investigate this, we add Prelude            4.3.1. R ANDOM L OOP S AMPLING
+and Coda layers into our experiments. The added Prelude                 The random loop sampling strategy aims to decouple model
+and Coda layers utilize the same block architecture as the              performance from a fixed training step count Ttrain , by dy-
+recurrent unit but do not participate in the loop iterations.           namically sampling the number of recurrent iterations for
+Given our previous finding that the specific normalization              each batch. This approach was previously employed in
+type has negligible impact, we fix LayerNorm as the nor-                training recurrent models (Geiping et al., 2025); however,
+malization operator for this analysis. We conduct exper-                a systematic analysis of its impact and insights into its un-
+iments using two structural baselines Pre-Sandwich and                  derlying mechanics were not provided. To address this gap,
+Post-Sandwich across four configurations: only-recurrent,               we build upon this method by conducting a detailed inves-
+with-prelude, with-coda, and with-both.                                 tigation. Specifically, we experiment with three distinct
+                                                                        distributions (Log-Normal, Poisson, and Uniform), each
+As visualized in Figure 3, for the internal normalization               with two different parameter configurations, applied to our
+system, the addition of a prelude layer marginally slows                two representative architectures: Pre-Sandwich and Post-
+performance degradation, but the effect is negligible; the tra-         Sandwich (others are detailed in Appendix C).
+jectory’s drift scale remains immense, and accuracy rapidly
+collapses to zero. For the external normalization system,               As illustrated in the Figure 3, sampling iterations during
+while a coda layer leads to a more concentrated set of final            training contributes to performance retention. For Pre-
+attractor, these prove to be non-benign fixed points that offer         Sandwich models, the random loop sampling strategy proves
+no performance benefit.                                                 highly effective. Across all combinations, performance re-
+                                                                        tention persists far beyond the iteration range encountered
+                                                                        during training. However, this does not alter the fundamen-
+   Finding 3: The inclusion of Prelude and Coda lay-                    tal nature of external normalization system, and state drift
+   ers does not alter the system’s dynamical tendencies.                still occurs. For Post-Sandwich models, compared to the
+   Although these layers likely contribute to a deeper                  trajectory plots in previous experiments, the set of attractors
+   semantic understanding of the input and output spaces,
+                                                                        it eventually converges to is more compact, but the training
+   their impact on the system’s stability is negligible.
+                                                                        process is unstable, and sometimes the model even fails
+                                                                        to learn to solve the task. Furthermore, based on the log-
+
+                                                                    5
+            Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+normal and uniform combinations, a wider sampling range             nonlinear system defined by h(t+1) = Φθ (h(t) ) at a fixed
+and a higher mean are not necessarily better. For example,          point h⋆ is governed by the properties of its Jacobian matrix,
+when encountering a wider sampling range, Post-Sandwich             denoted as:
+models are prone to training collapse and fail to learn the                          J(h⋆ ) = ∇h Φθ (h)|h=h⋆
+task. However, the Post-Sandwich architecture holds greater         To determine stability, we examine the set of eigenvalues
+potential due to its inherent tendency to converge to an at-        {λ1 , λ2 , . . . , λn } of J(h⋆ ). The critical metric is the spec-
+tractor. If this convergence can be guided toward an effec-         tral radius, denoted by ρ(J(h⋆ )), which is defined as the
+tive attractor, the system could simultaneously achieve both        maximum absolute value (modulus) of these eigenvalues:
+stability and effectiveness.
+                                                                                           ρ(J(h⋆ )) = max{|λi |}
+                                                                                                        i
+   Finding 4: Overall, sampling loop counts during train-
+   ing significantly enhances performance retention and             Specifically, if the spectral radius satisfies: ρ(J(h⋆ )) < 1,
+   generalization capabilities. However, it does not fun-           the fixed point is asymptotically stable. Under this condition,
+   damentally transform the effective stability of the sys-         any small perturbations introduced to the system will decay
+   tem and is sensitive to the size of the sampling range.          exponentially over successive iterations. And if the spectral
+                                                                    radius is smaller, the convergence rate also becomes faster.
+4.3.2. L2 REGULARIZATION                                            Previous works (Bai et al., 2019; 2021) often regularize us-
+                                                                    ing the Frobenius norm ∥J∥F . However, while the spectral
+To curb the continuous drift in internal normalization system       radius and the norm satisfy ρ(J) ≤ ∥J∥, directly constrain-
+and enhance the effective stability of external normalization       ing the norm is overly restrictive and may excessively com-
+system, a natural idea is to introduce a regularization term        press the model’s expressive capacity. In contrast, regular-
+defined as the L2 norm of the difference between hidden             izing the spectral radius provides a mathematically precise
+states across adjacent iterations. However, as depicted in          means to achieve stability.
+the lower panel of the Figure 3, the impact of L2 regulariza-
+tion is minimal. It provides only marginal improvements in          Direct eigenvalue computation of J ∈ RD×D is infeasible
+performance retention and drift mitigation for internal nor-        for large D. We therefore adopt an efficient spectral radius
+malization system, while its effect on external normalization       estimator based on the power iteration method. Starting
+system is virtually non-existent. Furthermore, we evaluated         from a randomly initialized vector v, the power iteration
+                                                                                                            Jv
+the combination of the random loop sampling strategy with           procedure repeatedly updates v ← ∥Jv∥       , eventually con-
+L2 regularization. Contrary to expectations, this combi-            verging to the dominant eigenvector of J. The correspond-
+nation yields no enhancement and actually underperforms             ing spectral radius can then be estimated by: ρ(J) ≈ ∥Jv∥2 .
+compared to the pure random loop sampling.                          To integrate this approach into large-scale model training,
+                                                                    we use only a single-step power iteration with the Jacobian-
+   Finding 5: The introduction of an L2 regularization              vector product technique in Pytorch, enabling efficient and
+   between hidden states yields negligible benefits and             memory-aware computation without explicit construction
+   demonstrates poor synergy when combined with the                 of the full Jacobian matrix.
+   random loop sampling strategy.
+                                                                    We adopt a single-step update for two reasons: 1) multi-
+                                                                    step iteration introduces complex gradient dependencies
+5. Jacobian Spectral Radius Regularization                          that can lead to abnormal gradients; 2) It is computationally
+                                                                    lightweight, and experiments show it provides effective su-
+Building on our previous experimental findings, we pro-             pervisory signals. Although the single-step estimate may
+pose that effective test-time scalable latent reasoning must        be noisy for individual samples, its optimization direction
+satisfy both effectiveness and stability. This requirement          remains statistically accurate across batches.
+stems from the nature of reasoning as an iterative process of
+uncertainty reduction and thought refinement. This implies          While the ultimate goal is to optimize the spectral radius
+that hidden states should converge toward a stable and ef-          at the fixed point h⋆ , identifying the exact location of the
+fective fixed point. Systems that are effective but unstable        fixed point during training is computationally prohibitive.
+produce chaotic reasoning trajectories, whereas systems that        Consequently, we adopt a proxy approach: for a specific
+are stable but ineffective yield shallow thoughts. To address       iteration t within the LoopLM execution, we regulate the
+this, we introduce STARS (STAbility-driven Recurrent Scal-          squared spectral radius of the Jacobian at the current state
+ing), a training framework that combines Jacobian Spectral          h(t) . For a batch of N samples, the JSRR loss at iteration t
+Radius Regularization (JSRR) with random loop sampling.             is formulated as:
+                                                                                                   N
+According to the Lyapunov Linearization Theorem for                                  (t)       1 X (t,i) (t,i) 2
+                                                                                   LJSRR =           J  v        ,                 (3)
+discrete-time dynamical systems, the local stability of a                                      N i=1           2
+
+
+                                                                6
+              Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+              Table 2. We report Accuracy (%) on various mathematical benchmarks. Best results for LoopLMs are bolded.
+
+  Model                                                Recurrents         GSM8K    MATH500     ASDiv    SVAMP     AMC23     AVG
+                                                       Standard Language Models
+  Gemma3-1b-it (Team et al., 2025)                          -        42.76      41.20           72.45    62.67     25.00    48.82
+  Llama-3.2-3B-Instruct (Grattafiori et al., 2024)          -             71.11      42.40      82.04    79.67     15.00    58.04
+  Qwen2.5-3B-Instruct (Team et al., 2024)                   -             74.91      68.20      76.18    87.00     32.50    67.76
+  Qwen3-1.7B (Yang et al., 2025)                            -             75.82      65.80      85.64    89.00     17.50    66.75
+  Qwen3-4B (Yang et al., 2025)                              -             80.36      63.00      86.59    89.00     12.50    66.29
+                                                        Looped Language models
+                                                           2         15.01           14.60      30.50    18.67     00.00    15.76
+  Recurrent-Llama-3.2 (McLeish et al., 2025)               4         14.03           14.60      41.65    18.67     5.000    18.79
+                                                           8         13.04           14.00      21.33    42.17     7.500    19.61
+                                                            2             17.89      9.000      29.33    31.97     00.00    17.64
+  Recurrent-OLMo-2-0425 (McLeish et al., 2025)              4             17.13      9.800      38.13    38.67     2.500    21.25
+                                                            8             17.97      11.40      40.00    38.48     00.00    21.57
+                                                            2             76.88      54.80      74.27    81.67     35.00    64.52
+  Ouro-1.4B (Zhu et al., 2025b)                             4             75.21      59.60      76.57    75.67     50.00    67.41
+                                                            8             58.23      40.80      70.07    66.33     40.00    55.09
+                                                            2             76.04      55.80      82.08    82.33     30.00    65.25
+  Ouro-1.4B-SFT                                             4             80.06      64.60      83.47    76.67     47.50    70.46
+                                                            8             60.05      39.20      75.10    68.00     22.50    52.97
+                                                            2             75.89      56.40      82.56    79.67     40.00    66.90
+  Ouro-1.4B-STARS (Ours)                                    4             81.96      67.40      84.73    84.33     52.50    74.18
+                                                            8             74.45      54.80      82.52    81.00     35.00    65.55
+
+
+                     (t+1)
+where J (t,i) =
+                   ∂hi
+                         (t)   is the Jacobian of the i-th sample,        6. Experiments
+                    ∂hi
+      (t,i)                                                               In this section, we conduct experiments to demonstrate the
+and v1 is the one-step dominant eigenvector estimate of
+the i-th sample at iteration t.                                           effectiveness of our proposed method. We mainly focus
+                                                                          on two tasks: the arithmetic task mentioned in Section 4
+However, directly constraining the spectral radius at only a              and complex mathematical reasoning benchmarks of a pre-
+single iteration t is suboptimal, as it neglects the stability            trained LoopLM model, exemplified by Ouro. Furthermore,
+properties across the entire inference trajectory. Therefore,             we conduct rigorous ablation and analysis studies.
+we propose to integrate JSRR with the random loop sam-
+pling strategy introduced earlier. This ensures that spectral             6.1. Experimental Setup
+radius regularization is applied across a diverse set of states
+encountered during iterative inference, promoting global                  Multi-digits addition task. We follow the experimental
+stability over the support set of the latent dynamics. Our                setup described in Section 4 and adopt a Post-Sandwich
+final training objective is defined as the expectation of the             LayerNorm structure due to our previous findings. For the
+combined loss over the recurrent depth distribution P:                    random loop configurations, we employ log-normal random
+                                                                          loop sampling (µ = 2, σ = 0.7, range = [1, 100]) with a
+                                                                          weight λ = 0.1. The training is conducted with a learning
+                   h
+                               (t)        (t)
+                                              i                           rate of 1 × 10−4 .
+      LSTARS = Et∼P (1 − λ) · LSFT + λ · LJSRR ,                (4)
+                                                                          Mathematical reasoning task. We employ Ouro-
+                                                                          1.4B (Zhu et al., 2025b) which is a pre-trained LoopLM
+where λ is a balancing hyperparameter. By sampling the                    as our base model, specifically targeting its unreliable
+loop length t from the distribution P, this formulation en-               scaling behavior in test-time scaling. We fine-tuned the
+courages the model to achieve high performance on the train-              model on a random subset of NuminaMath-1.5 (Li et al.,
+ing data while maintaining a small spectral radius across the             2024) dataset containing 400K samples due to the compu-
+entire trajectory. The complete procedure of our algorithm                tational resource constraints. The training configuration
+is presented in Algorithm 1.                                              involved log-normal random loop sampling (µ = 1.7, σ =
+
+                                                                      7
+             Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+
+
+
+Figure 4. Comparative analysis of our method against baselines and its ablation variants across mathematical reasoning benchmarks. The
+left panel illustrates accuracy versus recurrent steps for Ouro, Ouro-SFT, and Ouro-STARS. The right panel details an ablation study
+evaluating the base Ouro model, Ouro with a Random Loop, Ouro with JSRR, and Ouro-STARS.
+
+                                                                        We also compare with existing open-source small models.
+                                                                        As anticipated and consistent with prior observations on
+                                                                        recurrent models, both the base Ouro-1.4B and the SFT
+                                                                        baseline exhibit significant performance degradation when
+                                                                        the number of recurrent steps is extended beyond the nom-
+                                                                        inal training depth (e.g., scaling from 4 to 8 recurrents).
+                                                                        Specifically, the SFT baseline’s average accuracy plummets
+                                                                        from 70.46% at 4 steps to a collapse at 52.97% at 8 steps.
+                                                                        In contrast, Ouro-1.4B-STARS (Ours) achieves the highest
+                                                                        overall in-distribution performance, peaking at an average
+Figure 5. Performance and state evolution on the multi-digit ad-
+dition task. The left panel displays the performance curve across       accuracy of 74.18% at 4 recurrent steps. More critically,
+recurrent steps, demonstrating the model’s stability. The right         when subjected to significant depth-scaling to 8 recurrent
+panel illustrates the PCA-projected hidden state dynamics.              steps, our framework maintains a remarkably robust average
+                                                                        accuracy of 65.55%. As shown in the right panel of Figure
+0.4, range = [1, 16]) and the weight λ = 0.1. The model                 4, our method exhibits a slower decline in performance after
+was trained for one epoch across four NVIDIA A800 GPUs                  reaching its peak as recurrent steps increase, demonstrating
+using AdamW (Loshchilov & Hutter, 2017) and a cosine                    more stable scaling behavior.
+learning rate scheduler starting at 1 × 10−6 . Subsequently,
+we use the lm eval harness (Gao et al., 2024) to evalu-                 6.3. Ablation Study
+ate model’s performance in a zero-shot setting across five
+mathematical benchmarks: GSM8K (Cobbe et al., 2021),                    To thoroughly validate the effectiveness and quantify the
+MATH500 (Lightman et al., 2023), ASDiv (Miao et al.,                    individual contributions of each component in our proposed
+2020), SVAMP (Patel et al., 2021), and AMC23 (Yang et al.,              framework, we conduct a comprehensive ablation study. We
+2025).                                                                  evaluate performance across four representative mathemat-
+                                                                        ical reasoning benchmarks: GSM8K, MATH500, ASDiv,
+6.2. Main Results                                                       and SVAMP. Specifically, we compare the original Ouro-
+                                                                        1.4B base model against three key variants: one integrated
+Multi-digits addition task. As illustrated in Figure 5,                 only with random loop sampling (Ouro-Random Loop), one
+with the integration of our proposed STARS, the model                   with only JSRR (Ouro-JSRR), and the full STARS combin-
+demonstrates notable robustness in performance. Regard-                 ing both strategies (Ouro-STARS). As shown in the right
+less of the number of recurrent iterations, accuracy consis-            panel of Figure 4, the results demonstrate that STARS gen-
+tently remains at 100%, indicating that the model has stably            erally exhibits a slower decline in performance compared
+learned the task. From a dynamical systems perspective, the             to the ablated variants, with each component, random loop
+latent states converge successfully to a stable fixed point             sampling and JSRR, contributing to this delayed degrada-
+with a relatively fast convergence rate. This ensures reliable          tion. We provide additional analysis in Appendix C.
+reasoning even as the number of recurrent steps increases.
+
+                                                                        7. Conclusion
+Mathematical reasoning task. Table 2 summarizes the
+performance of our framework in comparison to base Ouro-                In this paper, we identify and diagnose the unreliable scal-
+1.4B model and a standard Supervised Fine-Tuning (SFT)                  ing behavior in current LoopLMs from a dynamic systems
+baseline across the five mathematical reasoning benchmarks.
+
+                                                                    8
+            Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+perspective, attributing it to an inherent trade-off between            Kaiser, Ł. Universal transformers.         arXiv preprint
+reasoning effectiveness and latent trajectory stability. To             arXiv:1807.03819, 2018.
+resolve this, we propose STARS, a unified training frame-
+work that enforces asymptotic stability via Jacobian Spectral         Du, H., Dong, Y., and Ning, X. Latent thinking optimiza-
+Radius Regularization alongside random loop sampling. Ex-               tion: Your latent reasoning language model secretly en-
+perimental results on both synthetic tasks and mathematical             codes reward signals in its latent thoughts. arXiv preprint
+reasoning benchmarks demonstrate that STARS enables                     arXiv:2509.26314, 2025.
+more reliable test-time scaling over greater recurrent depths         Fan, Y., Du, Y., Ramchandran, K., and Lee, K. Looped
+compared to prior methods.                                              transformers for length generalization. arXiv preprint
+                                                                        arXiv:2409.15647, 2024.
+Impact Statement
+                                                                      Gao, L., Tow, J., Abbasi, B., Biderman, S., Black, S., DiPofi,
+This paper presents work whose goal is to advance the field             A., Foster, C., Golding, L., Hsu, J., Le Noac’h, A., Li, H.,
+of Machine Learning. There are no potential societal con-               McDonell, K., Muennighoff, N., Ociepa, C., Phang, J.,
+sequences of our work which we feel must be specifically                Reynolds, L., Schoelkopf, H., Skowron, A., Sutawika, L.,
+highlighted here. Our contributions are primarily method-               Tang, E., Thite, A., Wang, B., Wang, K., and Zou, A. The
+ological, focused on improving the stability and scaling                language model evaluation harness, 07 2024.
+behavior of a specific class of recurrent language model
+architectures for reasoning tasks. We do not introduce new            Geiping, J., McLeish, S., Jain, N., Kirchenbauer, J., Singh,
+applications or datasets, nor does our work directly address            S., Bartoldson, B. R., Kailkhura, B., Bhatele, A., and
+issues of fairness, safety, or bias in deployed systems. The            Goldstein, T. Scaling up test-time compute with latent
+proposed techniques are evaluated on standard academic                  reasoning: A recurrent depth approach. arXiv preprint
+benchmarks for mathematical reasoning.                                  arXiv:2502.05171, 2025.
+
+                                                                      Giannou, A., Rajput, S., Sohn, J.-y., Lee, K., Lee, J. D.,
+Acknowledge                                                             and Papailiopoulos, D. Looped transformers as pro-
+                                                                        grammable computers. In International Conference on
+This research was supported by the Jiangsu Science Foun-                Machine Learning, pp. 11398–11442. PMLR, 2023.
+dation (BK20243012, BG2024036, BK20232003), Nat-
+ural Science Foundation of China (62576162), and the                  Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian,
+Fundamental Research Funds for the Central Universities                 A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A.,
+(022114380023).                                                         Vaughan, A., et al. The llama 3 herd of models. arXiv
+                                                                        preprint arXiv:2407.21783, 2024.
+References                                                            Hao, S., Sukhbaatar, S., Su, D., Li, X., Hu, Z., Weston,
+Ba, J. L., Kiros, J. R., and Hinton, G. E. Layer normalization.         J., and Tian, Y. Training large language models to
+  arXiv preprint arXiv:1607.06450, 2016.                                reason in a continuous latent space. arXiv preprint
+                                                                        arXiv:2412.06769, 2024.
+Bai, S., Kolter, J. Z., and Koltun, V. Deep equilibrium mod-
+  els. Advances in neural information processing systems,             He, K., Zhang, X., Ren, S., and Sun, J. Deep residual learn-
+  32, 2019.                                                             ing for image recognition. In Proceedings of the IEEE
+                                                                        conference on computer vision and pattern recognition,
+Bai, S., Koltun, V., and Kolter, J. Z. Stabilizing equilib-             pp. 770–778, 2016.
+  rium models by jacobian regularization. arXiv preprint
+  arXiv:2106.14342, 2021.                                             Li, J., Beeching, E., Tunstall, L., Lipkin, B., Soletskyi, R.,
+                                                                        Huang, S., Rasul, K., Yu, L., Jiang, A. Q., Shen, Z., et al.
+Cheng, J. and Van Durme, B. Compressed chain of thought:                Numinamath: The largest public dataset in ai4maths with
+  Efficient reasoning through dense representations. arXiv              860k pairs of competition math problems and solutions.
+  preprint arXiv:2412.13171, 2024.                                      Hugging Face repository, 13(9):9, 2024.
+Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H.,             Lightman, H., Kosaraju, V., Burda, Y., Edwards, H., Baker,
+  Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano,             B., Lee, T., Leike, J., Schulman, J., Sutskever, I., and
+  R., Hesse, C., and Schulman, J. Training verifiers to solve           Cobbe, K. Let’s verify step by step. arXiv preprint
+  math word problems. arXiv preprint arXiv:2110.14168,                  arXiv:2305.20050, 2023.
+  2021.
+                                                                      Loshchilov, I. and Hutter, F. Decoupled weight decay regu-
+Dehghani, M., Gouws, S., Vinyals, O., Uszkoreit, J., and                larization. arXiv preprint arXiv:1711.05101, 2017.
+
+                                                                  9
+            Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+McLeish, S., Li, A., Kirchenbauer, J., Kalra, D. S., Bartold-         Xiong, R., Yang, Y., He, D., Zheng, K., Zheng, S., Xing,
+ son, B. R., Kailkhura, B., Schwarzschild, A., Geiping, J.,             C., Zhang, H., Lan, Y., Wang, L., and Liu, T. On layer
+ Goldstein, T., and Goldblum, M. Teaching pretrained lan-               normalization in the transformer architecture. In Interna-
+ guage models to think deeper with retrofitted recurrence.              tional conference on machine learning, pp. 10524–10533.
+ arXiv preprint arXiv:2511.07384, 2025.                                 PMLR, 2020.
+
+Miao, S.-Y., Liang, C.-C., and Su, K.-Y. A diverse corpus             Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B.,
+ for evaluating and developing english math word problem                Yu, B., Gao, C., Huang, C., Lv, C., et al. Qwen3 technical
+ solvers. In Proceedings of the 58th annual meeting of the              report. arXiv preprint arXiv:2505.09388, 2025.
+ Association for Computational Linguistics, pp. 975–984,
+                                                                      Yang, L., Lee, K., Nowak, R., and Papailiopoulos, D.
+ 2020.
+                                                                        Looped transformers are better at learning learning al-
+Mohtashami, A., Pagliardini, M., and Jaggi, M. Cot-                     gorithms. arXiv preprint arXiv:2311.12424, 2023.
+ former: A chain-of-thought driven architecture with
+                                                                      Yang, M. S., Schuurmans, D., Abbeel, P., and Nachum,
+ budget-adaptive computation cost at inference. arXiv
+                                                                        O. Chain of thought imitation with procedure cloning.
+ preprint arXiv:2310.10845, 2023.
+                                                                        Advances in Neural Information Processing Systems, pp.
+Patel, A., Bhattamishra, S., and Goyal, N. Are nlp models               36366–36381, 2022.
+  really able to solve simple math word problems? arXiv               Yao, S., Yu, D., Zhao, J., Shafran, I., Griffiths, T., Cao, Y.,
+  preprint arXiv:2103.07191, 2021.                                      and Narasimhan, K. Tree of thoughts: Deliberate problem
+Radford, A., Wu, J., Child, R., Luan, D., Amodei, D.,                   solving with large language models. Advances in Neural
+  Sutskever, I., et al. Language models are unsupervised                Information Processing Systems, 2024.
+  multitask learners. OpenAI blog, 1(8):9, 2019.                      Zelikman, E., Harik, G., Shao, Y., Jayasiri, V., Haber, N.,
+                                                                        and Goodman, N. D. Quiet-star: Language models can
+Shen, Z., Yan, H., Zhang, L., Hu, Z., Du, Y., and He, Y. Codi:
+                                                                        teach themselves to think before speaking. arXiv preprint
+  Compressing chain-of-thought into continuous space via
+                                                                        arXiv:2403.09629, 2024.
+  self-distillation. arXiv preprint arXiv:2502.21074, 2025.
+                                                                      Zhang, B. and Sennrich, R. Root mean square layer nor-
+Team, G., Kamath, A., Ferret, J., Pathak, S., Vieillard,                malization. Advances in neural information processing
+  N., Merhej, R., Perrin, S., Matejovicova, T., Ramé, A.,              systems, 32, 2019.
+  Rivière, M., et al. Gemma 3 technical report. arXiv
+  preprint arXiv:2503.19786, 2025.                                    Zhang, J., Zhu, Y., Sun, M., Luo, Y., Qiao, S., Du, L., Zheng,
+                                                                        D., Chen, H., and Zhang, N. Lightthinker: Thinking step-
+Team, Q. et al. Qwen2 technical report. arXiv preprint                  by-step compression. arXiv preprint arXiv:2502.15589,
+  arXiv:2407.10671, 2(3), 2024.                                         2025a.
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones,           Zhang, Q., Lyu, F., Sun, Z., Wang, L., Zhang, W., Hua,
+  L., Gomez, A. N., Kaiser, Ł., and Polosukhin, I. At-                  W., Wu, H., Guo, Z., Wang, Y., Muennighoff, N., et al.
+  tention is all you need. Advances in neural information               A survey on test-time scaling in large language mod-
+  processing systems, 30, 2017.                                         els: What, how, where, and how well? arXiv preprint
+                                                                        arXiv:2503.24235, 2025b.
+Wang, X., Wei, J., Schuurmans, D., Le, Q., Chi, E., Narang,
+ S., Chowdhery, A., and Zhou, D. Self-consistency im-                 Zhang, Y., Mao, S., Ge, T., Wang, X., de Wynter, A., Xia, Y.,
+ proves chain of thought reasoning in language models.                  Wu, W., Song, T., Lan, M., and Wei, F. Llm as a master-
+ International Conference on Learning Representations,                  mind: A survey of strategic reasoning with large language
+ 2022.                                                                  models. arXiv preprint arXiv:2404.01230, 2024.
+
+Wei, J., Wang, X., Schuurmans, D., Bosma, M., Xia, F., Chi,           Zhu, R.-J., Peng, T., Cheng, T., Qu, X., Huang, J., Zhu, D.,
+ E., Le, Q. V., Zhou, D., et al. Chain-of-thought prompting             Wang, H., Xue, K., Zhang, X., Shan, Y., et al. A survey
+ elicits reasoning in large language models. Advances in                on latent reasoning. arXiv preprint arXiv:2507.06203,
+ neural information processing systems, 35:24824–24837,                 2025a.
+ 2022.
+                                                                      Zhu, R.-J., Wang, Z., Hua, K., Zhang, T., Li, Z., Que, H.,
+Wei, X., Liu, X., Zang, Y., Dong, X., Cao, Y., Wang, J., Qiu,           Wei, B., Wen, Z., Yin, F., Xing, H., et al. Scaling latent
+ X., and Lin, D. Sim-cot: Supervised implicit chain-of-                 reasoning via looped language models. arXiv preprint
+ thought. arXiv preprint arXiv:2509.20317, 2025.                        arXiv:2510.25741, 2025b.
+
+                                                                 10
+            Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+A. Limitations and Future Work
+First, due to the computational resources limit, the empirical evaluation is concentrated on mathematical reasoning, leaving
+its generalizability to other complex reasoning domains (e.g., commonsense or strategic planning) an open question.
+Second, even on these tasks, while STARS prevents catastrophic collapse and enables scaling beyond the training horizon,
+performance does not always improve monotonically with more steps. This indicates that achieving fully reliable and
+predictable test-time scaling remains a challenge for the most difficult problems.
+Future work will explore extending the STARS framework to a wider variety of reasoning and planning tasks, and
+investigating adaptive mechanisms to more robustly guide latent trajectories toward optimal, stable fixed points.
+
+B. Training Algorithm Details
+
+Algorithm 1 STARS Training for Looped Language Models with JSRR
+  Input: Dataset D, Initial parameters θ, Distribution P, Regularization weight λ, Learning rate η, Power iteration steps K
+  repeat
+    Sample a batch {x(i) , y(i) }N
+                                 i=1 ∼ D
+    Sample loop depth t ∼ P
+    for i = 1 to N do
+      // Forward pass to loop depth t
+        (0)
+      hi ← prelude(x(i) )
+        (t)                     (0)
+      hi ← Φθ ◦ · · · ◦ Φθ (hi )
+               |    {z      }
+                    t times
+        // Initialize random direction
+        v(i) ∼ N (0, I)               
+        v(i) ← v(i) / ∥v(i) ∥2 + ϵ
+        // Power iteration using Jacobian-vector products
+        for k = 1 to K    do            
+                                (t)
+            j(i) ← JVP Φθ , hi , v(i)
+                                       
+            v(i) ← j(i) / ∥j(i) ∥2 + ϵ
+        end for
+           (i)
+        LJSRR ← ∥j(i) ∥22
+    end for
+    // Loss computation
+       (t)         PN             (t)
+    LSFT ← N1 i=1 − log pθ (y(i) | x(i) )
+       (t)          PN      (i)
+    LJSRR ← N1 i=1 LJSRR
+               (t)      (t)
+    L ← LSFT + λLJSRR
+    // Optimization step
+    θ ← θ − η∇θ L
+  until convergence
+
+
+C. More Results
+Random loop sampling on PreNorm and PostNorm We supplement the experimental results of random loop sampling
+for PreNorm with LN and PostNorm with LN under three distributions (Log-Normal, Poisson, and Uniform), each with two
+configurations, as shown in Figure C and Table 3.
+
+Hyperparameter analysis. We conducted a hyperparameter analysis by evaluating the regularization weight λ on multi-
+digit addition tasks, with the results illustrated in 7. This investigation involved plotting the performance curve and the
+PCA-projected trajectory for a range of λ values. The weight λ directly influences the strength of the JSRR constraint,
+which, in turn, is reflected in the resulting latent dynamics. While our method demonstrates that different weights lead to the
+model converging to attractor, as shown in the trajectory plots, if the weight λ is too large (e.g. 0.15 and 0.20), the model
+
+                                                             11
+             Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+
+
+
+Figure 6. The results with the random loop strategy across distributions and parameter sets for PreNorm with LN and PostNorm with LN.
+
+
+
+
+Table 3. Hyperparameter settings for random loop distributions with PreNorm and PostNorm. Range indicates the clipping bounds
+[min, max].
+
+                                   Distribution     Set 1 Configuration     Set 2 Configuration
+                                   Log-Normal       µ = 2.62, σ = 0.60       µ = 3.2, σ = 0.45
+                                                       range: [1, 40]          range: [1, 80]
+                                   Poisson                λ=5                      λ = 10
+                                                       range: [1, 30]           range: [1, 30]
+                                   Uniform             range: [1, 10]           range: [1, 30]
+
+
+
+
+                                                                 12
+            Stabilizing Recurrent Dynamics for Test-Time Scalable Latent Reasoning in Looped Language Models
+
+struggles to learn to solve the original multi-digit task. This is evident in the corresponding performance curves, which show
+a significant drop in accuracy. Therefore, although our method exhibits a degree of robustness, the regularization weight
+should not be excessively large, as it can impede the model’s effective learning capabilities.
+
+
+
+
+                                Figure 7. Hyperparameter analysis on the multi-digits addition task.
+
+
+Efficiency analysis during training phase. We conducted an efficiency analysis during the training phase for these four
+types, with Ouro-SFT as the baseline. The results are shown in Table 4. From the table, it can be observed that the efficiency
+of Ouro-Random Loop, Ouro-JSRR, and Ouro-STARS during the training phase is 1.4976, 1.5317, and 2.0439, respectively,
+relative to Ouro-SFT.
+            Table 4. Efficiency analysis during training phase. The values are presented relative to Ouro-SFT as the base.
+
+                  Model               Ouro-SFT        Ouro-Random Loop            Ouro-JSRR        Ouro-STARS
+                  Relative Value            1                 1.4976                 1.5317             2.0439
+
+
+Comparative Analysis and Ablation Study on AMC23. In addition to the mathematical reasoning benchmark analysis
+presented in the main text (Figure 4), we further conducted a comparative analysis of our method against baselines and its
+ablation variants on the AMC23 dataset shown in Figure 8.
+
+
+
+
+                Figure 8. Comparative analysis of our method against baselines and its ablation variants on AMC23.
+
+
+
+                                                                 13
+

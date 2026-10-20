@@ -1,0 +1,1135 @@
+                                          What Survives When You Compress a Recursive Reasoner for the Edge?
+
+
+                                          Pearse Jim1 * , Steven Kolawole2,1 * , Opegbemi M. Busoye1 , Glory Bagai1 , Virginia Smith2
+                                                                           1
+                                                                               ML Collective, 2 Carnegie Mellon University
+
+
+
+
+                                                                   Abstract                                     Backbone weights (analytical)                Puzzle embedding
+                                                 Recursive reasoning models solve hard struc-                       FP32                   79%           126 MB
+
+
+
+
+arXiv:2606.26488v2 [cs.LG] 30 Sep 2026
+                                                 tured tasks with a few million parameters by                  full table
+                                                 iterating a latent state, but deploying them on                  INT8          6.51 MB,   8 MB target (weights)
+                                                 edge hardware means compressing them – and                     + flash
+                                                 quantization noise compounds across recursive               INT4 calib. 3.26 MB, 4 MB target (weights)
+                                                                                                                + flash
+                                                 cycles rather than accumulating over output
+                                                 tokens, so single-pass intuitions fail. Here,                              0         50         100       150
+                                                 we ask what survives. Across a full preci-                                         Weight memory (MB)
+                                                 sion sweep and three tasks, aggressive com-
+                                                 pression preserves local prediction but destroys        Figure 1: Backbone-weight memory by configuration
+                                                 global reasoning: pruning, distillation, and lin-       (analytical, weights-only). The FP32 embedding ta-
+                                                 ear attention drive puzzle-exact accuracy to            ble (99.4 MB) accounts for 79% of the ∼126 MB base-
+                                                 zero while cell accuracy holds. Naïve INT4              line. Flash loading reduces the active embedding to
+                                                 is different: its damage is architectural, strik-       2 KB, isolating backbone compression. INT8 + flash
+                                                 ing MLP-mixing recursion but not attention on           reaches 6.51 MB and calibrated INT4 + flash 3.26 MB,
+                                                 the same task, and per-channel calibration re-          the latter within the 4 MB microcontroller budget. Both
+                                                 verses it without retraining, where quantization-       are weights-only; with activations and carry state the
+                                                 aware training does not. We also introduce              ARC/Maze streaming peak is 9.51 MB (Table 4).
+                                                 carry-trajectory fidelity, the cosine similarity
+                                                 to the full-precision reasoning path, as a label-
+                                                 free signal that predicts both the damage and           Wang et al., 2025; Hao et al., 2025; Kohli et al.,
+                                                 the recovery before any task evaluation, with a         2026). Yet TRM weighs ∼126 MB, more than an
+                                                 threshold that transfers across tasks. The result       order of magnitude beyond the kB-to-MB SRAM
+                                                 is a deployment recipe: flash-streamed embed-           of the microcontroller tier we target. Deployment
+                                                 dings remove a 99.4 MB bottleneck, one recur-           there requires compression. When such a model is
+                                                 sive cycle matches full-depth accuracy at 6×
+                                                                                                         squeezed, what survives and what breaks?
+                                                 fewer FLOPs, and calibrated INT4 brings the
+                                                 backbone to 3.3 MB, inside a 4 MB budget.                  While single-pass transformer quantization is
+                                                                                                         well-studied (noise accumulates over output tokens,
+                                                                                                         and INT8 deployment is standard) (Nagel et al.,
+                                         1       Introduction
+                                                                                                         2021; Dettmers et al., 2022; Han et al., 2016), re-
+                                         The Tiny Recursive Model (TRM) solves ab-                       cursive models introduce a different failure mode:
+                                         stract reasoning puzzles with only 6.83M parame-                quantization noise compounds across H recursive
+                                         ters (Jolicoeur-Martineau, 2025)—44.6% on ARC-                  cycles at each carry-state update. Whether this com-
+                                         AGI-1 with 1000-augmentation test-time voting                   pounding degrades reasoning has not been studied.
+                                         (36.00% single-pass in our harness)—competitive                 While quantization harms single-pass reasoning
+                                         with larger autoregressive systems on a benchmark               chains (Li et al., 2025) and emergent abilities col-
+                                         designed to resist pattern matching (Chollet, 2019).            lapse below 4-bit (Liu et al., 2024), depth and preci-
+                                         It does so by iterating a latent carry state across             sion are independent in those systems. In recursive
+                                         recursive cycles, a mechanism shared by Universal               models, they are not: the optimal operating point
+                                         Transformers (Dehghani et al., 2019) and depth-                 depends jointly on bit-width and depth.
+                                         recurrent language models (Geiping et al., 2025;                   We present the first systematic compression
+                                             *   Equal Contribution.                                     study of a recursive reasoning model under hard
+
+                                                                                                     1
+SRAM constraints (Lin et al., 2020; Abushahla                none give a signal usable during inference with-
+et al., 2025). We sweep precision (FP32, FP16,               out labels. Our carry-trajectory fidelity, grounded
+INT8, INT4) and depth across three tasks (ARC-               in Jiang et al. (2025)’s link between hidden-state
+AGI-1, Maze-Hard, Sudoku-Extreme) and two ar-                cosine similarity and representational saturation,
+chitectures (TRM and HRM). As shown in Figure 1,             predicts collapse under quantization with no task
+the dominant memory bottleneck is the 99.4 MB                evaluation.
+puzzle embedding table, which we resolve via 2 KB
+flash loading, isolating backbone compression. Our           Quantization-as-regularization has an unchar-
+primary contributions are:                                   acterized depth dimension. Quantization noise
+                                                             can act as a regulariser – pushing toward flatter
+1. We establish a depth–precision crossover with             minima with a model-specific optimal level (Askar-
+   two separable effects: a single recursive cy-             iHemmat et al., 2024, 2022), robust under distri-
+   cle matches full-depth accuracy at 6× fewer               bution shift and limited data (Javed et al., 2025;
+   FLOPs—a depth effect (FP32 at H=1 scores                  Tallec et al., 2023), sometimes letting INT8 beat
+   35.75% vs. INT8’s 35.25%)—while INT8 adds                 FP32 (Zhang et al., 2025) – which explains INT8
+   a 4× weight-memory reduction at no accuracy               parity in single-pass models. None predicts re-
+   cost, an interaction absent from single-pass              cursive behavior, where the same noise is applied
+   quantization (§4.2).                                      across H carry-state updates and beneficial reg-
+                                                             ularization at shallow depth becomes destructive
+2. We identify a compositional collapse: under               compounding at depth. We characterize this depth–
+   pruning, distillation, and linear-attention sub-          precision interaction directly.
+   stitution, local token accuracy survives while
+   global puzzle accuracy falls to zero; naïve               Compressed reasoning fails early; low-bit recov-
+   INT4’s harm is architecture-dependent, and                ery needs the right recipe. On reasoning chains,
+   an attention-vs-MLP-mixing ablation shows                 PTQ induces early failures that cascade (Li et al.,
+   the fragility is architectural, not task-intrinsic        2025), with a precision floor near 4-bit (Liu et al.,
+   (§4.3).                                                   2024) and W8A8 as the lossless threshold for small
+                                                             models (Liu et al., 2025); consistent with our INT8
+3. We introduce carry-trajectory fidelity, a label-
+                                                             finding, but for single-pass decoding. Standard
+   free detector that grades this damage and pre-
+                                                             QAT recipes for reasoning models favor distilla-
+   dicts its recovery from the model’s own hidden
+                                                             tion/KD objectives and PTQ initialization (Lv et al.,
+   states, with no task labels (§4.5).
+                                                             2026); our QAT comparison follows that recipe
+4. We derive and benchmark a deployment recipe:              (calibrated initialization, CE and KD objectives,
+   per-channel calibrated INT4 weights reach                 three learning rates) and finds that further token-
+   3.26 MB, within a 4 MB microcontroller budget,            level training degrades an already-calibrated model
+   with latency, memory, and file size measured              (§4.6), so the quantizer is the reliable recovery path
+   directly on three Snapdragon mobile platforms             in our setting.
+   (§4.4, 4.7).
+                                                             Edge NLP deployment motivates but does not
+2   Related Work                                             resolve these questions. Foundational compres-
+                                                             sion (Han et al., 2016), the finding that pruning
+Overthinking in recursive models is named but                degrades small LMs more than quantization (Zhou
+not detectable. Recurrent and weight-tied archi-             et al., 2025) (consistent with our pruning results),
+tectures are a parameter-efficient path to algorith-         INT8 as the deployment-native format (Dettmers
+mic reasoning (Dehghani et al., 2019), and recent            et al., 2022; Kim et al., 2021), sub-megabyte MCU
+depth-recurrent language models show iterative la-           inference via hardware co-design (Lin et al., 2020),
+tent refinement scales favorably (Geiping et al.,            MCU-quantization surveys at our 4–8 MB con-
+2025; Wang et al., 2025; Hao et al., 2025; Kohli             straints (Abushahla et al., 2025), and on-device
+et al., 2026). Bansal et al. (2022) name their central       NLP pipelines (Bohdal et al., 2025): none studies
+failure—overthinking, where too many iterations              recursive reasoning models or the depth–precision
+corrupt the instance—but detect it only by full task         interplay. No prior work compresses a recursive
+evaluation; Du et al. (2026) and Lu et al. (2025)            reasoning model; the closest (Li et al., 2025) ad-
+find correctness signals in latent trajectories, yet         dresses single-pass decoding and lacks the recur-
+
+                                                         2
+sive carry-state structure we study.                           Task                    Puzzle-exact % ↑
+                                                                                   FP32 INT8 INT4 INT4 cal.
+3     Background and Experimental Setup                        Sudoku, TRM-MLP      74.6   74.7    6.4      74.5
+                                                               Sudoku, TRM-Attn     73.1   72.8   68.3      72.3
+3.1    Tiny Recursive Model (TRM)                              Maze, TRM-Attn       87.0   87.1   86.2      86.7
+TRM (Jolicoeur-Martineau, 2025) is a weight-tied
+                                                            Table 1: Puzzle-exact accuracy (%) at the primary proto-
+recursive transformer that solves structured reason-
+                                                            col (nsup =16, fp32 forward). Sudoku: random n=2,000
+ing tasks through iterative latent refinement rather        subset (both architectures on the same subset); Maze:
+than autoregressive generation. Let V be a finite           full 1,000-maze test set. INT4 is naïve per-tensor; INT4
+vocabulary and X ∈ V Tx be an input sequence.               cal. is per-channel calibrated.
+TRM maintains a latent carry state updated across
+two nested loops.
+                                                            evaluations run single-pass (no TTA) unless noted.
+   Given an initial answer embedding Y0 ∈ RTy ×d ,
+                                                            Parameters: 6.83M.
+the model maintains a carry state Zh ∈ RTz ×d
+across outer cycles h ∈ {1, . . . , H}. At each outer       Maze-Hard. Path-finding requiring exact end-to-
+cycle, an inner loop executes L refinement steps. A         end traversal over topological maps. Uses TRM-
+shared two-layer transformer block fθ updates the           Attention without an embedding table or TTA. Pa-
+state:                                                      rameters: 6.82M.
+                                            
+            (l)                      (l−1)                  Sudoku-Extreme. Constraint satisfaction over
+          Zh = fθ [X ; Yh−1 ; Zh           ]      (1)
+                                                            9 × 9 grids with hard row, column, and block ex-
+   where [·; ·] denotes sequence concatenation. Af-         clusions. Uses TRM-MLP-Mixing without an em-
+ter L inner steps, the outer loop advances via:             bedding table. Parameters: 5.03M.
+                                                             We report two metrics throughout. Cell accu-
+                     (0)          (L)
+               Yh , Zh+1 = gϕ Zh                (2)         racy is the fraction of correct grid cells predic-
+                                                            tions. Puzzle exact match is the fraction of puzzles
+A one-step gradient approximation during training           solved with zero errors. These metrics can diverge
+keeps memory O(1) with respect to recursive depth.          substantially: a model may predict nearly correct
+The total number of refinement steps is H × nsup ,          tokens (high cell accuracy) while satisfying zero
+where nsup is the number of outer-loop supervision          global constraints (zero puzzle exact), as observed
+steps. At the default ARC-AGI-1 configuration               under several compression interventions (§4.6).
+(H = 3, nsup = 16), TRM executes 48 refinement
+steps, incurring ∼3,000 GFLOPs per puzzle over a            3.3   Evaluation Protocol
+900-token sequence (O(n2 ) attention).                      Headline evaluations use TRM’s test-time default:
+   We study two architectural variants: TRM-                nsup =16, an fp32 forward pass, and random test
+Attention, which uses multi-head self-attention             subsets (Table 1). We call this the primary protocol.
+over the full token sequence, and TRM-MLP-                  The wider sweeps and ablations, marked at point
+Mixing, which replaces attention with token-                of use, run a lighter secondary protocol (nsup =10,
+mixing MLP layers. These variants differ in how             bf16 forward, first-N subsets) whose absolute ac-
+relational structure is encoded across refinement           curacies sit a few points lower. The two protocols
+steps, which has consequences for compression               agree on every ordering this paper reports.
+sensitivity (§4.3).                                            At this protocol naïve INT4 costs MLP-mixing
+                                                            68.2 pp against 4.8 pp for attention on the same
+3.2    Tasks and Datasets                                   subset (Table 1).
+ARC-AGI-1. Abstract visual reasoning requir-
+ing detection of transformation rules across grid           3.4   Deployment Targets
+inputs (Chollet, 2019). We evaluate on the ARC-             The compression goal is on-device inference with
+AGI-1 public evaluation set (400 tasks). TRM                no cloud dependency under hard SRAM con-
+uses TRM-Attention with a 50,911-entry puzzle               straints. Our target is the microcontroller tier: kB-
+embedding table (99.4 MB in FP32) that provides             to-MB SRAM, no DRAM, Cortex-M class, where
+puzzle-specific context and, in its published proto-        the deployed state of the art is 1–2 MB CNNs (Lin
+col, test-time augmentation (1,000 augmentations            et al., 2020) and nothing reasoning-capable is de-
+per puzzle) with multi-pass majority voting; our            ployed at all. We use two budgets as reference
+
+                                                        3
+points on the way there, 8 MB (mobile SoC SRAM,             falls from ∼3,000 GFLOPs to ∼500 GFLOPs on
+e.g. Cortex-A55) and 4 MB (MCU, e.g. Cortex-                ARC-AGI-1.
+M55); the FP32 baseline (∼126 MB total: 26.7 MB
+backbone + 99.4 MB embeddings) exceeds both by              3.7   Carry-State Diagnostics
+an order of magnitude.
+                                                            We use the recursive carry state to build a label-free
+   Measurement cannot reach the target tier di-
+                                                            signal for reasoning collapse under compression.
+rectly: no MCU toolchain runs these graphs today,
+                                                            Let Zh ∈ RTz ×d be the carry state after recursive
+so the on-device latency, memory, and model sizes
+                                                            call h, with zh,i its i-th token vector.
+of §4.7 come from three Snapdragon platforms via
+Qualcomm AI Hub (App. B), which are mobile-                 Consecutive similarity (baseline). The cosine
+class. Everything we report at the 4 MB budget              similarity between successive carry states,
+is therefore an analytical, weights-only projection
+(Table 4).                                                                   z  T
+                                                                          1 X    zh,i · zh−1,i
+                                                                     sh =                          ,          (3)
+3.5   Compression Methods                                                 Tz   ∥zh,i ∥2 ∥zh−1,i ∥2
+                                                                               i=1
+Post-training quantization (PTQ). We apply
+PTQ directly to the pretrained FP32 checkpoint,             measures per-step refinement (low sh ) versus con-
+without retraining. FP16 halves memory via stan-            vergence to a near-fixed point (high sh ), following
+dard half-precision casting. INT8 uses per-channel          Jiang et al. (2025)’s finding that hidden-state co-
+scale calibration via bitsandbytes (Dettmers                sine similarity tracks representational saturation.
+et al., 2022) - the standard format for hardware            We find this signal is nearly invariant to precision
+with integer acceleration units. INT4 naïve ap-             (§4.5) and thus a poor failure detector.
+plies per-tensor PTQ without calibration. INT4
+calibrated applies per-channel asymmetric PTQ               Carry-trajectory fidelity (primary). The signal
+(min/max range per output channel), again with no           we recommend compares the compressed trajectory
+                                                                                              q       fp32
+fine-tuning; it recovers most of the accuracy that          to the full-precision one. Let ZH    and ZH be the
+naïve INT4 destroys (§4.4).                                 final carry states of the quantized and FP32 models
+   Structured pruning and knowledge distillation            on the same input. Fidelity is
+were also evaluated. Both collapse puzzle-level
+                                                                            Tz     q           fp32
+accuracy across all tasks while partially preserving                     1 X      zH,i · zH,i
+                                                                      ϕ=                  fp32
+                                                                                               .              (4)
+cell accuracy (§4.6). We read this as a consequence                      Tz    ∥z q ∥2 ∥z ∥2
+                                                                               i=1    H,i      H,i
+of the model’s compactness: at 5–7M parameters
+there is too little redundancy to absorb pruning, and       ϕ quantifies how far quantization pushes the rea-
+a single-pass student cannot capture the recursive          soning trajectory off the full-precision path. It re-
+computation.                                                quires only the FP32 reference (available before
+Embedding compression. For ARC-AGI-1, we                    deployment) and no task labels, and—unlike sh —
+separately evaluate three strategies for the 99.4 MB        is graded and monotonic with the eventual accuracy
+puzzle embedding table: INT8 quantization of the            loss (§4.5).
+full table, SVD rank-16 factorization, and single-
+puzzle flash loading (streaming only the 2 KB row           3.8   Quantization-Aware Training and
+for the current puzzle at inference time).                        Recovery
+                                                            As a probe of whether a token-level objective can
+3.6   Cycle Reduction                                       repair compression-induced reasoning loss, we run
+H (outer cycles) and nsup (the number of outer-loop         QAT from the calibrated-INT4 checkpoint: 1,000
+supervision steps) together determine total recur-          steps at batch 32, under cross-entropy and token-
+sion depth: H = 3, nsup = 16 means 48 sequen-               distillation objectives at three learning rates each,
+tial refinement steps on ARC-AGI-1. We sweep                with the deep-supervision ACT loop (§4.6). As
+(H, nsup ) ∈ {(1, 1–16), (3, 1–16)} for ARC-AGI-            the alternative recovery path we apply per-channel
+1, and (H, nsup ) ∈ {(1–4, 1–10)} for Maze-Hard             calibrated INT4 (a post-training quantizer with no
+and Sudoku-Extreme. FLOPs scale linearly with               fine-tuning) and report both its accuracy and its
+total steps: at H = 1, nsup = 8, the per-puzzle cost        carry-trajectory fidelity (§4.4).
+
+                                                        4
+Strategy                      SRAM ↓      Accuracy ↑                                    40           FP32                 FP32 full depth
+INT8 quant. (full table)       24.9 MB    no loss                                                    INT8
+
+
+
+
+                                                                     Puzzle-exact (%)
+SVD rank-16 factorization
+Single-puzzle flash loading
+                                3.2 MB
+                                  2 KB
+                                          lossy (cos = 0.94)
+                                          no loss
+                                                                                        30           INT4 naïve
+
+Table 2: Embedding compression strategies on ARC-                                       20
+AGI-1. Only flash loading brings the embedding within                                                                      6 × fewer
+                                                                                                                             FLOPs
+the deployment budgets without loss; the backbone and
+the activation-inclusive streaming peak are accounted
+                                                                                        10
+separately (§4.7, Table 5).
+                                                                                        0
+                                                                                             62.5      125.0      250.0     500.0      1000.0
+4       Results                                                                                     GFLOPs per puzzle (log)
+4.1      The Embedding Table Dominates the                          Figure 2: ARC-AGI-1 efficiency frontier (single-pass).
+         Memory Footprint                                           One recursive cycle reaches full-depth accuracy at
+The ARC-AGI-1 puzzle embedding table occupies                       500 GFLOPs (⋆)—a 6× FLOPs reduction attributable
+99.4 MB of the ∼126 MB FP32 footprint, against                      to depth: FP32 at the same depth scores 35.75%.
+26.7 MB for the transformer backbone (Table 2).
+Three strategies were evaluated for embedding                       34.25% (nsup =4) to 36.25% (nsup =16). The reduc-
+compression.                                                        tion holds on Maze-Hard (INT8 at H=1, nsup =8
+   Only flash loading fits the deployment targets                   stays within 0.10 pp at 3.75× fewer FLOPs).
+while preserving accuracy (Table 2): the 2 KB row                   Sudoku-Extreme is the exception: its accuracy
+for the current puzzle is streamed from flash at in-                keeps climbing with depth within the swept range
+ference time, decoupling the embedding from the                     (best at H=4, nsup ≤10) and INT8 stays lossless
+backbone compression problem. Figure 1 visual-                      there, so its full recursion cannot be cheaply cut
+izes the resulting footprints. With the embedding                   (Appendices F, G).
+handled, the backbone remains, and with it two                         Dynamic quantization preserves full-precision
+levers: precision and recursion depth.                              accuracy on every task, but NPU accelerators re-
+                                                                    quire static, pre-allocated tensor boundaries; the
+4.2      INT8 with Reduced Recursion Matches
+                                                                    static path’s task-dependent penalties, and the
+         Full-Depth FP32
+                                                                    operator exclusions Sudoku requires, are in Ap-
+INT8 is lossless across both architectural variants                 pendix B.2. INT8, then, is safe everywhere. INT4
+and all three tasks (Table 8, Appendix C): per-                     is not, and where it breaks turns out to be the more
+channel calibration holds quantization error within                 informative finding.
+what the recursive refinement process tolerates.
+The key efficiency gain therefore comes from cycle                  4.3            Compression Fragility Is Architectural,
+reduction, not precision: FP32 at H=1, nsup =8                                     Not Task-Intrinsic
+already scores 35.75% (Table 9), and INT8 at the                    The INT4 damage follows the architecture, not the
+same depth achieves 35.25% puzzle exact on ARC-                     task: the TRM-Attention tasks (ARC, Maze) toler-
+AGI-1, single-pass (no test-time augmentation),1                    ate naïve INT4 while TRM-MLP-Mixing (Sudoku)
+within 0.75 pp of the 36.00% full-depth baseline at                 collapses (Table 8). This looks like a task-precision
+6× fewer FLOPs (Figure 2). The two effects are                      effect; a same-task ablation shows it is not (Fig-
+separable: depth reduction supplies the 6× FLOPs                    ure 3; full grid in Appendix H).
+saving, while INT8 supplies a 4× weight-memory                         Under naïve INT4, Maze-Hard loses 0.8 pp and
+reduction at no accuracy cost.                                      ARC-AGI-1 loses 10.1 pp puzzle exact while keep-
+   Across the full depth sweep (Appendices E                        ing 89.2% cell accuracy, but Sudoku-Extreme col-
+and D), H=1 brackets the 36.00% baseline from                       lapses by 68.2 pp (primary protocol, Table 1; the
+    1
+     All reported ARC accuracies are single-pass: the evalua-       official-checkpoint ARC figures are in §4.4). Since
+tion’s fast mode discarded the augmentations, so no augment-        Sudoku was tested only with MLP-mixing, we re-
+and-vote protocol was applied. TRM’s published 44.6%                run it with attention: TRM-Attention, at nearly
+uses 1000-augmentation TTA and is not directly compara-
+ble. App. B compares the notebook harness with on-device            the same full-precision accuracy on the same sub-
+execution.                                                          set (73.1% vs. 74.6%), retains 68.3% under naïve
+
+                                                                5
+                                                                                                                       (a) Inter-Channel Range Variance                                                                    (b) Per-Tensor Quantization Risk
+                                       FP32         INT4 naïve
+
+                                                                       Per-Output-Channel Dynamic Range                                                                  Spread Ratio (Max / Min Row Range)
+                                                                                                          0.35                                                                                                20.0                                 Mean Channel Range Ratio
+                                                                                                                                                                                                                                                   Peak Channel Range Ratio
+                                                                                                          0.30                                                                                                17.5
+
+
+
+
+ Sudoku puzzle-exact (%)
+                                                                                                          0.25                                                                                                15.0
+
+                           80     74          73 70                                                       0.20
+                                                                                                          0.15
+                                                                                                                                                                                                              12.5
+                                                                                                                                                                                                              10.0
+                                                                                                                                                                                                               7.5
+                                                                                                          0.10
+                                                                                                                                                                                                               5.0
+                           60                                                                             0.05                                                                                                 2.5
+
+                                                        48 48
+                                                                                                          0.00                                                                                                 0.0
+                                                                                                                 Sudoku mlp_t Sudoku mlp_c      Maze           ARC                                                   Sudoku mlp_t Sudoku mlp_c      Maze           ARC
+                                                                                                                 (Token Mixer) (Channel MLP) (Attention)   (Attention)                                               (Token Mixer) (Channel MLP) (Attention)   (Attention)
+
+
+                           40               64 pp
+                                                                        Figure 4: Per-output-channel weight range by projection
+                                                                        type, across the deployment models. (a) The distribution
+                           20                                           for each projection. (b) The ratio of widest to narrowest
+                                       10                               channel range — what a single per-tensor scale must
+                           0                                            span. Sudoku’s token mixer (mlp_t) is the outlier;
+                                   TRM       TRM        HRM             its TRM-Attention counterpart, used as the same-task
+                                MLP-Mixing Attention (attention)        control in §4.3, is not plotted.
+
+Figure 3: Architecture ablation on Sudoku-Extreme:                      Variant                                                                   pass@1 ↑ Solved ↑ Cell ↑ Fidelity ↑
+full precision vs. naïve INT4 puzzle-exact for three re-
+                                                                        FP32                                                                               29.5%                                                         115           91.5%                        1.000
+cursive architectures on the same task (secondary pro-                  INT8 per-channel                                                                   30.0%                                                         117           91.6%                        1.000
+tocol; the primary protocol widens the gap to −68 pp,                   INT4 naïve                                                                         19.4%                                                          74           89.2%                        0.765
+Table 1). Only TRM-MLP-Mixing collapses; TRM-                           INT4 calibrated                                                                    29.4%                                                         114           91.6%                        0.942
+Attention (at the same FP32 accuracy) and HRM (a
+different model family) survive; the fragility follows the             Table 3: Official TRM ARC-AGI-1 checkpoint, single-
+MLP-mixing token mixer.                                                pass, all 400 evaluation tasks. pass@1 is the ARC per-
+                                                                       task score, with partial credit over a task’s multiple
+                                                                       test inputs (419 test grids across the 400 tasks); Solved
+                                                                       counts tasks with every test input correct. Calibration
+INT4, and HRM (Wang et al., 2025) is also robust,                      recovers ARC to within 0.1 pp of FP32; the fidelity col-
+while only MLP-mixing collapses (Table 15). The                        umn is a fully held-out test of the §4.5 threshold, which
+                                                                       was never calibrated on ARC or on this checkpoint.
+accuracy match rules out a headroom confound, lo-
+cating the fragility in the token mixer. HRM, evalu-
+ated only on Sudoku and at a lower FP32 baseline,                       4.4                                          Calibrated INT4 Recovers Constraint
+corroborates the pattern in a second model family                                                                    Reasoning
+rather than serving as a controlled comparison.
+                                                                       The catastrophic Sudoku-INT4 result is specific to
+                                                                       naïve per-tensor quantization. Replacing it with
+                                                                       per-channel calibrated INT4 (still 4-bit weights,
+A weight-level mechanism. Per-output-channel                           still post-training, no fine-tuning) recovers essen-
+dynamic range explains why the token mixer specif-                     tially all of the lost accuracy: at the primary proto-
+ically. On the two Sudoku checkpoints the token-                       col, naïve INT4 drops Sudoku to 6.4% puzzle exact
+mixing projections reach a 20.7× inter-channel                         while calibrated INT4 reaches 74.5%, within 0.1 pp
+spread, against 11.1× for the worst attention pro-                     of the 74.6% FP32 baseline on the same subset (Ta-
+jection. Figure 4 shows the underlying distribu-                       ble 1; secondary-protocol figures in App. I). The
+tions and extends the comparison to the deploy-                        carry-trajectory fidelity diagnostic tracks this recov-
+ment models: within the same network the token                         ery with no task evaluation: fidelity rises from 0.35
+mixer’s spread is nearly three times the channel                       (naïve, broken) to 0.89 (calibrated, recovered).
+MLP’s, and both attention models sit lower still.
+The token mixer is the outlier on every compari-                        Measured on the official ARC checkpoint. The
+son available to us, within a network and across                        same recovery holds on ARC-AGI-1, measured on
+them. Under a single per-tensor INT4 scale, the                         the official TRM checkpoint (arcprize verification
+widest-spread channels dominate the quantization                        release; embedding table verified against the rebuilt
+grid and narrow channels collapse into one or two                       official dataset, 876,406 identifiers), single-pass
+bins. Per-channel calibration repairs exactly this,                     over all 400 evaluation tasks:
+and the recovery of §4.4 follows. A failure rooted                         Calibration recovers ARC to within 0.1 pp of
+in per-channel spread implies a per-channel fix,                        FP32 on a checkpoint anyone can download, and
+which the next section tests.                                           the fidelity column doubles as the held-out thresh-
+
+                                                                   6
+old test cited in §4.5.                                                                        survived            TRM-Attn (Sudoku)
+  This reframes the deployment floor: for                                                      broke               TRM-Attn (Maze)
+                                                                                               TRM-MLP (Sudoku)
+constraint-satisfaction reasoning it is not INT8 but
+calibrated INT4, provided the quantizer is per-
+                                                                                       80
+
+
+
+
+                                                              Puzzle-exact drop (pp)
+channel. Naïve INT4 remains unusable, and the di-                                                                        flag safe
+agnostic distinguishes the two before deployment.
+                                                                                       60
+4.5   Carry-Trajectory Fidelity Predicts
+      Collapse and Recovery
+                                                                                       40
+The damage in §4.3 and its repair in §4.4 were                                         20     broken (>10 pp)
+both established by running the task. We now ask
+whether either can be predicted without doing so:                                      0
+a label-free signal that, before any task evaluation,                                       0.00    0.25        0.50    0.75       1.00
+tells whether a compression preserves or destroys                                              Carry-trajectory fidelity
+reasoning. The obvious candidate (cosine similar-
+ity between consecutive carry states) does not work:         Figure 5: Carry-trajectory fidelity is a label-free
+it is task-specific but nearly invariant to precision,       pass/fail predictor. Each point is one of the 50 com-
+changing by ≤ 0.064 from FP32 to INT4 on every               pression configurations in the validation grid (§4.5):
+task (App. I), so it cannot separate harmless from           bit-widths 3–8, three quantizer granularities and partial-
+                                                             layer sweeps, across three model–task pairs. Colour
+harmful compression.
+                                                             marks whether the configuration broke, defined as los-
+    The signal that does work is carry-trajectory            ing more than 10 pp puzzle-exact. The dashed line is the
+fidelity: the cosine similarity between the quan-            threshold τ =0.83 calibrated on Sudoku alone, which
+tized model’s final carry state and the full-precision       separates the two classes on held-out Maze without er-
+model’s final carry state on the same input (§3.7).          ror.
+It measures how far quantization pushes the reason-
+ing trajectory off the full-precision path, requires
+                                                             INT4 and clears calibrated INT4 (fidelity column
+only the FP32 reference (available before deploy-
+                                                             of Table 3). An L2 trajectory-divergence baseline
+ment), and uses no task labels. Fidelity is graded
+                                                             computed from the same captures is equally pre-
+and monotonic with damage (Figure 5; full data
+                                                             dictive on this grid; fidelity’s advantage is being
+Appendix I): it stays ≥ 0.99 wherever INT4 is
+                                                             bounded and scale-free across models, not higher
+harmless (Maze, and INT8 on every task) and falls
+                                                             discrimination. Quantization damage is therefore
+in proportion to the accuracy loss, moderately on
+                                                             both repairable and predictable in advance. Neither
+ARC and catastrophically on the Sudoku collapse
+                                                             holds for the remaining compression routes.
+of §4.3 (Table 17). It tracks the calibrated-INT4 re-
+covery of §4.4 in the same way, rising as accuracy           4.6 Cell and Puzzle Accuracy Decouple Under
+returns.                                                         Compression
+The threshold transfers across tasks. We val-                A pattern recurs across our compression interven-
+idate fidelity as a predictor on a 50-configuration          tions: cell accuracy and puzzle-exact accuracy de-
+grid spanning bit-widths, quantizer granularities            couple. A model can predict most individual cells
+and partial-layer sweeps across three model–task             correctly while satisfying zero global constraints—
+pairs (Appendix I); 8 configurations break, defined          the signature of a compositional-correctness break-
+as a >10 pp puzzle-exact drop. Spearman ρ be-                down that leaves local token prediction intact. We
+tween fidelity and accuracy damage is −0.75 over-            observe it under three distinct interventions:
+all, fidelity separates broken from surviving con-              On knowledge distillation, a single-cycle stu-
+figurations without error on this grid (AUC 1.00),           dent (13–15% of teacher parameters) reaches
+and the dose–response is monotone (Figure 5). The            87.3% (Maze) / 54.8% (Sudoku) cell accuracy but
+threshold question now has a held-out answer: cali-          0.0% puzzle exact (Appendix J, Tables 19 and 20).
+brated on Sudoku alone (τ = 0.83), it transfers to           With structured pruning at 25% sparsity, cell ac-
+Maze without error. The official ARC checkpoint              curacy partially survives (86.4% Maze, 50.0% Su-
+of §4.4 is a third, fully held-out test, on which            doku) while puzzle exact is 0.0% on every task.
+the threshold was never calibrated: it flags naïve           With linear-attention approximation on Maze, re-
+
+                                                         7
+placing softmax attention holds cell accuracy at             Memory accounting. Weights alone, weights
+87.5% but collapses puzzle exact to 0.0% (Ap-                plus activations, the on-disk artifact and host-
+pendix K).                                                   process RSS are different quantities. Table 4 gives
+   On quantization-aware training, we ran the                the scope and provenance of each figure we report.
+credible version: training from the calibrated-INT4             Maze-Hard is the cleanest deployable case: with
+Sudoku checkpoint under both cross-entropy and               no test-time augmentation and no embedding table,
+distillation objectives, at three learning rates, with       its per-pass latency is its per-puzzle latency, and
+converging training losses (Appendix L). Every               naïve INT4 costs it 0.4 pp (Table 8).
+configuration degraded held-out accuracy relative               Per-channel calibrated INT4 weights fit under
+to its initialization (Table 21, Appendix L).                the 4 MB MCU budget (3.26 MB, weights only)
+   Within our training budget, then, a token-level           and calibration recovers near-FP32 accuracy with
+objective does not repair the model it starts from,          no retraining, demonstrated directly on Sudoku-
+while per-channel calibration alone lands within             Extreme and, on the official checkpoint, on ARC-
+0.3 pp of FP32 on all three tasks (Tables 1 and 3). A        AGI-1 (29.4% vs. 29.5% FP32, Table 3; §4.4). The
+shorter-budget run reproduces the same split: high           practical compression floor is therefore calibrated
+cell accuracy, zero puzzle exact. We do not claim a          INT4, not INT8; naïve INT4 remains unusable,
+token-level objective cannot recover reasoning at a          and the fidelity diagnostic separates the two be-
+larger budget; we claim it is not needed.                    fore deployment. The 6× FLOPs reduction also
+   The common cause of the decoupling is the ob-             lowers modeled energy proportionally (∼3,000 to
+jective: cross-entropy and token-distillation losses         ∼500 mJ/puzzle, analytical; Appendix M), and
+reward each cell independently, so a model that              there is no cheaper shortcut through the input: trun-
+emits plausible cells without satisfying the puzzle          cating the context destroys accuracy on every task—
+is scored identically to one that solves it. This is         halving it collapses Maze and Sudoku to 0% puzzle
+not specific to TRM—it applies to any structured-            exact (Appendix N).
+prediction setting where correctness is composi-
+tional. Our contribution stands on the post-training         5   Discussion
+side: per-channel calibration recovers Sudoku with           Why the architecture split exists. The two mix-
+no retraining at all (§4.4). What survives compres-          ers spread their weights differently. Attention en-
+sion and what repairs it together fix the configura-         codes sparse relational updates that tolerate coarse
+tion worth deploying.                                        noise, whereas MLP-mixing encodes denser token-
+                                                             mixing whose wider per-channel ranges need per-
+4.7   Optimal Deployment Configuration                       channel scales to survive (Figure 4). Architecture
+The deployment configurations are summarized                 choice in recursive models is therefore a deploy-
+in Table 7. We measure step latencies, puzzle                ment decision, best made at design time.
+latencies, and peak memory directly on physical              The microcontroller tier. We target a regime
+hardware (Samsung Galaxy S24, Samsung Galaxy                 with kB-to-MB SRAM and no DRAM, where noth-
+S22 5G, and Dragonwing RB3 Gen 2) via Qual-                  ing reasoning-capable is deployed today. Mobile-
+comm AI Hub (Table 6). No INT4 configura-                    NPU deployment of 1–7B-parameter LLMs is a
+tion was run on device: Table 6 reports FP32 and             complementary industrial problem with gigabytes
+INT8 latency only, so the 3.26 MB INT4 configura-            of DRAM to work with, and a 3–7 MB recursive
+tion is a weights-only estimate throughout. INT8             reasoner would be a first entry at our tier. This
+with single-puzzle flash loading and reduced recur-          study establishes the compression recipe that gets a
+sion (H=1, nsup =8) occupies 6.51 MB of weights              reasoner to that size with its reasoning intact (§3);
+(analytical) and runs at ∼500 GFLOPs per ARC-                the streaming peaks fit an 8 MB envelope only on
+AGI-1 puzzle. Weights alone are not the whole                Sudoku (Table 4).
+footprint: including activations and carry state,
+the ARC/Maze INT8 streaming peak is 9.51 MB                  Fidelity should generalize beyond TRM. Be-
+against Sudoku’s 3.06 MB (Table 5, Appendix A),              cause carry-trajectory fidelity needs only a full-
+so only Sudoku currently runs inside an 8 MB en-             precision reference and the model’s own hidden
+velope, and the 4 MB target remains a weights-only           states (no labels, no task run) it should transfer to
+projection.                                                  any iterative-latent system with accessible state:
+
+                                                         8
+Universal Transformers (Dehghani et al., 2019),                 with recurrent networks: Logical extrapolation with-
+deep equilibrium models, and state-space models.                out overthinking. In Advances in Neural Information
+                                                                Processing Systems, volume 35, pages 20232–20242.
+Limitations                                                   Ondrej Bohdal, Konstantinos Theodosiadis, Asterios
+                                                                Mpatziakas, Dimitrios Filippidis, Iro Spyrou, Chris-
+Our study centers on the TRM family across three                tos Zonios, Anastasios Drosou, Dimosthenis Ioanni-
+tasks, with a second architecture (HRM) evalu-                  dis, Kyenghun Lee, Jijoong Moon, and 1 others. 2025.
+ated only on Sudoku-Extreme; broader general-                   On-device system of compositional multi-tasking in
+                                                                large language models. In Proceedings of the 2025
+ization across architectures and tasks is untested.             Conference on Empirical Methods in Natural Lan-
+The calibrated-INT4 recovery is measured by full-               guage Processing: Industry Track, pages 416–424.
+system accuracy on Sudoku and, on the official
+checkpoint, on ARC (Table 3); the Sudoku TRM-                 François Chollet. 2019. On the measure of intelligence.
+                                                                arXiv preprint arXiv:1911.01547.
+MLP checkpoint is a community reproduction, so
+its absolute accuracies are not comparable to the             Mostafa Dehghani, Stephan Gouws, Oriol Vinyals,
+original release (App. O). The fidelity diagnostic             Jakob Uszkoreit, and Lukasz Kaiser. 2019. Universal
+requires a full-precision reference, so it supports            transformers. In International Conference on Learn-
+                                                               ing Representations.
+a pre-deployment decision rather than monitoring
+a live model. ARC accuracies are reported single-             Tim Dettmers, Mike Lewis, Younes Belkada, and Luke
+pass (no test-time augmentation); TRM’s published               Zettlemoyer. 2022. LLM.int8(): 8-bit matrix mul-
+protocol uses 1,000-augmentation voting, which                  tiplication for transformers at scale. Advances in
+                                                                neural information processing systems, 35:30318–
+would raise both accuracy and per-puzzle deploy-                30332.
+ment cost proportionally. Maze and Sudoku need
+no augmentation and are the configurations whose              Hanwen Du, Yuxin Dong, and Xia Ning. 2026. La-
+                                                                tent thinking optimization: Your latent reasoning
+latency is directly deployable. One boundary on
+                                                                language model secretly encodes reward signals in
+the claim: every model here is recursive, so the                its latent thoughts. In International Conference on
+results isolate what recursion does under compres-              Learning Representations.
+sion but do not separate that from what being a
+                                                              Jonas Geiping, Sean McLeish, Neel Jain, John Kirchen-
+few-million-parameter model does. A same-size                   bauer, Siddharth Singh, Brian Bartoldson, Bhavya
+autoregressive control would separate them, and no              Kailkhura, Abhinav Bhatele, and Tom Goldstein.
+such checkpoint exists for these tasks.                         2025. Scaling up test-time compute with latent rea-
+                                                                soning: A recurrent depth approach. Advances in
+                                                                Neural Information Processing Systems, 38:41340–
+                                                                41391.
+References
+Hamza A Abushahla, Dara Varam, Ariel Justine N                Song Han, Huizi Mao, and William J Dally. 2016. Deep
+  Panopio, and Mohamed I AlHajri. 2025. Neural                  compression: Compressing deep neural networks
+  network quantization for microcontrollers: A com-             with pruning, trained quantization and Huffman cod-
+  prehensive survey of methods, platforms, and appli-           ing. In International Conference on Learning Repre-
+  cations. arXiv preprint arXiv:2508.15008.                     sentations.
+
+                                                              Shibo Hao, Sainbayar Sukhbaatar, DiJia Su, Xian Li,
+MohammadHossein AskariHemmat, Reyhane Askari                    Zhiting Hu, Jason E Weston, and Yuandong Tian.
+ Hemmat, Alex Hoffman, Ivan Lazarevich, Ehsan Sa-               2025. Training large language models to reason in
+ boori, Olivier Mastropietro, Sudhakar Sah, Yvon                a continuous latent space. In Second Conference on
+ Savaria, and Jean-Pierre David. 2022. QReg: On                 Language Modeling.
+ regularization effects of quantization. arXiv preprint
+ arXiv:2206.12372.                                            Saqib Javed, Hieu Le, and Mathieu Salzmann. 2025.
+                                                                QT-DoG: Quantization-aware training for domain
+MohammadHossein AskariHemmat, Ahmadreza Jeddi,                  generalization. In Proceedings of the 42nd Interna-
+ Reyhane Askari Hemmat, Ivan Lazarevich, Alexan-                tional Conference on Machine Learning, volume 267
+ der Hoffman, Sudhakar Sah, Ehsan Saboori, Yvon                 of Proceedings of Machine Learning Research, pages
+ Savaria, and Jean-Pierre David. 2024. QGen: On the             26981–27004.
+ ability to generalize in quantization aware training.
+ arXiv preprint arXiv:2404.11769.                             Jiachen Jiang, Jinxin Zhou, and Zhihui Zhu. 2025. Trac-
+                                                                 ing representation progression: Analyzing and en-
+Arpit Bansal, Avi Schwarzschild, Eitan Borgnia, Zeyad            hancing layer-wise similarity. In International Con-
+  Emam, Furong Huang, Micah Goldblum, and Tom                    ference on Learning Representations, volume 2025,
+  Goldstein. 2022. End-to-end algorithm synthesis                pages 1118–1143.
+
+
+                                                          9
+Alexia Jolicoeur-Martineau. 2025. Less is more: Re-            Guan Wang, Jin Li, Yuhao Sun, Xing Chen, Changling
+  cursive reasoning with tiny networks. arXiv preprint           Liu, Yue Wu, Meng Lu, Sen Song, and Yasin Abbasi
+  arXiv:2510.04871.                                              Yadkori. 2025. Hierarchical reasoning model. arXiv
+                                                                 preprint arXiv:2506.21734.
+Sehoon Kim, Amir Gholami, Zhewei Yao, Michael W
+  Mahoney, and Kurt Keutzer. 2021. I-BERT: Integer-            Michael S Zhang, Rishi A Ruia, Arnav Kewalram,
+  only BERT quantization. In International conference            Saathvik Dharmapuram, Utkarsh Sharma, and Kevin
+  on machine learning, pages 5506–5518. PMLR.                    Zhu. 2025. When less is more: 8-bit quantization im-
+                                                                 proves continual learning in large language models.
+Harsh Kohli, Srinivasan Parthasarathy, Huan Sun, and             arXiv preprint arXiv:2512.18934.
+  Yuekun Yao. 2026. Loop, think, & generalize:
+  Implicit reasoning in recurrent-depth transformers.          Zihan Zhou, Simon Kurz, and Zhixue Zhao. 2025. Re-
+  arXiv preprint arXiv:2604.07822.                               visiting pruning vs quantization for small language
+                                                                 models. In Findings of the Association for Compu-
+Zhen Li, Yupeng Su, Songmiao Wang, Runming Yang,                 tational Linguistics: EMNLP 2025, pages 12055–
+  Congkai Xie, Aofan Liu, Ming Li, Jiannong Cao,                 12070.
+  Yuan Xie, Ngai Wong, and 1 others. 2025. Quan-
+  tization meets reasoning: Exploring and mitigating
+  degradation of low-bit LLMs in mathematical reason-
+  ing. arXiv preprint arXiv:2505.11574.
+
+Ji Lin, Wei-Ming Chen, Yujun Lin, Chuang Gan, Song
+   Han, and 1 others. 2020. MCUNet: Tiny deep learn-
+   ing on IoT devices. Advances in neural information
+   processing systems, 33:11711–11722.
+
+Peiyu Liu, Zikang Liu, Ze-Feng Gao, Dawei Gao,
+  Wayne Xin Zhao, Yaliang Li, Bolin Ding, and Ji-
+  Rong Wen. 2024. Do emergent abilities exist in
+  quantized large language models: An empirical study.
+  In Proceedings of the 2024 Joint International Con-
+  ference on Computational Linguistics, Language
+  Resources and Evaluation (LREC-COLING 2024),
+  pages 5174–5190.
+
+Ruikang Liu, Yuxuan Sun, Manyi Zhang, Haoli Bai, Xi-
+  anzhi Yu, Tiezheng Yu, Chun Yuan, and Lu Hou.
+  2025. Quantization hurts reasoning? an empiri-
+  cal study on quantized reasoning models. In Pro-
+  ceedings of the Conference on Language Modeling.
+  ArXiv:2504.04823.
+
+Wenquan Lu, Yuechuan Yang, Kyle Lee, Yanshu Li,
+ and Enqi Liu. 2025. Latent chain-of-thought? decod-
+ ing the depth-recurrent transformer. arXiv preprint
+ arXiv:2507.02199. COLM 2025 Workshop on LLM
+ Explainability for Reasoning and Planning.
+
+Keyu Lv, Manyi Zhang, Xiaobo Xia, Jingchen Ni, Shan-
+  nan Yan, Xianzhi Yu, Lu Hou, Chun Yuan, and Haoli
+  Bai. 2026. What makes low-bit quantization-aware
+  training work for reasoning llms? a systematic study.
+  arXiv preprint arXiv:2601.14888.
+
+Markus Nagel, Marios Fournarakis, Rana Ali Amjad,
+ Yelysei Bondarenko, Mart Van Baalen, and Tijmen
+ Blankevoort. 2021. A white paper on neural network
+ quantization. arXiv preprint arXiv:2106.08295.
+
+Gauthier Tallec, Edouard Yvinec, Arnaud Dapogny, and
+  Kevin Bailly. 2023. Fighting over-fitting with quan-
+  tization for learning deep neural networks on noisy
+  labels. In 2023 IEEE International Conference on
+  Image Processing (ICIP), pages 575–579. IEEE.
+
+
+                                                          10
+A    Peak SRAM Memory Footprints
+
+                       Figure         What it measures                     Measured? Reported in
+                       6.7 MB         INT8 backbone weights                analytical   Table 8
+                       6.51 MB        INT8 + flash, weights only           analytical   Table 7
+                       3.26 MB        INT4 cal. + flash, weights only      analytical   Table 7
+                       6.91 MB        on-disk ONNX artifact                measured     Table 6
+                       9.51 MB        streaming peak, incl. activations    analytical   Table 5
+                       115–226 MB     Android host-process RSS             measured     Table 6
+
+Table 4: Scope and provenance of every memory figure this paper reports. The weights-only rows exclude activations
+and carry state; the RSS row is a host-process figure, not an SRAM footprint. No INT4 configuration was run on
+device.
+
+   For on-device edge deployment, we evaluate the peak memory footprint under two execution scenarios:
+a Full Load scenario (where the entire backbone and intermediate activations/carries are stored in SRAM)
+and a Streaming scenario (where only the current recursive step is loaded, leveraging single-puzzle flash
+loading of embedding tables).
+   Table 5 compiles these peak SRAM requirements against a theoretical 8 MB SRAM hardware budget
+limit.
+
+                    Model / Variant            Streaming      Full Load      Fits 8 MB? (Streaming)
+                    ARC (FP32, no embed)        27.31 MB        40.31 MB                 ✗
+                    ARC (INT8, no embed)         9.51 MB        12.76 MB                 ✗
+                    Maze (FP32)                 27.31 MB        40.31 MB                 ✗
+                    Maze (INT8)                  9.51 MB        12.76 MB                 ✗
+                    Sudoku (FP32)               11.08 MB        20.65 MB                 ✗
+                    Sudoku (INT8)                3.06 MB         5.45 MB                 ✓
+
+Table 5: Peak memory footprint (SRAM) for deployable ONNX models, including intermediate activations and
+carry state. Embedding layers are excluded (no-embed) as they are streamed via flash loading. The 8 MB target
+assumes streaming mode. These activation-inclusive peaks complement the weights-only analytical figures of
+Table 7.
+
+   Under streaming execution, only the Sudoku (INT8) model fits within the 8 MB SRAM budget (3.06 MB
+streaming peak); the ARC and Maze INT8 models peak at 9.51 MB and so exceed it (§4.7).
+
+B    On-Device Hardware Benchmarks
+We compile on-device step and puzzle latencies, peak memory usage, and file sizes directly on three
+physical edge devices:
+• Samsung Galaxy S24: Featuring the flagship Qualcomm Snapdragon 8 Gen 3 chipset (SM8650,
+  Hexagon v75 NPU).
+• Samsung Galaxy S22 5G: Featuring the Qualcomm Snapdragon 8 Gen 1 chipset (SM8450, Hexagon
+  v70 NPU).
+• Dragonwing RB3 Gen 2: Featuring the Qualcomm QCS6490 chipset (Hexagon NPU).
+   Evaluations are compiled and run via Qualcomm AI Hub targeting native hardware execution. Table 6
+reports the full set of consolidated benchmark results.
+   Static INT8 quantization delivers substantial latency gains for compute-bound tasks with long sequences
+(ARC-AGI-1 and Maze-Hard) but incurs a step-latency penalty on the computationally light Sudoku-
+Extreme task, which is dominated instead by NPU driver and dispatch overhead and format-conversion
+casting; §B.1 works through why.
+   The controlled quantity is the per-step latency, which is depth-independent by construction: on ARC
+the FP32→INT8 per-step ratio is 40.20→25.69 ms (1.56×). The FP32 and INT8 rows for ARC and Maze
+
+                                                           11
+ Model / Variant   Device       H   nsup   Step Lat. (ms)    Puzzle Lat. (ms)   Peak Mem. (MB)   Size (MB)   PExact
+           ‡
+ ARC (FP32 )       Galaxy S24   3    16            40.20              643.18            185.24       27.56   0.355
+ ARC (FP32‡ )      Galaxy S22   3    16            85.32             1365.18            180.73       27.56   0.355
+ ARC (FP32‡ )      Dragonwing   3    16          1737.80            27804.82            127.11       27.56   0.355
+ ARC (INT8)        Galaxy S24   1     8            25.69              205.53            173.96        6.91   0.260
+ ARC (INT8)        Galaxy S22   1     8            55.59              444.69            226.49        6.91   0.260
+ ARC (INT8)        Dragonwing   1     8           672.89             5383.10            115.48        6.91   0.260
+ Maze (FP32‡ )     Galaxy S24   3    16           119.83             1917.25            229.97       28.41   0.870
+ Maze (FP32‡ )     Galaxy S22   3    16           224.45             3591.18            189.69       28.41   0.870
+ Maze (FP32‡ )     Dragonwing   3    16          5239.83            83837.22            132.36       28.41   0.870
+ Maze (INT8)       Galaxy S24   1     8            25.71              205.72            170.73        6.90   0.850
+ Maze (INT8)       Galaxy S22   1     8            55.25              441.98            222.51        6.90   0.850
+ Maze (INT8)       Dragonwing   1     8           669.16             5353.26            112.21        6.90   0.850
+ Sudoku (FP32‡ )   Galaxy S24   3    16            11.38              182.05            154.41       20.47   0.717
+ Sudoku (FP32‡ )   Galaxy S22   3    16            30.17              482.75            179.78       20.47   0.717
+ Sudoku (FP32‡ )   Dragonwing   3    16           606.02             9696.40             58.64       20.47   0.717
+ Sudoku (INT8)     Galaxy S24   3    16            27.23              435.60            160.41        5.10   0.699
+ Sudoku (INT8)     Galaxy S22   3    16            79.68             1274.86            210.44        5.10   0.699
+ Sudoku (INT8)     Dragonwing   3    16           334.68             5354.94             57.25        5.10   0.699
+
+Table 6: On-device hardware benchmark results compiled via Qualcomm AI Hub. All evaluations are run on physical
+devices: Galaxy S24 (Snapdragon 8 Gen 3), Galaxy S22 (Snapdragon 8 Gen 1), and Dragonwing (Qualcomm
+QCS6490). ‡ FP32 rows were compiled with enable_htp_fp16_precision=1 and execute as FP16 on the
+Hexagon vector engine (HVX); see §B.1. Peak Mem. is the Android process RSS reported by AI Hub (application
+heap + runtime + RPC buffers); it is a host-process figure on these DRAM-backed devices and is not an SRAM
+footprint (see the memory-accounting taxonomy in §4.7).
+
+
+run at different recursion depths (H=3, nsup =16 against H=1, nsup =8; the depth columns make this
+explicit), so their per-puzzle ratio combines precision with depth. The Sudoku rows are depth-matched
+end to end (both H=3, nsup =16), and there INT8 is slower; §B.1 explains why.
+Notebook and on-device harnesses. The on-device INT8 run scores 26.0% for the H=1, nsup =8 ARC
+configuration against 35.25% in the notebook harness, both single-pass. The quantizer accounts for the
+gap. At FP32 the two harnesses agree to 0.5 pp (35.5% on device, 36.0% in harness); they diverge by
+9.3 pp only once INT8 is applied, where bitsandbytes and static QDQ differ. Attributing the residual
+gap to a specific implementation detail of one quantizer is left to future work.
+
+B.1   Sequence-Length Dependent Quantization Penalty
+All rows in Table 6 were compiled through the Qualcomm AI Hub QNN execution provider
+(libQnnHtp.so) targeting the Hexagon processor; no row falls back to CPU execution. Compilation
+used enable_htp_fp16_precision=1, so graphs labeled “FP32” execute in FP16 on the Hexagon
+vector engine (HVX), while INT8 graphs execute on the HTP tensor units with quantize/dequantize
+(QDQ) boundaries at node interfaces.
+  The benchmark reveals a counter-intuitive result: while static INT8 quantization accelerates the ARC-
+AGI-1 and Maze-Hard models, it actually leads to a latency slowdown for the Sudoku-Extreme model
+per step (from 11.38 ms to 27.23 ms on the S24). This behaviour is a classic small-matrix INT8 penalty
+governed by the sequence length (T ):
+
+• Compute-Bound Regime (ARC & Maze): ARC and Maze operate on a sequence length T = 900.
+  At this scale, the weight projection matrices are large (900 × 512 by 512 × 2048), which translates to
+  heavy arithmetic compute (∼187 GFLOPs/step). Moving this workload from the HVX FP16 pipeline to
+  the HTP’s INT8 tensor units reduces execution time significantly, easily overriding the fixed dispatch
+  and QDQ overhead.
+
+• Overhead-Bound Regime (Sudoku): Sudoku has a sequence length of only T = 81 (97 with padding
+  and embeddings). The matrix multiplications are tiny (e.g., 97 × 512 by 512 × 2048), requiring only
+
+                                                        12
+    ∼25 MFLOPs/step (7,500× less compute than Maze). A 97 × 512 matrix multiplication requires
+    only ∼100K multiply-accumulates, which is too small to saturate the INT8 parallel execution blocks.
+    Consequently, the fixed overhead of the Quantize/Dequantize (QDQ) operators—which convert tensors
+    back and forth at every node boundary—dominates the execution time. While the FP16-on-HVX model
+    runs in a single, unbroken compiler-fused pipeline in 11.38 ms, the INT8 model is penalized by a
+    constant ∼25 ms invocation and marshalling overhead.
+
+   Sudoku also relies on token-mixing MLP layers (mlp_t layers of 388 KB/194 KB). These represent
+extremely small matrices. The Qualcomm Hexagon tensor processor has a minimum efficient tile size
+threshold; matrix dimensions below this limit fail to trigger accelerated execution paths and fall back to
+slower scalar execution, further exacerbating the INT8 penalty.
+   The crossover point where static INT8 quantization becomes beneficial for this recursive transformer
+architecture on mobile chipsets is approximately T ≈ 200–300. Below this threshold, FP16-on-HVX
+execution remains faster.
+
+B.2    Static vs. Dynamic Quantization
+Dynamic quantization preserves full-precision accuracy on every task. Static quantization does not, and
+Sudoku-Extreme recovers only under selective operator exclusion: leaving activation and carry-state
+updates in FP32 and quantizing only the MatMul/Gemm weights. The trade-off matters for deployment:
+dynamic quantization is the robust out-of-the-box path for recursive models, but NPU accelerators require
+static, pre-allocated tensor boundaries, so on-device execution inherits the static path and its operator
+exclusions (§B.1). We report this trade-off qualitatively; per-task accuracy under the static path was not
+separately measured.
+
+C     Full Precision × Task Results
+
+              Configuration                         Weights    GFLOPs/puzzle      Fits 8 MB (weights)?
+              FP32, H=3, n=16, full emb.          ∼126 MB                3,000             ✗
+              INT8, H=1, n=8, flash loading        6.51 MB                 500             ✓
+              INT4 calibrated, H=1, n=8, flash     3.26 MB                 500             ✓
+
+Table 7: Deployment configurations per ARC-AGI-1 puzzle. Analytical, weights-only; excludes activations and
+carry state (see Table 5 for activation-inclusive streaming peaks). Bold marks viable targets. Figures show backbone-
+only weight footprint (ARC embedding handled via flash loading). On-device latencies are measured directly on
+physical hardware (Table 6). Per-channel calibrated INT4 recovers near-FP32 accuracy without retraining (§4.4),
+making the 3.26 MB configuration a candidate 4 MB MCU target.
+
+
+  Table 8 reports full-system accuracy across all precision levels and tasks at the evaluated recursive
+depth.
+
+                                            ARC-AGI-1           Maze-Hard         Sudoku-Extreme
+                Precision     SRAM       PExact    CellAcc    PExact    CellAcc   PExact    CellAcc
+                     †
+                FP32          26.7 MB    36.00%    88.22%     86.80%    99.52%    69.10%    87.47%
+                FP16          13.3 MB    36.00%    87.57%     87.00%    99.53%    68.50%    87.20%
+                INT8          6.7 MB     36.00%    87.62%     87.00%    99.53%    69.10%    87.51%
+                INT4 naïve    3.3 MB     25.50%    84.80%     86.40%    99.50%     5.30%    66.02%
+
+Table 8: Full-system precision × task accuracy results at the evaluated recursive depth, secondary protocol (H=3,
+nsup =10, bf16 forward, first-N subsets); the primary-protocol headline figures are in Table 1, and the official-
+checkpoint ARC figures in Table 3. ARC-AGI-1 public evaluation set (400 tasks), single-pass (no test-time
+augmentation). SRAM shows backbone-only footprint (ARC embedding handled via flash loading). † FP32 rows
+executed a bf16 forward pass; SRAM at FP32 precision.
+
+
+
+                                                        13
+D   Detailed Recursive Sweep Grids
+We report the complete multi-variant validation sweeps across combinations of recursive steps (n) and
+precision modes on GPU (CUDA) for all three architectures. Tables 9, 10, and 11 present these complete
+grids, including exact match accuracy and cell accuracy.
+
+E   Depth × Quantization Sweep (ARC-AGI-1)
+Table 12 reports key ARC-AGI-1 depth configurations (full-system, single-pass): INT8 matches FP32 at
+every depth tested.
+
+F   Depth × Quantization Sweep (Maze-Hard)
+Table 13 shows key configurations from the Maze-Hard depth sweep, confirming rapid saturation.
+
+G    Depth × Quantization Sweep (Sudoku-Extreme)
+Table 14 shows key configurations from the Sudoku-Extreme depth sweep: accuracy continues to improve
+with depth within the swept range (nsup ≤ 10).
+
+H    Architecture Ablation: MLP-Mixing vs. Attention
+To separate architecture from task precision we evaluate three recursive architectures on the same task
+(Sudoku-Extreme) under an identical harness (N =256, 16 ACT steps, no TTA; Table 15). TRM-MLP-
+Mixing and TRM-Attention are the same model family at the same full-precision accuracy (73.8 vs.
+73.1% puzzle exact), differing only in the token mixer; HRM (Wang et al., 2025) is a different recursive
+architecture (separate high- and low-level modules, attention-based). Under naïve INT4, TRM-MLP-
+Mixing collapses to 10.2% while both attention architectures retain their accuracy. Since TRM-Attention
+matches TRM-MLP at full precision, this is not an accuracy-headroom effect—the INT4 fragility is
+specific to MLP-mixing, not the task. The carry-trajectory fidelity diagnostic grades all three correctly
+(0.35 / 0.87 / 0.98), confirming it generalizes across recursive architectures.
+
+I   Carry-State Diagnostic: Full Data
+We measure two carry-state quantities, computed by hooking the shared reasoning module across all
+recursive calls within one inference pass. Both are computed on real test puzzles (Maze N =64, ARC
+N =32, Sudoku N =256); the ARC and Maze checkpoints are the public TRM releases, the Sudoku
+TRM-MLP checkpoint is a community reproduction (see checkpoint provenance, §O), and all numbers
+below are reproduced from those checkpoints.
+Consecutive carry similarity (single-model). The mean cosine similarity between consecutive carry
+states (Table 16) is task-specific but insensitive to compression: it is essentially identical under FP32,
+INT8, and INT4 on every task (changes ≤ 0.064), and is therefore a weak failure signal. We report it for
+completeness; the diagnostic below is the one we recommend.
+Carry-trajectory fidelity (vs. full-precision reference). The recommended diagnostic is the cosine
+similarity between the quantized model’s final carry state and the FP32 model’s final carry state on the
+same input—how far quantization pushes the reasoning trajectory off the full-precision path (Table 17). It
+requires only the FP32 reference (available before deployment) and no task labels. Unlike the consecutive
+signal, fidelity is graded and monotonic with severity: it stays ≈1.0 wherever INT4 is harmless (Maze,
+all INT8) and falls in proportion to the accuracy damage—moderately on ARC (0.69, −10 pp) and
+catastrophically on Sudoku (0.35, −64 pp). Per-channel calibrated INT4 recovers fidelity in lockstep with
+accuracy, so the diagnostic predicts both failure and recovery.
+Calibrated INT4 recovers Sudoku. Measured under an identical evaluation harness (N =256, 16
+ACT steps, no TTA), naïve per-tensor INT4 collapses Sudoku to 10.2% puzzle-exact while per-channel
+calibrated INT4 recovers to 71.9% (vs. 73.8% FP32 under the same harness)—i.e., the catastrophic INT4
+result is specific to naïve quantization, and the 4 MB MCU target is reachable with calibration (Table 18).
+
+                                                    14
+                   Precision      H   Metric    n=1       n=2      n=4      n=8      n = 16
+                   FP32 (bf16)    3   Exact    0.2850     0.3600   0.3575   0.3575   0.3600
+                                      Cell     0.8762     0.8839   0.8764   0.8760   0.8757
+                                  1   Exact    0.0025     0.0750   0.3425   0.3575   0.3550
+                                      Cell     0.5410     0.7954   0.8825   0.8832   0.8762
+                   FP16           3   Exact    0.2850     0.3600   0.3575   0.3600   0.3625
+                                      Cell     0.8762     0.8838   0.8765   0.8763   0.8755
+                                  1   Exact    0.0025     0.0750   0.3450   0.3550   0.3575
+                                      Cell     0.5410     0.7953   0.8825   0.8831   0.8773
+                   INT8 (bnb)     3   Exact    0.2850     0.3575   0.3575   0.3600   0.3600
+                                      Cell     0.8760     0.8837   0.8827   0.8842   0.8670
+                                  1   Exact    0.0025     0.0750   0.3425   0.3525   0.3625
+                                      Cell     0.5415     0.7953   0.8827   0.8835   0.8767
+                   INT4 (naive)   3   Exact    0.1575     0.2700   0.2675   0.2625   0.2575
+                                      Cell     0.8372     0.8626   0.8473   0.8430   0.8322
+                                  1   Exact    0.0000     0.0225   0.2525   0.2650   0.2600
+                                      Cell     0.3954     0.7148   0.8582   0.8494   0.8415
+
+Table 9: Detailed recursive sweep grid for ARC-AGI-1 (seq_len = 900) across H (outer cycles), n (supervision
+steps), and precision variants.
+
+
+
+
+                   Precision      H   Metric    n=1       n=2      n=4      n=8      n = 16
+                   FP32 (bf16)    3   Exact    0.7850     0.8670   0.8700   0.8700   0.8700
+                                      Cell     0.9940     0.9953   0.9953   0.9953   0.9953
+                                  1   Exact    0.0000     0.1390   0.8440   0.8690   0.8700
+                                      Cell     0.4363     0.9808   0.9949   0.9953   0.9953
+                   FP16           3   Exact    0.7850     0.8670   0.8700   0.8700   0.8700
+                                      Cell     0.9940     0.9953   0.9953   0.9953   0.9953
+                                  1   Exact    0.0000     0.1380   0.8440   0.8700   0.8700
+                                      Cell     0.4362     0.9808   0.9949   0.9953   0.9953
+                   INT8 (bnb)     3   Exact    0.7830     0.8680   0.8710   0.8700   0.8700
+                                      Cell     0.9940     0.9953   0.9953   0.9953   0.9953
+                                  1   Exact    0.0000     0.1380   0.8450   0.8690   0.8700
+                                      Cell     0.4333     0.9808   0.9949   0.9953   0.9953
+                   INT4 (naive)   3   Exact    0.7660     0.8610   0.8640   0.8640   0.8640
+                                      Cell     0.9934     0.9949   0.9950   0.9950   0.9950
+                                  1   Exact    0.0000     0.1580   0.8360   0.8630   0.8630
+                                      Cell     0.4734     0.9805   0.9945   0.9950   0.9950
+
+Table 10: Detailed recursive sweep grid for Maze-Hard (seq_len = 900) across H (outer cycles), n (supervision
+steps), and precision variants.
+
+
+
+
+                                                     15
+J   Structured Pruning and Knowledge Distillation
+Structured pruning. Magnitude-based structured pruning was evaluated at 25% and 50% sparsity
+targets across all three tasks (Table 19).
+
+Knowledge distillation. Student models (hidden=256, 1 layer, 1-cycle) were trained via KL-divergence
+distillation from the full teacher (Table 20).
+
+K    Linear-Attention Approximation (Maze)
+Replacing softmax attention with ELU feature-map linear attention (O(n) vs. O(n2 )) on Maze illustrates
+the same cell-vs-puzzle split as quantization: the swap preserves token-level accuracy but destroys
+puzzle-level reasoning. Evaluated at H=3, nsup =1 (hence the 78.50% baseline rather than the full-depth
+86.80%): zero-shot, cell accuracy holds at 87.3% while puzzle-exact falls to 0.00% (from 78.50% /
+99.40%); brief retraining (200 steps) recovers cell accuracy (87.5%) but not puzzle-exact (0.00%). This
+is a third intervention—alongside pruning and distillation—under which local prediction survives while
+global constraint satisfaction collapses. Sudoku-Extreme (MLP-mixing) has no attention layers and is not
+applicable.
+
+L    QAT Configurations
+Table 21 reports the six quantization-aware-training configurations of §4.6: two objectives at three learning
+rates each, 1,000 steps at batch 32 from the calibrated-INT4 initialization (72.3% at step 0).
+
+                             Final pass@1 (1,000 steps)        lr 10−5    lr 10−4    lr 10−3
+                             Cross-entropy                     53.9%      32.4%        2.3%
+                             Distillation (KD)                 53.9%      37.1%        7.8%
+
+Table 21: QAT from the calibrated-INT4 initialization (72.3% at step 0). All six configurations degrade the model
+they start from.
+
+
+M    Energy per Inference
+Estimated energy follows the FLOPs counts under a Cortex-M55 power model (∼1 mJ/GFLOP): ARC-
+AGI-1 at full depth (∼3,000 GFLOPs/puzzle) draws ∼3,000 mJ/puzzle, versus ∼500 mJ at the reduced
+configuration (H=1, nsup =8). Sudoku-Extreme (∼256 GFLOPs at default depth) draws ∼256 mJ/puzzle.
+These are analytical estimates under the same FLOPs-based model. The model is precision-blind—it
+assigns no separate energy-per-operation term to FP32 vs. INT8—so the 6× energy saving follows entirely
+from the 6× FLOPs (cycle) reduction, not from quantization.
+
+N    Context-Length Truncation
+Because attention cost scales as O(T 2 ), we tested zero-padding the input beyond a truncated context.
+Truncation is destructive on every task (Table 22): halving the sequence length takes Maze and Sudoku to
+zero and costs ARC nearly ten points. There is no cheap context shortcut—the full window is load-bearing.
+
+                                     Context           ARC        Maze     Sudoku
+                                     full (900 / 81)   36.00      78.50      28.40
+                                     ∼50%              26.50       0.00       0.00
+                                     ∼25%              10.75         —          —
+
+Table 22: Puzzle-exact accuracy under input context truncation, evaluated at H=3, nsup =1 (the full-context rows
+match the n=1 column of Tables 10–11, which is why they sit below the full-depth baselines quoted elsewhere).
+Maze and Sudoku collapse to 0 at 50%; ARC degrades severely.
+
+
+                                                          16
+O    Implementation Details
+Checkpoint provenance. The Sudoku TRM-MLP checkpoint is the alphaXiv community reproduction
+of TRM, whose model card reports 79.37% puzzle exact vs. 87.4% in the original paper. Our Sudoku
+claims are therefore relative comparisons between compression variants evaluated at matched checkpoints,
+not absolute-accuracy claims against the original release.
+Quantization. INT8 and INT4 PTQ were applied using bitsandbytes v0.41 (Dettmers et al., 2022)
+with load_in_8bit=True and load_in_4bit=True respectively. Per-channel calibration for
+INT4 calibrated used 128 calibration puzzles drawn from the training set.
+Carry-state extraction. sh was computed by registering a forward hook on the carry-state update
+function gϕ to capture Zh at each outer cycle. Cosine similarity was computed token-wise and averaged
+across the sequence dimension and across all puzzles in the evaluation set.
+QAT. The headline QAT runs (§4.6) initialize from the calibrated-INT4 checkpoint and fine-tune for
+1,000 steps at batch 32, under cross-entropy and token-distillation objectives at learning rates 10−5 , 10−4 ,
+and 10−3 , with the deep-supervision ACT loop. A shorter probe (100 steps, lr=10−5 , cross-entropy, batch
+4, from the naïve INT4 checkpoint) is the held-out run cited in §4.6. Training and evaluation used the
+Modal cloud platform.
+ONNX export and edge deployment. Models were exported to ONNX format using
+torch.onnx.export for deployment via ONNX Runtime and Qualcomm AI Hub. The ONNX
+export produces a single-step model (TRMBackboneStep) that executes one H-cycle step, with the
+outer recursion loop managed by the inference harness.
+
+
+
+
+                                                     17
+                    Precision        H     Metric       n=1       n=2      n=4        n=8      n = 16
+                    FP32 (bf16)      3     Exact        0.2840    0.4960   0.6040     0.6690   0.7090
+                                           Cell         0.7640    0.8147   0.8474     0.8680   0.8810
+                                     1     Exact        0.0060    0.0210   0.3830     0.5470   0.6370
+                                           Cell         0.5527    0.6943   0.7856     0.8293   0.8563
+                    FP16             3     Exact        0.2830    0.4960   0.6100     0.6700   0.7160
+                                           Cell         0.7639    0.8151   0.8488     0.8677   0.8851
+                                     1     Exact        0.0060    0.0210   0.3830     0.5480   0.6390
+                                           Cell         0.5526    0.6941   0.7856     0.8303   0.8574
+                    INT8 (bnb)       3     Exact        0.2800    0.5010   0.6210     0.6790   0.7120
+                                           Cell         0.7643    0.8183   0.8524     0.8721   0.8816
+                                     1     Exact        0.0060    0.0210   0.3820     0.5540   0.6560
+                                           Cell         0.5528    0.6942   0.7852     0.8306   0.8638
+                    INT4 (naive)     3     Exact        0.0210    0.0290   0.0510     0.0550   0.0610
+                                           Cell         0.6277    0.6490   0.6524     0.6573   0.6597
+                                     1     Exact        0.0000    0.0120   0.0210     0.0370   0.0510
+                                           Cell         0.5612    0.6097   0.6375     0.6536   0.6555
+
+Table 11: Detailed recursive sweep grid for Sudoku-Extreme (seq_len = 81) across H (outer cycles), n (supervision
+steps), and precision variants.
+
+
+
+
+                                  Config                 Precision    PExact    GFLOPs
+                                  H=3, n=2 (peak)        FP32         36.00%            375
+                                  H=1, n=4               INT8         34.25%            250
+                                  H=1, n=8               INT8         35.25%            500
+                                  H=1, n=16              INT8         36.25%          1,000
+                                  H=1, n=4               INT4         25.25%            250
+
+Table 12: ARC-AGI-1 depth–precision sweep (full-system, single-pass, no TTA). INT8 at H=1, nsup =8 reaches
+35.25% at 500 GFLOPs—within 0.75 pp of the 36.00% FP32 peak at 6× fewer FLOPs.
+
+
+
+
+                                     Config              Prec.    PExact    GFLOPs
+                                                    †
+                                     H=3, n=10           FP32     86.80%       1,875
+                                     H=1, n=8            INT8     86.90%         500
+                                     H=1, n=4            INT8     84.50%         250
+                                     H=1, n=8            INT4     86.30%         500
+
+Table 13: Maze-Hard depth–precision sweep. † Evaluation configuration (nsup =10); TRM’s default test-time setting
+is nsup =16. INT8 at H=1, n=8 matches the evaluated FP32 configuration at 3.75× fewer FLOPs.
+
+
+
+
+                                     Config              Prec.    PExact    GFLOPs
+                                                    †
+                                     H=3, n=10           FP32     69.10%            256
+                                     H=4, n=10           FP32     70.30%            342
+                                     H=4, n=10           INT8     70.20%            342
+                                     H=1, n=8            INT8     55.40%             68
+                                     H=4, n=10           INT4      6.00%            342
+
+Table 14: Sudoku-Extreme depth–precision sweep. † Evaluation configuration (nsup =10); TRM’s default test-time
+setting is nsup =16. INT8 at H=4, n=10 matches FP32 (70.20% vs 70.30%); reducing depth to H=1 causes major
+accuracy loss. Full depth is genuinely needed.
+
+
+
+                                                             18
+                                Architecture (Sudoku)            FP32      INT4      Fidelity
+                                TRM-MLP-Mixing                    73.8      10.2          0.35
+                                TRM-Attention                     73.1      69.5          0.87
+                                HRM (diff. family)                47.7      48.4          0.98
+
+Table 15: Same task (Sudoku-Extreme), three recursive architectures (secondary protocol; primary-protocol values
+for the two TRM variants are in Table 1): naïve INT4 puzzle-exact (%) and final-state carry fidelity. Only MLP-
+mixing collapses; both attention architectures—including a different model family (HRM)—survive. TRM-Attention
+matches TRM-MLP at FP32, ruling out an accuracy-headroom confound. HRM is evaluated on Sudoku only and at
+a lower FP32 baseline, so it corroborates the pattern rather than serving as a controlled comparison.
+
+                                       Precision        ARC       Maze          Sudoku
+                                       FP32             0.415     0.697          0.806
+                                       INT8             0.412     0.697          0.806
+                                       INT4             0.479     0.699          0.841
+
+Table 16: Mean consecutive carry-state cosine similarity. The change under INT4 is small on every task (≤ 0.064,
+and ≤ 0.035 on the two tasks where INT4 is catastrophic); the signal does not reliably separate compression that
+preserves reasoning from compression that destroys it. (Maze/Sudoku reproduced; ARC from the source run.)
+
+                                Precision                 Maze            ARC        Sudoku
+                                FP32                      1.000           1.000          1.000
+                                INT8                      1.000           0.999          0.998
+                                INT4 naïve                0.989           0.688          0.353
+                                INT4 calibrated              —            0.944          0.894
+                                INT4 accuracy ∆         −0.4pp         −10.5pp      −63.8pp
+
+Table 17: Carry-trajectory fidelity (final-state cosine vs. FP32), secondary protocol (the accuracy deltas match
+Table 8). Monotonic with INT4 severity (Maze → ARC → Sudoku); INT8 is never flagged; calibrated INT4
+recovers both fidelity and accuracy. Last row: INT4-naïve puzzle-exact change vs. FP32.
+
+                                    Variant               PExact         Cell     Fidelity
+                                    FP32                        73.8     88.9       1.000
+                                    INT8                        73.1     88.7       0.998
+                                    INT4 naïve                  10.2     67.8       0.353
+                                    INT4 calibrated             71.9     88.2       0.894
+
+Table 18: Sudoku-Extreme under an identical harness (secondary protocol, N =256, no TTA; FP32 reads 73.8 here
+vs. 69.1 on the full test set elsewhere, and 74.6 under the primary protocol of Table 1). Fidelity tracks accuracy
+across all four variants.
+
+                                    Dense (0%)                  25% sparse               50% sparse
+                       Task       PExact      CellAcc     PExact         CellAcc     PExact      CellAcc
+                       ARC       36.00%       87.55%       0.00%          0.27%       0.00%       0.58%
+                       Maze      86.80%       99.52%       0.00%         86.40%       0.00%       0.00%
+                       Sudoku    69.10%       87.47%       0.00%         50.01%       0.00%      37.81%
+
+Table 19: Structured pruning results. Even 25% sparsity destroys puzzle-level reasoning across all tasks. Cell
+accuracy partially survives on Maze (86.40%) and Sudoku (50.01%), indicating that token prediction survives while
+global constraint satisfaction does not.
+
+                                Task        Teacher       Student        PExact      CellAcc
+                                Maze          6.82M         855K          0.00%       87.25%
+                                Sudoku        5.03M         745K          0.00%       54.77%
+
+Table 20: Knowledge distillation results. Student models (12–15% of teacher params) learn token-level patterns but
+fail entirely at puzzle-level reasoning; the recursive structure is functionally necessary.
+
+
+                                                            19
+

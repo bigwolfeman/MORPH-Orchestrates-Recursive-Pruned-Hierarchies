@@ -1,0 +1,809 @@
+                                         CosmicFish-HRM: Adaptive Reasoning via Hierarchical Recurrent
+                                                   Mechanisms in Compact Language Models
+                                                                                  Venkat Akhil Lakkapragada
+                                                                                         Mistyoz AI
+                                                                                      Hyderabad, India
+                                                                                  lvakhil06@gmail.com
+
+
+
+
+arXiv:2605.28919v1 [cs.LG] 27 May 2026
+                                                                                           May 29, 2026
+
+
+                                                                                               Abstract
+                                                   Large language models have achieved strong reasoning capabilities, though often at the cost of
+                                               massive parameter counts and expensive inference. In this work, we explore a different direction: adaptive
+                                               reasoning depth in compact language models.
+                                                   We present CosmicFish-HRM, a compact language model built around a Hierarchical Reasoning
+                                               Module (HRM) that dynamically allocates reasoning compute during inference. Instead of applying fixed
+                                               computation to every input, the model iterates through high-level and low-level reasoning cycles and
+                                               learns when to halt based on input complexity.
+                                                   CosmicFish-HRM combines this adaptive reasoning core with modern transformer components
+                                               including Grouped Query Attention, RoPE, and SwiGLU activations. While the additional reasoning
+                                               infrastructure introduces overhead at small scale, we hypothesize that this tradeoff becomes increasingly
+                                               favorable as model size grows and the relative cost of the HRM core diminishes.
+                                                   Our results show that the model learns non-uniform reasoning behavior, allocating different numbers
+                                               of reasoning steps across tasks and inputs. These findings suggest that adaptive reasoning depth may offer
+                                               a promising alternative to relying solely on parameter scale for reasoning capability.
+
+
+                                         1    Introduction
+                                         The dominant trend in modern language modeling has been scale. From GPT-4 [15] to LLaMA [25], progress
+                                         has largely followed a familiar pattern: larger parameter counts, larger datasets, and increasingly expensive
+                                         training runs. The results have been impressive, especially in reasoning and instruction following, though this
+                                         progress has also pushed state-of-the-art systems further away from practical deployment on edge hardware,
+                                         mobile devices, and other resource-constrained environments. Running modern language models often
+                                         requires substantial memory, specialized accelerators, and inference infrastructure that simply does not exist
+                                         outside datacenters.
+                                              Most existing approaches to efficiency focus on compression. Quantization, pruning, and knowledge
+                                         distillation [10] reduce the size of already-large models, but the underlying computational structure usually
+                                         remains unchanged. A standard transformer still applies the same depth of computation to every input
+                                         regardless of difficulty. A short factual completion and a multi-step reasoning problem pass through
+                                         essentially the same pipeline with the same number of layers and attention operations. In practice, though,
+                                         not every prompt demands the same amount of reasoning.
+                                              We take a different view. Some tasks are almost reflexive. Others require iteration, revision, or longer
+                                         chains of internal computation. A compact model capable of allocating additional reasoning steps only when
+                                         necessary may offer a different tradeoff from simply increasing parameter count indefinitely. The central idea
+
+                                                                                                   1
+behind this work is straightforward: reasoning ability may depend not only on model scale, but also on how
+flexibly computation is used during inference.
+    To explore this idea, we introduce CosmicFish-HRM, a compact 82.77M parameter language model built
+around a Hierarchical Reasoning Module (HRM). Rather than operating as a purely fixed-depth transformer,
+the model alternates between high-level (H) and low-level (L) reasoning states through iterative recurrent
+cycles. A learned halting head determines whether additional reasoning steps are necessary before generation
+continues. Difficult inputs may trigger deeper reasoning trajectories, while simpler prompts can halt early
+and avoid unnecessary computation.
+    The architecture combines this adaptive reasoning core with modern transformer components including
+Rotary Positional Embeddings (RoPE) [24], Grouped Query Attention (GQA) [1], and SwiGLU activa-
+tions [22]. CosmicFish-HRM was trained on CosmicSet, a curated 10B token dataset spanning web text,
+Wikipedia, code, mathematics, and research papers.
+    At compact scales, introducing recurrent reasoning infrastructure creates a tradeoff. Part of the model
+capacity is allocated to adaptive reasoning behavior rather than raw language modeling capacity alone. This
+can limit benchmark performance relative to conventional transformers of similar size. We hypothesize,
+however, that this tradeoff becomes increasingly favorable as model scale grows and the relative overhead of
+the reasoning infrastructure diminishes while the adaptive computation behavior remains intact.
+    This paper makes the following contributions:
+
+      • We propose CosmicFish-HRM, a compact language model architecture that integrates a Hierarchical
+        Reasoning Module within a transformer backbone to enable adaptive reasoning depth during inference.
+
+      • We introduce a learned adaptive halting mechanism that allows the model to dynamically vary reasoning
+        depth across inputs instead of applying fixed computation uniformly.
+
+      • We analyze the relationship between reasoning step allocation and input complexity, showing that the
+        model exhibits non-uniform reasoning behavior across tasks.
+
+      • We discuss the tradeoffs introduced by adaptive reasoning infrastructure at compact scale and argue
+        that these costs may amortize more favorably as model size increases.
+
+   The remainder of this paper is organized as follows. Section 2 reviews related work on adaptive
+computation and efficient language models. Section 3 describes the CosmicFish-HRM architecture in detail.
+Section 4 presents experimental results and evaluation. Section 5 analyzes the model’s adaptive reasoning
+behavior, and Section 6 discusses limitations and future directions.
+
+
+2     Related Work
+2.1     Adaptive Computation in Neural Networks
+The idea that neural networks should adapt their computational effort based on input difficulty is not new.
+Graves [8] introduced Adaptive Computation Time (ACT), which allowed recurrent networks to decide how
+many computational steps to use before producing an output. The core intuition was simple but important:
+different inputs may require different amounts of processing. ACT, however, was developed in the context of
+recurrent networks and does not naturally extend to modern transformer-based language models.
+    Later work explored related forms of adaptive computation. PonderNet [2] introduced a probabilistic
+halting mechanism trained with an additional regularization objective, encouraging models to ”ponder” only
+as long as necessary. Universal Transformers [7] incorporated recurrent depth into transformer architectures
+by repeatedly applying the same layer across multiple iterations, though without an explicit learned halting
+
+
+                                                      2
+policy. Confident Adaptive Language Modeling [21] explored early exiting in transformer decoders, allowing
+inference to stop at intermediate layers once prediction confidence became sufficiently high.
+    Mixture of Depths [19] approached the problem differently by routing tokens dynamically through subsets
+of transformer layers. Rather than iterative reasoning, this approach focuses on allocating computation
+unevenly across tokens and layers to reduce overall inference cost.
+    CosmicFish-HRM is motivated by a somewhat different question. Instead of early exits or token routing
+alone, we investigate whether compact language models can benefit from iterative reasoning cycles operating
+across multiple abstraction levels before generation proceeds.
+
+2.2   Hierarchical Reasoning Models
+The work most directly connected to ours is the Hierarchical Reasoning Model (HRM) introduced by Wang
+et al. [26]. HRM proposed a recurrent reasoning architecture composed of two interacting modules: a slower
+high-level reasoning system responsible for abstract planning, and a faster low-level system responsible
+for detailed computation. Despite its relatively small parameter count, the original HRM achieved strong
+performance on structured reasoning tasks including Sudoku solving, maze navigation, and ARC-style
+reasoning benchmarks [5].
+     That said, the original HRM was not designed as a language model. It operated primarily as a task-specific
+reasoning engine trained on relatively small puzzle-oriented datasets, without open-ended text generation or
+autoregressive language modeling capabilities.
+     CosmicFish-HRM builds on the central intuition behind HRM while moving into a different setting.
+Rather than treating hierarchical reasoning as a standalone reasoning engine, we integrate it into a decoder-
+only language model architecture trained on diverse natural language data. Our goal is not simply to reproduce
+HRM-style reasoning behavior, but to explore whether iterative hierarchical computation can provide useful
+adaptive reasoning dynamics inside compact autoregressive language models.
+
+2.3   Small and Efficient Language Models
+A separate line of work has focused on improving the capabilities of small language models through training
+efficiency and data quality. TinyLlama [30] demonstrated that relatively small models trained on large-scale
+corpora could remain competitive despite reduced parameter count. The Phi series [9] further argued that
+carefully curated high-quality datasets can significantly improve compact model performance.
+     These approaches primarily improve efficiency through data and training strategy rather than changes to
+inference-time computation itself. The underlying architecture generally remains a conventional fixed-depth
+transformer.
+     CosmicFish-HRM explores a complementary direction. Instead of relying solely on improved data
+efficiency, the model attempts to vary reasoning depth dynamically during inference. At compact scales,
+this introduces an architectural tradeoff: some fraction of model capacity is devoted to adaptive reasoning
+infrastructure rather than raw language modeling capacity alone. We view this work as an exploration
+of that tradeoff rather than a claim that adaptive reasoning universally improves small-model benchmark
+performance.
+
+2.4   Adaptive Halting and Learned Decision Mechanisms
+Neural networks have previously incorporated learned decision mechanisms for routing, halting, and adaptive
+execution [14]. Inspired by these ideas, CosmicFish-HRM uses a lightweight learned halting head to
+determine whether additional reasoning iterations are necessary at each step.
+
+
+
+                                                      3
+    Our formulation is intentionally simple. The halting mechanism is trained jointly with the language
+modeling objective and step penalty, allowing the model to learn variable-depth reasoning behavior without
+requiring manually designed stopping criteria. Rather than framing the system as a full reinforcement learning
+setup, we treat the halting behavior primarily as a learned adaptive computation mechanism integrated directly
+into the forward pass.
+
+
+3     Architecture
+CosmicFish-HRM is a decoder-only language model organized around three major stages: an input trans-
+former stack for contextual representation learning, a Hierarchical Reasoning Module (HRM) for adaptive
+iterative computation, and an output transformer stack for token prediction. The overall design separates
+linguistic representation learning from the adaptive reasoning process itself.
+
+
+
+
+Figure 1: Overview of the CosmicFish-HRM architecture. Input tokens are embedded and processed by
+transformer blocks, passed through the HRM reasoning core for a variable number of reasoning iterations,
+and decoded into next-token predictions through output transformer layers.
+
+
+3.1   Overall Design
+The architecture follows the pipeline:
+                     Embed       Input Blocks   HRM Core   Output Blocks   LM Head
+                   x −−−−→ h0 −−−−−−−→ h −−−−−−→ z −−−−−−−→ ẑ −−−−−→ logits                               (1)
+    Given an input token sequence x = (x1 , x2 , . . . , xT ), tokens are first mapped into dense embeddings
+through a learned embedding matrix E ∈ RV ×d , where V = 50304 is the vocabulary size and d = 448 is
+the embedding dimension. The representation is then processed through six input transformer layers, the
+HRM reasoning core, and six output transformer layers before projection into vocabulary logits. Following
+standard practice, the embedding matrix is weight-tied with the language modeling head [17].
+    Key architectural hyperparameters are summarized in Table 1.
+
+                                                      4
+                         Table 1: CosmicFish-HRM architecture hyperparameters.
+                                   Hyperparameter                Value
+                                   Total parameters             82.77M
+                                   Embedding dimension d          448
+                                   Vocabulary size V            50,304
+                                   Maximum sequence length        512
+                                   Input transformer layers         6
+                                   Output transformer layers        6
+                                   Attention heads                 8
+                                   KV heads (GQA)                  4
+                                   HRM high-level layers nH         4
+                                   HRM low-level layers nL          4
+                                   Maximum reasoning steps         16
+                                   Exploration probability        0.1
+                                   Dropout                        0.1
+
+
+3.2     Input and Output Transformer Blocks
+Both transformer stacks follow a standard pre-normalization transformer design [27]. Each block applies
+attention and feedforward updates through residual connections:
+
+                                      h′ = h + Attn(RMSNorm(h))                                         (2)
+
+
+                                    h′′ = h′ + MLP(RMSNorm(h′ ))                                        (3)
+      RMSNorm [29] is used instead of LayerNorm for computational efficiency:
+                                                           x
+                                      RMSNorm(x) =              ·γ                                      (4)
+                                                         RMS(x)
+                                                v
+                                                u d
+                                                u1 X
+                                       RMS(x) = t    x2i + ϵ                                            (5)
+                                                  d
+                                                         i=1
+
+
+Grouped Query Attention. The model uses Grouped Query Attention (GQA) [1] with nq = 8 query heads
+and nkv = 4 key-value heads. Each query head has dimension dh = d/nq = 56. Sharing key-value heads
+across query groups reduces KV-cache memory requirements while preserving most of the representational
+capacity of standard multi-head attention.
+    Rotary Positional Embeddings (RoPE) [24] are applied to queries and keys prior to attention computation:
+
+                                      qm = Rm qm ,       kn = Rn kn                                     (6)
+    where Rm denotes the positional rotation matrix at position m. RoPE allows relative positional informa-
+tion to emerge directly through the attention mechanism without learned absolute position embeddings.
+
+
+
+
+                                                     5
+SwiGLU Feedforward Layers.          Feedforward layers use the SwiGLU activation [22]:
+                                                                                 
+                           MLP(x) = Dropout Wdown SiLU(Wup x) ⊙ Wgate x                                   (7)
+      where Wup , Wgate ∈ R4d×d , Wdown ∈ Rd×4d , and ⊙ denotes elementwise multiplication.
+
+3.3     HRM Reasoning Core
+The HRM reasoning core forms the central architectural component of CosmicFish-HRM. Inspired by the
+Hierarchical Reasoning Model proposed by Wang et al. [26], the system maintains two interacting recurrent
+reasoning states operating at different abstraction levels.
+    The high-level module H is intended to capture slower and more abstract reasoning behavior, while the
+low-level module L focuses on finer-grained local computation. Rather than replacing transformer layers
+entirely, the HRM core operates between transformer stacks as an adaptive reasoning stage.
+
+State Initialization. Let h ∈ RB×T ×d denote the output of the input transformer stack, where B is the
+batch size and T is the sequence length. The HRM initializes two recurrent states:
+                                              (0)         (0)
+                                            zH = h,       zL = h                                          (8)
+    Both states begin from the same contextual representation and evolve independently during reasoning
+iterations.
+
+Hierarchical Cycling. At each reasoning step s ∈ {1, . . . , S}, the low-level module performs cL = 2
+recurrent cycles conditioned on the current high-level state:
+                                                                  
+                                         (s,k)       (s,k−1) (s−1)
+                                       zL = L zL             , zH                                  (9)
+
+      where k ∈ {1, . . . , cL } and L consists of nL = 4 transformer blocks.
+      The updated low-level representation is then used to condition the high-level module:
+                                                                        
+                                             (s,k)       (s,k−1) (s,cL )
+                                           zH = H zH            , zL                                     (10)
+
+    where H consists of nH = 4 transformer blocks and k ∈ {1, . . . , cH } with cH = 2.
+    This alternating update process creates a recurrent feedback loop between abstract and fine-grained
+reasoning states. Intuitively, lower-level representations refine details conditioned on higher-level context,
+while higher-level states update broader representations using information accumulated through lower-level
+computation.
+
+Output Representation. After the halting mechanism terminates reasoning at step S ∗ , the final high-level
+                (S ∗ )
+representation zH is passed into the output transformer stack for token prediction.
+
+3.4     Adaptive Halting Mechanism
+A central component of CosmicFish-HRM is its learned adaptive halting mechanism. After each reasoning
+step s, a lightweight halting head computes halt and continue scores from the mean-pooled high-level
+representation:
+
+
+
+
+                                                      6
+                                                               T
+                                                                     !
+                                                          1 X (s)
+                                      q   (s)
+                                                = WQ         zH,t        ∈ R2                             (11)
+                                                          T
+                                                               t=1
+
+      where WQ ∈ R2×d .
+      The model halts reasoning once the halt score exceeds the continue score:
+
+                                           Q(s) (halt) > Q(s) (continue)                                  (12)
+
+Exploration During Training. During training, the model occasionally defers halting through an explo-
+ration mechanism designed to expose the network to longer reasoning trajectories:
+                         (
+                    (s)    Q(s) (halt) > Q(s) (continue) with probability 1 − pexplore
+                halt =                                                                           (13)
+                           ⊮[steps ≥ Uniform(2, Smax )] with probability pexplore
+      where pexplore = 0.1 and Smax = 16.
+
+Inference Biasing. At inference time, a small halt bias δ = 0.35 is added to encourage earlier stopping
+when additional reasoning cycles appear unnecessary:
+
+                                           Q̂(s) (halt) = Q(s) (halt) + δ                                 (14)
+    This creates a mild preference toward computational efficiency while still allowing deeper reasoning
+trajectories for more difficult inputs.
+
+3.5     Training Objective
+CosmicFish-HRM is trained using a joint objective combining autoregressive language modeling with a
+lightweight reasoning-step penalty:
+
+                                                  L = LLM + λ · S̄                                        (15)
+      where LLM is the standard next-token prediction loss:
+                                                   T
+                                                1X
+                                  LLM = −          log Pθ (xt+1 | x1 , . . . , xt )                       (16)
+                                                T
+                                                  t=1
+
+      and
+                                                               B
+                                                          1 X ∗
+                                                   S̄ =      Sb                                           (17)
+                                                          B
+                                                               b=1
+
+   denotes the mean number of reasoning steps across the batch.
+   The coefficient λ = 0.01 discourages unnecessary reasoning iterations by introducing a weak pressure
+toward efficient halting. In practice, this encourages the model to use additional reasoning depth only when it
+improves language modeling performance sufficiently to justify the extra computation.
+
+
+
+
+                                                           7
+4     Experiments
+4.1   Training Details
+CosmicFish-HRM was trained on the 10B-token CosmicSet dataset for 27,500 iterations using an effective
+batch size of 128 and a context length of 512 tokens. The model achieved a final validation loss of 3.36.
+
+
+
+
+                    Figure 2: Training and validation loss curves for CosmicFish-HRM.
+
+
+
+
+                  Figure 3: Average HRM reasoning steps during training and validation.
+
+
+4.2   Setup
+We evaluate CosmicFish-HRM on a collection of standard language modeling and reasoning benchmarks
+including HellaSwag [28], PIQA [4], WinoGrande [20], TriviaQA [11], ARC-Easy [6], and Natural Ques-
+tions [13]. These tasks span commonsense reasoning, physical reasoning, factual recall, coreference resolu-
+tion, and open-domain question answering.
+    CosmicFish-HRM contains 82.77M parameters and is compared against earlier CosmicFish variants
+without the HRM reasoning core, as well as several publicly available transformer baselines of comparable
+scale including GPT-2 Small (117M) [18], OPT-125M [31], and Pythia-160M [3]. All evaluations are
+performed in the zero-shot setting.
+    It is worth noting that the benchmarks used here primarily measure general language modeling and
+shallow reasoning ability. They are not specifically designed to evaluate adaptive iterative reasoning behavior.
+As a result, these experiments should be interpreted primarily as an initial study of the architectural tradeoffs
+introduced by HRM-style reasoning inside compact language models rather than a definitive measurement of
+the architecture’s long-horizon reasoning potential.
+
+
+
+                                                       8
+4.3   Main Results
+
+
+            Table 2: Zero-shot benchmark evaluation. All scores are reported as accuracy (%).
+
+  Model                                    HellaSwag               PIQA            WinoGrande
+  CosmicFish-90M                                 27.9                59.8                  50.6
+  CosmicFish-120M                                26.9                59.2                  50.7
+  GPT-2 Small (117M)                             29.7                62.5                  50.7
+  OPT-125M                                       30.6                62.6                  52.9
+  Pythia-160M                                    29.4                62.1                  52.8
+  CosmicFish-HRM                                 26.2                58.1                  50.7
+
+     At compact scale, CosmicFish-HRM does not outperform conventional transformers of similar size
+on these benchmarks. We believe this reflects an important architectural tradeoff rather than a failure of
+adaptive reasoning itself. Unlike standard decoder-only transformers, CosmicFish-HRM allocates a portion
+of its parameter budget and computation toward recurrent reasoning infrastructure, halting behavior, and
+hierarchical state interaction. In a model with fewer than 100M parameters, this overhead represents a
+relatively large fraction of total capacity.
+     Our hypothesis is that this tradeoff changes as model size increases. The HRM reasoning infrastructure
+remains relatively small compared to the backbone transformer, meaning its proportional overhead decreases
+at larger scales while the adaptive reasoning behavior remains available. Under this view, compact-scale
+experiments primarily test whether adaptive reasoning behavior can emerge at all inside autoregressive
+language models, rather than whether such systems immediately dominate standard transformer baselines on
+shallow benchmark accuracy.
+
+4.4   Discussion
+Raw benchmark accuracy alone does not fully capture the behavior CosmicFish-HRM is designed to study.
+The central question is not simply whether the model achieves higher scores, but whether it learns to allocate
+reasoning depth non-uniformly across inputs.
+    Section 5 examines this behavior directly by analyzing reasoning step allocation across tasks and
+prompts. In practice, the model tends to spend more reasoning iterations on inputs that appear structurally or
+semantically more difficult while halting early on simpler completions. This adaptive behavior represents
+the primary architectural contribution of the system and differentiates CosmicFish-HRM from fixed-depth
+transformer baselines.
+    We also note that many of the benchmarks used here emphasize short-context commonsense prediction
+rather than extended reasoning chains. Evaluating adaptive reasoning architectures on deeper reasoning-
+oriented tasks remains an important direction for future work.
+
+
+
+
+                                                      9
+5     Analysis
+The primary goal of CosmicFish-HRM is not simply to increase benchmark accuracy, but to investigate
+whether compact autoregressive language models can learn non-uniform reasoning behavior through adaptive
+computation. The central question, then, is whether the HRM core meaningfully changes how computation is
+allocated across inputs.
+    This section examines that behavior from three perspectives: reasoning step allocation across tasks,
+overall compute efficiency, and qualitative examples illustrating how the model responds to prompts of
+varying complexity.
+
+5.1   Adaptive Step Distribution
+An adaptive reasoning system should not behave like a fixed-depth transformer internally. If the halting mech-
+anism is functioning meaningfully, more difficult inputs should tend to trigger longer reasoning trajectories,
+while simpler prompts should halt earlier.
+    To study this behavior, we measure the number of HRM reasoning iterations used across benchmark
+tasks.
+
+
+
+
+Figure 4: Mean HRM reasoning steps across benchmark tasks. More complex or retrieval-heavy tasks tend to
+trigger longer reasoning trajectories, while simpler prompts halt earlier.
+
+     The resulting distributions suggest that the model does not collapse into a single fixed reasoning depth.
+Instead, reasoning trajectories vary substantially across tasks and prompts. Although this does not prove that
+the model has learned a complete notion of ”reasoning difficulty,” it does indicate that the halting mechanism
+is sensitive to differences in input structure and prediction uncertainty.
+     Importantly, this behavior emerges without manually designed stopping rules. The adaptive reasoning
+dynamics arise from the interaction between the learned halting head, recurrent reasoning states, and the
+lightweight step penalty introduced during training.
+
+5.2   Compute Efficiency
+An adaptive reasoning system is only useful in practice if it actually avoids unnecessary computation. Simply
+adding recurrent reasoning loops without meaningful halting would increase inference cost without providing
+adaptive behavior.
+    Table 3 reports the mean and standard deviation of reasoning steps across benchmark tasks relative to the
+maximum reasoning budget of 16 steps.
+
+
+
+                                                     10
+Table 3: Mean HRM reasoning steps per benchmark task (maximum = 16). Lower values indicate earlier
+halting and reduced average computation.
+
+                                 Benchmark      Mean Steps      Std. Dev.
+                                 HellaSwag          3.033        6.263
+                                 PIQA               1.866        5.132
+                                 WinoGrande         0.954        3.777
+                                 TriviaQA           0.804        3.017
+                                 Overall            2.681        5.949
+
+
+    The relatively low average reasoning depth suggests that the model frequently halts before reaching the
+maximum reasoning budget. At the same time, the high variance across samples indicates that reasoning
+depth remains highly input-dependent rather than collapsing into a near-constant policy.
+    We note, however, that these measurements should be interpreted cautiously. The current experiments are
+intended primarily as an initial behavioral analysis of adaptive reasoning dynamics at compact scale rather
+than a definitive compute-efficiency benchmark against optimized transformer inference systems.
+
+5.3   Qualitative Examples
+To make the adaptive reasoning behavior more concrete, Table 4 presents representative prompts alongside
+their average reasoning depth.
+
+Table 4: Representative prompts and average reasoning depth. Simpler factual prompts tend to halt earlier,
+while prompts requiring abstraction or multi-step reasoning trigger deeper reasoning trajectories.
+ Input Prompt                                                                    Mean Steps Used
+ “The capital of France is”                                                             2.7805
+ “Photosynthesis is the process by which plants”                                        4.7722
+ “If all roses are flowers and some flowers fade quickly, what can                      7.0303
+ we conclude about roses?”
+ “A bat and a ball cost $1.10 in total. The bat costs $1.00 more                        8.4000
+ than the ball. How much does the ball cost?”
+
+    The examples are intentionally chosen to span a rough spectrum of reasoning difficulty. Short factual
+completions generally require relatively few reasoning iterations, while prompts involving abstraction,
+chained inference, or cognitive reflection tend to trigger deeper reasoning trajectories.
+    The bat-and-ball example is particularly interesting because it is widely used in cognitive psychology
+as a probe distinguishing fast intuitive responses from slower deliberate reasoning [12]. Seeing the model
+allocate substantially more reasoning steps to this prompt than to simple factual recall suggests that the
+adaptive halting mechanism is responding to meaningful differences in prompt structure rather than behaving
+randomly.
+    That said, these examples should not be interpreted as evidence of human-like reasoning. The current
+
+
+                                                    11
+results are better understood as evidence that the model has learned variable-depth computational behavior
+conditioned on input characteristics.
+
+5.4   Summary
+Taken together, the step distributions and qualitative examples suggest that CosmicFish-HRM learns non-
+uniform reasoning behavior rather than relying on a fixed computation budget for every prompt. The model
+allocates different reasoning depths across tasks and inputs, often halting early for simple completions while
+extending computation for prompts that appear structurally more difficult.
+    At this scale, the adaptive reasoning infrastructure introduces clear tradeoffs in raw benchmark perfor-
+mance. Even so, the experiments provide evidence that hierarchical recurrent reasoning can emerge inside
+compact autoregressive language models without hand-crafted reasoning schedules or explicit reasoning
+supervision. We view this as an initial step toward studying adaptive reasoning depth as an architectural
+property of future language models rather than treating reasoning purely as a function of parameter scale.
+
+
+6     Conclusion
+We introduced CosmicFish-HRM, a compact 82.77M parameter language model designed to explore adaptive
+reasoning depth inside autoregressive transformers. By integrating a Hierarchical Reasoning Module between
+transformer stacks, the model is able to allocate different amounts of computation across inputs rather than
+applying a fixed reasoning depth uniformly during inference.
+    The experiments presented in this work suggest that compact language models can learn variable-depth
+computational behavior through recurrent hierarchical reasoning and learned adaptive halting. Although
+CosmicFish-HRM does not outperform conventional transformers of similar size on standard benchmark
+accuracy, the results indicate that meaningful adaptive reasoning dynamics can emerge even at relatively
+small scales.
+    At the same time, the work highlights an important tradeoff. In compact models, the reasoning infrastruc-
+ture itself occupies a non-trivial fraction of the total parameter budget and compute capacity. This creates
+tension between adaptive reasoning flexibility and raw language modeling performance. We believe this
+tradeoff may become substantially more favorable at larger scales, where the relative overhead of the HRM
+core decreases while the adaptive computation behavior remains available.
+    More broadly, this work explores a different perspective on efficiency in language models. Much of
+the field has focused on making large models smaller through compression techniques such as pruning,
+quantization, and distillation. CosmicFish-HRM instead investigates whether smaller models can become
+more capable by using computation more selectively and adaptively during inference.
+    We do not view the current system as a final solution or a replacement for conventional transformer
+scaling. Rather, we view it as an initial architectural exploration into adaptive reasoning depth as a property
+of language models. The results suggest that reasoning behavior may depend not only on parameter count,
+but also on how computation is distributed across inputs and reasoning trajectories.
+
+Future Work
+Several directions seem particularly important moving forward.
+
+Scaling Behavior. The most immediate question is how HRM-style reasoning behaves at larger scales. In
+larger models, the relative overhead of the recurrent reasoning infrastructure becomes much smaller compared
+to the backbone transformer. Understanding whether adaptive reasoning becomes more effective under those
+conditions remains an open problem.
+
+                                                      12
+Reasoning-Oriented Evaluation. Many existing language model benchmarks primarily evaluate short-
+context prediction and shallow commonsense reasoning. Future work should evaluate adaptive reasoning
+architectures on tasks requiring longer reasoning chains, planning, abstraction, mathematical reasoning, and
+multi-hop retrieval.
+
+Mixture-of-Experts Integration. Combining adaptive reasoning depth with sparse expert routing [23]
+could produce architectures capable of scaling both computation depth and representational capacity effi-
+ciently. An HRM system operating over sparse expert modules may provide a more scalable form of adaptive
+inference.
+
+Improved HRM Integration. The current architecture treats the HRM core as a relatively modular
+reasoning stage inserted between transformer stacks. Future systems may benefit from tighter interaction
+between transformer representations and recurrent reasoning states, including cross-attention between HRM
+states and intermediate transformer activations.
+
+Interpretability and Internal Dynamics. The internal behavior of the high-level and low-level reasoning
+states remains poorly understood. Future work should investigate how representations evolve across reasoning
+iterations, whether distinct reasoning patterns emerge at different depths, and how the adaptive halting
+mechanism relates to uncertainty or prediction entropy.
+
+Instruction Tuning and Alignment. Instruction tuning and preference optimization [16] may also interact
+in interesting ways with adaptive reasoning depth. It remains unclear whether aligned or instruction-following
+models learn different halting behaviors from purely pretrained systems.
+
+
+Code Availability
+The implementation of CosmicFish-HRM and related resources are publicly available at:
+   https://github.com/MistyozAI/CosmicFish-HRM
+
+
+Appendix
+
+A     Qualitative Examples
+Representative generations from the instruction-tuned version of CosmicFish-HRM together with HRM
+reasoning statistics.
+
+A.1   Greeting
+Prompt:
+Hello
+Response:
+Hey! How’s everything going?
+What brings you here today?
+Avg. HRM steps/token: 15.00
+
+
+                                                     13
+A.2   Identity Question
+Prompt:
+
+Who are you?
+
+Response:
+
+Hey! I’m CosmicFish, an AI assistant built
+by Mistyoz AI in Hyderabad.
+
+Avg. HRM steps/token: 13.59
+
+
+A.3   Poem Generation
+Prompt:
+
+Write a poem
+
+Response:
+
+The wind howled in the breeze,
+A symphony of life,
+As we wander through the night.
+
+Avg. HRM steps/token: 8.66
+
+
+A.4   Definition Generation
+Prompt:
+
+Define AI
+
+Response:
+
+Artificial Intelligence (AI) refers to the
+simulation of human intelligence in machines.
+
+Avg. HRM steps/token: 6.30
+
+
+A.5   Arithmetic
+Prompt:
+
+What is 1 + 2?
+
+Response:
+
+1 + 2 = 3
+
+Avg. HRM steps/token: 5.79
+
+
+
+                                  14
+A.6   Code Generation
+Prompt:
+
+Write a python program to add two numbers
+
+Response:
+
+def add_numbers(num1, num2):
+    return num1 + num2
+
+Avg. HRM steps/token: 10.01
+
+
+B     Failure Cases
+B.1   Factual Hallucination
+Prompt:
+
+What is the capital of India?
+
+Response:
+
+India has an estimated population of around
+1.5 billion people.
+
+Avg. HRM steps/token: 10.46
+
+
+B.2   Arithmetic Failure
+Prompt:
+
+What is 5 + 5?
+
+Response:
+
+5 + 5 = 25
+
+Avg. HRM steps/token: 10.54
+
+
+C     Summary
+These examples illustrate that CosmicFish-HRM exhibits non-uniform reasoning behavior across prompts
+and tasks. Different inputs trigger different reasoning depths, though deeper reasoning does not necessarily
+guarantee correctness.
+
+
+
+
+                                                    15
+References
+ [1] Joshua Ainslie, James Lee-Thorp, Michiel de Jong, Yury Zeiler, Sumit Sanghai, and Yuexin Xu. GQA: Training
+     generalized multi-query transformer models from multi-head checkpoints. arXiv preprint arXiv:2305.13245,
+     2023.
+
+ [2] Andrea Banino, Jan Balaguer, and Charles Blundell.          PonderNet: Learning to ponder.       arXiv preprint
+     arXiv:2107.05407, 2021.
+
+ [3] Stella Biderman, Hailey Schoelkopf, Quentin Anthony, Herbie Bradley, Kyle O’Brien, Eric Hallahan, Moham-
+     mad Aflah Khan, Shivanshu Purohit, USVSN Sai Prashanth, Edward Raff, et al. Pythia: A suite for analyzing large
+     language models across training and scaling. In Proceedings of the 40th International Conference on Machine
+     Learning, 2023.
+
+ [4] Yonatan Bisk, Rowan Zellers, Jianfeng Gao, Yejin Choi, et al. PIQA: Reasoning about physical commonsense in
+     natural language. In Proceedings of the AAAI Conference on Artificial Intelligence, 2020.
+
+ [5] François Chollet. On the measure of intelligence. arXiv preprint arXiv:1911.01547, 2019.
+
+ [6] Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa Schoenick, and Oyvind Tafjord.
+     Think you have solved question answering? Try ARC, the AI2 reasoning challenge. 2018.
+
+ [7] Mostafa Dehghani, Stephan Gouws, Oriol Vinyals, Jakob Uszkoreit, and Łukasz Kaiser. Universal transformers.
+     arXiv preprint arXiv:1807.03819, 2018.
+
+ [8] Alex Graves. Adaptive computation time for recurrent neural networks. arXiv preprint arXiv:1603.08983, 2016.
+
+ [9] Suriya Gunasekar, Yi Zhang, Jyoti Aneja, Caio César Teodoro Mendes, Allie Del Giorno, Sivakanth Gopi, Mojan
+     Javaheripi, Piero Kauffmann, Gustavo de Rosa, Olli Saarikivi, et al. Textbooks are all you need. arXiv preprint
+     arXiv:2306.11644, 2023.
+
+[10] Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. Distilling the knowledge in a neural network. arXiv preprint
+     arXiv:1503.02531, 2015.
+
+[11] Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke Zettlemoyer. TriviaQA: A large scale distantly supervised
+     challenge dataset for reading comprehension. In Proceedings of the 55th Annual Meeting of the Association for
+     Computational Linguistics, 2017.
+
+[12] Daniel Kahneman. Thinking, Fast and Slow. Farrar, Straus and Giroux, 2011.
+
+[13] Tom Kwiatkowski, Jennimaria Palomaki, Olivia Redfield, Michael Collins, Ankur Parikh, Chris Alberti, Danielle
+     Epstein, Illia Polosukhin, Jacob Devlin, Kenton Lee, et al. Natural questions: A benchmark for question answering
+     research. volume 7, pages 453–466, 2019.
+
+[14] Volodymyr Mnih, Koray Kavukcuoglu, David Silver, Andrei A Rusu, Joel Veness, Marc G Bellemare, Alex
+     Graves, Martin Riedmiller, Andreas K Fidjeland, Georg Ostrovski, et al. Human-level control through deep
+     reinforcement learning. Nature, 518(7540):529–533, 2015.
+
+[15] OpenAI. GPT-4 technical report. Technical report, OpenAI, 2023. URL https://arxiv.org/abs/2303.
+     08774.
+
+[16] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang,
+     Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human
+     feedback. arXiv preprint arXiv:2203.02155, 2022.
+
+[17] Ofir Press and Lior Wolf.      Using the output embedding to improve language models.            arXiv preprint
+     arXiv:1608.05859, 2017.
+
+
+
+                                                         16
+[18] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. Language models are
+     unsupervised multitask learners. OpenAI Blog, 2019.
+
+[19] David Raposo, Sam Ritter, Blake Richards, Timothy Lillicrap, Peter Humphreys, and Adam Santoro. Mixture of
+     depths: Dynamically allocating compute in transformer-based language models. arXiv preprint arXiv:2404.02258,
+     2024.
+
+[20] Keisuke Sakaguchi, Ronan Le Bras, Chandra Bhagavatula, and Yejin Choi. WinoGrande: An adversarial winograd
+     schema challenge at scale. In Communications of the ACM, 2021.
+
+[21] Tal Schuster, Adam Fisch, Jai Gupta, Mostafa Dehghani, Dara Bahri, Vinh Tran, Yi Tay, and Donald Metzler.
+     Confident adaptive language modeling. arXiv preprint arXiv:2207.07061, 2022.
+
+[22] Noam Shazeer. GLU variants improve transformer. arXiv preprint arXiv:2002.05202, 2020.
+
+[23] Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc Le, Geoffrey Hinton, and Jeff Dean.
+     Outrageously large neural networks: The sparsely-gated mixture-of-experts layer. In International Conference on
+     Learning Representations, 2017.
+
+[24] Jianlin Su, Yu Lu, Shengding Pan, Ahmed Murtadha, Bo Wen, and Yunfeng Liu. RoFormer: Enhanced transformer
+     with rotary position embedding. arXiv preprint arXiv:2104.09864, 2021.
+
+[25] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei, Nikolay Bashlykov,
+     Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, et al. Llama 2: Open foundation and fine-tuned chat models.
+     arXiv preprint arXiv:2307.09288, 2023.
+
+[26] Guan Wang, Jin Li, Yuhao Sun, Xing Chen, Changling Liu, Yue Wu, Meng Lu, Sen Song, and Yasin Abbasi
+     Yadkori. Hierarchical reasoning model. arXiv preprint arXiv:2506.21734, 2025.
+
+[27] Ruibin Xiong, Yunchang Yang, Di He, Kai Zheng, Shuxin Zheng, Chen Xing, Huishuai Zhang, Yanyan Lan,
+     Liwei Wang, and Tie-Yan Liu. On layer normalization in the transformer architecture. In Proceedings of the 37th
+     International Conference on Machine Learning, 2020.
+
+[28] Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin Choi. HellaSwag: Can a machine really finish
+     your sentence? In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,
+     2019.
+
+[29] Biao Zhang and Rico Sennrich. Root mean square layer normalization. In Advances in Neural Information
+     Processing Systems, volume 32, 2019.
+
+[30] Peiyuan Zhang, Guangtao Zeng, Tianhao Wang, and Wei Lu. TinyLlama: An open-source small language model.
+     arXiv preprint arXiv:2401.02385, 2024.
+
+[31] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen, Shuohui Chen, Christopher Dewan,
+     Mona Diab, Xian Li, Xi Victoria Lin, et al. OPT: Open pre-trained transformer language models. arXiv preprint
+     arXiv:2205.01068, 2022.
+
+
+
+
+                                                        17
+

@@ -1,0 +1,335 @@
+                                                           Dynamical phase selection controls compute scaling in looped transformers
+
+                                                                                                           Gunn Kim1, ∗
+                                                                          1
+                                                                              Department of Physics, Sejong University, Seoul 05006, Republic of Korea
+                                                                                                     (Dated: August 28, 2026)
+                                                                   A looped transformer performs inference by iterating a weight-tied map, making its computation
+                                                                a dynamical process whose cost is set by the resulting inference dynamics. Here we show that net-
+                                                                works with identical architecture and objective, trained to identical accuracy, nevertheless realize
+                                                                distinct dynamical phases depending strongly on initialization, and that the bifurcation defining
+                                                                each phase determines how test-time compute scales. The phases are distinguished by their bifur-
+                                                                cation mechanisms, including a saddle-node fold and a Neimark–Sacker-type transition to bounded
+
+
+
+
+arXiv:2608.26556v1 [cond-mat.dis-nn] 27 Aug 2026
+                                                                nonstationary motion. In the fold phase, a one-dimensional normal-form reduction predicts both the
+                                                                relaxation-time and spectral-gap amplitudes from local derivatives of the trained map, yielding the
+                                                                parameter-free relation τ (ε)[1 − λmax (−ε)] → π. Composed with a regular distribution of problem
+                                                                difficulty, the same critical slowing down produces the workload-level tail P (τ > N ) ∼ N −2 . In the
+                                                                Neimark–Sacker phase, the fold scaling law disappears rather than merely changing its prefactor.
+                                                                Thus, test-time compute is not determined by architecture alone. It is governed by the dynamical
+                                                                phase of the solution found by training.
+
+
+                                                      Introduction.—A looped transformer applies one                 fraction µ of trials, so the decision must be maintained
+                                                   weight-tied block recurrently to arbitrary depth [1–3], an        without support. The objective specifies neither a fixed
+                                                   architecture now scaled into language models that con-            point nor a bifurcation nor an iteration count. We sweep
+                                                   vert test-time iteration into reasoning performance [4–6].        d = 16, K = 48, µ ∈ {0.20, . . . , 0.80}, and three ini-
+                                                   Stripping the model to its recurrence makes inference ex-         tializations. All fifteen networks reach held-out accuracy
+                                                   plicit,                                                           1.000, with final losses between 1.9×10−5 and 3.6×10−4 ;
+                                                                                                                     at the level of task performance, they are indistinguish-
+                                                                        zt+1 = Fθ (zt ; h),                  (1)     able.
+                                                                                                                        Phases of inference.—We classify each network by the
+                                                   with the iteration count an operational relaxation time.          fate of the fixed point of the disfavored decision as h
+                                                   This raises a basic question: what determines how long            increases, tracking the leading nontrivial multiplier after
+                                                   the computation takes? Two aspects have received at-              removing the exact symmetry mode. We locate a real
+                                                   tention: what training makes the network compute, and             unit-multiplier crossing by solving
+                                                   whether the recurrence remains stable, often through
+                                                   spectral conditions on its linearization [6–9]. Neither                 Fθ (z; h) = z,      (J − I)v = 0,       v ⊤ v = 1,
+                                                   fixes the cost of inference, which is set by the fixed-point
+                                                   structure the network relaxes toward and the bifurcation          and identify a network as Neimark–Sacker only when no
+                                                   through which a decision is made.                                 fold is found by the extended system, the fixed-point
+                                                      That the linear condition is not the whole story is            branch persists, and a complex-conjugate pair crosses the
+                                                   known: a spectral bound ρ(A) < 1 on the linear part               unit circle [10]. Three principal phases emerge. In the
+                                                   does not certify convergence of the full map, and a               fold phase, a real multiplier reaches unity as the fixed
+                                                   minority of randomly initialized instances circulate on           point collides with a saddle and both disappear. In the
+                                                   bounded orbits without settling [8]. Our networks satisfy         Neimark–Sacker phase, a complex-conjugate pair crosses
+                                                   ρ(A) = 0.90 < 1 by construction and nonetheless have              the unit circle, destabilizing the fixed point while leav-
+                                                   a leading multiplier of the full Jacobian that reaches or         ing bounded nonstationary dynamics. In the rigid phase,
+                                                   crosses unity at a finite field. We show that these be-           the bistable branch persists throughout the explored field
+                                                   haviors are not failures but distinct dynamical phases            range. Monostable and non-generic cases occur as addi-
+                                                   selected by training, and that the phase determines the           tional outcomes [10].
+                                                   scaling law of inference time.                                       Figure 1(a) summarizes the phase assignments across
+                                                      Setup.—We iterate a weight-tied pre-norm attention-            memory pressure and initialization.         The phase is
+                                                   plus-MLP block on a latent state z ∈ Rd with one input            strongly initialization-dependent but only weakly depen-
+                                                   token carrying the evidence h, residual scale ρ, and la-          dent on the objective. The phase differs across seeds at
+                                                   tent decay γ. The decay permits isolated fixed points:            every value of µ, whereas varying µ at fixed initialization
+                                                   without it, normalization leaves fewer effective degrees          changes the classification only twice across the sweep. At
+                                                   of freedom than the number of fixed-point conditions,             fixed µ = 0.50, ten independent initializations yield five
+                                                   making an isolated solution nongeneric [10]. Networks             folds, one Neimark–Sacker, one rigid, and three monos-
+                                                   are trained end to end with a stationarity penalty to de-         table networks, all with accuracy 1.000 [10]. Checkpoints
+                                                   cide sign(h) from evidence withdrawn mid-episode in a             further show that the phase becomes identifiable early in
+                                                                                                                                2
+
+training: eight of ten networks are already in their final     therefore reduces the dynamics to
+phase by step 250; one additional network subsequently
+                                                                        ut+1 = ut + gε + bu2t ,         ε = h − hsn ,
+changes locally from a non-generic crossing to Neimark–
+Sacker, while none switches directly between fold and                      ⊤
+                                                               where u = l (z − zsn ) and
+Neimark–Sacker, despite a further 4–24-fold reduction
+in loss after the phase is established [10]. Thus, task                   g = l⊤ ∂h Fθ ,      b = 12 l⊤ ∂ 2 Fθ [r, r],     (3)
+performance does not resolve the dynamical distinction:        with l⊤ r = 1. Both coefficients are determined directly
+training finds multiple solutions with essentially identi-     from the trained map; choosing the orientation such that
+cal objective values but qualitatively different inference     b > 0 gives g > 0 for every fold network [10].
+dynamics.                                                         For ε > 0, the continuum limit gives u̇ = gε + bu2 ,
+  What symmetry constrains.—LayerNorm is invariant             the normal form of Type-I intermittency [13]. Passage
+under z → z + c1, so a perturbation along 1 survives           an equal distance ε above the fold and critical slowing on
+normalization only through the residual decay, giving ex-      the stable branch an equal distance below it give, respec-
+actly                                                          tively,
+                                                                         π/2
+                     J1 = (1 − γ)2 1
+                                                                                                           p
+                                                        (2)      τ (ε) = √ ε−1/2 ,      1 − λmax (−ε) = 2 gb ε1/2 . (4)
+                                                                           gb
+at every state and field [10]. This symmetry mode car-         The factor π/2, rather than π, reflects the one-sided pas-
+ries no information about the solution and is therefore        sage from the fold state; the finite-threshold correction
+removed before the remaining spectrum is analyzed; oth-        is below 0.15% at ε = 10−6 [10]. Thus the exponents
+erwise (1 − γ)2 can appear among the leading multipliers       and amplitudes are fixed by the same two local deriva-
+away from the fold. The Jacobians of the nonlinearities        tives. Evaluating the two relations at equal distances on
+are symmetric, so antisymmetry, and hence rotation, en-        opposite sides of the fold eliminates g and b:
+ters through compositions of the learned weight matrices.
+                                                                      Π(ε) ≡ τ (ε) 1 − λmax (−ε) = π + O(ε1/2 ).
+                                                                                                
+Looped recurrences are known to exhibit substantial non-                                                              (5)
+normality and rotation even at random initialization [8];      Unlike the exponents, which follow directly from the nor-
+here the decomposition shows that their magnitude and          mal form, this amplitude relation provides a parameter-
+direction vary across initializations of the same architec-    free test of the reduction itself. A map could repro-
+ture.                                                          duce the exponents while failing this amplitude relation.
+   These constraints narrow the bifurcations observed in       Across seven fold-phase networks spanning d = 16–20,
+our sweep. Because the map is real, multipliers are            K = 24 and 48, both protocols, and hsn = 0.021–0.215,
+real or occur in conjugate pairs. No architectural sym-        all predictions agree with the measurements to within a
+metry protects a pitchfork, and we find no transcriti-         few percent [10]; Fig. 2 and Table I summarize the tests.
+cal crossings; period doubling is also absent, with the           The cost of computation follows the phase.—A budget
+closest approach satisfying |λ + 1| = 1.7214. The ob-          is spent across a population of problems. For a difficulty
+served codimension-one bifurcations are therefore folds        density p that is smooth and nonzero at the fold, invert-
+and Neimark–Sacker crossings, apart from occasional            ing the first relation in Eq. (4) gives
+non-generic crossings [10]. This is a classification of the
+models explored, not an exclusion theorem.                                                                 π/2
+                                                                          p(τ ) ∼ 2A2 p(0)τ −3 ,        A= √ ,
+   The decisive quantity is not the spectrum at the resting                                                 gb
+attractor but its evolution with the control field. Resting-
+state rotation does not separate the phases: the antisym-      TABLE I. Parameter-free tests over seven fold-phase networks
+metric fraction of the Jacobian overlaps between the fold      spanning d = 16–20, K = 24 and 48, both protocols, and
+and Neimark–Sacker networks, spanning [0.067, 0.140]           hsn = 0.021–0.215. Uncertainties are standard deviations
+and [0.098, 0.190], respectively [10]. Likewise, a small       across networks [10].
+imaginary part at rest does not preclude a fold, because
+a complex pair can collide on the real axis as h increases.    quantity                        predicted          measured
+We therefore classify the phase from the continued Jaco-       branch exponent                    1/2         0.4999 ± 0.0014
+bian spectrum rather than from any scalar descriptor at        slowing exponent                   1/2          0.5004 ± 0.0019
+                                                                                     √
+rest. What matters is not how much rotation the map            slowing amplitude / 2 gb            1           1.0016 ± 0.0082
+carries, but whether it carries rotation in the critical di-   passage exponent                  −1/2         −0.4997 ± 0.0092
+                                                                                   π/2
+rection.                                                       passage prefactor / √ gb
+                                                                                                   1          1.0063 ± 0.0255
+   Inside the fold phase, an effective theory with no fit-     Π at ε = 10−6                  π = 3.1416       3.146 ± 0.017
+ted parameters.—At a generic fold, one multiplier reaches      tail exponent, least squares      −2            −2.130 ± 0.196
+unity while the remaining multipliers stay inside the unit     tail exponent, Hill                2            2.108 ± 0.183
+circle. The center manifold theorem for maps [11, 12]
+                                                                                                                                               3
+
+                       (a)                                        (b)                                            (c)
+                                                                             never real: no fold                 0.2          fold
+                      0.80
+
+
+
+    memory pressure
+                                                                 0.15                                                         Neimark-Sacker
+                      0.65                                                                                       0.1
+                                                     |Im max |
+                                                                 0.10
+                      0.50
+                                                                        collide, then fold              Im max   0.0
+                      0.35                                       0.05                                            0.1
+                      0.20                                       0.00                                            0.2
+                              1       2          3                   0.0          0.5             1.0                  0.92     0.96 1.00
+                             initialization seed                                 h / hc                                         Re max
+                                          fold         Neimark-Sacker                     rigid              monostable
+FIG. 1. (a) Phase across memory pressure and initialization, fifteen networks. (b) |Im λmax | along the branch, with the
+symmetry mode removed; fold networks are solid. (c) λmax in the complex plane for one fold and one Neimark–Sacker network.
+
+
+and hence                                                                        integration interval [10]. Scanning 200 fields above hN S ,
+                                                                                 the 35 non-escaping fields form one contiguous low-field
+                               P (τ > N ) ∼ N −2 .                         (6)   interval ending at h = 0.0497, followed by a single tran-
+                                                                                 sition into the escaping regime [Fig. 3]. Escape therefore
+The universality is that of the fold normal form combined
+                                                                                 begins at a field 29% above hN S , well separated from the
+with the regularity of the workload density, not of the
+                                                                                 crossing, and we assign no fold-like power-law exponent
+network itself. For the uniform ensembles used here, ε ∼
+                                                                                 to this phase. The fixed point persists, and escape is con-
+U(0, εmax ) and p(0) = 1/εmax , fixing the amplitude as
+                                                                                 trolled by the subsequent loss of the bounded nonstation-
+                       ∗ 2
+                        N                                                        ary state rather than by passage through a saddle-node
+       P (τ > N ) =            ,      N ∗ = Aε−1/2
+                                              max .                              bottleneck. Thus the fold-derived compute-time law has
+                        N
+                                                                                 no direct analogue in this network. We analyze escape
+Across 8.4 × 104 problems in seven networks, with no                             only for this phase; the rigid and monostable networks
+censoring, the distributions collapse onto (N/N ∗ )−2 with                       have no fold at which the same slowing law can arise.
+unit amplitude. At N = 10N ∗ , the predicted unsolved                            Predictability of cost is itself a property of the dynami-
+fraction 10−2 is measured as 0.0070–0.0110 [Fig. 2(c)].                          cal phase.
+   For this decision task, P (τ > N ) is the residual frac-                         Discussion.—That a trained network organizes infer-
+tion of problems unsolved at budget N and therefore                              ence around a bifurcation is not surprising; attractor
+the budget-induced error if an unresolved trajectory is                          models of decision making have been built this way for
+counted as an error. The tail also implies                                       decades [14–17], and networks trained on a single task
+                                                                                 can realize it through distinct mechanisms whose selec-
+                               ⟨τ | τ > N ⟩ ∼ 2N,
+                                                                                 tion depends on initialization [18–21]. What is new here
+so the expected remaining compute remains of the same                            is that these alternatives are distinct bifurcation phases,
+order as that already spent. Moreover, ⟨τ ⟩ is finite while                      and that the selected phase determines the computa-
+⟨τ 2 ⟩ diverges logarithmically with the cutoff, placing the                     tional time scale. This sharpens rather than contradicts
+workload at the boundary between finite and divergent                            the observation that trained recurrent networks can share
+compute fluctuations: rare hard instances dominate the                           dynamical topologies [22]: such sharing can hold within a
+variance.                                                                        phase even when the phase itself is not fixed by the task.
+   In the Neimark–Sacker phase, the fold law disap-                              It also extends the implicit bias identified for looped lin-
+pears.—Changing phase does not merely change the pref-                           ear transformers with normalization [23]: optimization
+actor of the fold law; it removes the underlying fixed-                          can favor a dynamical class, but that class need not be
+point-annihilation mechanism. In the Neimark–Sacker                              determined by the task.
+network, the disfavored fixed point is not destroyed: a                             From a physics perspective, optimization acts as a
+complex-conjugate pair crosses the unit circle at hN S =                         quench that selects among dynamically inequivalent solu-
+0.0386 with multiplier 0.9886 + 0.1504i, an angular in-                          tions that are indistinguishable at the level of task perfor-
+crement of 0.151 radians per iteration, or about 42 itera-                       mance, with symmetry constraining the available struc-
+tions per turn. Past the crossing the fixed point remains                        ture rather than selecting the phase. Once selected, the
+present but unstable, and trajectories launched from the                         phase admits a remarkably sharp description. In the fold
+branch state remain bounded and nonstationary over the                           phase, a nonlinear map produced by gradient descent,
+                                                                                                                                                           4
+
+                       (a)                                                    (b)                                           (c)
+                         node (filled)                                              dashed: (hsn h)1/2
+                                                                                                                            100            (N/
+                    10 1 saddle (open)                             gb        10 1                                          10 1                 N*
+                                                                                                                                                 ) 2
+
+         |u|/ g/b                                                  max )/2                                       P( > N)
+                    10 2                                                     10 2                                          10 2
+                                                 0.5                                         max ]
+                                   u             0.0                                                                       10 3
+                                                 0.5 2 1 0                                   [1
+                    10 3                          (h hsn ) × 103
+                                                                   (1        10 3                    10 5 10 3             10 4
+                                10 5 10 3 10 1                                         10 5 10 3 10 1                             100    101         102
+                                       hsn h                                                hsn h                                       N/N *
+
+FIG. 2. Seven fold-phase networks, each rescaled by its predicted amplitude; dashed lines carry no free parameter. (a) Node
+(filled) and saddle (open) branches; inset, sign retained. (b) Critical slowing down; inset, Π(ε) of Eq. (5). (c) Complementary
+cumulative distributions of τ .
+
+
+whose objective contains no bifurcation or compute-time                                     normal-form universality, arising from the structural sta-
+constraint, is quantitatively captured by the saddle-node                                   bility of the fold under smooth coordinate changes, rather
+normal form: both critical exponents and amplitudes are                                     than fluctuation-driven universality of a thermodynamic
+determined by local derivatives of the trained map, in-                                     transition. There is no diverging correlation length or
+cluding the parameter-free relation of Eq. (5). This is                                     thermodynamic limit; the exponent 1/2 follows directly
+                                                                                            from the local Taylor expansion.
+                                                                                               The fold normal form further converts single-problem
+   (a)                                                                                      critical slowing down into an ensemble theory of com-
+                 106                 no escape                                              pute. Combining τ ∼ ε−1/2 with a workload density reg-
+                                                                                            ular at the bottleneck gives P (τ > N ) ∼ N −2 , placing
+                 105                                                                        the workload at the boundary of finite compute fluctu-
+
+
+
+   escape time
+                 104                                                                        ations. The ingredients are the local normal form and
+                                                                                            the regularity of the difficulty distribution, not the de-
+                 103                                                                        tails of the neural network. The same composition should
+                                                                                            therefore apply to other iterative computations whose in-
+                 102          fold
+                              Neimark-Sacker                                                stances approach a bottleneck with varying distance to
+                 101                                                                        criticality. By contrast, the Neimark–Sacker phase lacks
+                       10 6 10 5 10 4 10 3 10 2 10 1                                        a fixed-point annihilation and, in our data, no analogous
+                                   = h hc                                                   single-parameter critical compute-time scaling emerges.
+                                                                                            Predictability of test-time compute is therefore itself a
+   (b)                                                                                      property of the dynamical phase.
+                         no escape ( > 2.5 × 105)                                              This perspective also clarifies the relation to stability
+                                                                                            analyses. Previous work asks whether the recurrence set-
+                 103                                                                        tles and shows that a spectral bound on the linear part
+
+
+
+                                  escape onset
+                                                                                            does not by itself answer that question [7, 8]; we ask
+                 102                                                                        what the full nonlinear map does as it approaches a bi-
+                                                                                            furcation, and how the resulting relaxation time scales.
+                       hNS                                                                  The non-settling trajectories reported at random initial-
+                         0.04        0.05              0.06        0.07                     ization [8] are consistent with the nonstationary dynam-
+                                  evidence field h                                          ics of our Neimark–Sacker phase, but our results show
+                                                                                            that such dynamical alternatives can persist after train-
+                                                                                            ing and depend strongly on initialization. This also rec-
+FIG. 3. (a) Escape time against distance to the critical field
+                                                                                            onciles the saturating exponential observed in test-time
+for a fold network (blue; dashed, Eq. (4)) and a Neimark–
+Sacker network (orange); crosses mark fields with no escape                                 curves [7], associated with the spectral radius of the full
+within 2.5 × 105 iterations. (b) The Neimark–Sacker scan on                                 Jacobian [8], with the power-law workload tail found
+a linear field axis. The non-escaping fields form a contiguous                              here: exponential relaxation describes the dynamics of
+low-field interval and escape begins at a single onset near                                 a fixed problem, whereas the power law arises from the
+h = 0.0499, well above the crossing hN S = 0.0386: loss of                                  distribution of relaxation times across problems. The
+fixed-point stability and escape are distinct events.                                       two describe different levels of the computation and are
+                                                                                                                            5
+
+therefore not in conflict.                                           L. Kaiser, in Proc. ICLR (2019), arXiv:1807.03819.
+   Several predictions follow that can be tested on              [2] A. Giannou, S. Rajput, J.-y. Sohn, K. Lee, J. D. Lee, and
+existing looped models using per-instance iteration                  D. Papailiopoulos, in Proc. ICML (2023), p. 11398.
+counts [10]. If a workload samples a fold bottleneck for         [3] N. Saunshi, N. Dikkala, Z. Li, S. Kumar, and S. J. Reddi,
+                                                                     in Proc. ICLR (2025), arXiv:2502.17416.
+which the leading real multiplier approaches unity and           [4] J. Geiping et al., in Adv. Neural Inf. Process. Syst. 38,
+the difficulty density is regular there, the iteration counts        41340 (2025), arXiv:2502.05171.
+should develop the N −2 tail even if mean performance re-        [5] A. Jeddi, M. Ciccone, and B. Taati, in Proc. ICLR
+tains an approximately exponential dependence on com-                (2026), arXiv:2602.11451.
+pute. More generally, if the difficulty density behaves as       [6] S. Movahedi, V. Milovanović, S. L. Feigin, A. Theus,
+p(ε) ∼ ε−a near the bottleneck, the same composition                 T. Hofmann, V. Boeva, T. K. Rusch, and A. Orvieto,
+gives P (τ > N ) ∼ N −2(1−a) , or a positive tail index              arXiv:2606.18206 (2026).
+θ = 2(1 − a) when P (τ > N ) ∼ N −θ ; thus the measured          [7] H. Prairie, Z. Novack, T. Berg-Kirkpatrick, and D. Y. Fu,
+                                                                     arXiv:2604.12946 (2026).
+tail probes the distribution of distances to criticality. Ar-    [8] M. M. M. Buehlmaier, arXiv:2607.10681 (2026).
+chitectures with ρ(A) = 1 by construction [7] provide            [9] A. Labovich, arXiv:2604.15259 (2026).
+a natural setting for this test, although marginal linear       [10] See Supplemental Material for architecture and training,
+residual dynamics does not by itself imply a fold. Finally,          the phase classification protocol and checkpoint statis-
+within our bistable ensemble, every network whose lead-              tics, symmetry constraints on the linearization, fold lo-
+ing nontrivial multiplier was exactly real at the resting            cation and saddle continuation, the normal-form reduc-
+attractor belonged to the fold phase, although not every             tion and its parameter-free tests, ensemble construction
+                                                                     and tail estimation, the Neimark–Sacker escape scan, the
+fold was real at rest. Since the N −2 law was observed               monostable and non-generic cases, the one-step forecast,
+only in the fold phase, the resting spectrum is a candi-             finite-noise scaling, and a protocol for measuring the
+date diagnostic whose scope must be tested beyond the                tail exponent on a large looped model, which includes
+present ensemble.                                                    Refs. [11, 12, 24, 25].
+   Conclusion.—Training determines what a looped                [11] J. Guckenheimer and P. Holmes, Nonlinear Oscillations,
+transformer computes, while spectral conditions on its               Dynamical Systems, and Bifurcations of Vector Fields
+linearized recurrence constrain the stability of its resid-          (Springer, New York, 1983).
+                                                                [12] Y. A. Kuznetsov, Elements of Applied Bifurcation The-
+ual dynamics. Neither, however, determines how infer-                ory, 3rd ed. (Springer, New York, 2004).
+ence unfolds. That is set by the dynamical phase se-            [13] Y. Pomeau and P. Manneville, Commun. Math. Phys.
+lected by training: networks with the same architecture,             74, 189 (1980).
+objective, and task performance can relax through quali-        [14] K.-F. Wong and X.-J. Wang, J. Neurosci. 26, 1314
+tatively different bifurcations, with the choice depending           (2006).
+strongly on initialization and becoming identifiable when       [15] X.-J. Wang, Neuron 60, 215 (2008).
+the memory–attractor structure forms. Symmetry con-             [16] V. Mante, D. Sussillo, K. V. Shenoy, and W. T. Newsome,
+                                                                     Nature (London) 503, 78 (2013).
+strains the available phases but does not select among          [17] D. Sussillo and O. Barak, Neural Comput. 25, 626
+them. In the fold phase, the resulting dynamics obey a               (2013).
+parameter-free critical scaling that extends from single-       [18] E. Ghazizadeh and S. Ching, PLoS Comput. Biol. 17,
+problem relaxation to a universal workload tail, whereas             e1009366 (2021).
+the Neimark–Sacker phase has no analogous compute-              [19] C. Jarne, Cogn. Neurodyn. 17, 257 (2023).
+time law. Test-time compute is therefore not determined         [20] C. Jarne and R. Laje, J. Comput. Neurosci. 51, 407
+by the architecture alone; it is a dynamical property of             (2023).
+                                                                [21] E. Turner, K. Dabholkar, and O. Barak, in Adv. Neural
+the solution that training finds.                                    Inf. Process. Syst. 34 (2021), arXiv:2111.09356.
+   Data availability.—The data and code that support the        [22] N. Maheswaranathan, A. Williams, M. Golub, S. Gan-
+findings of this study are available from the correspond-            guli, and D. Sussillo, in Adv. Neural Inf. Process. Syst.
+ing author upon reasonable request.                                  32 (2019).
+                                                                [23] L. Wu, C. Zhang, and Y. Cao, arXiv:2606.00605 (2026).
+                                                                [24] D. Hathcock and J. P. Sethna, Phys. Rev. Research 3,
+                                                                     013156 (2021).
+                                                                [25] N. Berglund and B. Gentz, Noise-Induced Phenomena in
+  ∗
+     Corresponding author: gunnkim@sejong.ac.kr                      Slow-Fast Dynamical Systems (Springer, London, 2006).
+ [1] M. Dehghani, S. Gouws, O. Vinyals, J. Uszkoreit, and
+

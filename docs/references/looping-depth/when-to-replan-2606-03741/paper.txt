@@ -1,0 +1,526 @@
+                                                When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning
+
+
+                                                                                                 Ayushi Chadha 1
+
+
+                                                                   Abstract                                   a fast, automatic, intuition-driven mode and a slow, deliber-
+                                                                                                              ate, effortful mode (Kahneman, 2011; Evans & Stanovich,
+                                                Long-horizon reasoning requires a system to com-              2013). Modern reasoning systems in machine learning have
+                                                mit to medium-horizon intent without becoming                 begun to recapitulate something like this structure. Chain-
+                                                rigid: re-plan too often and computation never co-
+
+
+
+
+arXiv:2606.03741v2 [cs.AI] 30 Jun 2026
+                                                                                                              of-thought prompting (Wei et al., 2022) makes delibera-
+                                                heres into multi-step structure; commit too long              tion explicit by externalizing it as a token sequence; latent
+                                                and the plan goes stale. We study this stability–             reasoning architectures internalize multi-step computation
+                                                adaptivity tradeoff in the latent reasoning setting,          inside hidden state. Among the latter, adaptive computa-
+                                                where multi-step computation occurs inside hid-               tion time (Graves, 2016) allocates variable depth as needed,
+                                                den state rather than externalized token traces. We           and the Hierarchical Reasoning Model (HRM) (Wang et al.,
+                                                extend the Hierarchical Reasoning Model (HRM)                 2025) couples a slow high-level loop with a fast low-level
+                                                with a feudal-style manager–worker interface: a               loop and a halting mechanism, achieving deep latent com-
+                                                slow high-level module periodically emits a nor-              putation in compact models trained from scratch. These
+                                                malized directional subgoal that persists for P               architectures gain speed and flexibility by giving up the leg-
+                                                low-level steps, biasing the worker’s hidden-state            ibility of the reasoning trace — but in doing so, they raise a
+                                                updates and supplying an intrinsic cosine align-              question the externalized setting does not have to confront.
+                                                ment loss. On ARC and ConceptARC, we find
+                                                that subgoal persistence — not subgoal injection              When deliberation is a sequence of explicit tokens, each
+                                                alone — is the central knob: moderate periods                 token implicitly commits the system to a piece of intent: the
+                                                P ∈ [3, 6] consistently outperform both very fre-             next word constrains what comes after. When deliberation is
+                                                quent (P =1) and longer horizons, with a clear                a sequence of hidden-state updates, no such commitment is
+                                                minimum LM loss at P =3 (1.544 vs. 1.674 at                   forced. A latent reasoner can in principle revise its medium-
+                                                P =1 and a 1.640 baseline; replicated over five               horizon intent at every micro-step, or never. The architec-
+                                                seeds with mean 1.595 and standard deviation                  tural form does not, by itself, determine the temporal scale
+                                                0.045). The intrinsic alignment weight λ shows a              of planning. How long should a latent reasoner commit
+                                                complementary narrow optimum (λ ≈ 0.05), and                  to an intent before revising it?
+                                                a controlled ablation at past-sweet-spot λ isolates           We study this question through the lens of subgoal persis-
+                                                learned directional structure — not architectural             tence. One way to give a latent reasoner explicit medium-
+                                                capacity or auxiliary loss alone — as the source              horizon intent is to add a slow module that periodically
+                                                of interference when the alignment signal exceeds             emits a subgoal — a directional vector in latent space —
+                                                its optimum. Together these findings implicate                that persists across multiple fast-module steps before being
+                                                a design principle for compositional planning in              revised. The choice of how long to commit to a subgoal is
+                                                latent reasoning systems: medium-horizon intent               then the central knob, and it embodies a stability–adaptivity
+                                                must be coherent across enough computational                  tradeoff that any planner organized around intermediate in-
+                                                steps for compositional structure to form.                    tent must resolve. Update too frequently and each subgoal
+                                                                                                              is overwritten before the worker can compose it into multi-
+                                                                                                              step computation; commit too long and the subgoal ossifies
+                                         1. Introduction                                                      as the worker’s hidden state evolves past it. This tradeoff
+                                         A long-standing observation in cognitive science is that hu-         has been studied extensively in feudal reinforcement learn-
+                                         man reasoning operates on at least two distinct timescales:          ing (Vezhnevets et al., 2017; Sutton et al., 1999), where
+                                                                                                              it underwrites the design of options and manager–worker
+                                            1
+                                            Independent Researcher, India. Correspondence to: Ayushi          hierarchies. We import this commitment-duration lens into
+                                         Chadha <ayushichadha48@gmail.com>.                                   latent reasoning, where the worker’s “actions” are hidden-
+                                                                                                              state updates rather than environment interactions and the
+                                         Accepted to the 2nd Workshop on Compositional Learning at ICML
+                                         2026, Seoul, South Korea. Copyright 2026 by the author(s).           cost of stale plans is representational rather than behavioral.
+
+                                                                                                          1
+                           When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning
+
+We propose Subgoal-Augmented HRM, a feudal-style ex-                  evidence of this gap.
+tension of HRM that operationalizes persistent latent intent.
+Every P low-level micro-steps, the high-level module emits            Contributions.
+a normalized directional subgoal g; the worker’s hidden-
+state updates are biased by g through a learned projection,            1. We characterize a stability–adaptivity tradeoff in sub-
+and a cosine alignment loss rewards net low-level displace-               goal persistence for hierarchical latent reasoning, iden-
+ment that progresses along g. Crucially, P — the manager                  tifying P ∈ [3, 6] as a consistent sweet spot on
+period — is exposed as a hyperparameter we sweep, al-                     ARC/ConceptARC and P =1 as underperforming the
+lowing us to characterize the persistence regime in which                 no-subgoal baseline. We replicate the best configura-
+subgoals actually help. We complement the persistence                     tion across 5 seeds (Sections 3–4).
+sweep with two further studies: a sweep over the alignment
+loss weight λ that distinguishes “subgoal as prior” from               2. We show that the alignment loss weight λ exhibits a
+“subgoal as constraint,” and a controlled ablation that iso-              complementary narrow optimum at λ ≈ 0.05, consis-
+lates the contribution of learned directional structure from              tent with directional subgoals acting as a lightweight
+architectural capacity alone.                                             planning prior rather than a dominant constraint (Sec-
+                                                                          tion 4).
+Our findings on ARC and ConceptARC point to a single
+design principle. Persistence is necessary, not optional: at           3. We provide a controlled ablation at past-sweet-spot λ
+P =1, the full subgoal infrastructure performs below the no-              that isolates learned directional structure — not archi-
+subgoal baseline — the cleanest evidence in our study that                tectural capacity or auxiliary loss alone — as the source
+the persistence mechanism, not the injection mechanism,                   of interference when the alignment signal exceeds its
+drives the improvement. The benefit emerges sharply at                    optimum (Section 5).
+P =3 and decays only gradually out to P =8, an asymme-
+try suggesting that staleness is a softer failure mode than           2. Background and Related Work
+instability. The intrinsic weight λ shows a complementary
+narrow optimum at λ ≈ 0.05, consistent with the mecha-                Latent reasoning and adaptive computation. Chain-of-
+nism functioning as a lightweight planning prior rather than          thought prompting (Wei et al., 2022) externalizes reasoning
+a dominant geometric constraint. A controlled ablation at             as token sequences, gaining interpretability and trainability
+past-sweet-spot λ isolates learned directional structure —            at the cost of latency and brittleness to step ordering. Latent
+not architectural capacity or auxiliary loss alone — as the           reasoning architectures internalize multi-step computation
+source of interference when the alignment signal exceeds its          in hidden state. Adaptive Computation Time (Graves, 2016)
+optimum. Results are replicated across 5 seeds at the best            allocates variable depth as needed by learning a halting prob-
+configuration.                                                        ability, increasing effective depth when the input warrants
+                                                                      it. The Hierarchical Reasoning Model (HRM) (Wang et al.,
+                                                                      2025) combines multi-timescale recurrence with halting:
+Scope. This work is an empirical and behavioral charac-
+                                                                      coupled fast and slow loops exchange state through learned
+terization of when and how persistent directional subgoals
+                                                                      dynamics, with an ACT-style halting head choosing the num-
+improve hierarchical latent reasoning, complemented by a
+                                                                      ber of segments executed per example. HRM achieves deep
+controlled ablation that isolates the source of past-sweet-
+                                                                      latent computation in compact models trained from scratch
+spot interference. A representation-level analysis of how
+                                                                      on abstract reasoning tasks. However, coordination between
+persistent subgoals shape worker hidden-state geometry is
+                                                                      the two levels in HRM is implicit: there is no explicit signal
+a natural complement we leave for follow-up work; we
+                                                                      carrying medium-horizon intent from the slow loop to the
+discuss this in Section 7.
+                                                                      fast one, and the temporal scale of any planning that occurs
+We frame this as a contribution to compositional learning.            must emerge from the recurrent dynamics alone.
+The manager–worker decomposition gives an explicit inter-
+face between intent and execution, allowing the worker to             Feudal hierarchies and temporal abstraction. The gap
+assemble a sequence of subgoal-conditioned hidden-state               left implicit in HRM — an explicit medium-horizon in-
+updates into longer-horizon computation. The persistence              tent signal between hierarchical levels — is precisely the
+finding identifies the necessary condition under which this           design problem that feudal hierarchies in reinforcement
+assembly actually occurs. A subgoal mechanism without                 learning address. The framework we extend originates in
+persistence has the architectural form of compositionality            feudal reinforcement learning, where a manager emits latent
+(manager, worker, intent vector) but not its function: it             goals and a worker is incentivized to follow them (Vezhn-
+cannot produce the temporally extended structure that dis-            evets et al., 2017). The broader principle that temporally
+tinguishes “planning a sequence of steps” from “taking a              extended actions admit semi-Markov treatment and pro-
+single step with extra signal.” The P =1 result is the cleanest       vide credit-assignment leverage is formalized by the options
+
+                                                                  2
+                             When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning
+
+framework (Sutton et al., 1999). Both lines of work estab-            period P : the number of low-level steps a subgoal persists
+lish that commitment duration is a first-class design choice:         before being revised. This parameter controls the stability–
+a manager that re-issues goals every step is functionally             adaptivity tradeoff directly — small P permits rapid adap-
+not a manager, and an option without a stable termination             tation but prevents temporally extended computation from
+condition is not an option. We import this commitment-                cohering around any single intent; large P provides commit-
+duration lens from RL planning into latent reasoning, treat-          ment but risks staleness as the worker’s hidden state evolves
+ing the worker’s hidden-state updates as the analogue of              past the issued goal.
+environment-interaction “actions” and the manager’s emis-
+                                                                      Every P low-level micro-steps, at times tk = kP , the high-
+sion period as the analogue of an option’s expected duration.
+                                                                      level state emits a directional subgoal:
+Compositional planning. Subgoal decomposition is a                                                                 g̃k
+                                                                                  g̃k = Wg ztHk ,      gk =               .         (3)
+canonical mechanism by which planners achieve composi-                                                        ∥g̃k ∥2 + ε
+tional generalization in feudal and options-based reinforce-
+ment learning (Vezhnevets et al., 2017; Sutton et al., 1999):         A scalar commitment gate αk = σ(wα⊤ ztHk ) ∈ (0, 1) op-
+a complex task is solved by composing solutions to simpler            tionally modulates the strength of the subgoal’s influence,
+subgoals over extended horizons. We adopt this lineage                allowing the manager to soften commitment when the high-
+in latent reasoning, treating each persistent subgoal as a            level state is uncertain. For steps t ∈ [tk , tk + P ), the active
+directional primitive that the worker composes — through              goal and gate are g(t) = gk and α(t) = αk .
+a sequence of subgoal-conditioned hidden-state updates —
+into longer-horizon computation. The stability–adaptivity             Why direction, not target. A directional goal encodes
+tradeoff we characterize is, in this view, a tradeoff about how       “where to move” in latent space without forcing the worker
+long each primitive must remain in force for composition to           to hit a specific absolute target — a target-state formulation
+occur.                                                                would be brittle under the nonstationary internal dynamics
+                                                                      of a recurrent reasoner. Direction is the minimal structure
+                                                                      that lets the manager commit to medium-horizon intent
+3. Method
+                                                                      without overspecifying execution.
+3.1. HRM Backbone
+                                                                      3.3. Subgoal Injection
+We build on HRM with two coupled latent states: a slow
+high-level state ztH and a fast low-level state ztL . Given           The active goal is injected as an additive bias into the
+an encoded input x̃t , the model performs iterative latent            worker’s update. Let VL be a learned projection into the
+computation within a segment using recurrent transformer              low-level latent space:
+blocks. At each micro-step t, the low-level state updates:                   L
+                                                                                  = fL ztL , ztH , x̃t + α(t) VL g(t); θL . (4)
+                                                                                                                         
+                                                                            zt+1
+                 L
+                zt+1 = fL (ztL , ztH , x̃t ; θL ).         (1)
+                                                                      Optionally, the goal is also injected at the high-level update
+The high-level state updates every T low-level steps:                 step via a projection VH :
+         (
+                                                                               H
+           fH (ztH , zt+1
+                      L
+                                                                                   = fH ztH , zt+1
+                                                                                                 L
+                                                                                                                           
+   H                      ; θH ), (t + 1) mod T = 0,                         zt+1                    + α(t) VH g(t); θH ,
+ zt+1 =      H
+                                                      (2)                                                                        (5)
+           zt ,                   otherwise.                                               when (t + 1) mod T = 0.
+
+After N micro-steps, the segment produces a prediction                The injection converts medium-horizon intent into a persis-
+           H
+ŷ = fO (zN  ; θO ). Here T is HRM’s intrinsic high-level             tent steering term that shapes multiple consecutive worker
+update period — a small fixed integer, typically T =2 in our          updates, rather than relying on emergent cross-level interac-
+experiments following Wang et al. (2025) — and is indepen-            tions to carry intent forward.
+dent of the manager period P we introduce in Section 3.2
+for subgoal emission. HRM training uses deep supervision              3.4. Cosine Alignment Loss
+across segments with state detached between segments, and
+an ACT-style halting objective (Graves, 2016) chooses the             Persistent injection alone biases each update but does not
+number of executed segments per example. We treat the                 guarantee the worker’s trajectory progresses along the is-
+halting objective as part of the HRM baseline.                        sued direction. We add a cosine-based intrinsic loss — the
+                                                                      feudal alignment loss in the terminology of Vezhnevets
+                                                                      et al. (2017), which we abbreviate to alignment loss for
+3.2. Subgoal Emission and the Persistence Period P
+                                                                      the remainder of this paper — that rewards net low-level
+We add a feudal manager–worker interface inside HRM’s la-             displacement aligned with the active subgoal. Over the
+tent computation. The central design choice is the manager            interval [tk , tk + P ), define ∆zkL = ztLk +P − ztLk , the net
+
+                                                                  3
+                               When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning
+
+                              (a) Architecture                                                     (b) Persistence timeline
+                                      every P steps
+                                                                                       P =1
+                 Manager z H              Wg                                      instability
+
+
+
+               every T                                   subgoal gk                    P =3
+                                                                                  sweet spot
+                                                         persists P steps
+
+
+                  Worker z L              VL
+                  L                                                                    P =8
+                ∆zk                                                                staleness                               worker drifts past goal
+
+                         Lalign = 1 − cos(∆zkL , gk )                                                  low-level micro-step t
+
+                                          P      (k)
+                           L = LHRM + λ       k Lalign
+
+
+Figure 1. Subgoal-Augmented HRM. (a) Architecture. The manager (high-level state z H , blue) projects through Wg to emit a normalized
+directional subgoal gk every P low-level steps. The subgoal is injected into the worker’s update via VL (additive bias), persisting
+for P steps before re-emission. Worker displacement ∆zkL over the commitment window is compared to gk via Lalign , added to the
+HRM objective with weight λ. Grey arrows indicate HRM’s standard slow–fast recurrent coupling. (b) Persistence timeline over nine
+micro-steps. Coloured arrows above each axis denote subgoal emissions; their length spans the persistence window. At P =1 a fresh
+direction is issued every step (no temporal coherence); at P =3 three windows accumulate aligned worker displacement (shading); at
+P =8 a single subgoal persists while the worker drifts past it. The wavy line sketches the worker’s hidden-state trajectory z L .
+
+
+displacement of the worker’s hidden state during the sub-                               alignment-weight sweep over λ, and the 5-seed replica-
+goal’s commitment window. The alignment loss is:                                        tion of the best configuration — using a global batch
+                                                                                        size of 768 on CPU on the arc-aug-1000 corpus
+   (k)                                 ⟨∆zkL , gk ⟩                                     (num_aug=1000). The ablation study (Section 5) char-
+  Lalign = 1 − cos ∆zkL , gk = 1 −
+                            
+                                                      . (6)
+                                     ∥∆zkL ∥2 ∥gk ∥2                                    acterizes the causal contribution of learned directional
+                       (k)                                                             structure under controlled conditions, using a global batch
+With optional gating, Lalign = αk 1 − cos(∆zkL , gk ) .                                 size of 64 on a single NVIDIA L4 GPU on a compara-
+                                                                                        ble corpus constructed from the same source datasets but
+3.5. Full Training Objective                                                            with reduced augmentation (num_aug=100) for tractabil-
+Let LHRM denote the baseline HRM objective including                                    ity under the smaller batch size. Within each setup, all
+task loss and halting losses, unchanged from Wang et al.                                hyperparameters other than the variables under study are
+(2025). We add the intrinsic alignment term, summed over                                held fixed, and all reported numbers come from the same
+the ⌊N/P ⌋ subgoal windows within the current segment of                                metric (train/lm_loss) on identically-sized batches at
+N micro-steps and weighted by λ:                                                        matched optimization steps.
+
+                                     ⌊N/P ⌋
+                                                                                        The two setups produce different absolute LM-loss val-
+                                      X        (k)                                      ues for the same nominal configuration — for example,
+                L = LHRM + λ                  Lalign .                      (7)
+                                                                                        λ=0.10, P =4 yields 1.636 in the main study and 1.327 in
+                                      k=1
+                                                                                        the ablation study — reflecting differences in batch-size
+Because HRM detaches state between segments, the align-                                 optimization dynamics and effective dataset size rather than
+ment loss is computed within each segment and does not                                  any change in the model or objective. The magnitude of
+propagate gradients across segment boundaries, consistent                               past-sweet-spot interference also differs: at λ=0.10 the
+with HRM’s truncated-gradient training.                                                 main study shows the mechanism barely matching base-
+                                                                                        line (1.636 vs. 1.640), while the ablation study at the same
+4. Experiments                                                                          λ shows the mechanism clearly underperforming baseline
+                                                                                        (1.327 vs. 1.227), consistent with smaller batches making
+4.1. Experimental Regimes                                                               auxiliary-loss interference more visible. We therefore make
+                                                                                        all comparisons within their respective study and do not
+We report results from two complementary experimen-
+                                                                                        interpret absolute differences across studies as meaning-
+tal setups, distinguished by batch size, hardware, and
+                                                                                        ful. The two studies are nonetheless qualitatively consis-
+dataset-augmentation factor. The main study (Sections 4.2
+                                                                                        tent: both place λ=0.10 at or below the no-subgoal baseline
+through 4.5) characterizes the mechanism’s behavior across
+                                                                                        within their own setup, consistent with λ=0.10 lying past
+hyperparameters — the persistence sweep over P , the
+
+                                                                                   4
+                          When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning
+
+the optimum identified in the main λ sweep (Section 4.4).          Figure 2(a) plots the sweep curve.
+The ablation study extends this picture by isolating why the
+                                                                   Three observations are central to our claim.
+past-sweet-spot configuration interferes.
+
+                                                                   Persistence is necessary, not optional. At P =1 — full
+4.2. Setup
+                                                                   subgoal infrastructure but no commitment beyond a single
+Data. Our primary training corpus is derived from ARC-             step — LM loss is 1.674, worse than the 1.640 baseline
+AGI (Chollet, 2019) and ConceptARC (Moskvichev et al.,             without any subgoal mechanism. A subgoal that is overwrit-
+2023), using the arc-aug-1000 configuration. Each puz-             ten every step does not function as a subgoal. This is the
+zle is represented as a flattened 30×30 grid sequence over a       cleanest evidence in our study that the persistence mecha-
+vocabulary of 12 symbols (padding, end-of-sequence, and            nism, not the injection mechanism, drives the improvement.
+ten colors). Each puzzle is augmented up to 1000 times
+during training via dihedral transformations (rotations and        The benefit emerges sharply between P =2 and P =3.
+reflections), random color permutations, and translational         P =2 improves over baseline only marginally (1.638 vs.
+padding-based shifts, following standard ARC augmenta-             1.640). The transition to P =3 drops LM loss by 0.094 —
+tion practice. For cross-task validation we additionally           by far the largest single step in the sweep. This suggests a
+report results on ConceptARC-mini, a held-out subset of            minimum coherence horizon below which subgoals cannot
+∼4,900 training and ∼400 validation samples grouped by             organize compositional structure.
+puzzle type.
+                                                                   Decay beyond the optimum is gradual. From P =3 to
+Architecture. HRM backbone with hidden size 512, 4                 P =8, LM loss varies in a narrow band [1.544, 1.590], with
+high-level and 4 low-level transformer layers, 8 attention         no monotone degradation. Subgoals tolerate moderate
+heads, recurrent cycles Hcycles = Lcycles = 2, ACT with            over-commitment but are substantially harmed by under-
+maximum 16 internal steps, RoPE positional encoding,               commitment. We interpret this asymmetry as evidence that
+SwiGLU feedforward layers, and RMS normalization. The              staleness is a softer failure mode than instability: a slightly
+subgoal head projects z H to a 512-dimensional directional         stale subgoal still provides directional consistency, while an
+vector. All comparisons within a study use matched com-            instantaneously revised subgoal provides none.
+pute and identical backbone configurations; the only vari-
+ation is the subgoal mechanism’s hyperparameters (P and
+                                                                   Replication across seeds. We replicate the two best con-
+λ).
+                                                                   figurations across 5 independent training runs each. At
+                                                                   λ=0.05, P =3: mean LM loss 1.595 (std 0.045, min 1.540,
+Optimization. We use the AdamATan2 optimizer with
+                                                                   max 1.662). At λ=0.05, P =4: mean LM loss 1.601 (std
+base learning rate 10−4 and weight decay 0.1, with puzzle-
+                                                                   0.048). The seed-level variability is small relative to the
+specific embeddings on a separate learning rate of 10−2 .
+                                                                   gap between P =3 (1.544) and P =1 (1.674) and between
+A cosine schedule with 2000 warmup steps controls the
+                                                                   P =3 and the no-subgoal baseline (1.640), confirming that
+learning rate.
+                                                                   the persistence finding is not a single-seed artifact.
+Metrics. We report LM loss as the primary metric: token-
+level stablemax cross-entropy, masked over valid output            4.4. The Alignment Weight λ Has a Narrow Optimum
+positions, computed on the training set at matched optimiza-       Fixing P =4, we sweep the alignment-loss weight λ. Fig-
+tion steps. Secondary metrics include token-level accuracy,        ure 2(b) plots LM loss and token-level accuracy against
+exact accuracy (all output tokens correct), the alignment          λ.
+loss itself, and average ACT halting depth.
+                                                                   The optimum at λ=0.05 is narrow: λ=0.10 already ap-
+Compute. The main study reported in this section was               proaches the no-subgoal baseline, and λ ≥ 0.20 degrades
+conducted on CPU with global batch size 768. The abla-             below it. We interpret this as evidence that the alignment
+tion study reported in Section 5 was conducted on a single         loss is most useful as a prior that gently shapes worker
+NVIDIA L4 GPU (24 GB) hosted on E2E Networks with                  dynamics, rather than as a constraint that dominates task
+global batch size 64. Section 4.1 discusses how this differ-       optimization. When the intrinsic geometric signal competes
+ence is handled across the paper.                                  with the task gradient on roughly equal terms (λ ≥ 0.10),
+                                                                   the worker’s representational flexibility is reduced enough
+                                                                   to harm performance. This complements the persistence
+4.3. Persistence Is the Central Knob
+                                                                   finding: subgoals work best when they are committed-to
+We sweep the manager period P at fixed alignment-loss              long enough to organize computation (P ∈ [3, 6]) but soft
+weight λ=0.05, holding all other hyperparameters fixed.            enough not to override it (λ ≈ 0.05). We additionally veri-
+
+                                                               5
+                                     When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning
+
+                             (a) Persistence sweep (λ=0.05)                                (b) Alignment-weight sweep (P =4)
+               1.7
+                         worst ∆=−0.13                                                                                           LM loss
+                                                                         1.68                                                    Accuracy
+              1.65                                baseline (1.640)                                                                          0.71
+
+
+  LM loss ↓                                                                                                                                         Accuracy ↑
+                                                                                     baseline
+                                                                         1.64
+                                                                                                                                            0.68
+               1.6
+                                                                          1.6
+                                                                                                                                            0.65
+              1.55                                                                                       best
+                                     best                                1.56
+                                                                                                                  ablation λ
+                     1       2     3    4     5      6               8                 0.01             0.05 0.1      0.2             0.5
+                                    Manager period P                                               Alignment weight λ
+
+Figure 2. Main study results on ARC-AGI/ConceptARC. (a) Persistence sweep at λ=0.05. The shaded green/red regions mark
+below/above the no-subgoal baseline (1.640). P =1 underperforms baseline (worst); the benefit emerges sharply at P =3 (∆=−0.13, red
+point) and decays only gradually out to P =8 — staleness is a softer failure mode than instability. Error bars at P =3 and P =4 are 5-seed
+standard deviations. (b) Alignment-weight sweep at P =4. LM loss (blue, left axis) shows a narrow optimum at λ=0.05, with token-level
+accuracy (orange dashed, right axis) tracking the same optimum. The ablation regime (λ=0.10) lies past the optimum and is the focus of
+Section 5.
+
+
+fied that removing ℓ2 normalization of gk or the commitment                  Table 1. Ablation conditions at λ=0.10, P =4. All three cells share
+                                                                             an identical HRM backbone, optimizer, dataset, and training dura-
+gate αk degrades performance, confirming the directional                     tion, and differ only in the three subgoal-mechanism flags shown.
+semantics and soft-prior role of the mechanism; a more                       A_full is Subgoal-Augmented HRM as proposed. B_baseline
+substantive ablation separating learned directional structure                disables both injection and the alignment loss, reducing the model
+from the architectural addition appears in Section 5.                        to vanilla HRM with no manager–worker interface. E_random
+                                                                             keeps both active but replaces the manager’s learned directions
+                                                                             with random unit vectors, isolating the contribution of learned
+4.5. Cross-Task Validation on ConceptARC-mini                                directional content from the architectural addition and auxiliary
+                                                                             loss term.
+To check whether the persistence effect generalizes beyond
+the arc-aug-1000 corpus, we evaluate on ConceptARC-                           Cell          inject_subgoal      use_alignment_loss   random_directions
+mini, a held-out task family grouped by puzzle type. The                      A_full             true                    true               false
+                                                                              B_baseline         false                  false               false
+no-subgoal baseline achieves LM loss 2.316; Subgoal-                          E_random           true                    true                true
+Augmented HRM at λ=0.05, P =3 achieves 2.308. The
+improvement is modest in absolute terms (∼0.4%), and we
+therefore treat this as a directionally consistent secondary                 (Section 4.1). All three cells trained on the same ARC-AGI
+observation rather than independent benchmark evidence:                      plus ConceptARC augmented corpus (num_aug=100,
+the headline persistence and λ effects characterized above                   seed=42; 95,993 puzzle identifiers), constructed from the
+remain the load-bearing claims.                                              same source corpora as the main study but with reduced
+                                                                             augmentation factor for tractability under the smaller batch
+5. Past-Sweet-Spot Ablation: What Causes                                     size.
+   Interference?
+The main λ sweep (Section 4.4) characterizes the symp-                       Hyperparameters and training duration. All three cells
+tom of past-sweet-spot interference but does not identify its                used λ=0.10, P =4, learning rate 10−4 , 500 training epochs,
+source. We address this with a controlled three-cell ablation                and a single fixed random seed. The HRM backbone and
+at λ=0.10 — past the optimum, where interference is reli-                    optimizer match Section 4.2. All three cells terminated at
+ably observable. The cells (Table 1) differ only in three flags              the same optimization step (30,321 of an intended 31,143,
+governing the subgoal mechanism, isolating learned direc-                    the last full epoch boundary that fit within the iteration
+tional structure as the variable of interest while controlling               budget) under identical software conditions — this shared
+for architectural capacity and the auxiliary loss term.                      termination is a property of the training driver and makes
+                                                                             the three cells directly comparable. We report training-set
+5.1. Setup                                                                   LM loss (the same metric as the main study), under the
+                                                                             within-regime comparison rule described in Section 4.1.
+Hardware, batch size, and data. Training was performed
+on a single NVIDIA L4 GPU with global batch size 64, in                      5.2. Results
+contrast to the main study’s CPU runs at batch size 768
+                                                                             Three within-regime contrasts are central.
+
+                                                                         6
+                             When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning
+
+Table 2. Train LM loss at step 30,321 for the three ablation cells.       The persistence tradeoff. A subgoal revised every step
+The within-regime contrast structure — not the absolute values —
+is what the result speaks to.
+                                                                          provides no temporal structure for the worker to compose:
+                                                                          each micro-update receives a fresh, potentially uncorrelated
+    Cell            Train LM loss ↓       ∆ vs. B_baseline                direction, the alignment loss provides high-variance gradi-
+                                                                          ents with no medium-horizon signal, and the injection adds
+    A_full                1.327                +0.100                     noise the worker must compensate for. This is why P =1
+    B_baseline            1.227                  —                        underperforms baseline. Between P =3 and P =6, subgoals
+    E_random              1.230                +0.003                     persist long enough for multiple consecutive updates to accu-
+                                                                          mulate aligned displacement, and the alignment loss rewards
+                                                                          consistent progress rather than instantaneous alignment. The
+A vs. B: at λ=0.10, the full mechanism interferes.                        asymmetry between under- and over-commitment (P =1
+Adding learned directional subgoals raises LM loss by                     catastrophic, P =8 only mildly degraded) suggests stale-
+∼0.10 relative to the no-subgoal baseline, consistent with                ness is a soft failure mode while absence of commitment
+the main λ sweep (Section 4.4, Figure 2(b)) where λ=0.10                  is not: compositional structure tolerates approximation in
+already performs at or below baseline.                                    commitment duration but does not tolerate its absence.
+E vs. B: random directions are nearly indistinguishable
+from baseline. When learned directions are replaced with                  Why λ has a narrow optimum, and what the ablation
+random unit vectors, LM loss matches baseline within 0.003                adds. The alignment loss is a structural prior, not a task
+— an order of magnitude smaller than the seed-level variabil-             signal. Too small, it fails to shape latent dynamics; too large,
+ity (0.045) observed in the main study’s replication. The                 it competes with the task gradient and reduces representa-
+architectural addition and auxiliary loss term are not, by                tional flexibility. The narrow optimum at λ ≈ 0.05 is consis-
+themselves, harmful at λ=0.10.                                            tent with auxiliary objectives being most effective as soft reg-
+                                                                          ularizers. The past-sweet-spot ablation (Section 5) refines
+A vs. E: interference is specifically driven by learned di-               this: the conflict past the optimum is not generic auxiliary-
+rectional content. The 0.097 gap between A_full and                       loss interference but specifically the conflict introduced by
+E_random — much larger than the 0.003 gap between                         learned directional structure that, when over-weighted, cap-
+E_random and baseline — isolates the interference as specif-              tures representational capacity the worker would otherwise
+ically due to the learned directional content of the subgoals,            use for the task.
+not the additional capacity, auxiliary objective, or injection
+mechanism per se.                                                         7. Limitations and Conclusion
+                                                                          Gains are modest in absolute terms, with evaluation re-
+5.3. Interpretation
+                                                                          stricted to ARC-style tasks (held-out check on ConceptARC-
+This ablation refines the picture established by the λ sweep.             mini); broader validation is needed. The past-sweet-spot ab-
+The narrow optimum at λ≈0.05 shows that the alignment                     lation uses a single fixed seed (train-set LM loss at one step),
+loss functions best as a soft prior; the ablation isolates why            though main-study replication variance (std ≈ 0.045) is
+it stops functioning as a soft prior past the optimum. The                much larger than the E vs. B gap, bounding single-seed vari-
+issue is not generic auxiliary-loss interference — random                 ability well below the contrast magnitude. A representation-
+directions, with the same loss term, do not interfere. Rather,            level analysis of subgoal-induced hidden-state geometry
+learned directional structure is doing real representational              would directly probe the compositional substrate but re-
+work in A_full (which is why it helps at λ=0.05 and hurts at              quires late-training checkpoints we did not retain; we leave
+λ=0.10); when the alignment weight competes with the task                 this for follow-up work. Subgoal persistence, controlled
+gradient on roughly equal terms, the worker is pulled toward              by P , is the design knob determining whether directional
+directions that serve alignment but not the LM objective.                 latent subgoals function in HRM; the narrow λ optimum
+This contrast identifies learned directional structure as the             and past-sweet-spot ablation together identify the stability–
+active component: it helps near the optimum but becomes                   adaptivity tradeoff any compositional planner in latent space
+harmful when over-weighted.                                               must resolve.
+
+6. Discussion                                                             Impact Statement
+The persistence sweep identifies a regime in which medium-                This paper presents work whose goal is to advance the field
+horizon intent measurably helps a latent reasoner, and identi-            of Machine Learning, specifically the design of compact
+fies the failure modes outside it. We organize the discussion             latent reasoning systems with explicit temporal abstraction.
+around the stability–adaptivity tradeoff.                                 The experiments are conducted on abstract reasoning bench-
+
+                                                                      7
+                           When to Re-Plan: Subgoal Persistence in Hierarchical Latent Reasoning
+
+marks and do not involve human-subjects data, private data,
+or deployed decision systems. We do not identify immediate
+negative societal consequences beyond those generally asso-
+ciated with improved machine-learning reasoning systems.
+
+References
+Chollet, F. On the measure of intelligence. arXiv preprint
+  arXiv:1911.01547, 2019.
+Evans, J. S. B. T. and Stanovich, K. E. Dual-process theories
+  of higher cognition: Advancing the debate. Perspectives
+  on Psychological Science, 8(3):223–241, 2013.
+
+Graves, A. Adaptive computation time for recurrent neural
+  networks. arXiv preprint arXiv:1603.08983, 2016.
+Kahneman, D. Thinking, Fast and Slow. Farrar, Straus and
+  Giroux, New York, 2011.
+Moskvichev, A., Odouard, V. V., and Mitchell, M. The
+ ConceptARC benchmark: Evaluating understanding and
+ generalization in the ARC domain. Transactions on Ma-
+ chine Learning Research, 2023.
+Sutton, R. S., Precup, D., and Singh, S. Between MDPs and
+  semi-MDPs: A framework for temporal abstraction in
+  reinforcement learning. Artificial Intelligence, 112(1–2):
+  181–211, 1999.
+Vezhnevets, A. S., Osindero, S., Schaul, T., Heess, N.,
+  Jaderberg, M., Silver, D., and Kavukcuoglu, K. FeU-
+  dal networks for hierarchical reinforcement learning. In
+  Proceedings of the 34th International Conference on Ma-
+  chine Learning, volume 70 of Proceedings of Machine
+  Learning Research, pp. 3540–3549. PMLR, 2017.
+Wang, G., Li, J., Sun, Y., Chen, X., Liu, C., Wu, Y., Lu,
+ M., Song, S., and Yadkori, Y. A. Hierarchical reasoning
+ model. arXiv preprint arXiv:2506.21734, 2025.
+Wei, J., Wang, X., Schuurmans, D., Bosma, M., Ichter, B.,
+ Xia, F., Chi, E. H., Le, Q. V., and Zhou, D. Chain-of-
+ thought prompting elicits reasoning in large language
+ models. In Advances in Neural Information Processing
+ Systems, volume 35, pp. 24824–24837, 2022.
+
+
+
+
+                                                                8
+

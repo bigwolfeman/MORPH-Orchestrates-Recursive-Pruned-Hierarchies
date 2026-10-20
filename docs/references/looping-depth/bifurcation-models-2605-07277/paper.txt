@@ -1,0 +1,2073 @@
+                                          BIFURCATION MODELS: LEARNING SET-VALUED SOLUTION MAPS
+                                                       WITH WEIGHT-TIED DYNAMICS
+
+
+                                                                               CALEB JORE AND JIALIN LIU
+
+
+                                                 Abstract. Many scientific and combinatorial problems admit multiple correct solutions,
+                                                 not a single label. Standard supervised learning resolves this ambiguity by choosing one
+
+
+
+
+arXiv:2605.07277v1 [cs.LG] 8 May 2026
+                                                 solution as the target, but this hidden selector can be arbitrary, discontinuous, and harder to
+                                                 learn than the underlying solution set. We study bifurcation models, a weight-tied dynamical
+                                                 view in which different initializations can converge to different stable equilibria, so the model
+                                                 represents an attractor landscape rather than one chosen branch. We prove that broad
+                                                 set-valued maps with locally Lipschitz branches can be represented by regular equilibrium
+                                                 dynamics and that the induced selectors are almost everywhere regular, while manual selectors
+                                                 can be arbitrarily irregular. Experiments on frustrated Ising models show that such dynamics
+                                                 can discover multiple valid equilibria without branch labels and outperform single-branch
+                                                 supervision. Allen–Cahn experiments further show that diversity is not automatic: it can be
+                                                 encouraged explicitly, but with an accuracy–diversity tradeoff.
+
+
+
+
+                                                                                     1. Introduction
+                                           Most supervised learning formulations begin by assuming that the target is a function: given
+                                        an input x, there is a single desired output y⋆ = f (x). This assumption is so standard that it is
+                                        often invisible. Yet in many scientific and engineering problems, it is not the right abstraction.
+                                        A frustrated spin system may admit many low-energy configurations [22]; a nonlinear PDE may
+                                        have multiple steady states [35]; an inverse-design problem may have several physically valid
+                                        designs [40]. In such settings, the object to be learned is not a single-valued map f : K → Y,
+                                        but a set-valued map
+                                                                              F : K ⇒ Y,       x 7→ F(x),
+                                           where F (x) is the set of admissible solutions for the same input x.
+                                           The usual supervised workaround is to choose one element u(x) ∈ F(x) and train a model to
+                                        imitate this branch. This is benign when a regular selector is known, but in many multi-solution
+                                        problems no such selector is specified: labels may come from solver initialization [10, 43], a
+                                        symmetry-breaking convention [23], or an arbitrary choice among valid solutions. The labeling
+                                        procedure therefore defines a hidden selector, which may switch between branches as x varies
+                                        and inject artificial irregularity into the learning problem. An alternative is to learn the target as
+                                        set-valued. Neural architectures for sets can represent and process unordered collections [32, 41].
+                                        In multi-solution scientific problems, however, the target is not merely an unordered list but a
+                                        solution set whose elements may correspond to distinct physical, geometric, or combinatorial
+                                        branches. This raises a basic question: should multi-solution problems be represented by choosing
+                                        one branch, or by learning the solution set itself ?
+                                           We study this question through the lens of weight-tied parameterized dynamics. Starting
+                                        from an initial state y0 that may be fixed, sampled, or chosen by the user, the model iterates
+                                                                           yt+1 = gθ (yt , x),        t = 0, 1, 2, . . . .
+
+                                           Date: May 11, 2026.
+                                           The authors are listed alphabetically. Corresponding author: Jialin Liu, jialin.liu@ucf.edu.
+                                                                                                 1
+2                                     CALEB JORE AND JIALIN LIU
+
+
+Here, gθ may itself be a multi-layer neural module, such as an MLP, GNN, or neural operator.
+The term weight-tied means that, when the dynamics are unrolled over time, the same
+parameters θ are reused at every iteration t, rather than using a different layer at each depth.
+    For a fixed input x, different initializations y0 may converge to different stable equilibria.
+Thus the model does not need to output a single label. Instead, it can represent the attractor
+set
+                                         n                       o
+(1)                           Aθ (x) := lim gθt (y0 , x) : y0 ∈ Y ,
+                                             t→∞
+
+   where g t (y0 , x) denotes applying the update g(·, x) for t steps starting from y0 . For the
+same input x, trajectories from different initial states y0 may split over iterations into different
+basins of attraction and converge to different solution branches. We refer to this viewpoint as a
+bifurcation model .
+   Rather than introducing a new architecture, we focus on three fundamental questions:
+    (Q1) Representation. Can weight-tied models represent set-valued mappings in a regular,
+         learnable way? More precisely, for what class of set-valued maps F : K ⇒ Y does there
+         exist an operator g : Y × K → Y whose stable fixed points recover F(x)?
+    (Q2) Label selection. If such a representation exists, and suppose all solution branches
+         are available during training. Should we learn the whole set-valued map, or select one
+         element of F(x) as the label and train a single-valued predictor? What regularity or
+         stability can be lost when a set-valued problem is collapsed into a manually chosen
+         solution selector?
+    (Q3) Discovery without complete branch information. In practice, the full set of
+         branches is often not observed. Given only an unsupervised physical objective and
+         multiple initializations, will a weight-tied dynamic model automatically discover multiple
+         solutions without full branch information during training?
+Centered around the three questions, we contribute the following:
+       • Representation. We prove that broad set-valued maps with locally Lipschitz branches
+         can be represented by regular weight-tied equilibrium dynamics: for almost every
+         initialization, trajectories converge to valid branches, and varying the initialization
+         recovers all branches.
+       • Selection. We show that selecting one element of F(x) as the label can create arbitrarily
+         irregular supervised targets, even when the underlying branches are regular. In contrast,
+         the selectors induced by equilibrium dynamics are locally Lipschitz almost everywhere.
+       • Discovery. We show that in favorable cases, weight-tied dynamics can discover multiple
+         valid equilibria even without complete branch information during training. In addition,
+         we observe that such multi-branch discovery is problem-dependent rather than automatic.
+         It emerges naturally in our Ising experiments, but in Allen–Cahn energy minimization
+         can collapse to a dominant branch despite the model’s multi-equilibrium capacity.
+         Explicit diversity promotion recovers multiple branches, revealing an accuracy–diversity
+         tradeoff.
+   Here we discuss four lines of related works. The first line of work involves implicit or
+equilibrium models (e.g., [4, 8, 11, 13, 16]). While these models usually focus on designing network
+layers that converge to a single, unique fixed point for deterministic prediction [8,19,21,27,33,37],
+here we treat the model as a dynamical system explicitly capable of representing an entire set of
+valid solutions through multiple stable equilibria. The second line of work is unrolling networks
+(e.g., [1, 17, 26, 29, 31, 38, 39, 42]), including recurrent networks [5, 36], looped transformers [12, 14],
+etc. We share their computational realization of unrolling weight-tied iterations during training,
+but our focus is fundamentally different: rather than optimizing a finite-depth refinement
+                                SET-VALUED SOLUTION MAP LEARNING                                      3
+
+
+map, we study the limiting attractor structure of the shared operator to capture multi-basin
+landscapes. The third line of related work, [24], also uses an iterated map to recover multiple
+optima, but specifically aims to emulate the proximal-point algorithm for an explicit objective.
+In contrast, we study weight-tied dynamics more broadly as a fundamental representation
+of set-valued solution maps, analyzing their representational capacity, label regularity, and
+unsupervised branch discovery. Finally, [43] uses deep ensembles of PINNs to discover multiple
+PDE solutions, which requires training an independent ensemble for each individual problem
+instance. Conversely, we learn an amortized solver over a distribution of instances, where
+solution multiplicity naturally emerges from different state initializations within a single shared
+weight-tied model.
+   The remainder of this paper is organized as follows. In Section 2, we analyze weight-tied
+dynamics within a nonparametric setting so that our theoretical results capture the generic
+nature of dynamical representations, not restricted to specific neural parameterizations. Sections
+3 and 4 instantiate the same underlying principle using different parameterized operators in
+concrete applications.
+
+                                     2. Theoretical Foundations
+  In this section, we address (Q1) and (Q2) theoretically. We consider finite-branch set-valued
+maps F (x) = {f1 (x), · · · , fn (x)}, allowing different branches to coincide at some inputs.
+
+2.1. Can Weight-Tied Dynamics Represent Set-Valued Maps? To isolate the funda-
+mental capacity of weight-tied dynamics from specific network structures, we study this in a
+generic nonparametric setting; thus, we drop the parameter subscript θ and study the exis-
+tence/properties of general operators g. Accordingly, the attractor set in (1) can be written
+as
+                                      n                         o
+(2)                          Ag (x) := lim g t (y0 , x) : y0 ∈ Y .
+                                              t→∞
+
+   We now formalize (Q1) in this context: Let F be a set-valued map. Does there exist g such
+that its attractor set exactly recover the target, i.e., Ag (x) = F(x), for all x ∈ K?
+   In fact, a naive answer satisfies the above condition. Consider the following g with 0 < η < 1:
+(3)                                  g(y, x) := (1 − η)y + ηΠF (x) (y)
+   where ΠF (x) (y) denotes a projection of y onto F(x), with an arbitrary fixed tie-breaking
+rule when the projection is nonunique. Because this operator explicitly forces y toward the
+closest point in the target set, any trajectory will unconditionally converge to a branch in F(x),
+and sweeping across all initializations y0 will successfully recover every branch.
+   However, this naive construction is not practically insightful. Let’s consider an example:
+K = Y = R and F(x) = {x + 1, x − 1} with two branches f1 (x) = x + 1 and f2 (x) = x − 1.
+Then (3) becomes
+                      g(y, x) = (1 − η)y + η(x + 1)I(y ≥ x) + η(x − 1)I(y < x)
+      Now we fix y = 0. It can be shown that g(0, x) is not Lipschitz continuous near x = 0:
+                                                                         |g(0, x1 ) − g(0, x2 )|
+           lim+ g(0, x) = η,   lim− g(0, x) = −η,     lim     sup                                =∞
+          x→0                  x→0                    δ→0 x1 ,x2 ∈B(0,δ)       |x1 − x2 |
+   Therefore, (0, 0) is a singular point of g(0, x). In fact, all the points on the switching
+boundaries {(x, y) : y = x} are singular. This reveals a key limit of this naive construction: it’s
+hard to parameterize such an operator g with neural networks. While neural networks have the
+ability to approximate operators with singular points, doing so demands much higher network
+4                                  CALEB JORE AND JIALIN LIU
+
+
+complexity—i.e., increasing depth/width to capture the growing steepness near the singularity
+(see, e.g., [34]).
+   Therefore, (Q1) becomes: whether, given F, there exists an operator g that satisfies the above
+conditions while also being regular (specifically, Lipschitz continuous) with respect to the input.
+This regularity is essential, as it makes g an easier operator for a neural network to model and
+parameterize.
+   Our findings show an affirmative result, provided we exclude the unstable collapse set U: a
+specific subset of inputs where branch intersections are not locally constant.
+Definition 2.1 (Stable and Unstable Collapse). Let f1 , . . . , fn : K → Y be branch maps. A
+point x ∈ K exhibits a stable collapse pattern if there exists a neighborhood around x wherein
+the equality relationship between any pair of branches fi and fj remains constant. We denote
+the set of all such points as the stable set S. Its complement, U = K \ S, is defined as the
+unstable collapse set.
+    In practice, the unstable collapse set U typically forms a zero-measure set. For example,
+given a 1D two-branch case with f1 (x) = 0 and f2 (x) = ReLU(x), U contains only a single
+point: U = {0}. Only in rare, artificial scenarios does U form a substantial subset. For instance,
+if f1 (x) = 0 and f2 (x) = dist(x, C) where C is a fat Cantor set, then U = C, which has a strictly
+positive measure.
+    With these definitions, we are ready to state our main finding. In contrast to the naive
+construction (3), proving the existence of an operator that is also regular with respect to its
+input requires a highly non-trivial construction. The theorem is provided below, with the
+detailed proof in Appendix A.
+ Theorem 2.2. Let K ⊂ Rd be bounded and Y = Rm . Assume the branch maps f1 , . . . , fn :
+ K → Y are locally Lipschitz. Then there exists an operator g : Y × K → Y satisfying:
+(1) (Input Regularity). For every y ∈ Y, the map x 7→ g(y, x) is globally Lipschitz on K.
+(2) (Reliable Convergence). For every stable input x ∈ K \ U, the iteration yt+1 = g(yt , x)
+    converges to a valid branch in F(x) for Lebesgue-almost every initialization y0 ∈ Y. (The
+    exceptional initializations form a zero-measure set Σ◦ (x)).
+(3) (Attractor Completeness). For every x ∈ K \ U, varying the initialization completely recovers
+    the target solution set. Formally, {limt→∞ g t (y0 , x) : y0 ∈ Y \ Σ◦ (x)} = F(x).
+   The assumptions of Theorem 2.2 are deliberately weak. Each branch is required only
+to be locally Lipschitz, not globally Lipschitz, and K is assumed bounded but need not be
+compact or connected. This distinction matters because on bounded non-compact domains, local
+           √ does not automatically upgrade to global Lipschitzness. For example, x 7→ log x
+Lipschitzness
+and x 7→ x on (0, 1], x 7→ 1/x on (−1, 0) ∪ (0, 1), and x 7→ tan x on (−π/2, π/2) are locally
+Lipschitz at every point of their bounded domains, but none is globally Lipschitz because
+the domain excludes a singular endpoint or interior gap. Thus the theorem covers genuinely
+non-compact, disconnected, and locally singular branch structures while still guaranteeing a
+globally input-Lipschitz recurrent operator.
+   Numerical verification. As an initial verification of Theorem 2.2, we evaluate two toy
+multi-solution problems in an idealized setting where all valid labels are known. Crucially, we do
+not force the model to fit a predefined branch for a given input x. Instead, we supply the full set
+of labels (Algorithm 1), sample random initializations y0 , dynamically match each initialization
+to its nearest label, and train the weight-tied dynamics to converge accordingly. Details are in
+Appendix D.
+   Figure 1 provides the numerical evidence. In both toy examples, the iterates of the learned
+weight-tied dynamics evolve regularly with respect to (y0 , x), and all different initializations
+                                         SET-VALUED SOLUTION MAP LEARNING                                                   5
+
+          Target (x)           (y0, x)             y1(y0, x)           y2(y0, x)           y4(y0, x)           y8(y0, x)
+10
+
+y0
+
+10
+     10       0      10 10       0        10 10       0        10 10      0        10 10      0        10 10      0        10
+              x                  x                    x                   x                   x                   x
+          Target (x)           (y0, x)             y1(y0, x)           y2(y0, x)           y4(y0, x)           y8(y0, x)
+ 5
+
+y0
+
+ 5
+     10       0        10 10     0         10 10      0        10 10      0        10 10      0        10 10      0        10
+              x                  x                    x                   x                   x                   x
+
+            Figure 1. Numerical verification of Theorem 2.2. Each row shows one toy
+            set-valued map. The first column shows the target branches F (x); the second
+            column shows sampled initial states y0 ; and the remaining columns show the
+            iterates y1 , y2 , y4 , y8 produced by the same weight-tied update map. For each
+            fixed input x, different random initializations move toward different admissible
+            branches. As the iteration proceeds, the point cloud aligns with the full target
+            set.
+
+are driven toward different valid branches of the target set-valued map. At the same time, the
+collection of converged states recovers the full branch structure rather than collapsing to a single
+solution. This is exactly the behavior predicted by Theorem 2.2: a single regular weight-tied
+dynamics can represent a multi-branch function, and the branch realized at convergence can
+depend on the initialization while remaining consistent with the target set-valued mapping.
+Quantitative results are given in Table 1.
+2.2. When is Multi-Branch Learning Preferable? Let us now address (Q2): if multiple
+valid solution branches exist, what is the fundamental theoretical benefit of representing the
+entire set-valued map rather than isolating a single branch? Returning to the recurrent operator
+g constructed in Theorem 2.2, we find that multi-branch dynamics provide a natural, built-in
+regularization. Fixing an initialization y0 implicitly defines a solution selector u(y0 , x) that
+routes the input to a specific branch. The following theorem guarantees that this dynamically
+induced selector is exceptionally well-behaved—it is locally Lipschitz almost everywhere.
+Theorem 2.3 (Lipschitz selector). Let K ⊂ Rd be bounded and measurable, Y = Rm , and
+f1 , . . . , fn : K → Y be locally Lipschitz branch maps. Let K⋆ := K \ U denote the stable domain,
+and let g : Y × K → Y be the operator constructed in Theorem 2.2. For y0 ∈ Y, define
+u(y0 , x) := limt→∞ g t (y0 , x). Then, for Lebesgue-almost every initialization y0 ∈ Y, it holds
+that
+                         x ∈ K⋆ : x 7→ u(y0 , x) is not locally Lipschitz at x = 0
+                       
+
+     Here, | · | denotes the d-dimensional Lebesgue measure.
+    Theorem 2.3 says that, for almost every initialization, the recurrent dynamics does not choose
+branches in an arbitrary way. It may switch between branches, but the set of inputs where
+the induced selector fails to be locally Lipschitz has measure zero. This provides a structural
+contrast with the usual supervised reduction of a multi-solution problem. In that reduction, one
+first constructs a manual selector u : K⋆ → Y by choosing u(x) ∈ F(x) for every input x. Such
+a choice may come from a solver initialization, an ordering convention, a symmetry-breaking
+rule, or simply from whichever solution is observed. Unless additional regularity is imposed,
+6                                                 CALEB JORE AND JIALIN LIU
+
+              (y0, x)            y (y0, x)         Selected Branch             (y0, x)            y (y0, x)        Selected Branch
+    5
+y   0
+
+    5
+            5 0 5                5 0 5                 5 0 5                 5 0 5                5 0 5                5 0 5
+                x                    x                      x                    x                    x                     x
+            interval 4           interval 8            interval 16           interval 4           interval 8           interval 16
+    2
+y   0
+
+    2
+        2       0        2   2       0        2    2       0         2   2       0        2   2       0        2   2       0         2
+                x                    x                     x                     x                    x                    x
+
+              Figure 2. Comparison of dynamical (top row) and manual (bottom row)
+              solution selectors for Example 1 (left) and Example 2 (right). The dynamic
+              model naturally maps a fixed initialization y0 to a regular converged state
+              y∞ (y0 , x). Conversely, manual selection introduces arbitrary switching and
+              artificial discontinuities as the interval increases, hindering training and gener-
+              alization.
+
+there is no reason for this selector to respect the geometry of the branches: nearby inputs can
+be assigned to far-apart solutions even when all underlying branches are regular. The following
+theorem formalizes this failure mode.
+Theorem 2.4. Let K⋆ ⊂ Rd be bounded and measurable, and let Y = Rm . Let f1 , . . . , fn :
+K⋆ → Y be locally Lipschitz branch maps. Define the genuinely multi-branch region
+                            n                                        o
+                     M := x ∈ K⋆ : ∃i ̸= j such that fi (x) ̸= fj (x) .
+   Then, for every a ∈ [0, |M|], there exists a measurable solution selector ua : K⋆ → Y such
+that
+                  ua (x) ∈ F(x), for all x ∈ K⋆ ,       and DiscK⋆ (ua ) = a.
+   Here DiscK⋆ (ua ) denotes the set of discontinuity points of ua relative to the domain K⋆ .
+   Theorem 2.4 describes a critical danger in standard pipelines: arbitrarily selected branches
+inject artificial noise into the mapping. If a neural network is forced to fit these discontin-
+uous manual labels, it must learn unphysical, steep decision boundaries that severely harm
+generalization.
+   Importantly, this does not mean multi-branch learning should unconditionally replace con-
+ventional supervised learning. If a smooth selector is known, or if the task explicitly requires
+convergence to a particular branch, then single-branch supervision is a natural objective. How-
+ever, when no such selector is available, forcing the model to imitate one arbitrary branch can
+introduce avoidable jumps.
+   Numerical verification. We numerically compare the selector induced by the learned
+weight-tied dynamics with manually prescribed single-branch selectors on the same two toy
+examples. We construct a family of artificial single-branch datasets by partitioning the input
+domain into Nint intervals and forcing one fixed branch to be chosen on each interval, with
+neighboring intervals alternating between the two branches. Thus, as Nint increases, the
+manually selected target becomes increasingly oscillatory and introduces more unnecessary,
+artificial switching.
+   Figure 2 shows the effect: the selector induced by the implicit dynamics remains smooth
+and natural, while the human-designed selectors become progressively more irregular. Table 1
+                                     SET-VALUED SOLUTION MAP LEARNING                                                    7
+
+
+         Table 1. Test error for the bifurcation-model selector and manually selected
+         branch targets. The manual selectors alternate between branches over Nint
+         intervals. Nint ∈ {2, 4, 8, 16, 32, 64}.
+
+                                                                          Manual selector: Nint
+                              Bifurcation
+       Problem                                            2          4         8        16         32            64
+       Toy example 1              0.0028             0.0181        0.1847   0.8982   5.7052     9.6052      10.5995
+       Toy example 2              0.0002             0.0159        0.0321   0.2401   0.2698     0.5019       0.5767
+
+
+
+Algorithm 1 Multi-branch fitting                                    Algorithm 2 Multi-branch discovery
+                                               xi , {yi,j }n        Require: Input data D = {xi }i
+                                           
+Require: Full branch data D =                                i
+                                                           j=1 i
+ 1: for each mini-batch B ⊂ D do                                     1: for each mini-batch B ⊂ D do
+                                  (0)                                                                 (0)
+ 2:    Sample initialized states yi,k ∼ ρ for                        2:    Sample initialized states yi,k ∼ ρ for
+         xi , {yi,j }n                                                             xi ∈ B,    k = 1, · · · , M
+                         
+                     j=1 ∈ B, k = 1, · · · , M
+                       i
+
+
+ 3:    Choose the closest branch:
+        ⋆                                           (0)
+       yi,k = arg          min             ∥y − yi,k ∥
+                    y∈{yi,1 ,...,yi,ni }
+
+ 4:    Unroll for t = 0, 1, · · · , T − 1:                           3:    Unroll for t = 0, 1, · · · , T − 1:
+                                                                                                          
+                                                                                  (t+1)            (t)
+                (t+1)
+              yi,k = gθ yi,k , xi
+                                 (t)                                              yi,k = gθ yi,k , xi
+                                                                                                                  
+                                                                                                             (T )
+ 5:
+                                        (T )
+       Minimize L(θ) := mean ∥yi,k − yi,k    ⋆
+                                               ∥22                   4:    Minimize L(θ) := mean E yi,k , xi
+ 6: end for                                                          5: end for
+
+
+
+shows the same phenomenon quantitatively: as the interval count increases, both training and
+test errors grow substantially. These experiments validate Theorem 2.3 by illustrating that
+the selector induced by the weight-tied dynamics is regular, and they validate Theorem 2.4 by
+showing that arbitrary branch assignment can create artificial discontinuities that make the
+learning problem significantly harder.
+
+              3. Discovering Multiple Solutions Without Branch Labels
+   The toy experiments in Section 2 verify the theory in an idealized setting: for each input
+x, all valid branch labels (y1 , . . . , yn ) are known, and each sampled initialization y0 is trained
+to converge to its nearest branch label. In realistic scientific systems, however, enumerating
+all solution branches is usually impossible or prohibitively expensive. What is often available
+instead is an unsupervised objective E(y, x), such as an energy functional, whose low values
+indicate physically valid solutions.
+   We therefore replace the nearest-branch fitting loss in Algorithm 1 with the unsupervised
+procedure in Algorithm 2. For each input x, we sample multiple initial states y0 , unroll the
+same weight-tied dynamics, and minimize the terminal physical objective E(yT , x). No branch
+labels are provided, and the dynamics are free to converge to any physically valid branch.
+   This raises several questions. Can a branch-flexible recurrent model discover multiple solutions
+for the same input without being shown all branches? Does unsupervised branch-flexible training
+outperform supervised fitting to a single solver-selected label? And does avoiding a prescribed
+branch make the learned solution map less brittle? We study these questions below in a frustrated
+Ising system, where many low-energy spin configurations can coexist for the same graph.
+8                                   CALEB JORE AND JIALIN LIU
+
+
+
+
+         Figure 3. Unsupervised multi-solution discovery. The same Ising graph
+         instance yields distinct solutions when starting from different initializations.
+         Red nodes denote +1 spins and blue for −1.
+
+    Basic formulation. The Ising model [20] is a fundamental mathematical model in statistical
+mechanics used to study the magnetic properties of materials. Each Ising instance is a weighted
+graph G = (V, E) with coupling weights Jij on the edges. A spin assignment is a vector
+s ∈ {−1, +1}|V| , representing the binary magnetic dipole (up or down) of each node. Finding
+the system’s stable physical ground state at zero temperature corresponds to solving the minimal
+energy problem:
+                                                         1 X
+(4)                            min     EIsing (s, G) = −       Jij si sj .
+                          s∈{−1,+1}|V|                   2
+                                                           (i,j)∈E
+
+    When all couplings are positive (Jij > 0), the ferromagnetic ground states are trivial: all spins
+align, giving the uniform all-(+1) or all-(−1) states. We therefore focus on the antiferromagnetic
+case (Jij < 0), where geometric frustration [30] makes (1) a degenerate landscape with many
+valid low-energy configurations, i.e., the map from a graph to its low-energy states is set-valued.
+    Model. To parameterize the recurrent update g, we use a standard message-passing graph
+neural network (GNN) [15] on the weighted graph G = (V, E). At iteration t, the current
+continuous spin vector st is treated as the node feature, and the GNN updates it using the
+graph structure and edge weights Jij : st+1 = gGNN (st , G). Starting from different initializations
+s0 , the same weight-tied update is unrolled for T steps, and the final prediction is projected
+to the spin range by ŝ = sT . The goal of training is that, as T grows, the iterates converge to
+low-energy spin configurations of the same graph; different initializations may therefore lead to
+different low-energy states.
+    As a non-recurrent counterpart, we also consider a vanilla GNN baseline. This model applies
+message passing to the weighted graph as a feed-forward predictor and directly outputs a spin
+ŝ = hGNN (G).
+    Loss and evaluation.During neural training, the model outputs continuous spins ŝ ∈
+[−1, 1]|V| . To penalizes non-binary outputs, we use the following unsupervised training loss:
+                                    1  1 X                       X           
+(5)                     E(ŝ; G) =       −          Jij ŝi ŝj +  (ŝ2i − 1)2 .
+                                   |V|     2
+                                             (i,j)∈E          i∈V
+
+   Dataset and other experiment details are in Appendix E.
+   Can unsupervised training discover many solutions? Yes. In this Ising setting, the
+energy-trained weight-tied dynamics shows clear multi-solution behavior. Figure 3 gives a
+representative visual example, and Table 2 provides a quantitative summary. The energy-trained
+recurrent GNN finds many distinct solutions on average: its trajectories bifurcate over the
+iterates. A fuller histogram of the solution counts is provided in Appendix E.
+   Label fitting or energy minimization? We next compare two training objectives: fitting
+one solver-selected label versus minimizing the physical energy directly. For the label-fitting
+objective, we use Gurobi [18] to solve the binary quadratic Ising problem in (4), and train the
+                             SET-VALUED SOLUTION MAP LEARNING                                           9
+
+        Table 2. Quantitative summary of the Ising experiments. “Train energy”
+        and “test energy” denote the physical Ising energy EIsing (s̄)/|V| evaluated
+        after rounding the predicted spins s̄ = sign(ŝ), on the training and test sets
+        respectively. The number of solutions is computed on 200 test graphs using 20
+        trajectories per graph. All values are reported as mean ± standard deviation.
+
+ Objective       Model                  Train energy            Test energy         # Solution (Out of 20)
+ Gurobi label    Vanilla GNN         -0.478 ± 0.327           -0.059 ± 0.358            1.000 ± 0.000
+ Gurobi label    Recurrent GNN       -0.513 ± 0.315           -0.092 ± 0.361            1.000 ± 0.000
+ Energy-based    Vanilla GNN         -0.768 ± 0.181            -0.750 ± 0.190          1.000 ± 0.000
+ Energy-based    Recurrent GNN      -0.979 ± 0.101            -0.983 ± 0.101           13.635 ± 5.760
+
+        Table 3. Empirical perturbation sensitivity at noise level ε = 0.005. Val-
+        ues represent percentiles of the normalized output variation, ∥ŝ(J + ∆J) −
+        ŝ(J)∥2 /∥∆J∥2 , across the test set. To illustrate, p40 = 15.184 indicates that
+        40% of the tested perturbations resulted in an output variation of 15.184 or
+        lower. Energy-based models remain highly stable for the vast majority of inputs,
+        whereas models trained on Gurobi labels exhibit sensitivity globally, which
+        supports our theory in Section 2.2.
+
+    Obj.      Model               p40       p50         p60        p70        p80       p90     p95
+    Gurobi    Vanilla GNN       15.184 16.730 18.411 20.693 23.767 27.601 31.606
+    Gurobi    Recurrent GNN     9.919 10.762 11.600 12.591 14.020 15.612 17.523
+    Energy    Vanilla GNN        0.000     0.000       0.000      0.000   0.000        0.000   25.978
+    Energy    Recurrent GNN      0.000     0.000       0.000      0.000   0.000        0.025   38.168
+
+
+
+
+model to imitate one returned spin configuration for each graph. For the energy objective,
+we train directly with (5). Table 2 shows that energy minimization gives lower rounded-spin
+energy for both vanilla and recurrent GNNs. The vanilla GNN still outputs a single solution,
+but the energy objective lets it choose a low-energy branch instead of imitating an arbitrary
+Gurobi-selected one. The recurrent GNN has additional freedom: different initializations can
+follow different trajectories and settle into different low-energy basins. Thus, energy-based
+training not only avoids a potentially brittle single-branch label, but also enables the recurrent
+model to exploit its multi-solution dynamics.
+   Why does energy minimization yield a more robust solver? This gap reflects the
+regularity viewpoint in Section 2.2. Under energy minimization, the model is not forced to
+imitate a solver-selected branch; it can dynamically route each input to a low-energy attraction
+basin. Theorem 2.3 shows that such induced selectors are locally Lipschitz almost everywhere,
+whereas manual selectors can be arbitrarily irregular (Theorem 2.4). Thus, single-label fitting
+may introduce artificial branch switches. Table 3 supports this contrast empirically. Energy-
+based models have near-zero perturbation sensitivity for most inputs, while Gurobi-label models
+remain sensitive across the distribution. This suggests that energy minimization avoids fitting
+an unnecessarily irregular selector.
+   Larger graphs. Appendix E extends the evaluation to graphs with up to ∼15,000 nodes.
+10                                 CALEB JORE AND JIALIN LIU
+
+
+            4. Encouraging Bifurcations: Explicit Diversity in Training
+   The Ising experiment shows a favorable regime where unsupervised weight-tied dynamics
+naturally uses different initializations to discover multiple low-energy solutions. We now ask
+a complementary question: is such diversity automatic once the model has multi-equilibrium
+capacity? To answer this question, we use the Allen–Cahn equation as a testbed.
+   Problem formulation. Allen–Cahn equation [2] is a fundamental reaction-diffusion equation
+widely used to study complex pattern formation and phase transitions in continuous media. On
+the domain Ω = (0, 2π)2 , with phase field u : Ω → R, forcing f : Ω → R, and ε > 0, we consider
+                               −ε2 ∆u + u3 − u − f = 0        in Ω,
+                                                             2
+   with periodic boundary conditions, i.e., on the flat torus T . It is the Euler–Lagrange equation
+of                                Z  2                                          
+                               1      ε          2    1      2
+                                                                   2
+               EAC (u; f ) =             ∥∇u(x)∥2 + u(x) − 1 − f (x)u(x) dx.
+                              |Ω| Ω 2                 4
+   The energy balances interface smoothing, external forcing, and a double-well potential that
+drives the system toward distinct macroscopic phases (u ≈ ±1). This competition naturally
+creates multiple stable steady states for the exact same forcing f [3]. This continuous, multi-
+basin landscape provides an ideal testbed, requiring the network to genuinely capture coexisting
+attraction basins.
+   Model. Given a forcing field f , our goal is to learn a solver that maps f to one or more steady
+phase fields u. Since both the input and output are periodic functions on Ω, we parameterize
+the update map with a Fourier neural operator (FNO) [25]. We do not use the FNO as a
+one-shot predictor f 7→ u. Instead, following the implicit neural operator viewpoint of [28], we
+use it as a shared recurrent update: ut+1 = gFNO (ut , f ). Starting from a randomly generated
+initial state u0 , we unroll the weight-tied dynamics for T iterations. During training, the model
+parameters are optimized entirely unsupervised by directly minimizing the terminal physical
+energy EAC (uT ; f ).
+   Evaluation metrics. To evaluate physical accuracy, we measure the steady-state PDE
+residual using the discrete mean squared error (MSE) over an N × N spatial grid:
+                                            N N
+                                         1 XX                        2
+                     MSEres (u; f ) =     2
+                                                  −ε2 ∆u + u3 − u − f p,q .
+                                        N p=1 q=1
+   Does multi-equilibrium capacity imply automatic branch discovery? Not necessarily.
+Figure 4 shows that the energy-only model maps very different initial states to visually similar
+final states, indicating collapse to a dominant branch. Table 4 confirms this quantitatively: the
+energy-only model has only one discovered solution. Thus, while the weight-tied dynamics has
+the capacity to represent multiple attractors, minimizing the energy alone does not force those
+attractors to be used.
+   How does energy training compare with IMEX-label fitting? Although the energy-
+only model does not automatically bifurcate, it is still much more accurate than fitting a single
+IMEX-generated label; see Table 4. For the single-label target, we use the classical periodic
+IMEX solver [6] to construct one target branch for each forcing field. Forcing the network to fit
+this selected branch gives substantially worse physical residuals and energy than the energy-only
+model. By contrast, energy training does not prescribe which branch the network must imitate;
+it only asks the dynamics to reach a low-energy steady state. The learned model can therefore
+settle on the branch that is easiest to represent and optimize, rather than spending capacity
+matching a particular label-selection rule.
+   If we still want multiple solutions, how do we achieve that? We add an explicit
+diversity-promoting term to the energy objective. For a fixed forcing field f , we sample M
+                                           SET-VALUED SOLUTION MAP LEARNING                                   11
+
+
+                     Trajectory 1     Trajectory 2     Trajectory 3       Trajectory 4       Trajectory 5
+                                                                                                            1.0
+                                                                                                            0.5
+
+
+Initial u0
+                                                                                                            0.0
+                                                                                                              0.5
+                                                                                                              1.0
+                                                                                                              1.5
+                                                                                                            1.0
+
+
+
+
+Energy only
+                                                                                                            0.5
+                                                                                                            0.0
+                                                                                                             0.5
+                                                                                                              1.0
+                                                                                                            1.0
+
+
+
+
+Div. (λinit = 1.2)
+                                                                                                            0.5
+                                                                                                            0.0
+                                                                                                             0.5
+                                                                                                             1.0
+
+
+                       Figure 4. Five trajectories for the same f . Top row: five independent initial
+                       states. Middle row: final predictions from the energy-only model: collapse
+                       to visually similar states. Bottom row: final predictions from the diversity-
+                       regularized model: discover distinct steady-state candidates.
+
+                                         (0)
+  independent initial states uk ∼ ρ, evolve each of them k = 1, . . . , M with the same weight-tied
+               (t+1)        (t)                                          (T )
+  dynamics, uk       = gθ (uk , f ). Denote the final states by ûk := uk . The diversity-regularized
+  objective is
+                                        M
+                                      1 X
+                                           EAC (ûk ; f ) − λ Diversity {ûk }M
+                                                                                 
+                       Lλ (θ; f ) =                                           k=1 ,
+                                     M
+                                                 k=1
+                where
+                                                                1     X 1
+                                    Diversity {ûk }M                     ∥ûi − ûj ∥22 .
+                                                       
+                                                    k=1 =
+                                                            M (M − 1)  N2
+                                                                       i̸=j
+
+     Here, the penalty weight λ is decayed over the progress of training. For clarity, we refer to
+  each specific decay schedule by its initial penalty weight, λinit (full details in Appendix F).
+     Figure 4 illustrates the effect. The top row shows five independent initial states for the same
+  forcing field. With energy-only training, λinit = 0, the middle row shows that these trajectories
+  collapse to visually similar final states. With diversity regularization, λinit = 1.2, the bottom
+  row shows that the same initial states lead to visibly distinct steady-state candidates. Table 4
+  confirms the same trend: the average number of detected solution clusters increases from 1.00
+  at λinit = 0 to 16.11 at λinit = 1.2.
+     Is there an accuracy–diversity tradeoff ? Yes. Table 4 shows a clear tradeoff. The
+  energy-only model gives the best physical accuracy, with the lowest residual error and energy, but
+  it discovers only one solution cluster. Increasing the initial diversity weight λinit produces more
+  distinct outputs: for example, λinit = 1.2 increases the average number of solution clusters from
+  1.00 to 16.11. However, this comes at a cost: the test residual error increases from 9.19 × 10−4 to
+  5.74 × 10−3 , and the test energy becomes less favorable. Thus, in this experiment, multi-solution
+12                                    CALEB JORE AND JIALIN LIU
+
+         Table 4. Full-dataset Allen–Cahn evaluation. For each forcing instance, we
+         run 20 trajectories for 50 iterations. Train/Test error denote the residual MSE
+         MSEres (u; f ), and Train/Test energy denote the energy EAC (u; f ). Lower error
+         and lower energy indicate better physical accuracy; residual MSE is nonnegative,
+         while the energy may be negative. “# Sols” is the average number of distinct
+         output clusters among the final states, so larger values indicate greater solution
+         diversity.
+
+     Training obj.       Train error      Test error       Train energy        Test energy      # Sols
+                                 −2                  −2                 −1                 −1
+     IMEX label         9.58 × 10        9.55 × 10          1.43 × 10          1.43 × 10          1.00
+     Energy only        9.08 × 10−4     9.19 × 10−4       −1.15 × 10−1       −1.15 × 10−1         1.00
+                                 −3                  −3             −1                     −1
+     Div. λinit = 0.5   1.54 × 10        1.55 × 10        −1.15 × 10         −1.14 × 10           1.00
+     Div. λinit = 1.2   5.77 × 10−3      5.74 × 10−3       −4.29 × 10−2      −4.22 × 10−2        16.11
+     Div. λinit = 2.0   4.06 × 10−3      4.07 × 10−3       −8.11 × 10−3      −7.95 × 10−3        18.84
+
+
+discovery is not free. This tradeoff gives a practical way to tune the solver: setting λ = 0
+prioritizes physical accuracy, while increasing λ encourages broader exploration of the solution
+landscape.
+   Additional experiments. Appendix F gives two further studies: learned warm starts
+improve IMEX solver, and the same accuracy–diversity tradeoff persists beyond the 64 × 64
+setting.
+
+                                          5. Conclusions
+   We studied learning problems where one input admits multiple valid solutions. Bifurcation
+models represent this multiplicity through weight-tied dynamics, whose different initializations
+can converge to different stable equilibria. We proved that broad set-valued maps can be
+represented by regular dynamics and that the induced selectors are almost everywhere regular,
+unlike arbitrary manual branch labels. Empirically, these dynamics can naturally discover many
+low-energy Ising solutions without branch labels. In Allen–Cahn, however, energy minimization
+alone may collapse to a dominant branch; explicitly promoting diversity recovers multiple
+branches, revealing an accuracy–diversity tradeoff. This makes diversity a tunable modeling
+objective: the training objective can bias the solver toward either higher physical accuracy or
+broader exploration of the solution set.
+                                  SET-VALUED SOLUTION MAP LEARNING                                             13
+
+
+                                                References
+ [1] Jonas Adler and Ozan Öktem, Learned primal-dual reconstruction, IEEE Transactions on Medical Imaging
+     37 (2018), no. 6, 1322–1332.
+ [2] Samuel M Allen and John W Cahn, A microscopic theory for antiphase boundary motion and its application
+     to antiphase domain coarsening, Acta metallurgica 27 (1979), no. 6, 1085–1095.
+ [3] João Henrique Andrade, Dario Corona, Stefano Nardulli, Paolo Piccione, and Raoní Ponciano, From bubbles
+     to clusters: Multiple solutions to the allen–cahn system, Journal of Differential Equations 464 (2026),
+     114189.
+ [4] Shaojie Bai, J Zico Kolter, and Vladlen Koltun, Deep equilibrium models, Advances in Neural Information
+     Processing Systems 32 (2019).
+ [5] Arpit Bansal, Avi Schwarzschild, Eitan Borgnia, Zeyad Emam, Furong Huang, Micah Goldblum, and Tom
+     Goldstein, End-to-end algorithm synthesis with recurrent networks: Extrapolation without overthinking,
+     Advances in Neural Information Processing Systems 35 (2022), 20232–20242.
+ [6] Long Qing Chen and Jie Shen, Applications of semi-implicit fourier-spectral method to phase field equations,
+     Computer Physics Communications 108 (1998), no. 2-3, 147–158.
+ [7] Ziang Chen, Jialin Liu, Xinshang Wang, and Wotao Yin, On representing linear programs by graph neural
+     networks, The eleventh international conference on learning representations, 2023.
+ [8] Laurent El Ghaoui, Fangda Gu, Bertrand Travacca, Armin Askari, and Alicia Tsai, Implicit deep learning,
+     SIAM Journal on Mathematics of Data Science 3 (2021), no. 3, 930–958.
+ [9] Lawrence C. Evans and Ronald F. Gariepy, Measure theory and fine properties of functions, Revised, CRC
+     Press, 2015.
+[10] Patrick E. Farrell, Ásgeir Birkisson, and Simon W. Funke, Deflation techniques for finding distinct solutions
+     of nonlinear partial differential equations, SIAM Journal on Scientific Computing 37 (2015), no. 4, A2026–
+     A2045.
+[11] Samy Wu Fung, Howard Heaton, Qiuwei Li, Daniel McKenzie, Stanley Osher, and Wotao Yin, JFB: Jacobian-
+     free backpropagation for implicit networks, Proceedings of the aaai conference on artificial intelligence,
+     2022.
+[12] Jonas Geiping, Sean McLeish, Neel Jain, John Kirchenbauer, Siddharth Singh, Brian R Bartoldson, Bhavya
+     Kailkhura, Abhinav Bhatele, and Tom Goldstein, Scaling up test-time compute with latent reasoning: A
+     recurrent depth approach, arXiv preprint arXiv:2502.05171 (2025).
+[13] Zhengyang Geng, Xin-Yu Zhang, Shaojie Bai, Yisen Wang, and Zhouchen Lin, On training implicit models,
+     Advances in Neural Information Processing Systems 34 (2021), 24247–24260.
+[14] Angeliki Giannou, Shashank Rajput, Jy-yong Sohn, Kangwook Lee, Jason D. Lee, and Dimitris Papailiopoulos,
+     Looped transformers as programmable computers, Proceedings of the 40th international conference on machine
+     learning, 2023, pp. 11398–11442.
+[15] Justin Gilmer, Samuel S Schoenholz, Patrick F Riley, Oriol Vinyals, and George E Dahl, Neural message
+     passing for quantum chemistry, International conference on machine learning, 2017, pp. 1263–1272.
+[16] Davis Gilton, Gregory Ongie, and Rebecca Willett, Deep equilibrium architectures for inverse problems in
+     imaging, IEEE Transactions on Computational Imaging 7 (2021), 1123–1133.
+[17] Karol Gregor and Yann LeCun, Learning fast approximations of sparse coding, Proceedings of the 27th
+     international conference on international conference on machine learning, 2010, pp. 399–406.
+[18] Gurobi Optimization, LLC, Gurobi Optimizer Reference Manual, 2024.
+[19] Aaron Havens, Alexandre Araujo, Siddharth Garg, Farshad Khorrami, and Bin Hu, Exploiting connections
+     between Lipschitz structures for certifiably robust deep equilibrium models, Advances in Neural Information
+     Processing Systems 36 (2023), 21658–21674.
+[20] Ernst Ising, Beitrag zur Theorie des Ferromagnetismus, Zeitschrift für Physik 31 (1925), no. 1, 253–258.
+[21] Saber Jafarpour, Alexander Davydov, Anton Proskurnikov, and Francesco Bullo, Robust implicit networks
+     via non-Euclidean contractions, Advances in Neural Information Processing Systems 34 (2021), 9857–9868.
+[22] K. Kim, M.-S. Chang, S. Korenblit, R. Islam, E. E. Edwards, J. K. Freericks, G.-D. Lin, L.-M. Duan, and
+     C. Monroe, Quantum simulation of frustrated ising spins with trapped ions, Nature 465 (2010), no. 7298,
+     590–593.
+[23] Hannah Lawrence, Vasco Portilheiro, Yan Zhang, and Sékou-Oumar Kaba, Improving equivariant networks
+     with probabilistic symmetry breaking, Icml 2024 workshop on geometry-grounded representation learning
+     and generative modeling, 2024.
+[24] Lingxiao Li, Noam Aigerman, Vladimir Kim, Jiajin Li, Kristjan Greenewald, Mikhail Yurochkin, and Justin
+     Solomon, Learning proximal operators to discover multiple optima, The eleventh international conference on
+     learning representations, 2023.
+14                                     CALEB JORE AND JIALIN LIU
+
+
+[25] Zongyi Li, Nikola Borislavov Kovachki, Kamyar Azizzadenesheli, Burigede liu, Kaushik Bhattacharya,
+     Andrew Stuart, and Anima Anandkumar, Fourier Neural Operator for parametric partial differential
+     equations, International conference on learning representations, 2021.
+[26] Jialin Liu, Xiaohan Chen, Zhangyang Wang, and Wotao Yin, ALISTA: Analytic weights are as good as
+     learned weights in LISTA, International conference on learning representations (iclr), 2019.
+[27] Jialin Liu, Lisang Ding, Stanley Osher, and Wotao Yin, Expressive power of implicit models: Rich equilibria
+     and test-time scaling, The fourteenth international conference on learning representations, 2026.
+[28] Tanya Marwah, Ashwini Pokle, J Zico Kolter, Zachary Lipton, Jianfeng Lu, and Andrej Risteski, Deep
+     equilibrium based neural operators for steady-state PDEs, Advances in Neural Information Processing
+     Systems 36 (2023), 15716–15737.
+[29] Christopher A Metzler, Ali Mousavi, and Richard G Baraniuk, Learned D-AMP: Principled neural network
+     based compressive image recovery, Advances in Neural Information Processing Systems (2017), 1773–1784.
+[30] Roderich Moessner and Arthur P Ramirez, Geometrical frustration, Physics Today 59 (2006), no. 2, 24–29.
+[31] Vishal Monga, Yuelong Li, and Yonina C. Eldar, Algorithm unrolling: Interpretable, efficient deep learning
+     for signal and image processing, IEEE Signal Processing Magazine 38 (2021), no. 2, 18–44.
+[32] Charles R Qi, Hao Su, Kaichun Mo, and Leonidas J Guibas, Pointnet: Deep learning on point sets for
+     3d classification and segmentation, Proceedings of the ieee conference on computer vision and pattern
+     recognition, 2017, pp. 652–660.
+[33] Max Revay, Ruigang Wang, and Ian R Manchester, Lipschitz bounded equilibrium networks, arXiv preprint
+     arXiv:2010.01732 (2020).
+[34] Matus Telgarsky, Neural networks and rational functions, International conference on machine learning,
+     2017, pp. 3387–3393.
+[35] Hannes Uecker, Continuation and bifurcation in nonlinear pdes – algorithms, applications, and experiments,
+     Jahresbericht der Deutschen Mathematiker-Vereinigung 124 (2022), no. 1, 43–80.
+[36] Guan Wang, Jin Li, Yuhao Sun, Xing Chen, Changling Liu, Yue Wu, Meng Lu, Sen Song, and Yasin Abbasi
+     Yadkori, Hierarchical reasoning model, arXiv preprint arXiv:2506.21734 (2025).
+[37] Ezra Winston and J Zico Kolter, Monotone operator equilibrium networks, Advances in Neural Information
+     Processing Systems 33 (2020), 10718–10728.
+[38] Bo Xin, Yizhou Wang, Wen Gao, David Wipf, and Baoyuan Wang, Maximal sparsity with deep networks?,
+     Advances in Neural Information Processing Systems 29 (2016), 4340–4348.
+[39] Yan Yang, Jian Sun, Huibin Li, and Zongben Xu, Deep ADMM-Net for compressive sensing MRI, Proceedings
+     of the 30th international conference on neural information processing systems, 2016, pp. 10–18.
+[40] Hao You, Liuge Du, Xiao Xu, and Jia Zhao, Deep learning methods for solving non-uniqueness of inverse
+     design in photonics, Optics Communications 554 (2024), 130122.
+[41] Manzil Zaheer, Satwik Kottur, Siamak Ravanbakhsh, Barnabas Poczos, Russ R Salakhutdinov, and Alexan-
+     der J Smola, Deep sets, Advances in neural information processing systems 30 (2017).
+[42] Jian Zhang and Bernard Ghanem, ISTA-Net: Interpretable optimization-inspired deep network for image
+     compressive sensing, Proceedings of the ieee conference on computer vision and pattern recognition, 2018,
+     pp. 1828–1837.
+[43] Zongren Zou, Zhicheng Wang, and George Em Karniadakis, Learning and discovering multiple solutions
+     using physics-informed neural networks with random initialization and deep ensemble, Proceedings of the
+     Royal Society A 481 (2025), no. 2325, 20250205.
+                             SET-VALUED SOLUTION MAP LEARNING                                    15
+
+
+                           Appendix A. Proof of Theorem 2.2
+   Throughout this section, let K ⊂ Rd be bounded, let Y = Rm , and let
+                                        f1 , . . . , fn : K → Y
+be locally Lipschitz branch maps. These branches may collapse. Define the finite set of distinct
+branch values
+                              F(x) := {f1 (x), . . . , fn (x)} ⊂ Y.
+A.1. Nearest solution selector.
+Definition A.1 (Priority nearest selector). Fix a priority order
+                                           1 ≺ 2 ≺ · · · ≺ n.
+For y ∈ Y and x ∈ K, define
+                                 πy (x) := min argmin ∥y − fi (x)∥,
+                                                 1≤i≤n
+
+where the minimum is taken according to the fixed priority order. Define
+                                        Py (x) := fπy (x) (x).
+Thus Py (x) is single-valued for every (y, x) ∈ Y × K.
+Definition A.2 (Voronoi switching set). Define the reduced switching set
+          n                                                                                 o
+ Σ◦ (x) := y ∈ Y : ∃i ̸= j, fi (x) ̸= fj (x), ∥y − fi (x)∥ = ∥y − fj (x)∥ = min ∥y − fk (x)∥ .
+                                                                            k
+Define the graph-closure switching set
+               e 0 ) := {y ∈ Y : ∃xℓ → x0 , ∃yℓ → y such that yℓ ∈ Σ◦ (xℓ )} .
+               Σ(x
+Equivalently,
+                                       Σ) = graph(Σ◦ ) ⊂ K × Y.
+                                 graph( e
+In particular, graph( e
+                     Σ) is closed.
+Lemma A.3 (Continuity of solution selector). Let K ⊂ Rd and let Y = Rm with the Euclidean
+norm. Let f1 , . . . , fn : K → Y be locally Lipschitz. For fixed y ∈ Y, define
+                                 Jy := {x ∈ K : (x, y) ∈ graph( e Σ)}.
+Then Py is locally Lipschitz on K \ Jy .
+Proof. Fix x0 ∈ K \ Jy . Since
+                                        (x0 , y) ∈
+                                                 / graph(Σ)
+                                                         e
+and graph(Σ)
+          e is closed, there exist a relative neighborhood
+                                                V⊂K
+of x0 , and a number ε > 0, such that
+                                  (V × Bε (y)) ∩ graph(Σ◦ ) = ∅.
+Equivalently, for every x ∈ V and every q ∈ Bε (y), the point q is not on the reduced Voronoi
+switching set of F (x).
+   For fixed x ∈ V, the ball Bε (y) is connected. Since no point in this ball crosses a reduced
+switching boundary, the same distinct branch value remains the unique nearest value throughout
+the ball. Therefore, if
+                                          u = Py (x),
+16                                  CALEB JORE AND JIALIN LIU
+
+
+then for every q ∈ Bε (y) and every w ∈ F (x),
+                                        ∥q − u∥ ≤ ∥q − w∥.
+Moreover, if w ̸= u, choose
+                                                       ε w−u
+                                        q=y+                     .
+                                                       2 ∥w − u∥
+and plug it into ∥q − u∥2 ≤ ∥q − w∥2 gives
+                                                   2                        2
+                               ε w−u                   ε w−u
+                         y−u+               ≤ y−w+
+                               2 ∥w − u∥               2 ∥w − u∥
+                                         ε2                                  ε2
+                                                                      
+                              w−u                                 w−u
+         ∥y − u∥2 + ε y − u,           +    ≤∥y − w∥2 + ε y − w,           +
+                             ∥w − u∥     4                       ∥w − u∥     4
+and hence by possibly shrinking ε, we have
+                               ∥y − w∥2 − ∥y − u∥2 ≥ ε∥w − u∥
+for all x ∈ V, u = Py (x), and w ∈ F(x).
+   Now shrink V if necessary so that all fi are L-Lipschitz on V. Also, let
+                                B :=      sup          ∥y − fi (x)∥ < ∞.
+                                       x∈V, 1≤i≤n
+
+     Take arbitrary x, z ∈ V. Let
+                                    u = Py (x),           v = Py (z).
+Choose labels i, j such that
+                                    u = fi (x),           v = fj (z).
+Set
+                                    r := fi (z),          w := fj (x).
+By L-Lipschitzness,
+                         ∥u − r∥ ≤ L∥x − z∥,              ∥v − w∥ ≤ L∥x − z∥.
+     Apply the margin estimate at x with competitor w, and at z with competitor r:
+                               ∥y − w∥2 − ∥y − u∥2 ≥ε∥w − u∥,
+                                ∥y − r∥2 − ∥y − v∥2 ≥ε∥r − v∥.
+Adding,
+           ε(∥w − u∥ + ∥r − v∥) ≤ ∥y − w∥2 − ∥y − v∥2 + ∥y − r∥2 − ∥y − u∥2 .
+                                                                          
+
+The right-hand side is bounded by 4BL∥x − z∥ because
+    ∥y − w∥2 − ∥y − v∥2 =⟨(y − w) + (y − v), w − v⟩
+                                             
+                          ≤ ∥y − w∥ + ∥y − v∥ ∥w − v∥ ≤ 2B∥w − v∥ ≤ 2BL∥x − z∥,
+                                     
+and similarly for ∥y − r∥2 − ∥y − u∥2 .
+  On the other hand,
+                              ∥w − u∥ ≥ ∥u − v∥ − L∥x − z∥,
+and
+                              ∥r − v∥ ≥ ∥u − v∥ − L∥x − z∥.
+Hence
+                         ε(2∥u − v∥ − 2L∥x − z∥) ≤ 4BL∥x − z∥.
+                              SET-VALUED SOLUTION MAP LEARNING                                      17
+
+
+Therefore                                                  
+                                                 2B
+                                 ∥u − v∥ ≤ L 1 +                ∥x − z∥.
+                                                  ε
+Since u = Py (x) and v = Py (z), this proves the local Lipschitz of Py at x0 . Thus Py is locally
+Lipschitz on K \ Jy , which concludes the proof.                                               □
+
+A.2. Bad sets. Here we restate Definition 2.1 and provide a more detailed version below.
+Definition A.4 (Stable and unstable collapse pattern). Let f1 , . . . , fn : K → Y be branch
+maps, and fix x0 ∈ K. We say that the labeled branches have a stable collapse pattern near x0
+if there exists a relative neighborhood U ⊂ K of x0 and a partition
+                                     {1, . . . , n} = C1 ∪ · · · ∪ Cq
+such that, for every x ∈ U,
+                           fi (x) = fj (x)    ⇐⇒      i, j ∈ Cα for some α.
+Thus labels in the same cluster remain collapsed throughout U, while labels in different clusters
+remain distinct throughout U. Let
+               S := {x ∈ K : the branches have a stable collapse pattern near x}.
+Define the unstable collapse set
+                                             U := K \ S.
+Lemma A.5 (Closedness of the unstable collapse set). The set U is relatively closed in K.
+Proof. The stable set S is relatively open. Indeed, if a stable collapse partition holds on a
+relative neighborhood U of x0 , then the same partition holds on a smaller relative neighborhood
+of every point in U. Therefore U = K \ S is relatively closed.                                 □
+
+Definition A.6 (Switching set.). For each fixed y ∈ Y, define the switching-in-x set
+
+                                    Jy := {x ∈ K : y ∈ e
+                                                       Σ(x)}.
+Lemma A.7 (Closedness of switching set). For each y ∈ Y, the set Jy is relatively closed in K.
+
+                   Σ) is closed in K × Y, its section Jy is relatively closed in K.
+Proof. Since graph( e                                                                               □
+
+Definition A.8 (Extended domain and discontinuity points). First we extend F to x̄ ∈ K\K
+by the limit relative to K. For each branch i = 1, 2, · · · , n, we define
+                                 (
+                                     lim fi (x),   if lim fi (x) exists,
+                        fi (x̄) = K∋x→x̄               K∋x→x̄
+                                  0,               otherwise.
+
+In addition, the nearest branch selector Py (x) can also be extended to K accordingly.
+   Note that even if fi is continuously extendable to √ x̄, it is still possible that fi is not locally
+Lipschitz continuous at the point x̄. An example is x when it is extended from (0, 1] to 0. We
+collect all these points (where fi is not locally Lipschitz) into the set D:
+            n                                                                                   o
+     D := x ∈ K : fi is not locally Lipschitz continuous at x for some i ∈ {1, 2, · · · , n}.
+
+Lemma A.9 (Closedness of discontinuity points). D is closed in K and D ⊂ K\K.
+18                                   CALEB JORE AND JIALIN LIU
+
+
+Proof. The conclusion D ⊂ K\K directly follows from the definition of D and the local Lipschitz
+property of fi . To show its closedness, we define:
+                        n                                                    o
+                  Di := x ∈ K : fi is not locally Lipschitz continuous at x.
+
+and hence D = ∪ni=1 Di . Thanks to [27, Lemma A.2], each Di is closed. The union of finitely
+many closed sets is closed, then D is closed.                                             □
+                                                                                           K
+Definition A.10 (Bad set). Equip Y × K with the product Euclidean norm. Define U               as the
+closure of U relative to K. The joint bad set is
+                                       K
+                                           n                         o
+                     B := Y × D ∪ U        ∪ (y, x) ∈ Y × K : y ∈ Σ(x)
+                                                                  e     .
+
+Lemma A.11 (Closedness of the joint bad set). The set B is closed in Y × K.
+                                                               K
+Proof. By Lemma A.9, D is closed in K. By definition, U            is closed in K. Hence
+                                                 K
+                                     Y × D∪U
+is closed in Y × K.
+                    Σ) is closed in K × Y. Therefore its coordinate-swapped version
+   Moreover, graph( e
+                                    {(y, x) ∈ Y × K : y ∈ Σ(x)}
+                                                          e
+is closed in Y × K. Thus B, being the union of two closed sets, is closed.                         □
+     Based on the bad set, we can provide a joint-space analogue of Lemma A.3.
+Lemma A.12 (Joint local Lipschitzness of the nearest selector). Define
+                                         P (y, x) := Py (x).
+Then P is locally Lipschitz on
+                                             (Y × K) \ B.
+Proof. Fix (y0 , x0 ) ∈
+                      / B. Then
+                                               K
+                                    x0 ∈
+                                       / D∪U ,         y0 ∈
+                                                          / e
+                                                            Σ(x0 ).
+Therefore the nearest distinct branch value to y0 at x0 is unique. Let C∗ be the corresponding
+stable collapse cluster, and choose its priority representative i∗ .
+                 K
+   Since x0 ∈
+            / U , after shrinking a relative neighborhood V ⊂ K of x0 , the collapse pattern of
+the branches is stable on V ∩ K. Choose one representative iα for each stable collapse cluster
+Cα . Since C∗ is the unique nearest cluster at (y0 , x0 ), there is a positive margin
+                        γ := min (∥y0 − fiα (x0 )∥ − ∥y0 − fi∗ (x0 )∥) > 0.
+                             α̸=∗
+
+By continuity of the branch maps and of the functions
+                                      (y, x) 7→ ∥y − fiα (x)∥,
+after further shrinking V and taking ϵ > 0 sufficiently small, we have
+                        ∥y − fi∗ (x)∥ < ∥y − fiα (x)∥       for every α ̸= ∗,
+for all (y, x) ∈ Bϵ (y0 ) × V . Hence the same stable collapse cluster C∗ remains the unique
+nearest cluster throughout this product neighborhood. Therefore,
+                        P (y, x) = fi∗ (x)      for all (y, x) ∈ Bϵ (y0 ) × V.
+                               SET-VALUED SOLUTION MAP LEARNING                                      19
+
+
+Since x0 ∈ / D, the branch fi is locally Lipschitz near x0 . Therefore, for all (y, x), (y ′ , x′ ) ∈
+Bϵ (y0 ) × V ,
+        ∥P (y, x) − P (y ′ , x′ )∥ = ∥fi∗ (x) − fi∗ (x′ )∥ ≤ L∥x − x′ ∥ ≤ L∥(y, x) − (y ′ , x′ )∥.
+Hence P is locally Lipschitz near (y0 , x0 ). Since (y0 , x0 ) was arbitrary, P is locally Lipschitz
+on (Y × K) \ B.                                                                                   □
+
+A.3. Construction of dynamics. Distance-to-bad-set safety factor. For (y, x) ∈ Y × K,
+set
+                                                              ρ(y, x)
+                     ρ(y, x) := dist((y, x), B), ω(y, x) :=             .
+                                                            1 + ρ(y, x)
+Because B is closed,
+                                ω(y, x) = 0 ⇐⇒ (y, x) ∈ B.
+and we consider (y, x) to be a safe point if this factor ω is large enough. Moreover, for every
+fixed y ∈ Y, the map x 7→ ω(y, x) is 1-Lipschitz on K. Indeed,
+                      |ρ(y, x) − ρ(y, z)| ≤ ∥(y, x) − (y, z)∥Y×K = ∥x − z∥,
+and r 7→ r/(1 + r) is 1-Lipschitz on [0, ∞). Hence
+                        |ω(y, x) − ω(y, z)| ≤ ∥x − z∥            for all x, z ∈ K.
+  Safe tubes and safe-set profiles. Define the safe tube (i.e., a clear gap to the bad set):
+                           n                                           o
+                 S(R, s) := (y, x) ∈ Y × K : ∥y∥ ≤ R, ω(y, x) ≥ s.
+And then define safe-set profiles:
+                                                         ∥Py (x) − Py (z)∥
+                             H1 (R, s) :=       sup                        .
+                                            (y,x)∈S(R,s)      ∥x − z∥
+                                            (y,z)∈S(R,s)
+                                                x̸=z
+
+and
+                                  H2 (R, s) :=        sup       ∥Py (x)∥.
+                                                 (y,x)∈S(R,s)
+
+Lemma A.13. It holds that
+                                 H1 (R, s) < ∞,            H2 (R, s) < ∞
+for every R > 0 and s > 0.
+Proof. If s ≥ 1, then the safe sets are empty since ω < 1, and the claim is trivial. Hence assume
+                    Y
+0 < s < 1. Since B R × K is compact and ω is continuous, S(R, s) is compact. Moreover,
+                                        S(R, s) ⊂ (Y × K) \ B.
+Thanks to Lemma A.12, P (y, x) is joint local Lipschitz on (Y × K) \ B and the restriction of P
+to the compact set S(R, s) is globally Lipschitz. Hence there exists LR,s < ∞ such that
+       ∥Py (x) − Py (z)∥ = ∥P (y, x) − P (y, z)∥ ≤ LR,s ∥(y, x) − (y, z)∥ = LR,s ∥x − z∥
+for all (y, x), (y, z) ∈ S(R, s). Therefore H1 (R, s) ≤ LR,s < ∞.
+   Since P is continuous on the compact set S(R, s), it is bounded there. Thus there exists
+MR,s < ∞:
+                           ∥Py (x)∥ ≤ MR,s       for all (y, x) ∈ S(R, s).
+Therefore, H2 (R, s) ≤ MR,s < ∞. This completes the proof.                                           □
+20                                   CALEB JORE AND JIALIN LIU
+
+
+      Damping factor and recurrent operator. Define
+                                                 1
+                         λR (s) :=                             ,        s > 0.
+                                     H1 (R, s) + H2 (R, s) + 1
+
+Define
+                                            Z r
+                                ΘR (r) :=         λR (s) ds,   r ≥ 0.
+                                              0
+
+Define
+                                                Θ1+∥y∥ (ω(y, x))
+                                 η(y, x) :=                        .
+                                              1 + Θ1+∥y∥ (ω(y, x))
+Finally define
+
+(6)                         g(y, x) := (1 − η(y, x))y + η(y, x)Py (x).
+
+Lemma A.14 (Monotonicity). For fixed R > 0, H1 (R, s) and H2 (R, s) are nonincreasing in s,
+and hence λR (s) is nondecreasing in s. Moreover, for fixed s > 0, H1 (R, s) and H2 (R, s) are
+nondecreasing in R, and hence λR (s) is nonincreasing in R.
+
+Proof. Since the safe tube S(R, s) shrinks as s increases, H1 (R, s) and H2 (R, s) are nonincreasing
+in s, λR (s) is nondecreasing in s. Similar argument for R.                                       □
+
+Lemma A.15 (Positivity and freezing). For (y, x) ∈ Y × K,
+
+                 η(y, x) = 0 ⇐⇒ (y, x) ∈ B ⇐⇒ x ∈ D ∪ U K or y ∈ Σ(x).
+                                                                 e
+
+In particular, for x ∈ K, since D ∩ K = ∅ and U K ∩ K = U, we have
+
+                                      x ∈ U =⇒ g(y, x) = y.
+
+Proof. By definition,
+                                                Θ1+∥y∥ (ω(y, x))
+                                 η(y, x) =                         .
+                                              1 + Θ1+∥y∥ (ω(y, x))
+Since λR (s) > 0 for every s > 0, we have ΘR (r) = 0 if and only if r = 0. Hence
+
+                                  η(y, x) = 0 ⇐⇒ ω(y, x) = 0.
+
+Moreover,
+                         ω(y, x) = 0 ⇐⇒ ρ(y, x) = 0 ⇐⇒ (y, x) ∈ B,
+where the last equivalence uses the closedness of B. By the definition of B, this is equivalent to
+
+                                   x ∈ D ∪ UK        or   y ∈ Σ(x).
+                                                              e
+
+Finally, if x ∈ U, then x ∈ U K , so (y, x) ∈ B for every y. Thus η(y, x) = 0, and therefore
+
+                          g(y, x) = (1 − η(y, x))y + η(y, x)Py (x) = y.
+
+This completes the proof.                                                                         □
+                               SET-VALUED SOLUTION MAP LEARNING                                21
+
+
+A.4. Convergence given fixed x.
+Lemma A.16 (Graph-closure switching agrees with reduced switching at stable points). Fix
+x ∈ K \ U . Then
+                                  Σ(x)
+                                  e     = Σ◦ (x).
+Proof. The inclusion Σ◦ (x) ⊆ Σ(x)
+                               e     is immediate from the definition of graph closure. We prove
+the reverse inclusion.
+   Let q ∈ Σ(x).
+           e      By definition, there exist xℓ → x and qℓ → q such that
+                                            qℓ ∈ Σ◦ (xℓ ).
+For each ℓ, choose labels iℓ ̸= jℓ witnessing the switching, namely
+                                         fiℓ (xℓ ) ̸= fjℓ (xℓ ),
+and
+                      ∥qℓ − fiℓ (xℓ )∥ = ∥qℓ − fjℓ (xℓ )∥ = min ∥qℓ − fk (xℓ )∥.
+                                                             1≤k≤n
+Since there are only finitely many label pairs, after passing to a subsequence we may assume
+                                         iℓ = i,       jℓ = j
+for fixed i ̸= j.
+   Because x ∈ K \ U, the collapse pattern is stable near x. Hence, after shrinking to a
+neighborhood of x, whether two labels are collapsed is constant. Since
+                                          fi (xℓ ) ̸= fj (xℓ )
+for infinitely many ℓ, the labels i and j cannot belong to the same stable collapse cluster.
+Therefore
+                                        fi (x) ̸= fj (x).
+Now let ℓ → ∞. By continuity of the branch maps,
+                         ∥q − fi (x)∥ = ∥q − fj (x)∥ = min ∥q − fk (x)∥.
+                                                           1≤k≤n
+
+Together with fi (x) ̸= fj (x), this implies q ∈ Σ◦ (x). Therefore, Σ(x)
+                                                                    e    ⊆ Σ◦ (x), and hence
+         ◦
+Σ(x) = Σ (x).
+e                                                                                         □
+Lemma A.17 (Voronoi-segment invariance). Fix x ∈ K \ U. Let y0 ∈             / Σ◦ (x), and define
+u := Py0 (x). Then for every z ∈ [y0 , u] (Here, [y0 , u] represents the line segment connecting
+the endpoints y0 and u.),
+                                            Pz (x) = u.
+In particular,
+                                      [y0 , u] ∩ e
+                                                 Σ(x) = ∅.
+                                          Σ(x) = Σ◦ (x) and hence
+Proof. Since x ∈ K \ U , Lemma A.16 gives e
+                                             y0 ∈
+                                                / Σ(x).
+                                                  e
+Hence the selected value u = Py0 (x) is the unique nearest branch value to y0 .
+  Let v ∈ F(x) be any distinct value with v ̸= u. Then
+                                       ∥y0 − u∥ < ∥y0 − v∥.
+For t ∈ [0, 1], set
+                                        zt := (1 − t)y0 + tu.
+Then
+                                    ∥zt − u∥ = (1 − t)∥y0 − u∥.
+22                                  CALEB JORE AND JIALIN LIU
+
+
+By the triangle inequality,
+                   ∥zt − v∥ ≥ ∥y0 − v∥ − ∥y0 − zt ∥ = ∥y0 − v∥ − t∥y0 − u∥.
+Since ∥y0 − v∥ > ∥y0 − u∥, we obtain
+                              ∥zt − v∥ > (1 − t)∥y0 − u∥ = ∥zt − u∥.
+Therefore u remains the unique nearest branch value for every zt ∈ [y0 , u]. Hence
+                                                Pzt (x) = u
+                                      ◦
+for every t ∈ [0, 1], and then zt ∈
+                                  / Σ (x) for every t ∈ [0, 1].
+   Using again e Σ(x) = Σ◦ (x), we conclude that
+                                                zt ∈
+                                                   / Σ(x)
+                                                     e
+
+for every t ∈ [0, 1]. Therefore [y0 , u] ∩ Σ(x)
+                                           e    = ∅, which concludes the proof.             □
+Lemma A.18 (Uniform positive bad-set distance along the Voronoi segment). Fix x ∈ K \ U.
+       / Σ◦ (x) and define u := Py0 (x). Then
+Let y0 ∈
+                                             inf       ρ(z, x) > 0.
+                                           z∈[y0 ,u]
+
+Proof. Define
+                              Γ := {(z, x) : z ∈ [y0 , u]} ⊂ Y × K.
+The set Γ is compact because [y0 , u] is compact.
+   We claim that
+                                           Γ ∩ B = ∅.
+Indeed, since x ∈ K \ U and D ⊂ K \ K, we have x ∈         / U ∪ D. Moreover, by Lemma A.17,
+[y0 , u] ∩ e
+           Σ(x) = ∅. Therefore, for every z ∈ [y0 , u], the point (z, x) belongs to none of the
+components defining B. Hence Γ ∩ B = ∅.
+   Since B is closed and Γ is compact, the continuous function
+                                       (z, x) 7→ dist((z, x), B)
+attains a strictly positive minimum on Γ. Therefore
+                                   inf       ρ(z, x) = dist(Γ, B) > 0.
+                                 z∈[y0 ,u]
+
+This proves the claim.                                                                      □
+                                                     / Σ◦ (x) and define u := Py0 (x).
+Lemma A.19 (Positive damping). Fix x ∈ K \ U. Let y0 ∈
+Then
+                             c := inf η(z, x) > 0.
+                                              z∈[y0 ,u]
+
+Proof. By Lemma A.18, there exists ρ0 > 0 such that
+                                               ρ(z, x) ≥ ρ0
+for every z ∈ [y0 , u]. Hence
+                                            ρ(z, x)       ρ0
+                           ω(z, x) =                  ≥        =: ω0 > 0.
+                                          1 + ρ(z, x)   1 + ρ0
+Let
+                                       R0 := 1 + max ∥z∥.
+                                                        z∈[y0 ,u]
+Then
+                                              1 + ∥z∥ ≤ R0
+                                SET-VALUED SOLUTION MAP LEARNING                                  23
+
+
+for every z ∈ [y0 , u]. Since H1 (R, s) and H2 (R, s) are nondecreasing in R, the function λR (s) is
+nonincreasing in R. Therefore
+                                       Θ1+∥z∥ (ω0 ) ≥ ΘR0 (ω0 ).
+Thus, for every z ∈ [y0 , u],
+                                              ΘR0 (ω0 )
+                                    η(z, x) ≥             =: c.
+                                            1 + ΘR0 (ω0 )
+Since ω0 > 0 and λR0 (s) > 0 for every s > 0,
+                                            Z ω0
+                                ΘR0 (ω0 ) =      λR0 (s) ds > 0.
+                                                      0
+Hence c > 0.                                                                                      □
+
+                                                               / Σ◦ (x) and define
+Theorem A.20 (Convergence with fixed x). Fix x ∈ K \ U. Let y0 ∈
+u := Py0 (x). Consider the iteration
+                                             yt+1 = g(yt , x).
+Then
+                                                 yt → u.
+More precisely, there exists c > 0 such that
+                                   ∥yt − u∥ ≤ (1 − c)t ∥y0 − u∥.
+where c may depend on x and y0 .
+Proof. By Lemma A.19,
+                                      c :=      inf       η(z, x) > 0.
+                                             z∈[y0 ,u]
+
+By Lemma A.17,
+                                               Pz (x) = u
+for every z ∈ [y0 , u].
+   We prove by induction that
+                                               yt ∈ [y0 , u]
+for every t. This is true for t = 0. If yt ∈ [y0 , u], then
+                                yt+1 = (1 − η(yt , x))yt + η(yt , x)u.
+Since
+                                          0 ≤ η(yt , x) ≤ 1,
+we have
+                                      yt+1 ∈ [yt , u] ⊂ [y0 , u].
+Thus yt ∈ [y0 , u] for all t.
+  Therefore
+                                 yt+1 − u = (1 − η(yt , x))(yt − u),
+and so
+                                   ∥yt+1 − u∥ ≤ (1 − c)∥yt − u∥.
+Iterating gives
+                                   ∥yt − u∥ ≤ (1 − c)t ∥y0 − u∥.
+Therefore yt → u.                                                                                 □
+24                                    CALEB JORE AND JIALIN LIU
+
+
+A.5. Input regularity.
+Lemma A.21. Fix y ∈ Y. The map x 7→ η(y, x)Py (x) is globally Lipschitz on K.
+Proof. Fix y. Set R := 1 + ∥y∥. Then ∥y∥ ≤ R, and
+                                                    ΘR (ω(y, x))
+                                      η(y, x) =                    .
+                                                  1 + ΘR (ω(y, x))
+For simplicity, we write
+                      ω(x) := ω(y, x),        P (x) := Py (x),      η(x) := η(y, x).
+Since x 7→ ω(x) is 1-Lipschitz, we have
+                                       |ω(x) − ω(z)| ≤ ∥x − z∥.
+Case 1: If (y, x), (y, z) ∈ B, according to Lemma A.15, we have η(x) = η(z) = 0 and hence
+                                      η(x)P (x) = η(z)P (z) = 0.
+Case 2: If (y, x) ∈ B and (y, z) ∈
+                                 / B, set
+                                              r := ω(z) > 0.
+Then (y, z) ∈ S(R, r), so
+                                           ∥P (z)∥ ≤ H2 (R, r).
+Also,
+                                         η(z) ≤ ΘR (r) ≤ rλR (r).
+Hence
+                                  ∥η(z)P (z)∥ ≤ rλR (r)H2 (R, r) ≤ r.
+Since
+                                      r = ω(z) − ω(x) ≤ ∥z − x∥,
+we get
+                           ∥η(x)P (x) − η(z)P (z)∥ ≤ ∥x − z∥.
+Case 3: Now suppose (y, x), (y, z) ∈
+                                   / B. Without loss of generality, assume
+                                         r1 := ω(x) ≤ r2 := ω(z).
+Then (y, z), (y, x) ∈ S(R, r1 ), so
+                                 ∥P (x) − P (z)∥ ≤ H1 (R, r1 )∥x − z∥.
+Also,
+                                           ∥P (z)∥ ≤ H2 (R, r2 ).
+Therefore
+              η(x)P (x) − η(z)P (z) ≤ η(x)∥P (x) − P (z)∥ + |η(x) − η(z)| P (z) .
+For the first term,
+                                      η(x) ≤ ΘR (r1 ) ≤ r1 λR (r1 ),
+so
+                 η(x)∥P (x) − P (z)∥ ≤ r1 λR (r1 )H1 (R, r1 )∥x − z∥ ≤ ∥x − z∥.
+For the second term, since λR is nondecreasing,
+                        |η(x) − η(z)| ≤ |ΘR (r1 ) − ΘR (r2 )| ≤ (r2 − r1 )λR (r2 ).
+Thus
+                  |η(x) − η(z)| P (z) ≤ (r2 − r1 )λR (r2 )H2 (R, r2 ) ≤ r2 − r1 .
+                                SET-VALUED SOLUTION MAP LEARNING                                25
+
+
+Since ω is 1-Lipschitz,
+                                          r2 − r1 ≤ ∥x − z∥.
+Combining the two estimates gives
+                                 ∥η(x)P (x) − η(z)P (z)∥ ≤ 2∥x − z∥.
+Therefore x 7→ η(y, x)Py (x) is globally Lipschitz on K.                                        □
+Theorem A.22 (Global Lipschitzness of the damped operator). For every fixed y ∈ Y, the map
+                                             x 7→ g(y, x)
+is globally Lipschitz on K.
+Proof. We write
+                            g(y, x) = y − η(y, x)y + η(y, x)Py (x).
+By Lemma A.21, x 7→ η(y, x)Py (x) is globally Lipschitz.
+  It remains to control x 7→ η(y, x)y. Since y is fixed, it is enough to control x 7→ η(y, x).
+Because r 7→ r/(1 + r) is 1-Lipschitz and
+                                          Θ′R (r) = λR (r) ≤ 1
+for a.e. r, we have
+                          |η(y, x) − η(y, z)| ≤ |ω(y, x) − ω(y, z)| ≤ ∥x − z∥.
+Therefore
+                          ∥η(y, x)y − η(y, z)y∥ ≤ ∥y∥∥x − z∥.
+Combining the two estimates, x 7→ g(y, x) is globally Lipschitz on K.                           □
+A.6. Final proof of Theorem 2.2. Finally, we restate Theorem 2.2 in a more complete version
+and prove it.
+Theorem A.23. Let K ⊂ Rd be bounded and let Y = Rm with the Euclidean norm. Assume
+f1 , . . . , fn : K → Y be locally Lipschitz. These branches can collapse. Then there exists
+g : Y × K → Y satisfying:
+      (1) For every y ∈ Y, the map x 7→ g(y, x) is globally Lipschitz on K.
+      (2) For every x ∈ U, g(y, x) = y for every y ∈ Y. Hence the iteration freezes at unstable
+             collapse points.
+      (3) For every x ∈ K \ U and every y0 ∈ / Σ◦ (x), the iteration yt+1 = g(yt , x) converges to
+             one of the branch in F (x):
+                                         yt → Py0 (x) ∈ F(x)
+                      ◦
+        Moreover, Σ (x) has Lebesgue measure zero in Y. Therefore, for every x ∈ K \ U, the
+        convergence statement holds for Lebesgue-almost every initialization y0 ∈ Y.
+    (4) For every x ∈ K \ U, it holds that
+                         n                                  o
+                           lim yt (x; y0 ) : y0 ∈ Y \ Σ◦ (x) = F(x).
+                               t→∞
+        In other words, every branch in F(x) can be achieved
+Proof. The first claim follows from Theorem A.22.
+   The second claim follows from Lemma A.15.
+   The third claim follows from Theorem A.20. In addition, For a stable x, the graph-closure
+switching set agrees locally with the ordinary reduced Voronoi switching set (Lemma A.16).
+Since F(x) is finite, Σ◦ (x) is contained in a finite union of pairwise bisector hyperplanes. Hence
+Σ◦ (x) has Lebesgue measure zero in Y.
+26                                  CALEB JORE AND JIALIN LIU
+
+
+                                                                                   / Σ◦ (x)
+  For the fourth claim, fix x ∈ K \ U. By the third claim, every initialization y0 ∈
+converges to some element of F (x). Hence
+                         n                                  o
+                           lim yt (x; y0 ) : y0 ∈ Y \ Σ◦ (x) ⊂ F(x).
+                             t→∞
+
+Conversely, take any u ∈ F(x), and initialize at
+                                              y0 := u.
+Then u is the unique nearest point value to itself among the distinct branch values in F(x).
+Therefore
+                                  / Σ◦ (x),
+                               y0 ∈              Py0 (x) = u.
+By Theorem A.20, the iteration converges to u. Hence every u ∈ F(x) is obtained as a limit,
+proving equality.                                                                         □
+
+                             Appendix B. Proof of Theorem 2.3
+     We first describe Theorem 2.3 in a more precise version and then provide its complete proof.
+Theorem B.1. Let K ⊂ Rd be bounded and measurable, let Y = Rm , m ≥ 1, and let
+f1 , . . . , fn : K → Y be locally Lipschitz branch maps. Let K∗ := K \ U. Let g : Y × K → Y be the
+recurrent operator constructed in Theorem 2.2. For y0 ∈ Y, define the induced solution selector
+                                    u(y0 , x) := lim g t (y0 , x),
+                                                 t→∞
+whenever the limit exists.
+   Then there exists a Lebesgue-null set E ⊂ Y such that for every y0 ∈ Y \ E, the fixed-
+initialization switching set
+                              N (y0 ) := {x ∈ K⋆ : y0 ∈ Σ◦ (x)}
+has zero d-dimensional Lebesgue measure:
+                                         Ld (N (y0 )) = 0.
+Moreover, for every y0 ∈ Y \ E, the limit u(y0 , x) exists for all x ∈ K⋆ \ N (y0 ), and the map
+x 7→ u(y0 , x) is locally Lipschitz on K⋆ \ N (y0 ).
+   Note: In Appendix B, we write Ld for d-dimensional Lebesgue measure to avoid ambiguity in
+the Fubini argument. Elsewhere, we use | · | for Lebesgue measure in the relevant ambient space.
+Proof. We first show that for almost every fixed initialization y0 , the switching set N (y0 ) has
+zero measure. For fixed x ∈ K⋆ , the switching set Σ◦ (x) is contained in a finite union of
+affine hyperplanes in Y. Indeed, for each i ̸= j with fi (x) ̸= fj (x), expanding ∥y − fi (x)∥2 =
+∥y − fj (x)∥2 gives
+                            2⟨y, fj (x) − fi (x)⟩ = ∥fj (x)∥2 − ∥fi (x)∥2 .
+Since fi (x) ̸= fj (x), the vector fj (x) − fi (x) is nonzero, and hence this equation defines a
+genuine affine hyperplane in Y = Rm . Therefore it has m-dimensional Lebesgue measure zero.
+Since there are only finitely many pairs (i, j), we obtain
+                              Lm (Σ◦ (x)) = 0       for every x ∈ K⋆ .
+     Now define the switching incidence set in the joint space
+                               Γ := {(x, y) ∈ K⋆ × Y : y ∈ Σ◦ (x)}.
+Equivalently,                                    [
+                                         Γ=              Γij ,
+                                              1≤i<j≤n
+                                  SET-VALUED SOLUTION MAP LEARNING                                         27
+
+
+where Γij is the set of all (x, y) ∈ K⋆ × Y such that
+              fi (x) ̸= fj (x),        ∥y − fi (x)∥ = ∥y − fj (x)∥ = min ∥y − fk (x)∥,
+                                                                                    1≤k≤n
+
+Each Γij is measurable because it is described by finitely many equalities and inequalities
+involving continuous functions of (x, y). Hence Γ is measurable.
+   For R > 0, define the closed radius-R ball in the initialization space Y by
+                                           BY
+                                            R := {y ∈ Y : ∥y∥ ≤ R}.
+
+We use BYR only to localize the argument to a finite-measure set: since K is bounded and
+measurable, K⋆ ⊂ K has finite Lebesgue measure, and BY R also has finite Lebesgue measure.
+Thus the indicator function
+                                      1Γ∩(K⋆ ×BY )
+                                                                    R
+
+is integrable on K ⋆
+                       × BY
+                          R , so Fubini’s theorem applies.
+    For fixed x ∈ K⋆ , define the vertical fiber
+                                                   Y
+                                       ΓR
+                                        x := {y ∈ BR : (x, y) ∈ Γ}.
+
+By definition,
+                                                    ◦       Y
+                                              ΓR
+                                               x = Σ (x) ∩ BR .
+Therefore
+                                      ◦       Y
+                       Lm (ΓR      m
+                            x ) = L (Σ (x) ∩ BR ) = 0                          for every x ∈ K⋆ .
+Applying Fubini’s theorem [9, Theorem 1.22] in the order y-then-x, we get
+                                  Z    Z               !       Z
+          d+m          ⋆    Y
+                                                                   Lm (ΓR
+                              
+         L      Γ ∩ (K × BR ) =            1Γ (x, y) dy dx =             x ) dx = 0
+                                             K⋆       BY
+                                                       R                                  K⋆
+
+Next apply Fubini’s theorem in the other order. For fixed y ∈ BY
+                                                               R , define the horizontal fiber
+
+                                       ΓyR := {x ∈ K⋆ : (x, y) ∈ Γ}.
+By definition,
+                                  ΓyR = {x ∈ K⋆ : y ∈ Σ◦ (x)} = N (y).
+Therefore,                                                Z     Z                        
+                        d+m            ⋆
+                                           × BY
+                                                  
+                 0=L          Γ ∩ (K          R)      =                      1Γ (x, y) dx dy
+                                                           BY           K⋆
+                                                          Z R                       Z
+                                                      =         L (ΓyR ) dy =
+                                                                    d
+                                                                                          Ld (N (y)) dy.
+                                                              Y
+                                                           BR                        BY
+                                                                                      R
+
+The function y 7→ Ld (N (y)) is nonnegative. Hence the last identity implies that
+                                                   Ld (N (y)) = 0
+for Lebesgue-a.e. y ∈ BY
+                       R.
+   Let ER ⊂ BYR be the exceptional set
+
+                                    ER := {y ∈ BY    d
+                                                R : L (N (y)) > 0}.
+
+Then
+                                                   Lm (ER ) = 0.
+Now define
+                                                              ∞
+                                                              [
+                                                      E :=          Eℓ ,
+                                                              ℓ=1
+28                                       CALEB JORE AND JIALIN LIU
+
+
+where Eℓ is the exceptional set corresponding to the ball BY
+                                                           ℓ . Since E is a countable union of
+Lebesgue-null sets,
+                                                  Lm (E) = 0.
+Take any y0 ∈ Y \ E. Choose an integer ℓ large enough so that y0 ∈ BY
+                                                                    ℓ . Since y0 ∈
+                                                                                 / Eℓ , we have
+
+                                                Ld (N (y0 )) = 0.
+This proves the desired almost-everywhere statement for fixed initializations.
+  It remains to prove the local Lipschitz property. Fix y0 ∈ Y \ E and x0 ∈ K⋆ \ N (y0 ). Since
+x0 ∈                     / Σ◦ (x0 ). Thus, among the distinct branch values in
+   / N (y0 ), we have y0 ∈
+                                       F(x0 ) = {f1 (x0 ), . . . , fn (x0 )},
+there is a unique branch value closest to y0 .
+   Because x0 ∈ K⋆ , the branch collapse pattern is stable near x0 . Therefore there exist a
+relative neighborhood V0 ⊂ K of x0 and a partition
+                                         {1, . . . , n} = C1 ∪ · · · ∪ Cq
+such that, for every x ∈ V0 ,
+                          fi (x) = fj (x)         ⇐⇒       i, j ∈ Cα for some α.
+                                                                 / Σ◦ (x0 ), there is a unique
+Choose one representative iα ∈ Cα for each cluster Cα . Since y0 ∈
+cluster Cα⋆ whose branch value is closest to y0 at x0 . That is,
+                    ∥y0 − fiα⋆ (x0 )∥ < ∥y0 − fiβ (x0 )∥               for every β ̸= α⋆ .
+If q = 1, then there is only one distinct branch value near x0 , and the conclusion is immediate.
+Otherwise, define the positive margin
+                                                                    
+                        δ := min ∥y0 − fiβ (x0 )∥ − ∥y0 − fiα⋆ (x0 )∥ > 0.
+                               β̸=α⋆
+
+By continuity of the finitely many branch maps, after shrinking V0 if necessary, we may ensure
+that for every x ∈ V0 and every β ̸= α⋆ ,
+                                   ∥y0 − fiα⋆ (x)∥ < ∥y0 − fiβ (x)∥.
+Thus the same cluster Cα⋆ remains the unique nearest branch cluster throughout V0 . Conse-
+quently,
+                               Py0 (x) = fiα⋆ (x)           for every x ∈ V0 .
+In particular, it holds that
+                                               V0 ∩ N (y0 ) = ∅,
+and equivalently
+                                     / Σ◦ (x),
+                                  y0 ∈                   for every x ∈ V0 .
+By Theorem A.20, for every x ∈ V0 ,
+                         u(y0 , x) = lim g t (y0 , x) = Py0 (x) = fiα⋆ (x).
+                                           t→∞
+
+Since fiα⋆ is locally Lipschitz, the map x 7→ u(y0 , x) is locally Lipschitz in a neighborhood
+of x0 . Because x0 ∈ K⋆ \ N (y0 ) was arbitrary, hence x 7→ u(y0 , x) is locally Lipschitz on
+K⋆ \ N (y0 ).                                                                                □
+                              SET-VALUED SOLUTION MAP LEARNING                                29
+
+
+   An example to understand Theorem B.1. Consider the one-dimensional set-valued map
+                                 F (x) = {x, −x},           x ∈ K ⊂ R,
+with branches f1 (x) = x and f2 (x) = −x. The two branches collapse at x = 0, and this collapse
+is not stable: in every neighborhood of 0, the branches are equal at 0 but distinct away from 0.
+Hence the stable domain is
+                                          K⋆ = K \ {0}.
+Now fix an initialization y0 . If y0 = 0, then for every x ∈ K⋆ ,
+                                        |y0 − x| = |y0 + x|,
+so y0 lies exactly on the Voronoi switching boundary for every stable input. Therefore
+                                            N (0) = K⋆ .
+Thus y0 = 0 is a bad initialization: it is switching for a positive-measure, indeed full-measure,
+set of stable inputs. However, this bad initialization is exceptional. If y0 ̸= 0, then
+                                        |y0 − x| = |y0 + x|
+implies
+                                      (y0 − x)2 = (y0 + x)2 ,
+and hence
+                                               4y0 x = 0.
+Since y0 ̸= 0, this forces x = 0, which is not contained in K⋆ . Therefore
+                                 N (y0 ) = ∅       for every y0 ̸= 0.
+This example shows why the theorem must exclude a null set of initializations: some special
+initialization, here y0 = 0, can be bad for many inputs, but the set of such initializations has
+Lebesgue measure zero in Y = R. For almost every fixed initialization y0 , the induced selector
+is stable and locally Lipschitz on the whole stable domain K⋆ .
+
+                            Appendix C. Proof of Theorem 2.4
+   We now restate Theorem 2.4 to facilitate readability and proceed to prove it.
+Theorem C.1. Let K⋆ ⊂ Rd be bounded and measurable, and let Y = Rm . Let f1 , . . . , fn :
+K⋆ → Y be locally Lipschitz branch maps. Define the genuinely multi-branch region
+            M := {x ∈ K⋆ : |F(x)| ≥ 2} = {x ∈ K⋆ : ∃i ̸= j such that fi (x) ̸= fj (x)}.
+Then, for every
+                                           a ∈ [0, |M|],
+there exists a measurable solution selector
+                                 ua : K⋆ → Y,         ua (x) ∈ F(x),
+such that
+                                         |DiscK⋆ (ua )| = a.
+Here DiscK⋆ (ua ) denotes the set of discontinuity points of ua relative to the domain K⋆ .
+30                                      CALEB JORE AND JIALIN LIU
+
+
+Proof. For each pair 1 ≤ i < j ≤ n, define
+                                  Oij := {x ∈ K⋆ : fi (x) ̸= fj (x)}.
+Since fi and fj are continuous relative to K⋆ , the set Oij is relatively open in K⋆ . Moreover,
+                                                [
+                                       M=             Oij .
+                                                      1≤i<j≤n
+                                   ⋆
+Thus M is relatively open in K and is Lebesgue measurable.
+  Step 1: Scope of discontinuity. We first note that no selector can be discontinuous
+outside M. Indeed, let x0 ∈ K⋆ \ M. Then all branch values agree:
+                                       f1 (x0 ) = · · · = fn (x0 ) =: y0 .
+Let u be any selector satisfying u(x) ∈ F(x). For any sequence xk → x0 in K⋆ , there exists an
+index ik ∈ {1, . . . , n} such that
+                                         u(xk ) = fik (xk ).
+Hence
+             ∥u(xk ) − y0 ∥ = ∥fik (xk ) − fik (x0 )∥ ≤ max ∥fi (xk ) − fi (x0 )∥ → 0.
+                                                                 1≤i≤n
+Therefore u is continuous at x0 , and consequently
+                                               DiscK⋆ (u) ⊂ M
+for every solution selector u.
+   Step 2: Construction of disjoint open cover. Now fix a ∈ [0, |M|]. If a = 0, choose
+                                                ua (x) = f1 (x).
+Since f1 is locally Lipschitz, it is continuous, and hence
+                                              |DiscK⋆ (ua )| = 0.
+   It remains to consider a > 0. Since M is relatively open in K⋆ , for every x ∈ M there exists
+a pair i < j and an open ball B(x, r) such that
+                                            B(x, r) ∩ K⋆ ⊂ Oij .
+The family of all such ambient balls is a Vitali cover of M. By the Vitali covering theorem
+[9, Theorem 1.24], there exists a countable pairwise disjoint collection of open balls
+                                                  B1 , B2 , . . .
+such that, for each ℓ, there is a pair (iℓ , jℓ ) with
+                                          Gℓ := Bℓ ∩ K⋆ ⊂ Oiℓ jℓ ,
+and
+                                                        ∞
+                                                        [
+(7)                                            M\           Gℓ = 0.
+                                                      ℓ=1
+Since the balls Bℓ are pairwise disjoint, the sets Gℓ are pairwise disjoint. Therefore
+                                        ∞
+                                        X               ∞
+                                                        [
+                                              |Gℓ | =          Gℓ = |M|.
+                                        ℓ=1             ℓ=1
+     We now construct a relatively open set Ga ⊂ M with |Ga | = a.
+     If 0 < a < |M|, define partial sums
+                                                N
+                                                X
+                                       SN :=          |Gℓ |,        S0 := 0.
+                                                ℓ=1
+                             SET-VALUED SOLUTION MAP LEARNING                                  31
+
+
+Since SN → |M| > a, there exists a first index N such that SN > a. Hence
+                                        SN −1 ≤ a < SN .
+Set r := a − SN −1 . Then 0 ≤ r < |GN |. If r = 0, just define
+                                                     −1
+                                                    N[
+                                            Ga :=         Gℓ .
+                                                    ℓ=1
+If r > 0, let
+                                 Ht := {x ∈ Rd : x1 < t}.
+The function ϕ(t) := |GN ∩ Ht | is continuous, satisfies ϕ(t) → 0 as t → −∞, and satisfies
+ϕ(t) → |GN | as t → +∞. Hence there exists t0 such that |GN ∩ Ht0 | = r. Now define
+                                        −1
+                                      N[
+                                             !
+                            Ga :=          Gℓ ∪ (GN ∩ Ht0 ).
+                                            ℓ=1
+Then Ga ⊂ M, Ga is relatively open in K⋆ , and
+                                              |Ga | = a.
+Moreover, its relative boundary satisfies
+                                            |∂K⋆ Ga | = 0,
+because ∂K⋆ Ga is contained in a finite union of sets of the form K⋆ ∩ ∂Bℓ and possibly one
+hyperplane slice K⋆ ∩ {x1 = t0 }, all of which have d-dimensional Lebesgue measure zero.
+  If a = |M|, define
+                                                 ∞
+                                                 [
+                                          Ga :=     Gℓ .
+                                                    ℓ=1
+Then Ga ⊂ M, Ga is relatively open in K⋆ , and
+                              |M \ Ga | = 0,         |Ga | = |M| = a.
+In this case, ∂K⋆ Ga ∩ M ⊂ M \ Ga because Ga is relatively open and Ga ⊂ M. Then by (7),
+we have
+                                         |∂K⋆ Ga ∩ M| = 0.
+   Step 3: Construction of solution selector. We next define the selector ua . The set Ga
+is a finite or countable union of disjoint selected pieces. Each selected piece E is of one of the
+forms
+                               E = Gℓ        or     E = GN ∩ Ht0 ,
+and is contained in some OiE jE for a pair iE < jE . For each such selected piece E, choose a
+countable dense subset QE ⊂ E with respect to the relative topology of E. Define
+                                   (
+                                      fiE (x), x ∈ QE ,
+                          ua (x) =                               x ∈ E.
+                                      fjE (x), x ∈ E \ QE ,
+Outside Ga , define
+                                       ua (x) = f1 (x).
+Because the selected pieces are measurable and at most countably many, and because each QE
+is countable, the map ua is measurable. Moreover,
+                              ua (x) ∈ {f1 (x), . . . , fn (x)} = F(x)
+                ⋆
+for every x ∈ K .
+   Step 4: Discontinuity set. We now estimate the discontinuity set of ua .
+32                                  CALEB JORE AND JIALIN LIU
+
+
+    First, let E be one selected piece. Since E is measurable, the Lebesgue density theorem
+[9, Theorem 1.35] implies that almost every point of E is a density point of E. Let x0 be such a
+density point. Because QE is dense in E, there exists a sequence
+                                      xk ∈ QE ,       xk → x0 .
+Also, since QE is countable and x0 is a density point of E, every sufficiently small relative
+neighborhood of x0 contains points of E \ QE . Hence there exists a sequence
+                                    zk ∈ E \ QE ,       zk → x0 .
+Along these two sequences,
+                                   ua (xk ) = fiE (xk ) → fiE (x0 ),
+while
+                                   ua (zk ) = fjE (zk ) → fjE (x0 ).
+Since E ⊂ OiE jE , we have
+                                     fiE (x0 ) ̸= fjE (x0 ).
+Thus ua is discontinuous at x0 . Therefore ua is discontinuous at almost every point of every
+selected piece E, and hence |Ga \ DiscK⋆ (ua )| = 0. Consequently,
+                                      |DiscK⋆ (ua )| ≥ |Ga | = a.
+     Conversely, we already showed that no selector can be discontinuous outside M. Moreover, if
+                                     x0 ∈ M \ (Ga ∪ ∂K⋆ Ga ) ,
+then x0 has a relative neighborhood in K⋆ disjoint from Ga . On that neighborhood, ua = f1 , so
+ua is continuous at x0 . Therefore
+                                 DiscK⋆ (ua ) ⊂ Ga ∪ (∂K⋆ Ga ∩ M).
+     If 0 < a < |M|, then |∂K⋆ Ga | = 0, so
+                                      |DiscK⋆ (ua )| ≤ |Ga | = a.
+Together with the lower bound, this gives
+                                          |DiscK⋆ (ua )| = a.
+     If a = |M|, then |∂K⋆ Ga ∩ M| = 0, so again
+                                  |DiscK⋆ (ua )| = |Ga | = |M| = a.
+This completes the proof.                                                                     □
+
+                   Appendix D. Experiment Details for Toy Examples
+   This appendix records the implementation details for the toy-example experiments in Section 2.
+In particular, it specifies the parameterization of the weight-tied dynamics, the construction
+of the training/validation/test data, and the staged training procedure used in the numerical
+verifications for Theorems 2.2–2.4.
+   Model. In all toy-example experiments, we parameterize the weight-tied dynamics gθ by
+a two-layer MLP with embedding width 256. We use the same parameterization across the
+two toy examples. The model is trained in the unrolled form used throughout the paper, with
+shared parameters across all iterations.
+   Data. The first toy example (Algebraic) is constructed from the two branches of the map
+x 7→ {±1/|x|}. Its training inputs are sampled on a geometric grid
+                                         (1)
+                                       Xtrain = {±(1 + δ)s },
+                             SET-VALUED SOLUTION MAP LEARNING                                     33
+
+
+with δ = 0.1, truncated to the range determined by xmax = 10 and ymax = 10; in particular, the
+grid excludes x = 0. The validation inputs are generated independently on a different geometric
+grid with step size 0.2, so the validation points do not coincide with the training points. For
+visualization and testing, we use denser grids that are again generated independently from the
+training grid.
+   The second toy example (Double-well) is constructed from the two stable branches of the
+double-well equation
+                                        4y 3 − 4y + x = 0.
+Its training inputs are sampled uniformly on [−2.5, 2.5] with 500 points, while the validation
+inputs are sampled independently on the same interval with 128 points. For visualization and
+testing, we again use denser independent grids. Therefore, in both toy examples, the train and
+test data are independent.
+   Training. We largely follow Algorithm 1, with one practical modification: we use staged
+training with increasing unroll lengths. For the first toy example, the three stages use unroll
+lengths
+                                            [10, 20, 30],
+and for the second toy example, they use
+                                               [3, 6, 9].
+                             −4
+All runs use learning rate 10     , 5000 epochs per stage, and 3 stages in total. The initialization
+distribution is
+                                         y0 ∼ Unif[−5, 5],
+and for each input we sample 10 initializations during training. In the supervised toy-example
+experiments, when multiple target branches are available for the same input, we assign each
+sampled initialization y0 to the branch that is closest to y0 in Euclidean distance.
+   Optimization and model selection. We use the same optimizer settings across the two
+toy examples, together with the stage-wise continuation described above. Within each stage,
+model selection is based on the validation loss, and the best checkpoint in that stage is used to
+initialize the next stage. This produces the final supervised checkpoints used in the toy-example
+visualizations.
+   Branch selector construction. For the branch-selection experiments in Section 2.2, we
+derive single-valued supervised datasets from the original two-branch toy examples by imposing
+an interval-wise alternating selector. Specifically, we partition the input domain into Nint
+intervals and assign one branch to each interval, with adjacent intervals always selecting different
+branches. In the first toy example, the partition is uniform in log |x|, so that branch switching is
+distributed evenly across scales near the singular region. In the second toy example, the partition
+is uniform in x. We consider interval counts Nint ∈ {2, 4, 8, 16, 32, 64}. This construction keeps
+the underlying solution set unchanged while producing increasingly irregular single-valued
+targets as Nint grows, thereby isolating the effect of arbitrary human branch selection from the
+effect of the original multi-solution geometry.
+   Hardware. All neural training and evaluation runs in this paper were performed on a single
+workstation with four NVIDIA Quadro RTX 6000 GPUs (24 GB each).
+
+       Appendix E. Ising-GNN Experiments: Details and Addtional Results
+E.1. Experiment Details. This subsection provides more experiment details as a supplement
+to the main text.
+   Dataset construction. Each graph is a triangular lattice generated by python package
+networkx, with all couplings antiferromagnetic: Jij ∼ −Unif[0.5, 1.5]. This choice makes every
+edge prefer opposite spins, while the triangular geometry prevents all constraints from being
+34                                                      CALEB JORE AND JIALIN LIU
+
+
+
+
+                                       30
+
+
+
+
+                Count of test graphs
+                                       25
+                                       20
+                                       15
+                                       10
+                                        5
+                                        0
+                                            0.0   2.5   5.0    7.5   10.0   12.5   15.0   17.5   20.0
+                                        Number of distinct solutions per graph (out of 20 trajectories)
+        Figure 5. Histogram of the number of distinct rounded solutions per test
+        graph for the weight-tied GNN dynamic. Evaluation uses 200 test graphs and
+        k = 20 independent initializations per graph.
+
+satisfied simultaneously. The result is a geometrically frustrated family of Ising instances with
+many competing low-energy patterns. The stored dataset contains 2500 training graphs and
+500 held-out test graphs. The graph sizes vary substantially: the number of nodes ranges from
+6 to 55 with mean 27.37, and the number of undirected edges ranges from 9 to 135 with mean
+about 62.08.
+   For supervised comparisons, we use Gurobi on (4) to compute spin label s ∈ {−1, +1}|V| .
+This label is only one branch among many physically admissible low-energy branches.
+   Graph models. We largely adopt the implicit GNN architecture from [27], unrolling the
+dynamics for T = 10 iterations. However, when training the supervised baseline against exact
+Gurobi labels, we observed that the standard update was highly unstable and struggled to
+minimize the loss. To achieve reliable convergence, we modify the supervised model to use a
+damped recurrent update:
+                                             st+1 = (1 − α)st + α gGNN (st , G),      α ∈ (0, 1].
+This damping mitigates the training instability associated with forcing the weight-tied dynamics
+to fit a single target branch. We treat α as a hyperparameter and tune it over the grid
+{0.01, 0.05, 0.1, 0.5, 1}. For the vanilla GNN counterpart, we use the codebase from [7].
+   Other details. All models use hidden width h = 64. For the original small-scale dataset,
+models are trained with Adam, learning rate 10−3 , batch size 32, and a maximum of 10,000
+epochs.
+E.2. Additional Results: Distribution of the Solution Number. While Table 2 in the
+main text summarizes the average number of distinct solutions discovered by the weight-tied
+GNN dynamics, this appendix provides the complete distributional breakdown. Figure 5
+demonstrates that the multi-branch behavior is consistently expressed across the dataset: rather
+than being skewed by a few extreme outliers, the model successfully recovers a high multiplicity
+of distinct low-energy states for the vast majority of frustrated graph instances.
+E.3. Additional Results: Scaling up the Graph Size. This subsection reports the larger-
+scale Ising experiments used to assess how the models behave as the graph size increases. All
+datasets in this subsection use the same triangular antiferromagnetic construction as the base
+                             SET-VALUED SOLUTION MAP LEARNING                                 35
+
+        Table 5. Realized graph-size statistics for the eight triangular antiferromag-
+        netic dataset levels used in the scaling experiments. Edge counts are undirected
+        counts.
+
+        Level   Split   # Graphs   Node Range   Mean Nodes    Edge Range    Mean Edges
+         L1     Train     2500       66–120        86.64        165–315        222.05
+         L1     Test       500       66–120        86.05        165–315        220.40
+         L2     Train     2500      136–253        186.28       360–693        502.65
+         L2     Test       500      136–253        186.40       360–693        503.01
+         L3     Train     2500      276–528        388.27      759–1488       1083.06
+         L3     Test       500      276–496        387.77      759–1395       1081.62
+         L4     Train     2500      561–990        751.35      1584–2838      2139.65
+         L4     Test       500      561–946        756.40      1584–2709      2154.40
+         L5     Train     2500      990–1953      1476.19      2838–5673      4267.92
+         L5     Test       500      990–1953      1474.49      2838–5673      4262.84
+         L6     Train     2500     2016–3916      2979.14     5859–11484      8708.41
+         L6     Test       500     2016–3916      2989.31     5859–11484      8738.53
+         L7     Train     2500     4005–7875      5961.49     11748–23250     17559.91
+         L7     Test       500     4005–7875      5876.83     11748–23250     17308.27
+         L8     Train     2500     8001–15931     11975.45    23625–47259     35465.78
+         L8     Test       500     8001–15931     12218.36    23625–47259     36189.83
+
+
+dataset in the main text. Model, training, and evaluation protocols are also the same. The only
+difference is the graph size.
+   Dataset levels. We generated eight dataset levels, denoted L1 through L8, by increasing
+the target graph-size range in the same data-generation script used for the small dataset. Each
+level contains 2500 training graphs and 500 test graphs. Table 5 reports the realized graph-size
+statistics.
+   Interpretation. Table 6 shows that energy-based training scales much more reliably than
+Gurobi-label fitting. Across all levels L1–L8, the energy-based models remain trainable on
+increasingly large frustrated graphs, and the recurrent GNN consistently gives the lowest
+rounded-spin energies; even at L8, where test graphs have about 1.2 × 104 nodes and 3.6 × 104
+edges, its test energy remains around −1.16.
+   In contrast, Gurobi-label training is available only for L1–L5 due to labeling cost, and
+its performance degrades rapidly as graph size grows. This is consistent with the main-text
+interpretation: fitting one selected branch becomes increasingly brittle in large multi-solution
+landscapes, whereas energy-based training only asks the model to find any low-energy valid
+branch.
+
+  Appendix F. Allen-Cahn Experiments: More Details and Additional Results
+F.1. Experiment Details. This subsection provides more experiment details as a supplement
+to the main text.
+   Dataset construction. All experiments in this section use the fixed interface parameter
+ε = 0.01. Each forcing field is generated on an N × N periodic grid over Ω = (0, 2π)2 . Unless
+otherwise stated, N = 64. For each instance, we sample a periodic Gaussian random field (GRF).
+In particular, we draw independent Gaussian Fourier noise, impose the conjugate-symmetry
+condition needed to obtain a real-valued spatial field, set the zero mode to zero, and multiply
+36                                  CALEB JORE AND JIALIN LIU
+
+        Table 6. Ising results across dataset levels L1–L8. Supervised results are
+        available only for L1–L5, since Gurobi labeling takes > 50 hrs for L6 labeling.
+
+       Dataset Level Objective          Model                  Train energy   Test energy
+       L1             Gurobi labeled    Vanilla GNN    0.4413 ± 0.5470  0.4474 ± 0.5096
+       L1             Gurobi labeled    Recurrent GNN −0.1735 ± 0.2357 −0.1634 ± 0.2294
+       L1             Energy based      Vanilla GNN   −0.8761 ± 0.0751 −0.8765 ± 0.0701
+       L1             Energy based      Recurrent GNN −1.0612 ± 0.0407 −1.0638 ± 0.0422
+       L2             Gurobi labeled    Vanilla GNN    0.7460 ± 0.3787  0.7644 ± 0.4004
+       L2             Gurobi labeled    Recurrent GNN  0.3858 ± 0.2314  0.3875 ± 0.2295
+       L2             Energy based      Vanilla GNN   −0.9003 ± 0.0532 −0.9017 ± 0.0497
+       L2             Energy based      Recurrent GNN −1.1185 ± 0.0276 −1.1165 ± 0.0291
+       L3             Gurobi labeled    Vanilla GNN    2.2180 ± 0.2777  2.2055 ± 0.2773
+       L3             Gurobi labeled    Recurrent GNN  1.0121 ± 0.2629  0.9885 ± 0.2653
+       L3             Energy based      Vanilla GNN   −0.9181 ± 0.0389 −0.9167 ± 0.0390
+       L3             Energy based      Recurrent GNN −1.1458 ± 0.0189 −1.1457 ± 0.0179
+       L4             Gurobi labeled    Vanilla GNN    2.5518 ± 0.1508  2.5516 ± 0.1463
+       L4             Gurobi labeled    Recurrent GNN  1.7608 ± 0.1986  1.7606 ± 0.1809
+       L4             Energy based      Vanilla GNN   −0.9352 ± 0.0259 −0.9356 ± 0.0264
+       L4             Energy based      Recurrent GNN −1.1504 ± 0.0139 −1.1508 ± 0.0139
+       L5             Gurobi labeled    Vanilla GNN    2.5416 ± 0.0850  2.5427 ± 0.0817
+       L5             Gurobi labeled    Recurrent GNN  2.4534 ± 0.0923  2.4482 ± 0.0877
+       L5             Energy based      Vanilla GNN   −0.9448 ± 0.0199 −0.9435 ± 0.0202
+       L5             Energy based      Recurrent GNN −1.1464 ± 0.0101 −1.1461 ± 0.0096
+       L6             Gurobi labeled    Vanilla GNN                  –                –
+       L6             Gurobi labeled    Recurrent GNN                –                –
+       L6             Energy based      Vanilla GNN   −0.9540 ± 0.0139 −0.9531 ± 0.0137
+       L6             Energy based      Recurrent GNN −1.1554 ± 0.0071 −1.1554 ± 0.0071
+       L7             Gurobi labeled    Vanilla GNN                  –                –
+       L7             Gurobi labeled    Recurrent GNN                –                –
+       L7             Energy based      Vanilla GNN   −0.9583 ± 0.0097 −0.9577 ± 0.0100
+       L7             Energy based      Recurrent GNN −1.1695 ± 0.0080 −1.1698 ± 0.0082
+       L8             Gurobi labeled    Vanilla GNN                  –                –
+       L8             Gurobi labeled    Recurrent GNN                –                –
+       L8             Energy based      Vanilla GNN   −0.9616 ± 0.0067 −0.9617 ± 0.0068
+       L8             Energy based      Recurrent GNN −1.1605 ± 0.0075 −1.1605 ± 0.0074
+
+
+
+each Fourier mode k by the filter
+
+                                 exp(−∥k∥22 /(2ℓ2 ))(1 + ∥k∥22 )−α/2 ,
+
+where the smoothness and spectral-scale parameters are sampled independently as α ∼
+Unif[1.4, 2.8] and ℓ ∼ Unif[8.0, 14.0]. After applying the inverse FFT, we subtract the empirical
+spatial mean and divide by the empirical spatial standard deviation, obtaining a normalized
+field f˜. The final forcing is f = Af˜ + m, where A ∼ Unif[0.08, 0.20] controls the amplitude and
+m ∼ Unif[−0.03, 0.03] controls the mean shift. The dataset contains 1000 training instances,
+1000 validation instances, and 1000 held-out test instances, generated independently using the
+same procedure.
+                              SET-VALUED SOLUTION MAP LEARNING                                     37
+
+
+    Model structure. We largely follow the implicit FNO architecture of [28]. In that framework,
+a neural operator is used as a shared update rule for a steady-state solver rather than as a
+one-shot feed-forward predictor. At each iteration, the model takes the current state estimate
+together with the fixed PDE input, applies an FNO-based update block, and reuses the same
+parameters across all unrolled iterations. This gives a weight-tied dynamics whose equilibrium
+is interpreted as the predicted steady solution. In our Allen–Cahn experiments, the input is the
+normalized forcing field f , and the recurrent state is the phase-field estimate ut . We use the
+residual update
+                         ut+1 = gθ (ut , f ) = ut + ηΦθ (ut , f ), η = 0.2,
+where Φθ is an FNO-based state-dependent update field shared across all iterations, following
+[28]. In particular, we choose such a block which has depth one and consists of one spectral
+convolution, one pointwise 1 × 1 convolution, additive forcing injection, and a GELU nonlinearity.
+For the main 64 × 64 experiments, all models use width 32, 32 × 32 retained Fourier modes, one
+recurrent update block, one internal layer inside that block, and one forcing input channel.
+   The initial recurrent state u0 is sampled from a GRF distribution with scale 0.5, smoothness
+parameter α = 3.0, and spectral scale ℓ = 8.0. During training, each forcing instance is
+replicated with 8 independent GRF initializations, while validation and test-time evaluation use
+16 independent GRF initializations per instance. This trains the same weight-tied operator to
+evolve from multiple candidate starting states for the same physical input.
+   Supervised label making. For supervised training, we construct labels by solving the
+steady Allen–Cahn equation with a classical periodic Implicit-Explicit (IMEX) solver [6] on the
+same spatial grid as the dataset. This is a commonly used method to solve Allen–Cahn. For
+each forcing instance, the classical solver is initialized from a GRF draw generated by the same
+initialization procedure used in model training, namely with scale 0.5, smoothness parameter
+α = 3.0, and spectral scale ℓ = 8.0. The solver tolerance is fixed at 10−5 . The resulting steady
+solutions are used as the supervised targets in all supervised Allen–Cahn experiments reported
+in the main text and appendix.
+   Solution counting. To count the number of distinct solution branches discovered by
+the model, we cluster the M final states based on their pairwise root mean squared error
+(RMSE). Predictions are grouped into the same branch if their distance falls below a resolution-
+specific threshold. To ensure a fair baseline, this threshold is empirically calibrated such that
+the unregularized model (where the diversity penalty is zero) naturally collapses to a single
+dominant branch for the vast majority of test instances.
+   Training. We largely follow Algorithm 2, but use a fixed six-stage curriculum in the
+unroll length. Allmodels are trained for 120 epochs with the Adam optimizer, weight decay
+10−4 , batch size 16, and initial learning rate 10−3 . The six curriculum stages start at epochs
+0, 20, 40, 60, 80, 100, with training unroll lengths 2, 4, 8, 12, 16, 20, respectively. The learning
+rate is kept constant within each stage and decreased across stages according to the schedule
+[10−3 , 8 × 10−4 , 6 × 10−4 , 4 × 10−4 , 3 × 10−4 , 2 × 10−4 ]. During training, each forcing instance
+is paired with 8 independent GRF initial states. During validation and testing, we use 16
+independent GRF initial states per forcing instance. At each epoch, the model is evaluated
+on the validation set using the current curriculum stage, with the validation rollout length set
+to twice the training rollout length at that stage. We select the checkpoint with the smallest
+validation residual and report its final test performance. For supervised runs, we keep the
+same optimizer, epoch budget, learning-rate schedule, and unroll curriculum, but replace the
+unsupervised objective by a pure supervised regression loss to the chosen labeled branch.
+   Diversity-weight curriculum. The diversity coefficient is stage-dependent rather than
+fixed throughout training. We use the same six rollout stages as the unroll-length curriculum,
+with rollout lengths 2, 4, 8, 12, 16, 20 respectively. For each diversity-regularized run, we start
+38                                  CALEB JORE AND JIALIN LIU
+
+
+with a relatively large diversity weight to encourage separation among trajectories from different
+initial states, and then decay the weight so that later stages focus more on physical refinement.
+In the last stage the diversity weight is set to zero, allowing the model to improve the Allen–Cahn
+energy without further forcing separation. We report each schedule in the main text by its
+initial value λinit . The schedules are
+
+                              λinit = 0 : [0, 0, 0, 0, 0, 0],
+                            λinit = 0.5 : [0.5, 0.2, 0.06, 0.02, 0.006, 0],
+                            λinit = 1.2 : [1.2, 0.5, 0.16, 0.05, 0.016, 0],
+                            λinit = 2.0 : [2.0, 0.9, 0.28, 0.09, 0.028, 0].
+
+This curriculum separates the two roles of the objective: early stages encourage multiple basins
+of attraction, while later stages refine the discovered states toward lower-energy Allen–Cahn
+solutions.
+
+
+F.2. Additional Experiments: ML-initialized Solver. We first compare three test-time
+solvers on the canonical 64 × 64 problem:
+     (1) pure ML: the learned weight-tied dynamic trained with λ = 0 (energy only),
+     (2) numerical solver: the classical periodic IMEX solver,
+     (3) hybrid solver: a hybrid scheme that first applies the learned solver and then hands
+         the iterate to the IMEX solver.
+The hybrid solver uses the learned model for at most the first 50 steps. Let
+                                                                      !1/2
+                                    1 X                          2
+                           rtfp =    2
+                                          ut+1 (p, q) − ut (p, q)
+                                    n p,q
+
+denote the fixed-point residual of the learned recurrence on an n × n grid. The handoff criterion
+is rtfp ≤ 10−2 . If this never occurs, the switch is forced at step 50. After the switch, the IMEX
+solver continues from the learned state using the same total budget of 200 recorded iterations.
+   Result. Figure 6 reports the resulting energy and residual trajectories. The learned model
+decreases the variational objective rapidly, but its residual error plateaus. The numerical solver
+reduces the residual more steadily, but may remain at a higher energy for a substantial part of
+the trajectory. The hybrid method combines the two effects: it exploits the learned solver to
+reach a low-energy basin quickly and then uses the numerical solver to refine the state toward a
+smaller residual.
+
+
+F.3. Additional Experiments: Resolution Scaling. We extend the main Allen–Cahn
+comparison beyond the 64 × 64 setting to 96 × 96 and 128 × 128 grids. The physical problem and
+all training hyperparameters are kept fixed. To fit memory, we use 32 retained Fourier modes at
+all resolutions and reduce the batch size from 16 at 64 × 64, to 8 at 96 × 96, and 4 at 128 × 128.
+    Result. Table 7 shows that the same qualitative pattern persists across resolutions. IMEX-
+label fitting collapses to one solution cluster and gives the worst physics errors. Energy-only
+training remains the most accurate but also produces essentially one cluster. Increasing the initial
+diversity weight λinit can recover many distinct final-state clusters, especially at larger weights,
+but this generally comes with worse residual error and energy. Thus the accuracy–diversity
+tradeoff observed in the main 64 × 64 experiment is not an artifact of a single grid resolution.
+                                                     SET-VALUED SOLUTION MAP LEARNING                                                    39
+
+
+                                                                                           100
+                        0.15                         Pure ML                              10 2
+                                                     Numerical solver
+                                                                                          10 4
+
+
+
+Energy Function Value
+                        0.10                         Hybrid solver
+                                                                                          10 6
+
+                                                                          Residual MSE
+                        0.05                                                                                       Pure ML
+                                                                                          10 8                     Numerical solver
+                        0.00                                                             10 10                     Hybrid solver
+                                                                                         10 12
+                        0.05
+                                                                                         10 14
+                        0.10                                                             10 16
+                               0        50       100        150         200                      0       50       100      150        200
+                                    Number of test-time iterations                                   Number of test-time iterations
+                               Figure 6. Convergence comparison for pure ML, the numerical solver, and
+                               the hybrid solver.
+
+                               Table 7. Resolution extension of the Allen–Cahn study. We report mean best
+                               residual MSE, mean best energy, and the average number of distinct final-state
+                               clusters over 20 trajectories per forcing instance. Lower error/energy is better;
+                               larger # Sols indicates greater diversity.
+
+                        Grid         Training obj.      Train error      Test error              Train energy    Test energy # Sols
+                                                                  −2                      −2               −1
+                        96 × 96      IMEX label         9.51 × 10      9.53 × 10                  1.38 × 10      1.37 × 10−1      1.00
+                        96 × 96      Energy only        1.55 × 10−3    1.54 × 10−3               −1.15 × 10−1   −1.16 × 10−1      1.04
+                        96 × 96      Div. λinit = 0.5   1.47 × 10−3    1.46 × 10−3               −1.15 × 10−1   −1.16 × 10−1      1.11
+                        96 × 96      Div. λinit = 1.2   1.27 × 10−3    1.26 × 10−3               −1.15 × 10−1   −1.16 × 10−1      1.14
+                        96 × 96      Div. λinit = 2.0   1.45 × 10−2    1.45 × 10−2               −5.89 × 10−2   −5.96 × 10−2     19.74
+                        128 × 128    IMEX label         9.26 × 10−2    9.34 × 10−2                1.37 × 10−1    1.36 × 10−1      1.00
+                        128 × 128    Energy only        2.24 × 10−3    2.22 × 10−3               −1.13 × 10−1   −1.14 × 10−1      1.01
+                        128 × 128    Div. λinit = 0.5   1.88 × 10−3    1.85 × 10−3               −1.13 × 10−1   −1.14 × 10−1      1.05
+                        128 × 128    Div. λinit = 1.2   1.97 × 10−3    1.94 × 10−3               −1.12 × 10−1   −1.14 × 10−1      1.13
+                        128 × 128    Div. λinit = 2.0   2.69 × 10−3    2.70 × 10−3               −1.11 × 10−2   −1.12 × 10−2     19.98
+
+
+    (CJ) School of Data, Mathematical, and Statistical Sciences, University of Central Florida,
+  Orlando, FL 32826.
+    Email address: calebjore@gmail.com
+
+    (JL) School of Data, Mathematical, and Statistical Sciences, University of Central Florida,
+  Orlando, FL 32826.
+    Email address: jialin.liu@ucf.edu
+
