@@ -1,0 +1,5893 @@
+S PHERICAL F IXED -P OINT R EASONERS :
+A DAPTIVE L OOP H ALTING ON THE H YPERSPHERE
+Arber Zelaα Artavazd Maranjyanα Pol Puigdemontα David Berghausβ,γ
+Valentyn Boreikoδ Volkan Cevherα
+α
+EPFL β Lamarr Institute γ Fraunhofer IAIS δ Amazon AGI
+
+arXiv:2610.25646v1 [cs.AI] 19 Oct 2026
+
+A BSTRACT
+Looped (weight-tied) transformers enable adaptive computation by allocating
+more iterations to harder inputs. Fixed-Point Reasoners (FPRM) achieve this with
+a damped fixed-point solver, but operate in an unbounded Euclidean residual space
+with coupled rescaling and relative-norm halting. We introduce Spherical FixedPoint Reasoners (SFPRM), which performs the same computation on the unit
+hypersphere of normalized transformers (nGPT). Input injection, damping, and
+halting become geodesic operations, yielding boundedness by construction and
+eliminating coefficient coupling. We prove fixed-point existence, local convergence under an explicit step-size condition, and global convergence under strong
+injection. On Sudoku-Extreme, Maze-Hard and Mini-ARC, SFPRM achieves
+96.6%, 87.9% and 59.1% test accuracy, respectively, outperforming FPRM and
+other baselines while allocating test-time compute more effectively. Its converged
+geometry is also interpretable: token–input angles capture puzzle structure and
+predict correctness.
+
+1
+
+I NTRODUCTION
+
+Scaling test-time computation has become the main lever for improving the reasoning ability of sequence models, most visibly through chain-of-thought traces (Wei et al., 2022; Wang et al., 2023;
+Cobbe et al., 2021; Yao et al., 2023; Snell et al., 2025). Looped transformers offer a latent alternative (Dehghani et al., 2019; Bai et al., 2019; Geiping et al., 2025): a single weight-tied block is
+applied repeatedly, so depth becomes an iteration count chosen at inference time, and compute can
+be allocated per input according to its difficulty. On algorithmic puzzles such as Sudoku, mazes, and
+ARC, this recipe lets small recursive reasoners compete with far larger models (Wang et al., 2025;
+Jolicoeur-Martineau, 2025; Movahedi et al., 2026).
+A looped transformer raises two questions: when should it stop, and will it stay well-behaved as
+it runs? The fixed-point view (Bai et al., 2019), answers the first by treating the loop as a solver
+for z⋆ = Fθ (z⋆ ; x) and halting once the iterate stops moving. Fixed-Point Reasoners (FPRM)
+(Movahedi et al., 2026) turn this into a practical recipe: a damped iteration whose step size decays
+on a patience rule, a relative-norm residual as the halting test, and a boundedness theorem that keeps
+the recurrent state from diverging. The second question is where the Euclidean formulation shows its
+cost. Because the residual stream is free to grow, a boundedness theorem must couple four residualrescaling coefficients, and the halting residual needs a normalization factor to be scale-invariant.
+We introduce Spherical Fixed-Point Reasoning Models (SFPRM), which run FPRM’s damped solver
+on nGPT’s (Loshchilov et al., 2025) unit sphere (Figure 1). The normalized Transformer (nGPT)
+obtains stable dynamics by changing the geometry rather than adding control: every hidden state
+lives on the unit hypersphere Sd−1 and each sub-layer is a learned angular move followed by renormalization, so the divergence FPRM must guard against cannot occur. Every control quantity of
+the loop becomes an angle: the input is re-injected by moving a fraction λ of the great-circle arc
+toward it, the damped update is a spherical linear interpolation (Slerp) whose coefficient ηi is an
+angular step size that FPRM’s patience-based decay literally shrinks, and the halting residual is the
+worst-token angle between an iterate and its proposal. Our contributions are:
+1
+
+(b) Halting on the sphere
+
+(a) Outer fixed-point loop and the spherical block
+
+z2,t
+zi
+input x
+
+Slerpλ
+
+zi
+Spherical
+block fθ
+
+ei
+z
+
+No
+
+Slerpηi
+
+zi+1
+
+z1,t
+
+zt⋆
+
+τang
+
+ηi Ωi,t
+
+Halt? rc,i < τc
+rc,i = maxt 1 − ⟨zi,t , z
+ei,t ⟩
+
+z3,t ze3,t
+
+
+
+z0,t
+
+Yes z⋆
+ŷ = sz hϕ (z⋆ )
+Attention
+(QK-norm)
+
+R αA
+
+MLP
+(SwiGLU)
+
+Sd−1
+Each step rotates zi,t a fraction ηi
+of the way to its proposal zei,t along
+a great circle; the loop halts once
+Ωi,t = ∠(zi,t , zei,t ) < τang for every
+token, i.e. rc,i < τc = 1 − cos τang .
+
+R αM
+
+Figure 1: SFPRM overview. (a) Each iteration interpolates the current state toward the normalized
+ei , and rotates a
+input (Slerpλ ), applies the weight-tied spherical nGPT block to obtain the proposal z
+fraction ηi of the way toward it (Slerpηi ); the loop halts once the worst-token chordal residual rc,i
+falls below τc . The eigen-learning-rate retractions Rα inside the block keep every token state on
+unit sphere Sd−1 . (b) One token’s iterates rotate along a great circle by shrinking angles ηi Ωi,t ; the
+halting test compares each proposal with the current iterate, so it never needs the fixed point zt⋆ .
+(i) Simplicity: because the state cannot leave the sphere, boundedness is structural, and FPRM’s
+coupled residual-rescaling coefficients, its boundedness theorem, and its relative-norm residual disappear rather than being re-proved;
+(ii) guarantees: a fixed point exists from continuity and input injection alone, with no contraction
+or Lipschitz assumption; angular damping stabilizes any fixed point whose tangent Jacobian
+has real parts below one, with an explicit step-size window; and sufficiently strong injection
+makes it a unique global attractor;
+(iii) performance: on Sudoku-Extreme and Maze-Hard, SFPRM halts up to 2.7× earlier than
+FPRM at equal or higher accuracy; and
+(iv) interpretability: the angle between each token state and its input anchor separates token
+classes during the recursion, converges to a readable encoding of the task’s structure, and, on
+Sudoku, predicts whether the answer is correct.
+
+2
+
+R ELATED W ORK
+
+Looped and weight-tied transformers. Tying the weights of a transformer block (Vaswani et al.,
+2017) and applying it repeatedly turns depth into an iteration count at inference time (Dehghani
+et al., 2019; Lan et al., 2020). Looped models match much deeper non-looped ones on synthetic reasoning tasks and can simulate chain-of-thought in latent space (Saunshi et al., 2025), learn in-context
+algorithms more sample-efficiently (Yang et al., 2024; Gatmiry et al., 2024), emulate programmable
+computation (Giannou et al., 2023), generalize in length when the loop matches the algorithm’s recursion (Fan et al., 2025), scale to billions of parameters (Geiping et al., 2025; Prairie et al., 2026),
+and supply a scaling axis for masked diffusion models (Carballo-Castro et al., 2026; Miele et al.,
+2026). SFPRM is a looped transformer whose loop is run as a fixed-point solve on the sphere.
+Equilibrium models, adaptive computation, and halting. Adaptive Computation Time (Graves,
+2016) and PonderNet (Banino et al., 2021) learn a halting distribution through an auxiliary loss,
+so halting is a learned head rather than a property of the dynamics. Recent methods such as HRM
+(Wang et al., 2025), URM (Gao et al., 2025), TRM (Jolicoeur-Martineau, 2025), and PTRM (Sghaier
+et al., 2026) inherit this design. Deep equilibrium models (Bai et al., 2019; 2020; Winston & Kolter,
+2020; Bai et al., 2021) replace the unrolled iteration by the fixed point of a weight-tied layer and
+differentiate implicitly through it. Attractor models (Fein-Ashley & Rashidinejad, 2026) and equilibrium reasoners (Huang et al., 2026) make the loop’s attractor explicit and halt on a solver tolerance or a residual-based selection, and FPRM (Movahedi et al., 2026) halts on a scale-invariant
+residual of the tied block itself, at the cost of coupled residual-rescaling coefficients that keep its
+Euclidean residual stream bounded; iterating past the point where the answer has settled is itself
+2
+
+Table 1: Recent recurrent reasoners: HRM (Wang et al., 2025), TRM (Jolicoeur-Martineau, 2025),
+URM (Gao et al., 2025), Attractor (Fein-Ashley & Rashidinejad, 2026), EqR (Huang et al., 2026)
+and FPRM (Movahedi et al., 2026). “Appr.” means no numerical fixed-point solve is performed.
+Method
+
+Recurrence
+
+Fix. pt.
+
+State update and input
+
+Halting / output
+
+HRM
+TRM
+URM
+EqR
+Attractor
+FPRM
+
+Fast L-loop + slow H-loop
+Shared net refines z, answer y
+UT; fixed inner + ACT outer loop
+Tied loop; B stochastic restarts
+Backbone + equilibrium loop
+Tied Transformer loop
+
+Appr.
+No
+No
+Appr.
+Yes
+Yes
+
+Euclidean (zL , zH ); input drives L
+Euclidean; input re-read each step
+Euclidean; short conv in MLP
+Euclidean; random init, path noise
+Backbone ỹ0 seeds each step
+(α1 , β1 ) mix; (α2 , β2 ) injection
+
+ACT head; read zH
+ACT head; read y
+ACT head, ≤16 steps
+ACT; lowest-residual run
+Solver tol.; read ỹ ⋆
+Rel.-ℓ∞ residual
+
+SFPRM
+
+Tied nGPT spherical loop
+
+Yes
+
+Eigen-LR motion; λ geodesic injection
+
+Chordal residual
+
+harmful (Bansal et al., 2022; Schwarzschild et al., 2021). Table 1 sorts these reasoners by whether
+a numerical fixed-point solve is performed and what governs halting; SFPRM alone combines a
+genuine solve with an intrinsic, scale-free halting criterion on a curved state space.
+Normalized and hyperspherical representations. Constraining representations to a sphere is a
+long-standing stabilization device, for parameters (Salimans & Kingma, 2016; Miyato et al., 2018),
+latent variables (Davidson et al., 2018), contrastive representations (Wang & Isola, 2020), and flow
+language models that rotate tokens on Sd−1 (Deschenaux & Gülçehre, 2026). nGPT (Loshchilov
+et al., 2025) carries the constraint through an entire transformer, with every hidden state and weight
+vector on Sd−1 and each sub-layer a normalized retraction toward a learned target. SFPRM adopts
+that block, hence every optimizer and solver step becomes an angular update.
+
+3
+
+S PHERICAL F IXED -P OINT R EASONING M ODELS
+
+3.1
+
+P RELIMINARIES
+
+Notation. For a sequence of T tokens with hidden dimension d, the recurrent state at loop iteration i
+is zi = (zi,1 , . . . , zi,T ) with token states zi,t ∈ Rd . We use i for loop iterations, t for token positions,
+and ℓ for sub-layers. Sd−1 := {z ∈ Rd : ∥z∥ = 1} denotes the unit hypersphere in Rd . The emPT
+bedded input is x = (x1 , . . . , xT ). Tuples carry the product inner product ⟨u, v⟩ := t=1 ⟨ut , vt ⟩
+PT
+and norm ∥u∥2 := t=1 ∥ut ∥22 . Lowercase fθ always denotes the weight-tied network, uppercase
+Fθ (· ; x) the complete input-dependent recurrent map, and hϕ the readout.
+Looped transformers and fixed-point reasoning. A looped Transformer applies a weight-tied
+network repeatedly to a state that is re-exposed to the same input x at every application: zi+1 =
+Fθ (zi ; x), for i = 0, 1, . . ., and predicts with a readout hϕ (zi ). A convergent iteration reaches a
+fixed point z⋆ = Fθ (z⋆ ; x), the equilibrium view of Bai et al. (2019). The prediction is determined
+by the fixed point, while the number of iterations needed to reach it is chosen per input. FPRM
+(Movahedi et al., 2026) uses a pre-norm block of depth D (2D attention and MLP sub-layers). Because the residual stream is free to grow indefinitely, FPRM uses tied residual coefficients (α1 , β1 )
+and iteration-level coefficients (α2 , β2 ):
+
+zℓi = α1 zℓ−1
++ β1 fθℓℓ Normpre (zℓ−1
+) , ℓ = 1, . . . , 2D,
+z0i+1 = α2 z2D
++ β2 x. (1)
+i
+i
+i
+Via a boundedness theorem that couples the four coefficients:,
+β2 = 1 − α2 α12D ,
+
+2 (1−α1 )
+β1 = β1−α
+2D ,
+1
+
+0 ≤ α1 , α2 < 1,
+
+(2)
+
+ensures that the recurrent carry path (gain α2 α12D ) is balanced against the injected input. Given a
+proposal e
+zi = Fθ (zi ; x), FPRM damps linearly:
+ei ,
+zi+1 = (1 − ηi )zi + ηi z
+
+(3)
+
+with a per-sample ηi ∈ (0, 1] that is decayed on a patience rule whenever the residual stalls, and
+halts on the relative residual:
+z i ∥∞
+i −e
+rE,i = ∥z
+∥e
+zi ∥∞ +ϵ ,
+
+∥u∥∞ := max1≤t≤T, 1≤j≤d |(ut )j |,
+3
+
+(4)
+
+once rE,i < τE or the budget is exhausted. The coefficient coupling and the denominator of the
+residual exist to contain a Euclidean residual stream whose scale is not fixed. Rather than differentiate implicitly through the equilibrium as in Bai et al. (2019), FPRM trains with truncated BPTT
+over windows of K iterations, deep supervision, and state detachment between windows.
+nGPT and spherical geometry. nGPT (Loshchilov et al., 2025) constrains every hidden state to
+the unit sphere Sd−1 via Norm(u) = u/∥u∥2 for a nonzero token vector and folds each sub-layer
+output into the state through learned, per-coordinate eigen learning rates αA , αM ∈ Rd :
+
+z ← Norm z + αA ⊙ (Norm(Attn(z)) − z) ,
+
+(5)
+z ← Norm z + αM ⊙ (Norm(MLP(z)) − z) .
+Norm acts token-wise on tuples, and αA , αM are shared across tokens. Each sub-layer is a normalized retraction toward a learned target, so unit norm is preserved by construction rather than
+enforced by a constraint (Absil et al., 2008). For unit vectors u, v write ∠(u, v) := arccos(⟨u, v⟩).
+For Ω = ∠(u, v) ∈ (0, π), the spherical linear interpolation:
+Slerpη (u, v) = sin((1−η)Ω)
+u + sin(ηΩ)
+η ∈ [0, 1],
+(6)
+sin Ω
+sin Ω v,
+moves a fraction η along the shortest great-circle arc from u to v and stays on the sphere. For
+coincident endpoints we set Slerpη (u, u) := u, the limit of eq. (6) as v → u; at an antipodal pair
+(v = −u) the shortest arc is not unique, so we use eq. (12) (Section A.2). For small Ω, Slerp agrees
+with normalized linear interpolation Norm((1 − η)u + ηv) up to O(Ω3 ) (Lemma 2).
+3.2
+
+SFPRM: THE RECURRENT MAP AND ITS SOLVER
+
+SFPRM is a looped Transformer model whose recurrent state lives on the unit hypersphere and
+whose loop is run as a damped fixed-point solver. Algorithm 1 places it next to FPRM (Movahedi
+et al., 2026), its Euclidean predecessor. Every difference is a Euclidean operation replaced by its
+spherical one: the state is confined to S by a weight-tied nGPT block (line 5, eq. (5)), affine injection
+becomes a geodesic move a fraction λ of the arc toward the input (line 4, eq. (8)), the relative residual
+becomes the chordal one (line 6, eq. (9)), and linear damping becomes a rotation a fraction ηi of the
+way toward the proposal (line 9, eq. (10)).
+SFPRM: rc,i = maxt ρi,t < τc
+State space and spherical block. SFPRM’s rezi,t
+∥zi −e
+zi ∥∞
+FPRM: rE,i = (∥e
+< τE
+current state is a tuple of unit token vectors, zi =
+zi ∥∞ +ϵ)
+d−1 T
+(zi,1 , . . . , zi,T ) ∈ S := (S ) , where ∥zi,t ∥2 = 1
+and the input x = (x1 , . . . , xT ) ∈ S is the embedbox
+12◦
+S d−1
+ded sequence normalized token-wise. The weighttied network fθ : S → S is a stack of D nGPT
+layers, each an attention retraction followed by an
+4◦
+(1)
+MLP retraction as in eq. (5), with QK-normalization
+zei,t ✓✓
+disk
+and eigen learning rates shared across iterations. Atzi,t
+tention couples tokens, so fθ acts on the product
+S rather than token by token; it is the block applied at every iteration in eq. (8). Following nGPT’s
+(2)
+zei,t ✓×
+logit scaling, predictions are read out as sz hϕ (z),
+where, given the vocabulary V, hϕ is a linear map
+Rd → R|V| and sz is a learned scalar. nGPT would
+radius = geodesic angle ∠(zi,t , zei,t )
+normalize the rows of ϕ like every other weight vector, however we keep them unnormalized so the head Figure 2: Proposals accepted by each halting
+can set its own per-class scale while the state stays test around a token state zi,t . The chordal
+on the sphere.
+test accepts a disk; FPRM’s accepts an axisaligned ℓ∞ section, so two proposals at the
+Geodesic input injection. We lift Slerp from tokens
+same angle can be judged differently.
+to sequences by applying it position-wise. Given two
+unit token vectors u and v, we write:
+T
+Slerpη (u, v) := Slerpη (ut , vt ) t=1 ,
+η ∈ [0, 1].
+(7)
+At every iteration i, the current state is first pulled toward the input along the shortest arc using
+Slerpλ of eq. (7), and the result is then passed through the nGPT block of eq. (5):
+Fθ (z; x) := fθ (Slerpλ (z, x)) ,
+0 < λ < 1.
+(8)
+
+4
+
+Algorithm 1 FPRM (left) and SFPRM (right) in one skeleton. Black=shared control flow; orange=FPRM-specific; blue=SFPRM-specific. Both start from a random state z0 and re-inject the
+input before every application of fθ ; the coloured lines are the only differences.
+FPRM (Euclidean fixed point)
+SFPRM (spherical fixed point)
+Require: Euclidean block fθ (Transformer), head
+hϕ ; tol. τE ; decay γ; patience P ; cap Nmax
+1: z ← z0
+▷ random init
+2: η←1; p←P ; rbest ←∞
+3: repeat
+e ← α2 z + β2 x
+4:
+z
+▷ affine input injection
+e ← fθ (e
+5:
+z
+z)
+▷ 2D sub-layers, (α1 , β1 )
+e∥∞ /(∥e
+6:
+r ← ∥z − z
+z∥∞ + ϵ) ▷ relative-ℓ∞
+7:
+if r<rbest then rbest ←r; p←P else p←p−1
+8:
+if p≤0 and r>τE then η←γη; p←P
+e
+9:
+z ← (1−η) z + η z
+▷ linear damping
+
+10:
+(train) every K: backprop CE hϕ (z), y ;
+detach z
+11: until r<τE or Nmax steps
+12: return hϕ (z)
+
+Require: spherical block fθ (nGPT), head hϕ ; tol.
+τc ; decay γ; patience P ; cap Nmax
+1: z ← z0 ∈ S
+▷ random unit-norm init
+2: η←1; p←P ; rbest ←∞
+3: repeat
+e ← Slerpλ (z, x)
+4:
+z
+▷ geodesic injection
+e ← fθ (e
+5:
+z
+z)
+▷ tied spherical block
+6:
+r ← maxt 1 − ⟨zt , zet ⟩ ▷ chordal residual
+7:
+if r<rbest then rbest ←r; p←P else p←p−1
+8:
+if p≤0 and r>τc then η←γη; p←P
+e)
+9:
+z ← Slerpη (z, z
+▷ geodesic damping
+
+10:
+(train) every K: backprop CE sz hϕ (z), y ;
+detach z
+11: until r<τc or Nmax steps
+12: return sz hϕ (z)
+▷ scaled readout
+
+The injection strength λ is a model parameter, fixed or learned, with the same reading in either
+case: it is the fraction of the arc from each token state to its input token that is traversed before the
+block is applied. Geodesic injection is the intrinsic form of FPRM’s additive mixing α2 z + β2 x
+(eq. (1)): normalizing any positive combination αu + βv lands on the same shortest arc from u
+b to
+vb, at a fraction set by the coefficients, the norms, and the angle (Lemma 3 in Section A.3). FPRM’s
+coefficients therefore do two jobs at once: they place the state along this arc, and, through the
+coupling (eq. (2)), they keep its norm from drifting. On the unit sphere the second part is given by
+construction, and the first is done by λ alone. SFPRM thus replaces the implicit, state-dependent
+fraction by a single parameter and drops (α1 , β1 , α2 , β2 ) together with their coupling.
+Scale-free halting residual. Given the same proposal e
+zi = Fθ (zi ; x) of eq. (8), geodesic distance
+on S is the angle between unit vectors, so SFPRM halts on the worst-token chordal residual, which
+is smooth where the angle itself is not:
+rc,i = max1≤t≤T ρi,t ,
+
+ρi,t := 1 − ⟨zi,t , zei,t ⟩ = 12 ∥zi,t − zei,t ∥22 ,
+
+(9)
+
+and halts once rc,i < τc , where τc = 1 − cos τang for an angular tolerance τang , so the test fires
+exactly when every token’s proposal lies within τang of its iterate. The worst token maxt is the
+spherical analogue of the maximum over tokens and coordinates in rE,i (eq. (4)): a few unconverged
+but decisive tokens should keep the iteration running. What FPRM’s denominator and ϵ provide is
+scale invariance, and on the unit sphere that is automatic, so neither is needed. The two tests remain
+inequivalent: ρi,t sees only the geodesic angle and so accepts a disk of radius τang around the iterate,
+whereas rE,i sees the largest-magnitude coordinate and so accepts an axis-aligned ℓ∞ region whose
+angular extent depends on the direction of the update, and two proposals at the same angle can get
+opposite verdicts (Figure 2). We adopt the chordal form for its simplicity and frame-independence.
+Geodesic damping. If the residual is above tolerance, the state is advanced by a rotation toward the
+proposal, in place of FPRM’s linear interpolation (eq. (3)):
+ei ),
+zi+1 := Slerpηi (zi , z
+
+0 < ηi ≤ 1.
+
+(10)
+
+By Lemma 1, token t turns by exactly ηi ∠(zi,t , zei,t ), so ηi is an angular step size: ηi = 1 applies
+the raw map and smaller values shrink the rotation without leaving the sphere, so the block is always
+evaluated on the geometry it was trained on. The update never changes the equilibria: for ηi > 0
+the step returns zi if and only if e
+zi = zi , so the damped iteration and Fθ have exactly the same
+fixed points wherever the arcs are defined. As in FPRM (eq. (3)), ηi is per sample, starts at 1, and
+is multiplied by γ < 1 whenever the residual has not improved for P iterations. On the sphere this
+patience rule is literally a shrinking of the per-iteration rotation angle, a derivative-free search for a
+step inside the stability window of Theorem 1.
+Training. Training follows FPRM: deep supervision with truncated BPTT, i.e., each optimizer
+step backpropagating through one segment of K geodesic steps with the state detached between
+5
+
+segments. The residual, patience counter and step-size schedule are computed from detached states,
+so they steer the solver without entering the gradient; differentiating Norm projects state cotangents
+onto the tangent space, parameters stay Euclidean, and weight vectors are renormalized after every
+optimizer step. In practice, we use a guarded Slerp (eq. (12)), which replaces the sine formula by
+normalized linear interpolation near coincident endpoints and by an explicit arc near antipodes.
+3.2.1
+
+T HEORETICAL GUARANTEES
+
+We now investigate what the geometry buys analytically. All statements concern the exact recurrence
+eqs. (8) to (10) with shortest-arc interpolation. Full proofs are in Appendix A.
+Boundedness by construction. Because injection and damping return unit token vectors
+(Lemma 1), the block does so by construction (eq. (5)), and so does every branch of the guarded step
+(Lemma 2), the state stays on S for every i and every θ: recurrent magnitudes can neither explode
+nor vanish, which is what FPRM’s boundedness theorem secures through the coefficient constraints
+in eq. (2). However, boundedness alone says nothing about whether a fixed point exists or is reached,
+which is what we address next.
+Input injection guarantees a fixed point. On a sphere, continuity alone does not guarantee
+a fixed point since rotating a circle moves every point. Input injection repairs this by moving each token a fraction λ of the way to its input, keeping every injected state in the cap
+Cx := {y ∈ S : ∠(yt , xt ) ≤ (1 − λ)π for every token t}, which, unlike the sphere, can be flattened
+into a closed ball, where every continuous self-map has a fixed point.
+Proposition 1 (Fixed-point existence). Fix x and 0 < λ < 1. Assume fθ is continuous on Cx and
+fθ (y)t ̸= −xt for every y ∈ Cx and token t. Then the recurrent map Fθ (· ; x) in eq. (8) has at least
+one fixed point z⋆ = Fθ (z⋆ ; x) in S.
+The full proof (Appendix A.4) applies Brouwer’s theorem (Brouwer, 1911; Ortega & Rheinboldt,
+1970) to the reversed composition H(y) := Slerpλ (fθ (y), x). Unlike Fθ , which injects before the
+block, H ends with the injection, so it maps the cap into itself, and the antipode assumption keeps
+it well defined and continuous; its fixed point y⋆ gives the fixed point z⋆ := fθ (y⋆ ) of Fθ . No
+Lipschitz constant, contraction modulus, or spectral bound on fθ is needed. FPRM proves existence
+only via global convergence, hence under contraction (Movahedi et al., 2026, Theorem 2); Brouwer
+alone would need the coefficient coupling that keeps a ball invariant. On the sphere compactness is
+structural and injection supplies the missing ball-shaped domain. Only y⋆ , however, provably lies
+in Cx , and existence implies neither uniqueness nor attraction, which the next two results address.
+Angular damping stabilizes a fixed point. Let z⋆ be a fixed point of Fθ (· ; x) and let J :=
+Dz Fθ (z⋆ ; x) be its Jacobian in the recurrent state at z⋆ , with θ and x held fixed. Since Fθ maps
+S to itself, J sends tangent perturbations u = (ut )Tt=1 with ⟨ut , zt⋆ ⟩ = 0 to tangent perturbations,
+and we regard it as an endomorphism of that T (d − 1)-dimensional tangent space. It contains all
+coupling between tokens through attention and need be neither orthogonal nor diagonalizable.
+Theorem 1 (Local convergence of angular damping). Suppose Fθ (· ; x) is differentiable at a fixed
+point z⋆ and every ζ ∈ σ(J), where σ(J) is the Jacobian’s set of eigenvalues, satisfies Re(ζ) < 1.
+Then for every fixed 0 < η ≤ 1 with
+
+2 1−Re(ζ)
+η < ηmax := minζ∈σ(J) |ζ−1|2 ,
+(11)
+the damped iteration zi+1 = Slerpη (zi , Fθ (zi ; x)) converges to z⋆ from every sufficiently close
+initial state, with ∥zi − z⋆ ∥ ≤ Cq i ∥z0 − z⋆ ∥ for some C > 0 and q ∈ (0, 1). Moreover, wherever
+the shortest arcs are defined, the damped iteration and Fθ have exactly the same fixed points.
+This is the spherical counterpart of FPRM’s stabilization result (Movahedi et al., 2026, Theorem 3),
+with an explicit window and with unit norm and fixed points preserved. The window is certified for a
+fixed η; the patience rule (lines 7–8 of Algorithm 1) searches for one heuristically, without guarantee.
+The proof (Appendix A.6) linearizes the damped step at z⋆ to (1 − η) Id +ηJ (Lemma 4), which
+moves each eigenvalue ζ of J a fraction η from 1 toward ζ; the window of eq. (11) is exactly what
+keeps them all inside the unit disk. A spectral radius below one then gives geometric convergence
+in tangent coordinates, which the coordinate map transfers to the state. Such an η exists only if
+Re(ζ) < 1 for every ζ: damping tames modes that oscillate or spiral away under the raw map, not
+expansive ones with Re(ζ) ≥ 1, which training must remove (Remark 1).
+6
+
+# params.
+
+Single Loop
+(No Hier.)
+
+Sudoku-Ext.
+Pass@1
+
+Maze-Hard
+Pass@1
+
+Mini-ARC
+Pass@1
+
+ARC-1
+Pass@2
+
+Larger
+
+HRM
+rec. Tf
+Attractor Model Tf + FP loop
+URM
+rec. Tf + conv
+
+27M
+27M
+14M
+
+✗
+✗
+✗
+
+55.0%
+91.4%
+77.6%
+
+74.5%
+93.1%
+—
+
+44.9% (51.7%)
+—
+—
+
+40.3%
+—
+—
+
+5–7M
+
+Table 2: Comparison with published recurrent reasoners. Reported numbers are taken from
+the respective papers; Mini-ARC numbers are from Huang et al. (2026) (Table 14). Numbers in
+parentheses are our own runs under the same setting as SFPRM. Tf = Transformer, Mixer = MLPMixer, rec. = recurrent refinement, FP = fixed-point solve. Within the 5–7M group the best result
+is bold and the second best underlined.
+
+TRM
+EqR
+Attractor Model
+FPRM
+SFPRM (ours)
+
+7M
+5-7M
+7M
+7M
+7M
+
+✗
+✗
+✗
+✓
+✓
+
+74.7%
+85.3%
+48.4% (36.9%)
+93.0%
+—
+55.3% (40.3%)
+54.3%
+46.7%
+—
+94.2% (78.4%) 87.0% (83.9%)
+— (55.0%)
+96.6%
+87.9%
+59.1%
+
+44.6%
+—
+—
+47.5%
+47.4%
+
+Model
+
+Architecture
+
+rec. Tf
+rec. Mixer + restarts
+FP Tf
+FP Tf
+spherical FP Tf
+
+Global convergence under strong injection. Finally, we identify a regime where the raw recurrence (η = 1) converges from every admissible initialization. x and fθ are held fixed while λ varies.
+Theorem 2 (Global convergence under strong input injection). Suppose fθ : S → S is continuously
+differentiable in a neighborhood of x and fθ (x)t ̸= −xt for every token t. Then there exists a
+λ0 ∈ (0, 1), depending on fθ and x, such that for every λ ∈ (λ0 , 1) the map Fθ (· ; x) has a fixed
+point z⋆ , unique among all states at which the input interpolation is defined. For each such λ and
+every z0 ∈ S with z0,t ̸= −xt for all t, the iterates zi+1 = Fθ (zi ; x) are well defined and satisfy
+∥zi − z⋆ ∥ ≤ Cq i−1 for all i ≥ 1, with C > 0 and q ∈ (0, 1) independent of z0 .
+The proof (Appendix A.7, with an explicit λ0 ) uses logarithmic coordinates at x, where injection
+multiplies by 1 − λ: for λ near one, the first injection pulls every admissible state into a small ball
+around x on which the map is a Banach contraction, so only that ball matters. FPRM’s global result
+(Movahedi et al., 2026, Theorem 2) instead rests on a global Lipschitz bound and a small residual
+coefficient, which the sphere lacks: injection does not contract near the input’s antipode. Together
+the three results cover every injection strength: a fixed point exists for all λ, strong injection makes
+it a unique global attractor, and damping gives local convergence under weaker injection.
+
+E MPIRICAL E VALUATION
+
+0.88
+
+With the following experiments we answer three
+research questions:
+(RQ1) Accuracy. How does SFPRM compare to
+FPRM and other recurrent reasoner baselines? Does constraining the recurrence on
+the sphere cost accuracy? (Section 4.1)
+(RQ2) Convergence and halting. How effectively
+does SFPRM utilize the learned recurrence
+under the angular halting criterion and is
+the fixed-point unique? (Section 4.2)
+(RQ3) Geometry of the computation. What does
+the fixed-point iteration write into the
+state, and does the spherical parameterization make it readable? (Section 4.3)
+
+test accuracy
+
+mean halt (992/1000), t=108
+mean halt (950/1000), t=130
+
+0.87
+0.86
+
+FPRM
+SFPRM
+
+0.85
+10 1
+10 0
+
+halting residual r
+
+4
+
+¿ = 0:1
+
+10 ¡1
+¿ = 0:01
+
+10 ¡2
+10 ¡3
+10 ¡4
+10 ¡5
+10 ¡6
+0
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+fixed-point iteration t
+
+Setup. We evaluate SFPRM on puzzle bench- Figure 3: Exact accuracy and halting on
+marks: Maze-Hard, Sudoku-Extreme (Wang et al., Maze-Hard (Sudoku: fig. 10). SFPRM vs.
+2025), Mini-ARC (Kim et al., 2022) and ARC-1 FPRM evaluation on 1000 test puzzles. Top:
+(Chollet et al., 2024), used to assess generaliza- exact accuracy; mean halt and number of extion when trained with a limited number of exam- amples halting. Bottom: per-sequence residual
+ples. SFPRM and FPRM share a 6.83M-parameter (thin), median (heavy).
+Transformer backbone and follow the hyperparameters of Movahedi et al. (2026) (details in Appendix B). SFPRM trains its weight matrices with Muon (Jordan et al., 2024) and its embeddings,
+7
+
+normalization scales, and scalars with AdamW, regularizes with variational and weight dropout, and
+learns the injection fraction λ, except on Sudoku (λ fixed at 0.1). It halts once rc,i < τc = 0.01
+(eq. (9)), i.e. once every token’s proposal lies within 8.1◦ of its iterate.
+4.1
+
+RQ1: ACCURACY ON PUZZLE BENCHMARKS
+
+Table 2 compares SFPRM with published recurrent reasoners. On Sudoku-Extreme, SFPRM reaches
+96.6% exact accuracy, 2.4 points above FPRM published results. Since we cannot resample the same
+1k base puzzles augmented 1000× from FPRM, we train it on 5k puzzles augmented 200× instead:
+the same number of training examples, but five times as many distinct puzzles. On Maze-Hard,
+SFPRM reaches 87.9% on the 1,000 test mazes, above TRM’s and FPRM’s published results and
+behind only the 27M-parameter Attractor model (Fein-Ashley & Rashidinejad, 2026). On MiniARC, SFPRM reaches 59.1% Pass@1, above both the best published result in its size group (EqR,
+55.3% (Huang et al., 2026)) and all baselines retrained under our protocol (FPRM 55.0%, HRM
+51.7%, EqR 40.3%, TRM 36.9%). On ARC-1, it matches FPRM.
+Answer to RQ1. Confining the state to the sphere improves accuracy: SFPRM outperforms
+FPRM and other baselines on Sudoku-Extreme (96.6% vs. 94.2%), Maze-Hard (87.9% vs. 87.0%)
+and Mini-ARC (59.1% vs. 55.0%), and matches it on ARC-1 (47.4% vs. 47.5%).
+4.2
+
+RQ2: CONVERGENCE AND HALTING
+
+Loop utilization and halting. To see how the two solvers converge and when they stop, we run
+each trained model with halting disabled for Nmax iterations, decode every iterate zi , and record the
+residual its solver tests. Halting is counted per sequence, i.e., a sequence halts once its residual stays
+below the threshold (Appendix C.4). Figure 3 shows the result on Maze and Figure 10 on Sudoku.
+Both residuals fall quickly, and both models saturate their accuracy within 20–35 iterations, so every
+later loop is spent after the answer stops changing. SFPRM converges faster and stops sooner: it
+halts on 992/1000 mazes against FPRM’s 950, and on average 22 iterations earlier (108 vs. 130).
+Fixed-point uniqueness. Theorem 2 predicts that for λ > λ0 the raw recurrence zi+1 = Fθ (zi ; x)
+contracts to one fixed point from every initialization. We test this by overriding λ at inference in the
+trained model (learned λ = 0.47) and running the raw map, without damping, in fp32 for 400 steps
+on 32 evenly spaced test puzzles, from eight initializations each: six random states, the input x,
+and its antipode −x, which the theorem excludes. The largest geodesic angle between the eight end
+states measures uniqueness without a reference point (Figure 4a). For λ ≥ 0.8 all eight end states
+coincide on every puzzle. At the trained λ = 0.47 the raw map reaches an attracting fixed point on
+91% of the puzzles, and on the puzzle of Figure 4b all eight paths end inside the exact-match region.
+At λ = 0.1 the raw iteration does not converge, while for λ ≥ 0.7 it converges within a few steps to
+a unique fixed point that no longer solves the puzzle.
+Varying the fixed-point solver. At inference we replace the damped step of Algorithm 1 by two
+standard solvers, keeping the model and the halting rule: Anderson acceleration (Anderson, 1965;
+
+0.6
+
+same fixed point
+
+10 ¡3
+0.4
+
+10 ¡4
+10 ¡5
+
+0.2
+
+10 ¡6
+0.0
+
+0.2
+
+0.4
+
+0.6
+
+0.8
+
+0.0
+1.0
+
+injection fraction ¸
+one end point
+
+¸ 2 end points
+
+(a) Uniqueness vs. λ.
+
+token accuracy
+
+10 ¡2
+
+¸ = 0:47
+15
+
+10
+
+0.8
+
+principal direction 2
+
+spread between init [rad]
+
+1.0
+10 ¡1
+
+5
+5
+0
+
+0
+
+¡10
+¡10
+
+0
+
+principal direction 1
+
+10
+
+¡15
+
+¡10
+
+¸ = 0:9
+20
+
+1.00
+
+10
+
+0.75
+
+0
+
+0
+
+0.50
+
+¡10
+
+¡10
+
+0.25
+
+10
+
+¡5
+
+¡5
+¡10
+
+¸ = 0:7
+
+z⋆
+z0
+halt
+
+10
+
+0
+
+10
+
+principal direction 1
+
+¡10
+
+0
+
+10
+
+principal direction 1
+
+¡20
+
+token accuracy
+
+¸ = 0:1
+
+trained ¸
+
+10 0
+
+0.00
+¡20
+
+0
+
+20
+
+principal direction 1
+
+(b) Trajectories in the top-2 principal plane at four values of λ.
+
+Figure 4: Global convergence under input injection (SFPRM, Sudoku). (a) Largest angle between the end states of eight initializations, over 32 puzzles, against λ (teal: all coincide, coral:
+≥ 2 end states); indigo, right axis: token accuracy. (b) Trajectories from the eight z0 (squares) to
+z⋆ (star), coloured by the token accuracy of the decoded state; circles mark the first iteration with
+rc,i < τc , dashed red the exact-match region.
+8
+
+halting residual rt exact accuracy
+
+0.90
+
+Adaptive ´0 = 1
+halts at t = 279
+
+Anderson
+
+Broyden
+
+halts at t = 13
+
+halts at t = 15
+
+Adaptive ´0 = 1
+and fixed ´ = 1
+Anderson
+
+0.85
+Broyden
+0.80
+10 0
+
+wall
+¿ = 0:01
+
+10 ¡2
+10 ¡4
+
+median
+75th percentile
+half halted
+
+10 ¡6
+
+fp32 floor
+
+1
+
+10
+
+100
+
+1000
+
+0
+
+200
+
+fixed-point iteration t
+
+400
+
+600
+
+800
+
+1000
+
+fixed-point iteration t
+
+(a) Accuracy per solver.
+
+(b) Path-token trajectory per solver.
+
+Figure 5: Fixed-point solvers (SFPRM, Maze). (a) Accuracy, halting disabled. (b) Radius is the
+geodesic angle (log-scaled) to z⋆ , rings at 0.1/1/10/100◦ .
+Walker & Ni, 2011) and limited-memory Broyden (Broyden, 1965), the solver of deep equilibrium
+models (Bai et al., 2019). Both cost one evaluation of Fθ per iteration, like the damped step (details
+in Appendix C.5). For both models Anderson halts earlier than the default solver, on every Maze
+example, while staying within one point of its accuracy (Table 5 and Figure 5). Broyden halts about
+as early on Maze but diverges afterwards, so it relies on stopping in time. Without damping (η = 1),
+37–100% of examples never reach τ , and on Sudoku accuracy drops as well. We leave training with
+these solvers, rather than swapping them in at inference, for future work.
+Answer to RQ2. SFPRM uses its loop iterations more effectively than FPRM: its angular criterion
+halts earlier on Sudoku-Extreme and Maze-Hard at equal or higher accuracy. Under strong input
+injection the raw iteration converges to a unique fixed point, as Theorem 2 predicts.
+
+RQ3: THE GEOMETRY OF THE COMPUTATION
+FPRM
+halt t = 35
+
+The state reveals the task structure. On
+the sphere a token state’s only free quantity is its direction, so we probe the computation through the anchor angle ∠(zi,t , xt )
+between each cell’s iterate and its unitnormalized input embedding, the quantity
+that injection acts on (eq. (8)).
+
+∠(zt ; x^) [deg]
+
+4.3
+
+90 ± orthogonal
+
+90
+
+free, becomes path
+free, stays empty
+
+80
+goal
+wall
+start
+
+70
+
+∠(zt ; x^) [deg]
+
+halt t = 20
+
+60
+Figure 7 shows four frames of one rollout
+at t = 999
+SFPRM
+per task (FPRM and more puzzles in Fig120
+ures 21 and 22), and Figures 6 and 15 show
+free, stays empty
+110
+the angle over loops for every cell of a test
+free, becomes path
+puzzle, clustered by cell class. On Sudoku,
+100
+we can see that, for SFPRM, the clue tokens
+90 orthogonal
+wall
+90
+rotate toward their anchors while the blanks
+goal
+start
+80
+end near orthogonal. By i=39 the anchor
+map is a binary image of the clue mask.
+70
+Each loop iteration writes the cell class inat t = 999
+0
+10
+20
+30
+40
+fixed-point iteration t
+formation into the direction of the state. On
+the other hand, FPRM encodes the mask Figure 6: Anchor angles by cell class on Maze: cells
+mainly in the norm of its state (Figure 9), (thin lines), class means (heavy), the halt iteration
+a scale set by training rather than by the ge- (vertical line), and the final distribution (margin).
+ometry. Its anchor map shows only small
+differences between clues and blanks. Similarly, on Maze, SFPRM settles walls at ≈90◦ , empty
+cells at ≈113◦ , and path cells at ≈102◦ . Empty and path cells receive the same input token but still
+end at different angles, so the looping itself decides which cells lie on the path instead of reading it
+off the input. FPRM separates walls from free cells but not path from empty cells. On Mini-ARC
+(Figures 8, 23 and 24), the cells a task rewrites end furthest from their anchors under SFPRM (mean
+AUC 0.81), while FPRM’s ordering varies across tasks (AUC 0.51).
+±
+
+9
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+t=0
+
+19 7 9 712 8 7 89 8 6 612 3 5 59 8 4 612 7 3 59 8 4 612 7 3
+96 9 9919 96 73 1 5284 96 73 1 5284 96 73 1 5284 96
+86 9 6 6 6 56 6 26 2 4 7 7 38 1 26 4 3 9 7 58 1 26 4 3 9 7 58 1
+66 6 6 1 616 2 67 9 3 6 214 5 87 9 6 3 214 5 87 9 6 3 214 5
+15 5 65 75 5 4 12 1 15 47 6 8 12 6 15 97 3 8 42 6 15 97 3 8
+5 75 7 5 4 4 57 4 53 1 7 7 8 62 1 53 8 7 4 9 62 1 53 8 7 4 9 62
+75 57 7 7 7 8 7 21 59 8 4 6 2 7 61 59 4 3 8 2 7 61 59 4 3 8 2 7
+6 6 66 66 3 6 6 3 4 97 85 6 2 1 3 4 27 85 6 1 9 3 4 27 85 6 1 9
+6866 6 3 63 3872 16 5 94 9872 16 3 54 9872 16 3 54
+
+t=2
+
+G
+
+t = 11
+
+G
+
+S
+
+G
+
+S
+
+G
+
+S
+
+decoded board (top row):
+path cell on the true path
+false step
+
+decoded board (top row): bold digit = given (clue)
+60
+80
+100
+changed since t ¡ 1
+constraint violation
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+t = 39
+
+S
+
+dark = wall
+missed path cell
+80
+100
+start / goal
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+Figure 7: SFPRM rollout frames (FPRM in Figures 21 and 22). Top row: the board decoded from
+zi ; bottom row: each cell’s angle to its own input anchor. left: Sudoku-Extreme; right: Maze-Hard.
+FPRM
+input
+
+t=0
+
+t=3
+
+SFPRM
+t = 13
+
+t = 52
+
+t=3
+
+t = 13
+
+t = 52
+
+t = 199
+
+target
+
+target
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=
+199
+input
+
+72:1 ±
+
+75 ±
+
+80 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+85:7 ±
+
+79:4 ±
+
+85 ±
+
+90 ±
+
+95 ±
+
+100 ±
+
+105:5 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+Figure 8: Rollout frames on Mini-ARC for FPRM (left) and SFPRM (right). Input (top) and target
+(bottom), then iterations t = 0 to 199: decoded grid (×: wrong cell) and angle to the input anchor,
+∠(zt , x̂). Only SFPRM solves this puzzle, and its angle map singles out the cells the task rewrites.
+The final angle predicts correctness. On unsolved Sudoku puzzles both SFPRM cell classes end
+farther from their anchors (Figure 9): the clues at ≈65◦ instead of ≈52◦ , almost disjoint from the
+solved ones, and the blanks at ≈92◦ instead of ≈88◦ . The converged angle thus flags a wrong answer
+without labels, shared by every cell and puzzle. FPRM’s final norms separate the two outcomes far
+less: its clue and blank norms overlap widely.
+Answer to RQ3. SFPRM’s loop writes task structure into the state, and on the sphere it is legible
+as an angle to the input: the clue mask on Sudoku, the path on Maze, and, on Sudoku, whether
+the answer is correct. FPRM’s angles and state norm carry this structure only faintly or partially.
+
+5
+
+C ONCLUSION
+solved puzzles (filled)
+
+We introduced SFPRM, which runs FPRM’s
+damped fixed-point loop on nGPT’s hypersphere.
+This change of geometry assures norm boundedness by construction and eliminates the need for
+FPRM’s coupled residual-rescaling coefficients.
+We provide theoretical guarantees under weaker
+assumptions than its Euclidean counterpart. Empirically, on puzzle and reasoning tasks, SFPRM
+halts more effectively at equal or higher accuracy than FPRM. Finally, we showed that the
+angle each token keeps to its input turns out to
+be a readable encoding of the task’s structure
+and, on Sudoku, a label-free predictor of correctness. Natural next steps are to scale SFPRM to
+language modeling and train with better solvers,
+which we have so far used only at inference.
+10
+
+unsolved (hatched)
+
+(a) SFPRM (480 solved / 32 unsolved)
+
+(b) FPRM (426 solved / 86 unsolved)
+
+clue
+
+clue
+
+blank
+
+blank
+
+40
+
+60
+
+80
+
+∠(zT ; x^) [deg]
+
+100
+
+4000
+
+6000
+
+8000
+
+10000
+
+12000
+
+kzT k
+
+Figure 9: Final anchor angle vs. correctness
+on 512 Sudoku puzzles: angle (SFPRM) and
+state norm (FPRM) of clue and blank cells, for
+solved (filled) and unsolved (hatched) puzzles.
+
+Reproducibility. We provide the experimental protocol in Appendix B and in Table 3 a list of
+the used hyperparameters in our experiments. The inference-time solver description and comparison from Section 4.2 is provided in Appendix C.5. We implemented SFPRM on top of the public
+FPRM code base (Movahedi et al., 2026). The code is provided at https://github.com/
+arberzela/sfprm.git. All runs were trained using Nvidia A100 GPUs for a single seed each.
+LLM Usage. Running FPRM’s damped fixed-point solver on nGPT’s unit hypersphere, with
+geodesic injection, angular damping, and a chordal halting residual, was the authors’ idea. For
+the theory, the authors provided proof strategies and guidance, while AI tools helped develop, write,
+and check parts of the proofs. The SFPRM implementation on the FPRM code base was assisted by
+Claude and verified by the authors, who also produced the experimental design, analyses, and figures
+with LLM assistance. Claude helped restructure and edit the manuscript for length and readability.
+Acknowledgments. This work was supported by EPFL AI Center & Swiss AI Initiative Postdoctoral Fellowship Programme. This work was supported as part of the Swiss AI Initiative, through
+a grant from the ETH Domain and computational resources provided by the Swiss National Supercomputing Centre (CSCS) under the Alps infrastructure.
+
+R EFERENCES
+P.-A. Absil, Robert Mahony, and Rodolphe Sepulchre. Optimization Algorithms on Matrix Manifolds. Princeton University Press, 2008.
+Donald G. Anderson. Iterative procedures for nonlinear integral equations. Journal of the ACM, 12
+(4):547–560, 1965.
+Shaojie Bai, J. Zico Kolter, and Vladlen Koltun. Deep equilibrium models. In Advances in Neural
+Information Processing Systems (NeurIPS), 2019.
+Shaojie Bai, Vladlen Koltun, and J. Zico Kolter. Multiscale deep equilibrium models. In Advances
+in Neural Information Processing Systems (NeurIPS), 2020.
+Shaojie Bai, Vladlen Koltun, and J. Zico Kolter. Stabilizing equilibrium models by Jacobian regularization. In International Conference on Machine Learning (ICML), 2021.
+Andrea Banino, Jan Balaguer, and Charles Blundell. PonderNet: Learning to ponder. In ICML
+Workshop on Automated Machine Learning (AutoML), 2021.
+Arpit Bansal, Avi Schwarzschild, Eitan Borgnia, Zeyad Emam, Furong Huang, Micah Goldblum,
+and Tom Goldstein. End-to-end algorithm synthesis with recurrent networks: Logical extrapolation without overthinking. In Advances in Neural Information Processing Systems (NeurIPS),
+2022.
+L. E. J. Brouwer. Über Abbildung von Mannigfaltigkeiten. Mathematische Annalen, 71:97–115,
+1911.
+Charles G. Broyden. A class of methods for solving nonlinear simultaneous equations. Mathematics
+of Computation, 19(92):577–593, 1965.
+Alba Carballo-Castro, Julianna Piskorz, Paulius Rauba, Mihaela van der Schaar, and Pascal
+Frossard. Recursive scaling in masked diffusion models. arXiv preprint arXiv:2606.18022, 2026.
+François Chollet, Mike Knoop, Gregory Kamradt, and Bryan Landers. ARC prize 2024: Technical
+report. arXiv preprint arXiv:2412.04604, 2024.
+Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Łukasz Kaiser,
+Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, Christopher Hesse, and John
+Schulman. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168,
+2021.
+Tim R. Davidson, Luca Falorsi, Nicola De Cao, Thomas Kipf, and Jakub M. Tomczak. Hyperspherical variational auto-encoders. In Conference on Uncertainty in Artificial Intelligence (UAI), 2018.
+11
+
+Mostafa Dehghani, Stephan Gouws, Oriol Vinyals, Jakob Uszkoreit, and Łukasz Kaiser. Universal
+transformers. In International Conference on Learning Representations (ICLR), 2019.
+Justin Deschenaux and Çağlar Gülçehre. Language modeling with hyperspherical flows. arXiv
+preprint arXiv:2605.11125, 2026.
+Ying Fan, Yilun Du, Kannan Ramchandran, and Kangwook Lee. Looped transformers for length
+generalization. In International Conference on Learning Representations (ICLR), 2025.
+Jacob Fein-Ashley and Paria Rashidinejad. Solve the loop: Attractor models for language and
+reasoning. In ICML 2026 Workshop on Foundations of Deep Generative Models: Understanding
+Memorization, Generalization, and Reasoning, 2026.
+Zitian Gao, Lynx Chen, Yihao Xiao, He Xing, Ran Tao, Haoming Luo, Joey Zhou, and Bryan Dai.
+Universal reasoning model. arXiv preprint arXiv:2512.14693, 2025.
+Khashayar Gatmiry, Nikunj Saunshi, Sashank J. Reddi, Stefanie Jegelka, and Sanjiv Kumar. Can
+looped transformers learn to implement multi-step gradient descent for in-context learning? In
+International Conference on Machine Learning (ICML), 2024.
+Jonas Geiping, Sean Michael McLeish, Neel Jain, John Kirchenbauer, Siddharth Singh, Brian R.
+Bartoldson, Bhavya Kailkhura, Abhinav Bhatele, and Tom Goldstein. Scaling up test-time compute with latent reasoning: A recurrent depth approach. In The Thirty-ninth Annual Conference
+on Neural Information Processing Systems, 2025.
+Angeliki Giannou, Shashank Rajput, Jy-yong Sohn, Kangwook Lee, Jason D. Lee, and Dimitris
+Papailiopoulos. Looped transformers as programmable computers. In International Conference
+on Machine Learning (ICML), pp. 11398–11442, 2023.
+Alex Graves. Adaptive computation time for recurrent neural networks.
+arXiv:1603.08983, 2016.
+
+arXiv preprint
+
+Benhao Huang, Zhengyang Geng, and J. Zico Kolter. Equilibrium reasoners: Learning attractors
+enables scalable reasoning. In International Conference on Machine Learning (ICML), 2026.
+Alexia Jolicoeur-Martineau. Less is more: Recursive reasoning with tiny networks. arXiv preprint
+arXiv:2510.04871, 2025.
+Keller Jordan, Yuchen Jin, Vlado Boza, Jiacheng You, Franz Cesista, Laker Newhouse, and Jeremy
+Bernstein. Muon: An optimizer for hidden layers in neural networks. Blog post, 2024. URL
+https://kellerjordan.github.io/posts/muon/.
+Subin Kim, Prin Phunyaphibarn, Donghyun Ahn, and Sundong Kim. Playgrounds for abstraction
+and reasoning. In NeurIPS 2022 Workshop on Neuro Causal and Symbolic AI (nCSI), 2022.
+Zhenzhong Lan, Mingda Chen, Sebastian Goodman, Kevin Gimpel, Piyush Sharma, and Radu Soricut. ALBERT: A lite BERT for self-supervised learning of language representations. In International Conference on Learning Representations (ICLR), 2020.
+Ilya Loshchilov, Cheng-Ping Hsieh, Simeng Sun, and Boris Ginsburg. nGPT: Normalized transformer with representation learning on the hypersphere. In International Conference on Learning
+Representations (ICLR), 2025.
+Andrea Miele, Yiming Qin, Alba Carballo-Castro, Justin Deschenaux, and Pascal Frossard. Fixedpoint masked generative modeling. arXiv preprint arXiv:2605.31215, 2026.
+Takeru Miyato, Toshiki Kataoka, Masanori Koyama, and Yuichi Yoshida. Spectral normalization
+for generative adversarial networks. In International Conference on Learning Representations
+(ICLR), 2018.
+Sajad Movahedi, Vera Milovanović, Shlomo Libo Feigin, Alexander Theus, Thomas Hofmann,
+Valentina Boeva, T. Konstantin Rusch, and Antonio Orvieto. Fixed-point reasoners: Stable and
+adaptive deep looped transformers. arXiv preprint arXiv:2606.18206, 2026.
+12
+
+James M. Ortega and Werner C. Rheinboldt. Iterative Solution of Nonlinear Equations in Several
+Variables. Academic Press, New York, 1970.
+Thomas Pethick, Wanyun Xie, Kimon Antonakopoulos, Zhenyu Zhu, Antonio Silveti-Falls, and
+Volkan Cevher. Training deep learning models with norm-constrained LMOs. In International
+Conference on Machine Learning (ICML), 2025.
+Hayden Prairie, Zachary Novack, Taylor Berg-Kirkpatrick, and Daniel Y. Fu. Parcae: Scaling laws
+for stable looped language models. arXiv preprint arXiv:2604.12946, 2026.
+Tim Salimans and Diederik P. Kingma. Weight normalization: A simple reparameterization to accelerate training of deep neural networks. In Advances in Neural Information Processing Systems
+(NeurIPS), 2016.
+Nikunj Saunshi, Nishanth Dikkala, Zhiyuan Li, Sanjiv Kumar, and Sashank J. Reddi. Reasoning with latent thoughts: On the power of looped transformers. In International Conference on
+Learning Representations (ICLR), 2025.
+Avi Schwarzschild, Eitan Borgnia, Arjun Gupta, Furong Huang, Uzi Vishkin, Micah Goldblum,
+and Tom Goldstein. Can you learn an algorithm? Generalizing from easy to hard problems with
+recurrent networks. In Advances in Neural Information Processing Systems (NeurIPS), 2021.
+Amin Sghaier, Ali Parviz, and Alexia Jolicoeur-Martineau. Probabilistic tiny recursive model. arXiv
+preprint arXiv:2605.19943, 2026.
+Charlie Victor Snell, Jaehoon Lee, Kelvin Xu, and Aviral Kumar. Scaling LLM test-time compute
+optimally can be more effective than scaling parameters for reasoning. In International Conference on Learning Representations (ICLR), 2025.
+Ayhan Suleymanzade, Chanhyuk Lee, Floor Eijkelboom, Nicholas M. Boffi, İsmail İlkan Ceylan,
+and Jinwoo Kim. Thinking with looped flows. arXiv preprint arXiv:2609.11801, 2026.
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez,
+Łukasz Kaiser, and Illia Polosukhin. Attention is all you need. In Advances in Neural Information Processing Systems (NeurIPS), 2017.
+Homer F. Walker and Peng Ni. Anderson acceleration for fixed-point iterations. SIAM Journal on
+Numerical Analysis, 49(4):1715–1735, 2011.
+Guan Wang, Jin Li, Yuhao Sun, Xing Chen, Changling Liu, Yue Wu, Meng Lu, Sen Song, and Yasin
+Abbasi Yadkori. Hierarchical reasoning model. arXiv preprint arXiv:2506.21734, 2025.
+Tongzhou Wang and Phillip Isola. Understanding contrastive representation learning through alignment and uniformity on the hypersphere. In International Conference on Machine Learning
+(ICML), 2020.
+Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc V. Le, Ed H. Chi, Sharan Narang, Aakanksha
+Chowdhery, and Denny Zhou. Self-consistency improves chain of thought reasoning in language
+models. In International Conference on Learning Representations (ICLR), 2023.
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Brian Ichter, Fei Xia, Ed H. Chi,
+Quoc V. Le, and Denny Zhou. Chain-of-thought prompting elicits reasoning in large language
+models. In Advances in Neural Information Processing Systems (NeurIPS), 2022.
+Ezra Winston and J. Zico Kolter. Monotone operator equilibrium networks. In Advances in Neural
+Information Processing Systems (NeurIPS), 2020.
+Liu Yang, Kangwook Lee, Robert D. Nowak, and Dimitris Papailiopoulos. Looped transformers are
+better at learning learning algorithms. In International Conference on Learning Representations
+(ICLR), 2024.
+Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Thomas L. Griffiths, Yuan Cao, and Karthik
+Narasimhan. Tree of thoughts: Deliberate problem solving with large language models. In Advances in Neural Information Processing Systems (NeurIPS), 2023.
+13
+
+A
+
+P ROOFS FOR THE SFPRM GUARANTEES
+
+Throughout this appendix, the already token-wise normalized input x ∈ S is fixed and
+S = (Sd−1 )T ,
+
+u, v ∈ Sd−1 .
+
+∠(u, v) := arccos(⟨u, v⟩),
+
+The integer T is the number of tokens. Every spherical operation is applied independently to the T
+token vectors. In particular, we use the sequence-level convention from eq. (7). All operands passed
+to Norm are assumed nonzero. Exact Slerp means interpolation along the unique shortest arc, so its
+endpoints are assumed non-antipodal. Numerical guards require separate care because an arbitrary
+antipodal fallback need not be continuous.
+A.1
+
+BASIC GEOMETRY OF SPHERICAL INTERPOLATION
+
+Lemma 1 (Geometry of SLERP). Let u, v ∈ Sd−1 with v ̸= −u, and let s ∈ [0, 1]. Then
+∥Slerps (u, v)∥2 = 1,
+∠(u, Slerps (u, v)) = s ∠(u, v),
+∠(Slerps (u, v), v) = (1 − s)∠(u, v).
+Moreover, if Ω := ∠(u, v) > 0, then
+Slerps (u, v) = cos(sΩ) u + sin(sΩ) e,
+
+e :=
+
+v − cos Ω u
+,
+sin Ω
+
+where e is a unit vector orthogonal to u.
+Proof. Set Ω = ∠(u, v). If Ω = 0, then v = u and Slerps (u, u) = u by definition. Its norm is one
+and both angles are zero, proving all three claims in this case. For 0 < Ω < π, define
+e :=
+
+v − cos Ω u
+.
+sin Ω
+
+Then ⟨u, e⟩ = 0, ∥e∥2 = 1, and v = cos Ω u + sin Ω e. Substituting this identity into the SLERP
+formula and using the sine addition rule gives
+Slerps (u, v) = cos(sΩ)u + sin(sΩ)e.
+The two terms are orthogonal, so the result has unit norm. The same expression places it at angle
+sΩ from u and (1 − s)Ω from v.
+A.2
+
+G UARDED INTERPOLATION
+
+The implementation replaces exact SLERP by a guarded step. The sine formula of eq. (6) gives 0/0
+at Ω = 0 and is ill conditioned nearby, especially in bf16, although Slerpη (u, u) = u; at Ω = π
+
+the shortest arc is not unique. Write c = ⟨u, v⟩ and nlerpη (u, v) := Norm (1 − η)u + ηv , and
+near an antipode fix an explicit arc through a unit vector e(u, v) ⊥ u, namely e(u, v) = Norm(Pu v)
+with Pu = I − uu⊤ when ∥Pu v∥2 > ϵv and a fixed unit vector e0 (u) ⊥ u otherwise. The guarded
+interpolation is
+
+c > 1 − ϵΩ ,
+
+nlerpη (u, v),
+gSlerpη (u, v) = Arcη (u, v) := cos(ηΩ) u + sin(ηΩ) e(u, v), c < −1 + ϵΩ ,
+(12)
+
+
+Slerpη (u, v),
+otherwise.
+The last branch is the exact step, and the middle one makes the unavoidable choice of arc near an
+antipode explicit. The first branch is what the solver executes in the convergence regime, and the
+following lemma is what the boundedness argument of Section 3.2.1 needs from it.
+Lemma 2 (The guarded step stays on the sphere and on the arc). Let u, v ∈ Sd−1 and η ∈ [0, 1].
+Every branch of eq. (12) returns a unit vector. On the first branch, nlerpη (u, v) lies on the same
+great circle as Slerpη (u, v), at angle θ = ηΩ + O(Ω3 ) from u, where Ω = ∠(u, v).
+14
+
+Proof. The first branch normalizes explicitly, the third has unit norm by Lemma 1, and the middle
+branch is cos(ηΩ)u + sin(ηΩ)e with e ⊥ u of unit norm. For the first branch, (1 − η)u + ηv lies
+in span{u, v}, so normalizing it lands on the great circle through u and v: the guard can change the
+position along the arc, not the arc. Its angle θ from u satisfies
+cos θ =
+
+(1 − η) + η cos Ω
+1 − ηΩ2 /2 + O(Ω4 )
+η 2 Ω2
+=
+=
+1
+−
++ O(Ω4 ),
+∥(1 − η)u + ηv∥2
+1 − η(1 − η)Ω2 /2 + O(Ω4 )
+2
+
+using cos Ω = 1 − Ω2 /2 + O(Ω4 ) and ∥(1 − η)u + ηv∥22 = 1 − 2η(1 − η)(1 − cos Ω). Hence
+θ = ηΩ + O(Ω3 ): the guard’s error is a third-order timing error along the correct arc. The guard
+√
+3/2
+fires for Ω ≲ 2ϵΩ , where this discrepancy is of order ϵΩ , while the 0/0 is removed.
+A.3
+
+E UCLIDEAN MIXING FOLLOWS THE SAME GEODESIC
+
+This is the identity behind the geodesic injection of eq. (8): FPRM’s affine input mixing, once
+normalized, moves along the same arc with a state-dependent fraction.
+Lemma 3 (Normalized Euclidean mixing follows the same geodesic). Let u, v ∈ Rd \ {0}, write
+u
+b = u/∥u∥2 and vb = v/∥v∥2 , and assume vb ̸= −b
+u. For any α, β > 0, if Ω = ∠(b
+u, vb) ∈ (0, π),
+then
+Norm(αu + βv) = Slerpλeff (b
+u, vb),
+(13)
+1
+λeff = atan2(β∥v∥2 sin Ω, α∥u∥2 + β∥v∥2 cos Ω) ∈ (0, 1).
+Ω
+If Ω = 0, then Norm(αu + βv) = u
+b = vb.
+Proof. If Ω = 0, then u
+b = vb and the positive mixture αu + βv = (α∥u∥2 + β∥v∥2 )b
+u normalizes to
+u
+b. This is also Slerps (b
+u, u
+b) for every s ∈ [0, 1].
+For 0 < Ω < π, define
+vb − cos Ω u
+b
+.
+sin Ω
+As in Lemma 1, u
+b and e are orthonormal and vb = cos Ω u
+b + sin Ω e. Hence
+e :=
+
+αu + βv = (α∥u∥2 + β∥v∥2 cos Ω) u
+b + β∥v∥2 sin Ω e.
+By the definition of atan2 and λeff in the lemma, the normalized mixture is therefore
+Norm(αu + βv) = cos(λeff Ω) u
+b + sin(λeff Ω) e.
+The first argument of atan2 is positive, so 0 < λeff Ω < π. Moreover,
+sin(Ω − λeff Ω) =
+
+α∥u∥2 sin Ω
+> 0.
+∥αu + βv∥2
+
+Since Ω − λeff Ω ∈ (−π, π), this implies 0 < λeff Ω < Ω, or 0 < λeff < 1. The representation in
+Lemma 1 now gives
+Norm(αu + βv) = Slerpλeff (b
+u, vb) ,
+which is exactly eq. (13).
+At Ω = π, the shortest great-circle direction is not unique. If the two opposing weighted vectors
+also have equal magnitudes, their Euclidean mixture is zero and cannot be normalized. This explains
+why antipodal directions are excluded.
+A.4
+
+D ETAILED PROOF OF FIXED - POINT EXISTENCE
+
+Proof of Proposition 1. Set R := (1 − λ)π. Since 0 < λ < 1, we have 0 < R < π. Recall the cap
+Cx = {y ∈ S : ∠(yt , xt ) ≤ R for every t} .
+The exact recurrent map Fθ does not generally map this cap into itself, because the network is
+applied after the token-wise interpolation in eq. (8). The proof therefore uses the reversed order
+only in an auxiliary map:
+H(y) := Slerpλ (fθ (y), x) .
+15
+
+For every y ∈ Cx , the assumptions ensure that fθ (y)t is a unit vector different from −xt . By
+Lemma 1,
+∠(H(y)t , xt ) = (1 − λ)∠(fθ (y)t , xt )
+< (1 − λ)π = R.
+Thus H(Cx ) ⊆ Cx . Continuity of fθ and exclusion of the antipode make H continuous throughout
+this cap.
+We next give the Euclidean coordinates needed for Brouwer’s theorem. The spherical logarithm
+below is a vector-valued coordinate map, not a scalar logarithm. Given unit vectors u and v ̸= −u,
+let Ω = ∠(u, v) < π and define
+
+0,
+v = u,
+Logu (v) :=
+Ω
+
+(v − cos Ω u) , v ̸= u.
+sin Ω
+The vector in parentheses is orthogonal to u and has norm sin Ω. Therefore
+⟨Logu (v), u⟩ = 0,
+
+∥Logu (v)∥2 = Ω.
+
+In words, Logu (v) points in the tangent direction of the shortest arc from u to v, and its length
+equals that arc’s angle. Its inverse is
+
+u,
+w = 0,
+w
+Expu (w) :=
+, w ̸= 0,
+cos(∥w∥2 )u + sin(∥w∥2 )
+∥w∥2
+for ⟨w, u⟩ = 0 and ∥w∥2 < π. The two maps are continuous inverses on every closed cap of radius
+strictly smaller than π.
+Applying the spherical logarithm token by token identifies Cx continuously and bijectively with
+B :=
+
+T
+Y
+
+
+ut ∈ Rd : ⟨ut , xt ⟩ = 0, ∥ut ∥2 ≤ R .
+
+t=1
+
+Each factor is an ordinary closed Euclidean ball inside the hyperplane perpendicular to xt . Consequently, B is nonempty, compact, and convex and can be identified with a subset of RT (d−1) .
+We now apply Brouwer’s fixed-point theorem (Brouwer, 1911), in the following standard form: if
+K is a nonempty, compact, convex subset of a finite-dimensional Euclidean space and G : K → K
+is continuous, then
+there exists y ⋆ ∈ K such that G(y ⋆ ) = y ⋆ .
+For a textbook statement, see Ortega & Rheinboldt (1970, Section 6.3, p. 161). Transforming H
+into the logarithmic coordinates above produces just such a continuous self-map of B. Therefore
+there exists y⋆ ∈ Cx such that
+y⋆ = H(y⋆ ) = Slerpλ (fθ (y⋆ ), x) .
+Now define
+z⋆ := fθ (y⋆ ).
+The preceding fixed-point identity gives y⋆ = Slerpλ (z⋆ , x), and hence
+Fθ (z⋆ ; x) = fθ (Slerpλ (z⋆ , x))
+= fθ (y⋆ ) = z⋆ .
+Thus z⋆ is a fixed point of the exact injection-first recurrent map. Notice that the proof places y⋆ ,
+not necessarily z⋆ , in the input-centered cap.
+16
+
+A.5
+
+T HE FIRST DERIVATIVE OF SLERP AT COINCIDENT ENDPOINTS
+
+Lemma 4 (First-order interpolation rule). Fix 0 ≤ η ≤ 1 and a ∈ Sd−1 . As unit vectors u, v
+approach a,
+Slerpη (u, v) = (1 − η)u + ηv + O(∥u − v∥22 ),
+with the exact value Slerpη (u, u) = u at coincidence. In particular, the interpolation is jointly
+differentiable at (a, a), with tangent derivative
+D Slerpη (a, a)[h, k] = (1 − η)h + ηk,
+
+⟨a, h⟩ = ⟨a, k⟩ = 0.
+
+Proof. For Ω = ∠(u, v) > 0 small, the elementary estimate sin(cΩ) = cΩ + O(Ω3 ), for fixed c,
+gives
+sin((1 − η)Ω)
+sin(ηΩ)
+= (1 − η) + O(Ω2 ),
+= η + O(Ω2 ).
+sin Ω
+sin Ω
+Substituting into the interpolation formula gives an error of order Ω2 , since both endpoints have unit
+norm. The chord identity ∥u − v∥2 = 2 sin(Ω/2) implies Ω = O(∥u − v∥2 ), proving the stated
+estimate. If u = v, the error is exactly zero because Slerpη (u, u) = u.
+To obtain the joint derivative, express nearby endpoints using tangent coordinates h, k ⊥ a:
+u=
+
+a+h
+= a + h + O(∥h∥22 ),
+∥a + h∥2
+
+v=
+
+a+k
+= a + k + O(∥k∥22 ).
+∥a + k∥2
+
+Here ∥a + h∥22 = 1 + ∥h∥22 , so normalization has no first-order effect. The uniform interpolation
+estimate now yields
+Slerpη (u, v) = a + (1 − η)h + ηk + O(∥h∥22 + ∥k∥22 ).
+Thus the linear response to arbitrary simultaneous endpoint perturbations is (1 − η)h + ηk, as
+claimed.
+A.6
+
+P ROOF OF LOCAL CONVERGENCE UNDER ANGULAR DAMPING
+
+Proof of Theorem 1. Tangent directions and fixed points. Let J = Dz Fθ (z⋆ ; x). Consider a
+differentiable spherical curve z(ε) with z(0) = z⋆ and z′ (0) = u. Both its input and output tokens
+have unit norm, so differentiation gives
+d
+∥zt (ε)∥22
+= 2⟨zt⋆ , ut ⟩,
+dε
+ε=0
+d
+0=
+∥Fθ (z(ε); x)t ∥22
+= 2⟨zt⋆ , (Ju)t ⟩.
+dε
+ε=0
+0=
+
+The output derivative uses Fθ (z⋆ ; x) = z⋆ . Hence J sends tangent perturbations to tangent perturbations at the same fixed point; it includes all coupling between tokens.
+For η > 0, interpolation moves a positive fraction of the shortest arc, so it returns its first endpoint
+exactly when the endpoints coincide. The damped update therefore has exactly the fixed points of
+Fθ , wherever these arcs are defined. At z⋆ the endpoints coincide, and continuity ensures that nearby
+endpoint pairs are non-antipodal.
+Linearization and the damping range. Represent a nearby state by tangent coordinates w =
+(wt )Tt=1 :
+z ⋆ + wt
+,
+⟨zt⋆ , wt ⟩ = 0.
+zt = ⋆t
+∥zt + wt ∥2
+These coordinates measure displacement along the sphere to first order: z = z⋆ + w + O(∥w∥2 ).
+The inverse is wt = zt /⟨zt⋆ , zt ⟩ − zt⋆ , defined nearby, and also has identity tangent derivative.
+Differentiability of Fθ gives
+Fθ (z; x) = z⋆ + Jw + o(∥w∥).
+17
+
+In particular, the two interpolation endpoints differ by O(∥w∥). By Lemma 4, replacing their spherical interpolation by their weighted average incurs only O(∥w∥2 ) error. Thus, writing Φη for the
+damped update in these coordinates,
+Φη (w) = Aw + o(∥w∥),
+
+A := (1 − η) Id +ηJ.
+
+If Jv = ζv for a nonzero, possibly complex eigenvector v, then Av = [1 + η(ζ − 1)]v. Conversely,
+every eigenvector of A is one of J = (A − (1 − η) Id)/η. This identifies all eigenvalues without
+assuming diagonalizability. As in Euclidean damping (Movahedi et al., 2026, Appendix A.3),
+|1 + η(ζ − 1)|2 = 1 + 2η(Re(ζ) − 1) + η 2 |ζ − 1|2 < 1
+exactly when 0 < η < 2(1 − Re(ζ))/|ζ − 1|2 . The theorem’s damping bound therefore places every
+eigenvalue of A strictly inside the unit disk.
+From the linearization to convergence. This eigenvalue condition need not make the Euclidean
+norm shrink at every step. A standard finite-dimensional stability result instead provides a vector
+norm ∥·∥∗ with induced matrix norm a := ∥A∥∗ < 1 (Ortega & Rheinboldt, 1970). This norm is
+equivalent to the Euclidean norm: positive constants c1 , c2 satisfy
+c1 ∥w∥ ≤ ∥w∥∗ ≤ c2 ∥w∥.
+It therefore measures the same notion of convergence, up to fixed factors.
+Choose a < q < 1. The remainder o(∥w∥) means that its norm divided by ∥w∥ tends to zero. By
+norm equivalence, we may choose a sufficiently small neighborhood where
+∥Φη (w) − Aw∥∗ ≤ (q − a)∥w∥∗ .
+The triangle inequality then gives the full one-step error bound:
+∥Φη (w)∥∗ ≤ ∥Aw∥∗ + ∥Φη (w) − Aw∥∗
+≤ a∥w∥∗ + (q − a)∥w∥∗ = q∥w∥∗ .
+Because q < 1, a sufficiently small ball in this norm stays within itself after every update. Starting
+there, induction gives ∥wi ∥∗ ≤ q i ∥w0 ∥∗ . Finally, the coordinate map and its inverse are smooth
+nearby, so they bound coordinate error and state error by constant multiples of each other. Together
+with norm equivalence, this yields
+∥zi − z⋆ ∥ ≤ Cq i ∥z0 − z⋆ ∥
+for some C > 0, proving the asserted local geometric convergence.
+The guarded step. Near z⋆ the endpoints zi and Fθ (zi ; x) are O(∥w∥) apart, so on a neighborhood of z⋆ the solver executes the first branch of eq. (12). By Lemma 2 that branch lies on the same
+arc as the exact step, at an angle from u that differs by O(Ω3 ), so it differs from Slerpη (u, v) by
+O(∥u − v∥32 ) and shares the expansion (1 − η)u + ηv + O(∥u − v∥22 ) of Lemma 4. It also returns
+u only when v = u, because for η > 0 a normalized nonnegative combination of two non-antipodal
+unit vectors equals u only if v = u. The proof above therefore applies verbatim, and Theorem 1
+holds for the guarded step the solver runs.
+Remark 1 (Optimal damping, and when the window is narrow). Write ζ = a + bi. The squared
+modulus |1+η(ζ −1)|2 = 1−2η(1−a)+η 2 |ζ −1|2 is an upward parabola in η with value 1 at η = 0,
+so for a < 1 the window 0 < η < 2(1 − a)/|ζ − 1|2 of eq. (11) is exactly the interval on which it lies
+below one, the vertex η ⋆ = (1 − a)/|ζ − 1|2 is the optimal damping for that
+pmode, and the smallest
+attainable squared modulus is 1 − (1 − a)2 /|ζ − 1|2 , a contraction factor of 1 − (1 − a)2 /|ζ − 1|2
+per step. Three consequences. (i) Damping handles rotation but not expansion: for a ≥ 1 every term
+is nonnegative, so no η > 0 contracts the mode and only training can remove it. (ii) The guarantee
+is weak when 1 − a is small compared with |b|, that is, when ζ − 1 is nearly imaginary, whatever
+|ζ| is: for ζ = 0.9 + 1.5i the undamped mode grows by |ζ| ≈ 1.75 per step while rotating by
+about 59◦ , the window is 0 < η < 0.089, and even the optimal damping contracts by only 0.22%
+per step, so halving the error takes about 313 iterations. Bounding the rotation magnitude, not only
+the expansion, is therefore what makes halting fast. (iii) The patience rule of Algorithm 1, which
+starts at η = 1 and multiplies it by γ whenever the residual stalls, is a derivative-free descent into
+18
+
+this window: well-conditioned modes (ζ = 0.5 admits every η < 4) converge at once, and the
+geometric decay eventually drops η below the threshold of the rotational modes, at which point their
+tangent error contracts geometrically and, whenever the residual then improves within P iterations,
+the decay pauses, without any spectrum ever being estimated. Because the contraction is in an
+adapted norm, the residual need not fall monotonically, so the rule may keep shrinking η; this slows
+convergence but cannot break it, since every smaller η stays inside the window.
+A.7
+
+G LOBAL CONVERGENCE UNDER SUFFICIENTLY STRONG INPUT INJECTION
+
+Proof of Theorem 2. We use the token-wise logarithm and exponential from Appendix A.4. They
+satisfy
+Slerpλ (z, x) = Expx ((1 − λ) Logx (z))
+whenever zt ̸= −xt for every token t. Indeed, eq. (6) gives Slerpλ (zt , xt ) = Slerp1−λ (xt , zt ),
+which by the representation in Lemma 1 equals cos((1 − λ)Ω) xt + sin((1 − λ)Ω) e with Ω =
+∠(xt , zt ) and Logxt (zt ) = Ωe, and this is Expxt ((1 − λ) Logxt (zt )) by definition, also when
+Ω = 0. Thus input injection multiplies the logarithmic coordinates by exactly 1 − λ: it preserves
+the direction toward the current state while reducing its angular distance from the input.
+The geometric difficulty is that shrinking angles to the input does not give a global contraction bound
+between states. Two states approaching an input antipode along different arcs can be arbitrarily close
+while their injected states remain separated for fixed 0 < λ < 1. Thus the direct global Lipschitz
+argument for Euclidean input mixing in FPRM (Movahedi et al., 2026, Appendix A.2) does not apply
+here. Instead, every injected token has angle less than (1 − λ)π to its input. We use this uniform
+bound to place all injected states in one fixed neighborhood, prove contraction in its logarithmic
+coordinates, and then transfer convergence back to the original states.
+These are smooth inverse coordinate maps for ∥wt ∥2 < π. The spherical exponential is smooth, and
+its differential has singular values 1 in the radial direction and sin r/r in the transverse directions
+at radius 0 < r < π, with identity differential at the origin. Its differential is therefore invertible
+throughout this domain, so the inverse function theorem gives smoothness of the logarithm.
+A fixed neighborhood of the input. Since fθ is C 1 near x and fθ (x)t ̸= −xt for every t, continuity allows us to choose 0 < r < π/2 such that fθ ◦ Expx is C 1 and none of its output tokens
+equals −xt on an open neighborhood of
+
+Br := w ∈ (Rd )T : ⟨wt , xt ⟩ = 0, ∥wt ∥2 ≤ r for every t .
+Here Br is a compact, convex product of ordinary tangent-space balls. Define, on this neighborhood,
+A(w) := Logx (fθ (Expx (w))) .
+Here w represents an injected state, and A(w) represents the network’s output in the same coordinates. Multiplication by 1 − λ then performs the next input injection. Both A and fθ ◦ Expx are C 1 ,
+so their derivatives are bounded on the compact set Br . Integrating these derivatives along the line
+segment between any w, v ∈ Br gives a common finite constant L ≥ 1 such that
+∥A(w) − A(v)∥ ≤ L∥w − v∥,
+∥fθ (Expx (w)) − fθ (Expx (v))∥ ≤ L∥w − v∥.
+All norms here are the product Euclidean norm defined in the main text. Moreover, ∥A(w)t ∥2 < π
+for every token, because the logarithm’s length is the angle to xt and the antipode is excluded.
+Strong injection gives a contraction.
+
+Choose
+
+
+r 1
+λ0 := 1 − min
+∈ (0, 1).
+,
+π 2L
+
+Fix any λ ∈ (λ0 , 1), and set a := 1 − λ and q := aL. Then aπ < r and 0 < q < 1/2. The
+two terms in the threshold serve separate purposes: aπ < r keeps all injected states in the chosen
+neighborhood, while aL < 1 makes their distances contract. The factor 1/2 simply leaves a strict
+margin below one. The map w 7→ aA(w) sends Br into itself, since
+∥aA(w)t ∥2 < aπ < r.
+19
+
+It is also a contraction:
+∥aA(w) − aA(v)∥ ≤ q∥w − v∥.
+The set Br is closed in a finite-dimensional Euclidean space, hence complete. Banach’s contraction
+theorem therefore gives a unique w⋆ ∈ Br satisfying w⋆ = aA(w⋆ ), and every iteration wi+1 =
+aA(wi ) starting in Br satisfies
+∥wi − w⋆ ∥ ≤ q i ∥w0 − w⋆ ∥.
+Return to the original recurrence.
+every t, and set
+
+Let z0 be any admissible initialization, with z0,t ̸= −xt for
+w0 := a Logx (z0 ).
+
+Because ∥w0,t ∥2 < aπ < r, this initial coordinate lies in Br , regardless of the distance from z0 to a
+fixed point. The original recurrence and the coordinate iteration are related by
+zi+1 = fθ (Expx (wi )),
+
+wi+1 = a Logx (zi+1 ) = aA(wi ).
+
+These identities hold inductively for every i ≥ 0: each wi remains in Br , where the network’s
+outputs avoid the antipodes. Hence every subsequent interpolation is well-defined.
+Define z⋆ := fθ (Expx (w⋆ )). The identity w⋆ = aA(w⋆ ) implies w⋆ = a Logx (z⋆ ), so
+Fθ (z⋆ ; x) = fθ (Expx (w⋆ )) = z⋆ .
+This fixed point is admissible by the choice of r. Conversely, any admissible fixed point z of Fθ
+gives w = a Logx (z) ∈ Br with w = aA(w). Uniqueness of w⋆ then implies z = z⋆ .
+Finally, the Lipschitz bound above transfers convergence to the original states:
+∥zi+1 − z⋆ ∥ ≤ L∥wi − w⋆ ∥
+
+√
+≤ Lq i ∥w0 − w⋆ ∥ ≤ 2Lr T q i ,
+i ≥ 0.
+√
+Thus the theorem holds with C = 2Lr T , uniformly over all admissible initializations. The neighborhood, derivative bound, and injection threshold depend on the fixed network and input.
+
+B
+
+D ETAILS ON E XPERIMENTAL S ETUP
+
+This appendix section provides the details on the experimental setup and experiments in Section 4.
+Details on tasks and data are in Appendix B.1, on models in Appendix B.2, on training and solver
+settings in Appendix B.3. Table 3 reports all hyperparameters. The evaluation protocol is in Appendix B.4.
+B.1
+
+TASKS AND DATA
+
+Sudoku-Extreme. This dataset consists of 9×9 Sudoku puzzles selected for difficulty, with a test
+split of 422,786 puzzles. The standard training build has 1,000 base puzzles, each augmented 1000×
+by validity-preserving transformations (relabeling of the digits and permutations of rows, columns,
+bands, and stacks), giving 106 training examples. We train instead on a 5k×200 build, 5,000 base
+puzzles with 200 augmentations each, which has the same number of training examples. Unless
+stated otherwise, every SFPRM Sudoku run and every rollout of Sections 4.2 and 4.3 uses this
+build. A puzzle is a sequence of 81 cell tokens (blank or a digit) preceded by a learned per-puzzle
+embedding of 16 tokens, and the model predicts the digit of every cell.
+Maze-Hard. The 30×30 maze benchmark of the same suite: 1,000 training and 1,000 test mazes,
+used without augmentation. A maze is a sequence of 900 cell tokens (wall, free, start, goal) plus the
+puzzle embedding, and the model predicts for every cell whether it lies on the shortest path.
+Mini-ARC. A 5×5-grid ARC variant (Kim et al., 2022) with 149 tasks. We train on the 528 demonstration pairs augmented 100× and report task-level Pass@1 on the 149 test pairs, voting over augmentations. A puzzle is 25 cell tokens over a 12-token vocabulary plus the puzzle embedding.
+20
+
+ARC-AGI-1 and ARC-AGI-2. The abstraction-and-reasoning benchmarks of Chollet et al.
+(2024): few-shot tasks in which a grid transformation must be inferred from demonstration pairs
+and applied to a test grid. Following the HRM/TRM protocol, we train on 960 (ARC-1) and 1,280
+(ARC-2) base puzzles, each augmented 1000× with the transformations of Wang et al. (2025), and
+report Pass@2 on the 400 and 120 evaluation tasks. Grids are padded to 30×30, so a puzzle is a
+sequence of 900 cell tokens over a 12-token vocabulary plus the puzzle embedding.
+B.2
+
+M ODELS
+
+SFPRM is implemented in the FPRM code base and shares an identical backbone with 6.83M trainable parameters: hidden size 512, 8 attention heads, MLP expansion 4, rotary position embeddings,
+and the configuration fields H_cycles/L_cycles/L_layers = 3/6/2 of the code base, run as
+a single weight-tied loop without hierarchy. The number of iterations backpropagated through, is
+the BPTT window K = 6 of Section 3.1.
+FPRM. FPRM uses a pre-norm block with the coupled residual-rescaling coefficients
+(α1 , β1 , α2 , β2 ) of Section 3.1, linear damping, and the relative residual rE with tolerance τE = 0.1.
+SFPRM. The spherical model replaces the block by the nGPT-style block of Section 3.2: QKnormalized attention and a SwiGLU MLP, each folded into the unit-norm state by an eigen-learningrate retraction, with all weight vectors renormalized after every optimizer step. Three further choices
+are specific to SFPRM. (i) The input is injected by the geodesic step of eq. (8) with a learned fraction
+λ, initialized at 0.1. (ii) The readout is unnormalized: the rows of the output head are not constrained
+to unit norm, since with a unit-norm state that constraint would cap every logit at ±sz , and with it
+the confidence of the predictions. (iii) The solver is the geodesic one of Algorithm 1, with the
+chordal residual of eq. (9) and tolerance τc = 0.01, which corresponds to an angular tolerance of
+τang = arccos(0.99) ≈ 8.1◦ per token.
+B.3
+
+T RAINING AND SOLVER SETTINGS
+
+Table 3 lists every hyperparameter. Unless stated otherwise, SFPRM trains with a constant learning
+rate after the warmup steps and an exponential moving average of the weights with rate 0.999. We
+optimize SFPRM’s 2-D weight matrices with Muon (Jordan et al., 2024; Pethick et al., 2025) at
+learning rate 5 × 10−3 and momentum 0.95, and its embeddings, normalization scales, and scalar
+parameters with AdamW at 10−3 . Weight decay is 0.1 for SFPRM, and the per-puzzle embeddings
+have their own learning rate. SFPRM additionally uses weight dropout and variational dropout
+of 0.1 on the main build (variational dropout only on the 1k×1000 Sudoku run). Following the
+HRM/FPRM code base, one epoch draws one augmented example for every base puzzle; hence
+12,000 epochs on the 5k×200 build and 60,000 epochs on the 1k×1000 build and on Maze-Hard
+all amount to the same 78,125 optimizer steps at a global batch of 768. For the final Sudoku results,
+we train for 15,000 epochs.
+Deep supervision. Training runs one segment of K = 6 solver iterations per optimizer step and
+backpropagates through all K geodesic steps of the segment; the recurrent state is carried across
+optimizer steps and detached between segments, and a sample is re-initialized once it halts or once
+it has been unrolled for max_iter = 12 iterations. The halting residual, patience counter, step-size
+schedule, and iterate bookkeeping are evaluated on detached states, so they steer the solver without
+entering the gradient.
+Solver. Both geodesic steps of SFPRM use the guarded interpolation gSlerp of eq. (12). Per sample,
+the solver keeps the current step size η, the patience counter, the residual, and the residual state. As
+in FPRM, η starts at 1 and is multiplied by the decay factor γ whenever the residual has not improved
+for P = 5 consecutive iterations. The loop halts when the residual drops below tolerance, when η
+falls below the floor ηmin , or when the iteration budget is exhausted.
+B.4
+
+E VALUATION PROTOCOL
+
+All tasks are scored by exact accuracy (Pass@1 for Maze-Hard and Sudoku-Extreme and Pass@2
+for ARC-1 and ARC-2): a puzzle counts only if every cell is correct, i.e. the whole board or the
+whole path. We report the final exact test accuracy, except that the SFPRM run on the 1k×1000
+21
+
+Table 3: Hyperparameters and learned scalars of the SFPRM runs in Section 4. SudokuExtreme values are for the epoch-15,000 run, while values in parentheses are for the 12,000-epoch
+constant-schedule run. All convolutions are depthwise and bias-free. For the per-channel step sizes
+αA , αM and the per-dimension QK scale sqk , cells give the mean for layer 1 / layer 2, and the range
+row gives the minimum and maximum over all channels of both layers. On ARC, a linear Q-head
+on a detached state copy only breaks ties in Pass@K.
+
+Data and schedule
+base puzzles × augmentations
+sequence length / vocabulary
+test set
+epochs
+optimizer steps
+global batch size
+
+Maze-Hard
+
+Sudoku-Extreme
+
+ARC-AGI-1
+
+Mini-ARC
+
+1,000 × 1
+900 / 6
+1,000 mazes
+60,000
+78,125
+
+5,000 × 200
+81 / 11
+422,786 puzzles
+15,000 (12,000)
+97,656 (78,125)
+768
+
+960 × 1,000
+900 / 12
+400 tasks
+100,000
+518,226
+
+149 × 100
+25 / 12
+149 tasks
+100,000
+68,993
+
+Optimization
+optimizer
+Muon lr / momentum
+AdamW lr
+LR schedule
+warmup steps
+weight decay
+puzzle-embedding lr / wd
+EMA rate
+
+constant
+200
+10−2 / 0
+
+Backbone
+hidden / heads / MLP expansion
+H_cycles / L_cycles / L_layers
+BPTT window K (n_back)
+puzzle-embedding length
+16
+positional encoding
+conv branch
+1-D causal, k = 4
+trainable parameters
+Solver and regularization
+halting tolerance τ
+patience P / floor ηmin
+readout
+max_iter (train / eval)
+step-size decay γ (train / eval)
+Q-head loss weight
+weight dropout
+variational dropout
+
+Muon + AdamW
+5 × 10−3 / 0.95
+1 × 10−3
+cosine to 0.87× (const.)
+constant
+200 (2,000)
+0
+0.1
+10−3 / 0
+10−2 / 0
+0.999
+
+0.50 / 0.54
+
+MLP step size αM , init. 0.5
+
+0.48 / 0.58
+
+QK scale sqk , init. 1
+
+1.56 / 1.40
+
+10−2 / 0
+
+16
+
+16
+1
+RoPE
+none (2-D, k = 3)
+1-D causal, k = 4 1-D causal, k = 4
+6.83M
+0.01
+5 / 0.001
+unnormalized head, scale sz
+12 / 35,000
+8 / 48
+0.9 / 0.99
+0.9 / 0.9
+0
+0.5
+0.1
+0.05
+0.1
+0.1
+
+0.575
+75.8
+
+attention step size αA , init. 0.5
+
+constant
+0
+
+512 / 8 / 4
+3/6/2
+6
+
+24 / 1,000
+0.9 / 0.99
+0
+0.1
+0.1
+
+Learned scalars at the evaluated checkpoint
+input injection λ, init. 0.1
+logit scale sz , init. 16
+
+2.5 × 10−3 / 0.95
+
+0.1, fixed (0.470)
+88.9 (75.8)
+0.41 / 0.50
+(0.49 / 0.42)
+0.47 / 0.47
+(0.48 / 0.64)
+1.11 / 0.95
+(0.86 / 1.00)
+
+8 / 200
+0.9 / 0.9
+0.5
+0.05
+0.2
+
+0.334
+206.0
+
+0.436
+79.0
+
+0.44 / 0.46
+
+0.41 / 0.47
+
+0.49 / 0.67
+
+0.54 / 0.71
+
+1.31 / 1.53
+
+1.07 / 1.06
+
+Sudoku build is reported at both its best and its final evaluation because it collapses between them
+(Table 4). The published rows of Table 2 are taken from the respective papers.
+
+C
+
+A DDITIONAL R ESULTS , A BLATIONS , AND A NALYSIS
+
+This section provides the results that complement Section 4: the Sudoku-Extreme training dataset
+ablation (Appendix C.1), the Sudoku-Extreme and Maze-Hard counterparts of the convergence analyses of Section 4.2 (Appendix C.2), the learned scalars over training (Appendix C.3), additional
+results on the geometry of the computation (Appendix C.4), and the study of alternative fixed-point
+solvers at inference (Appendix C.5).
+C.1
+
+T RAINING - BUILD ABLATION
+
+Table 4 compares SFPRM with an FPRM control trained under the same budget on the two SudokuExtreme builds described in Appendix B.1. The 5k×200 does not seem to provide benefits for
+22
+
+mean halt (14436/14447), t = 147
+
+FPRM
+SFPRM
+
+0.25
+
+0.50
+
+0.00
+
+10 1
+
+10 1
+
+0
+
+0
+
+10
+
+10
+
+¿ = 0:1
+
+¿ = 0:01
+
+¡2
+
+10 ¡3
+
+FPRM
+SFPRM
+
+0.25
+
+0.00
+
+10 ¡1
+
+mean halt (166/512), t=254
+mean halt (422/512), t=89
+
+0.75
+
+0.56
+0.54
+
+10 0
+¿ = 0:1
+
+¿ = 0:01
+
+¡2
+
+10 ¡3
+
+10 ¡3
+10 ¡4
+
+10 ¡5
+
+10 ¡5
+
+10 ¡6
+
+10 ¡6
+50
+
+100
+
+150
+
+200
+
+250
+
+300
+
+350
+
+400
+
+¿ = 0:01
+
+10 ¡2
+
+10 ¡5
+
+0
+
+¿ = 0:1
+
+10 ¡1
+
+10 ¡4
+
+10 ¡4
+
+FPRM
+SFPRM
+
+mean halt (14441/14447), t = 44
+
+10 1
+
+10 ¡1
+10
+
+0.58
+
+0.52
+
+halting residual r
+
+test accuracy
+
+mean halt (422/512), t=89
+
+0.50
+
+10
+
+halting residual r
+
+1.00
+
+mean halt (452/512), t=33
+
+0.75
+
+halting residual r
+
+test accuracy
+
+1.00
+
+test Pass@1
+
+0.60
+
+10 ¡6
+
+0
+
+fixed-point iteration t
+
+50
+
+100
+
+150
+
+200
+
+250
+
+300
+
+350
+
+400
+
+fixed-point iteration t
+
+(a) Sudoku-Extreme, learned λ = 0.47 (left) and fixed λ = 0.1 (right)
+
+0
+
+200
+
+400
+
+600
+
+800
+
+fixed-point iteration t
+
+(b) Mini-ARC
+
+Figure 10: Accuracy and halting on Sudoku-Extreme and Mini-ARC. Open-loop rollouts of
+FPRM (amber) and SFPRM (blue). (a) 512 Sudoku test sequences of the released FPRM checkpoint
+and of SFPRM with the learned λ = 0.47 (left) and with λ fixed at 0.1 (right, the run in Table 2). (b)
+All 14,447 Mini-ARC test rows (149 tasks, 100 augmentations each) over 1000 iterations, for the
+runs in Table 2. Top: exact accuracy of the decoded state (a) and task-level Pass@1 (b). Dotted lines
+and stars mark each model’s mean halt iteration, labelled with how many sequences halt. Bottom:
+every sequence’s halting residual (thin) and its median (heavy) against its own threshold (τc =0.01
+chordal for SFPRM, τE =0.1 for FPRM).
+FPRM, however for SFPRM it removes the collapse happening when training with the 1k×1000
+build between its best and its final checkpoint.
+C.2
+
+C ONVERGENCE AND HALTING
+
+For Sections 4.2 and 4.3 each trained Table 4: Exact accuracy on Sudoku-Extreme for SFmodel is rolled with halting disabled and PRM vs. FPRM at matched backbone (6.83M trainwithout segment resets, in fp32, for a able parameters), data, global batch (768), and optifixed budget of Nmax = 400 itera- mizer steps/epochs (78,125/12,000). “1k × 1000” and
+tions on n = 512 uniformly sampled “5k×200” are the number of distinct base puzzles times
+test sequences from Sudoku-Extreme and the augmentations per puzzle. The SFPRM 1k run is
+Nmax = 1000 on the full Maze-Hard given at both its best and checkpoint because it collapses
+test data. At every iterate zi the model’s between them, which the 5k build fixes. For the 5k run
+readout head decodes the board, and the final checkpoint is also the best. The FPRM rows fall
+we record exact and per-token accuracy well below the 94.2% reported for FPRM in Table 2.
+together with the residual each solver
+tests: the worst-token chordal
+ residual Model
+Setting
+Sudoku-Ext.
+rc,i = maxt 1 − ⟨zi,t , zei,t ⟩ with τc =
+FPRM
+Sudoku
+1k×1000
+78.5%
+0.01 for SFPRM, and the worst-token
+FPRM
+Sudoku 5k×200
+78.4%
+relative residual rE,i = maxt ∥zi,t −
+SFPRM
+Sudoku
+1k×1000
+(best
+checkpoint)
+87.0%
+zei,t ∥∞ /∥e
+zi,t ∥∞ with τE = 0.1 for
+12.2%
+FPRM, where e
+zi = Fθ (zi ; x) is each SFPRM Sudoku 1k×1000 (final checkpoint)
+SFPRM Sudoku 5k×200
+92.8%
+model’s proposal. A sequence counts as
+halted at the first iteration from which its
+residual stays below its own threshold. Halt iterations are reported per sequence (mean over the
+sequences that halt), whereas the deployed evaluator halts a whole batch on its worst sequence, so
+the per-sequence counts are idealized costs. Every FPRM rollout is generated using the released
+checkpoints from Movahedi et al. (2026).
+Halting. Figure 10 shows the two Sudoku runs of Table 3 (one that reached 92.8% and one 96.6%
+exact accuracy) against FPRM. With the learned λ = 0.47 (left), the median residual of SFPRM
+drops below τc within a few dozen iterations, whereas FPRM’s decays roughly geometrically over
+the whole window. 452 of the 512 sequences halt for SFPRM, at a mean of 33 iterations, against
+422 at a mean of 89 for FPRM. Exact accuracy is still rising after the mean halt for both models,
+so on this task the threshold fires before the population has finished improving. With λ fixed at 0.1
+23
+
+0.8
+
+10 ¡2
+
+0.6
+
+same fixed point
+
+10 ¡3
+0.4
+
+10 ¡4
+10 ¡5
+
+token accuracy
+
+10
+
+0.2
+
+10 ¡6
+0.0
+
+0.2
+
+0.4
+
+0.6
+
+principal direction 2
+
+spread between init [rad]
+
+1.0
+¡1
+
+0.0
+1.0
+
+0.8
+
+¸ = 0:7
+
+20
+0
+
+0
+
+¡20
+
+¡20
+
+¡20
+
+¡40
+
+¡40
+
+¡40
+
+¡50
+
+0
+
+20
+
+¡25
+
+50
+
+principal direction 1
+
+1.00
+
+40
+
+0
+
+¸ 2 end points
+
+¸ = 0:9
+60
+
+40
+
+20
+
+injection fraction ¸
+one end point
+
+¸ = 0:575
+z⋆
+z0
+halt
+
+40
+
+40
+
+0
+
+0
+
+0.50
+
+¡20
+
+0.25
+
+¡40
+¡50
+
+25
+
+principal direction 1
+
+0.75
+
+20
+
+0
+
+50
+
+¡60
+
+token accuracy
+
+¸ = 0:1
+
+trained ¸
+
+10 0
+
+0.00
+¡50
+
+principal direction 1
+
+0
+
+50
+
+principal direction 1
+
+Figure 11: Global convergence under input injection on Maze-Hard (SFPRM, learned λ =
+0.575), analogue to Figure 4. (left) The largest angle between the end states of eight initializations
+of the raw map (teal: all coincide, coral: ≥ 2 end states), and the token accuracy of the end state
+(indigo, right axis), as a function of λ. (right) Trajectories at four values of λ for a single Maze
+example: the top-2 principal plane of the trajectories from the eight initializations z0 (squares)
+through z⋆ (star; circles: first iteration with rc,i < τc ). The color shows the token accuracy of the
+state decoded at each position (dashed red: exact-match region).
+
+0.575
+
+QK scale sqk (mean)
+
+logit scale sz
+
+injection fraction ¸
+0.6
+
+0.6
+
+75.8
+
+80
+
+1.4
+
+0.4
+
+1.00
+
+0.470
+
+0.4
+
+60
+
+0.3
+
+40
+
+0.95
+40
+1.2
+
+0.2
+
+0.2
+
+20
+0.0
+
+75.8
+
+80
+
+0.5
+60
+
+QK scale sqk (mean)
+
+logit scale sz
+
+injection fraction ¸
+
+0
+
+30k
+
+60k
+
+0
+
+eigen LR (mean)
+0.60
+
+layer 1
+layer 2
+
+1.0
+0
+
+30k
+
+60k
+
+0
+
+eigen LR (min)
+
+30k
+
+0.4
+0.2
+
+2.0
+
+30k
+
+60k
+
+training step
+
+60k
+
+30k
+
+60k
+
+0
+
+training step
+
+layer 1 attention ®A
+layer 1 MLP ®M
+layer 2 attention ®A
+
+0.85
+0
+
+30k
+
+60k
+
+0.0
+
+0.55
+
+¡0.5
+
+0.50
+
+¡1.0
+
+0.45
+
+¡1.5
+
+30k
+
+60k
+
+0
+
+training step
+
+30k
+
+60k
+
+training step
+
+layer 2 MLP ®M
+
+¡2.0
+
+(a) Maze-Hard
+
+30k
+
+60k
+
+eigen LR (max)
+2.0
+
+1.5
+
+1.0
+
+0.5
+0
+
+30k
+
+60k
+
+0
+
+training step
+
+layer 1 attention ®A
+layer 1 MLP ®M
+layer 2 attention ®A
+
+checkpoint value (EMA)
+initial value
+
+0
+
+eigen LR (min)
+
+0.60
+
+0.5
+0
+
+0
+
+eigen LR (mean)
+
+1.0
+
+¡0.4
+0
+
+30k
+
+1.5
+
+¡0.2
+
+0.50
+
+0
+
+0.5
+
+0.55
+0.0
+
+0.0
+
+eigen LR (max)
+2.5
+
+0.90
+20
+
+0.1
+60k
+
+layer 1
+layer 2
+
+30k
+
+60k
+
+training step
+
+layer 2 MLP ®M
+checkpoint value (EMA)
+initial value
+
+(b) Sudoku-Extreme
+
+Figure 12: Learned parameters of SFPRM during training. Per task, top row: injection fraction
+λ, logit scale sz , and QK scale sqk (mean over its 64 dimensions, per layer). Bottom row: the eigen
+learning rates αA (attention) and αM (MLP) of both layers, as the mean, minimum and maximum
+over the 512 hidden dimensions.
+
+(right) the residual of SFPRM decays far more slowly and hovers near τc , so only 166 sequences
+halt within 400 iterations, at a mean of 254, although the decoded accuracy is higher. In both runs
+the puzzles a solver halts on are solved in 99.7–100% of cases, so on Sudoku a halt certifies the
+answer, whereas a missing halt does not certify a failure.
+Fixed-point uniqueness. Figure 11 repeats the global-convergence test of Figure 4 on the Maze
+model (learned λ = 0.575), running the raw map without damping for 1000 steps. The contractive
+regime of Theorem 2 exists here too, but it is narrower: all eight initializations reach the same fixed
+point only for λ between about 0.6 and 0.8. The trained λ sits at the lower edge of this band, where
+some mazes have a single end point and others do not, and below λ ≈ 0.5 no maze does. For
+λ ≥ 0.9 the end states spread again, while the token accuracy of the fixed point falls to 0.7–0.8
+as the input pulls the state onto itself. On the maze of panel (b) the raw map does not reach the
+tolerance at the trained λ within 1000 steps, although it decodes the maze exactly throughout; it is
+the damped solver that halts this model. At λ = 0.7 the raw map converges inside the exact-match
+region, and at λ = 0.9 the eight paths run straight to one point that no longer solves the maze.
+24
+
+C.3
+
+E IGEN LR AND OTHER LEARNABLE PARAMETERS DURING TRAINING
+
+Figure 12 tracks the learned scalars of SFPRM during training on Maze and Sudoku. Both models
+raise the injection fraction from 0.1 to λ = 0.575 on Maze and λ = 0.470 on Sudoku, with most
+of the increase in the first 30k of 78k training steps. This moves them toward the strong-injection
+regime of Theorem 2. On Sudoku, all eight initializations already reach the same fixed point on
+72% of puzzles at the learned λ (Figure 4). The logit scale sz grows almost linearly from 16 to
+76, at nearly the same rate on both tasks, and is still rising when training ends. The eigen learning
+rates keep means near their initial 0.5, similarly as noted by Loshchilov et al. (2025). However,
+individual dimensions spread widely, from negative values, which move the state away from the
+sub-layer output, to values up to 2.6.
+
+C.4
+
+T HE GEOMETRY OF THE COMPUTATION
+
+Qualitative results (Figures 7 and 21 to 24). We unroll several test puzzles from each task open
+loop, for 40 iterations on Maze and Sudoku (rendered at t = 0, 2, 11, 39) and 200 on Mini-ARC
+(rendered at t = 0, 3, 13, 52, 199). The decoded board is the per-cell argmax of the readout. The
+anchor map shows, per cell, the angle ∠(zi,t , x̂i ) between the iterate and its unit-normalized input
+embedding x̂i (token plus position), on a colour scale normalized to the minimum and maximum
+angle over that puzzle’s whole rollout, so that a colour means the same angle in every frame of
+a strip. The same quantity is computed for FPRM from its unnormalized state. SFPRM’s anchor
+angles separate the roles of the cells far more cleanly than FPRM’s: on Sudoku, clue cells end 35◦
+closer to their anchors than blank cells, against 6◦ for FPRM, and on Mini-ARC the cells a task must
+rewrite end furthest from their anchors (AUC 0.81 for changed vs. unchanged cells, averaged over
+tasks), whereas FPRM’s ordering flips from task to task (AUC 0.51).
+Anchor angles by cell class (Figures 6, 15
+and 16). For four Sudoku and Maze test puzzles,
+we track the anchor angle of every cell throughout the unrolling, grouped by cell class (clues and
+blanks on Sudoku; walls, free cells that stay empty,
+free cells that become path, start, and goal on
+Maze). In the figures, the heavy lines are class
+means, whilst the thin lines show the individual
+cells’ anchor angles. The histograms on the righthand side of each figure show the distribution at
+the end of the unrolling (i = 399 on Sudoku, 999
+on Maze). For FPRM the angle is that of the normalized state.
+
+solved puzzles (filled)
+
+unsolved (hatched)
+
+(a) SFPRM (438 solved / 74 unsolved)
+
+(b) FPRM (438 solved / 74 unsolved)
+
+wall
+
+wall
+
+start
+
+start
+
+goal
+
+goal
+
+free (empty)
+
+free (empty)
+
+80
+
+100
+
+120
+
+50
+
+60
+
+80
+
+70
+
+90
+
+100
+
+∠(z ; x^) [deg]
+∠(z ; x^) [deg]
+Trajectories on the sphere (Figure 14). We draw
+each token’s path in the frame spanned by the inFigure 13: Final anchor angle on solved and
+ference unrolling trajectory’s two leading singuunsolved mazes (Maze-Hard analogue of Figlar directions and its input anchor x. This way
+ure 9). Per-class angle to the anchor at the end
+the anchor is exact rather than a near-zero proof the rollout over 512 test mazes (438 solved,
+jection. We only show the cell trajectories that
+74 unsolved), for (a) SFPRM and (b) FPRM’s
+capture the most trajectory variance. Over 98%
+normalized state. Filled: solved; hatched: unof each trajectory’s variance lies in that frame, so
+solved. Unlike on Sudoku, the distributions
+every token effectively moves on one great circle,
+overlap for every class, so the final angle does
+as the geodesic steps of Algorithm 1 prescribe,
+not predict correctness.
+and the anchor sits nearly orthogonal to that circle (|⟨xt , v1,2 ⟩| ≈ 0.05). The input injection pulls from far off the plane in which the computation
+happens, explaining how a small λ can anchor the hidden state without dictating it.
+T
+
+T
+
+Solved versus unsolved (Figure 9). For 128 Sudoku test puzzles we compare the distribution of
+the final anchor angle (SFPRM) or final norm (FPRM) of clue and blank cells between solved and
+unsolved puzzles. The same comparison on 512 test mazes (Figure 13) shows no separation for
+either model.
+25
+
+One token per panel, each in its own 3-frame
+init z0
+
+^
+input anchor x
+
+last iterate zT (stationary)
+
+sample halts (max ½ < ¿ = 0:01)
+t
+
+token 64 (blank)
+
+token 55 (blank)
+
+token 93 (clue)
+
+token 73 (clue)
+
+98.7% of trajectory variance
+in this frame
+
+98.6% of trajectory variance
+in this frame
+
+99.5% of trajectory variance
+in this frame
+
+99.5% of trajectory variance
+in this frame
+
+0
+
+5
+
+10
+
+15
+
+20
+
+25
+
+30
+
+fixed-point iteration t
+
+One token per panel, each in its own 3-frame
+init z0
+
+last iterate zT (stationary)
+
+input anchor ^
+x
+
+sample halts (max ½ < ¿ = 0:01)
+t
+
+token 682 (wall)
+
+token 522 (free (stays empty))
+
+token 520 (free (becomes path))
+
+token 470 (goal)
+
+99.7% of trajectory variance
+in this frame
+
+99.6% of trajectory variance
+in this frame
+
+99.7% of trajectory variance
+in this frame
+
+99.8% of trajectory variance
+in this frame
+
+0
+
+200
+
+400
+
+600
+
+800
+
+fixed-point iteration t
+
+Figure 14: One SFPRM trajectory per cell class, on the sphere (Sudoku left, Maze right). For
+every cell class we draw the token whose 3-frame captures the most trajectory variance. The frame
+is spanned by the trajectory’s two leading singular directions and the anchor xt , which sits at the
+pole. xt is nearly orthogonal to the plane of the trajectory (|⟨xt , v1,2 ⟩| ≈ 0.05). Arcs are great
+circles between projected iterates. The colour shows the iteration index.
+
+C.5
+
+F IXED - POINT SOLVERS AT INFERENCE
+
+Both SFPRM and FPRM are trained with a damped fixed-point iteration, but at inference any method
+that finds a fixed point of Fθ (· ; x) can take its place. We run four solvers (including the default one)
+on the trained models, without retraining and without changing the architecture (see Section 4.2).
+C.5.1
+
+S OLVERS
+
+All four solvers seek a fixed point of the same trained map. The model weights are unchanged, and
+only the default solver (adaptive) was used during training. At test time the input embedding x is
+computed once and every solver runs the loop
+
+ei = Fθ (zi ; x),
+z
+stop if ri < τ,
+zi+1 = update zi , e
+zi , history ,
+starting from a random z0 . Across solvers, only the update function differs. Each step evaluates Fθ
+once, and the same evaluation gives the halting residual, so the number of steps is the compute spent.
+SFPRM halts on the chordal residual ri = rc,i of eq. (9) with τc = 0.01, and FPRM on the pertoken relative residual ri = rE,i = maxt ∥zi,t − zei,t ∥∞ /∥e
+zi,t ∥∞ (eq. (4)) with τE = 0.1. We write
+ei −zi for the residual vector. Two operators adapt the updates to each model’s state space: the
+gi := z
+26
+
+FPRM
+
+FPRM
+
+90 ± orthogonal
+
+85
+
+blank
+
+80
+
+clue
+
+∠(zt ; x^) [deg]
+
+90
+
+75
+
+90
+
+blank
+
+80
+
+clue
+
+75
+
+100
+
+∠(zt ; x^) [deg]
+
+90 ± orthogonal
+
+90
+
+blank
+
+80
+70
+60
+
+90 ± orthogonal
+
+90
+
+blank
+
+80
+70
+60
+
+clue
+
+50
+0
+
+25
+
+50
+
+75
+
+100
+
+125
+
+150
+
+clue
+
+50
+
+at t = 399
+
+0
+
+fixed-point iteration t
+
+50
+
+100
+
+150
+
+200 at t = 399
+
+fixed-point iteration t
+
+(a) Sudoku test puzzle 0
+
+(b) Sudoku test puzzle 1
+
+90
+
+90
+
+±
+
+95
+
+orthogonal
+
+85
+
+blank
+
+80
+
+clue
+
+∠(zt ; x^) [deg]
+
+95
+
+halt t = 27
+
+FPRM
+halt t = 75
+
+FPRM
+
+90 ± orthogonal
+
+90
+85
+
+blank
+
+80
+
+clue
+
+75
+
+75
+at t = 399
+
+halt t = 9
+
+SLFPR
+
+90
+
+100
+90 ± orthogonal
+
+∠(zt ; x^) [deg]
+
+100
+
+at t = 399
+
+SLFPR
+halt t = 12
+
+∠(zt ; x^) [deg]
+
+at t = 399
+
+SLFPR
+halt t = 155
+
+halt t = 125
+
+100
+
+∠(zt ; x^) [deg]
+
+90 ± orthogonal
+
+85
+
+at t = 399
+
+SLFPR
+
+∠(zt ; x^) [deg]
+
+halt t = 24
+
+95
+
+halt t = 16
+
+∠(zt ; x^) [deg]
+
+95
+
+blank
+
+80
+70
+60
+
+90
+
+90 ± orthogonal
+
+blank
+
+80
+70
+60
+clue
+
+clue
+
+50
+0
+
+20
+
+40
+
+60
+
+80
+
+50
+
+at t = 399
+
+0
+
+10
+
+20
+
+30
+
+fixed-point iteration t
+
+fixed-point iteration t
+
+(c) Sudoku test puzzle 2
+
+(d) Sudoku test puzzle 3
+
+40 at t = 399
+
+Figure 15: Anchor angles by cell class on Sudoku-Extreme. Four test puzzles (Maze in Figures 6
+and 16). In each pair FPRM is above and SFPRM below. Thin lines are individual cells, thick
+lines class means, the vertical line the halt iteration, and the margin the distribution at the end of the
+rollout. SFPRM rotates the clues to ≈52◦ from their anchors within about 20 iterations and leaves
+the blanks near orthogonal, whereas FPRM’s normalized states settle within the first few iterations
+with clues and blanks only ≈6◦ apart.
+
+interpolation Iη (a, b) moves a a fraction η of the way to b, along the great circle token by token for
+SFPRM, Iη = Slerpη as in eq. (7), and along the straight line for FPRM, Iη (a, b) = (1 − η)a + ηb
+as in eq. (3); the projection Π applies Norm to every token for SFPRM and is the identity for FPRM.
+ei ) with η0 = 1. The step size is multiplied by γ = 0.99
+Adaptive (default). zi+1 = Iηi (zi , z
+whenever the residual has not improved for P = 5 consecutive steps while it is still above τ . Both
+models are trained and evaluated with this solver.
+Fixed step. The same update with ηi = 1 throughout, that is, plain fixed-point iteration zi+1 = e
+zi .
+27
+
+FPRM
+90 ± orthogonal
+
+free, becomes path
+free, stays empty
+
+80
+goal
+wall
+start
+
+70
+
+90
+
+90 ± orthogonal
+
+free, becomes path
+free, stays empty
+
+80
+goal
+wall
+start
+
+70
+
+60
+
+60
+
+at t = 999
+
+SFPRM
+
+110
+free, becomes path
+
+100
+90 ± orthogonal
+
+90
+
+halt t = 833
+
+free, stays empty
+
+∠(zt ; x^) [deg]
+
+110
+
+at t = 999
+
+SFPRM
+120
+
+halt t = 87
+
+120
+
+∠(zt ; x^) [deg]
+
+halt t = 96
+
+90
+
+100
+
+∠(zt ; x^) [deg]
+
+halt t = 73
+
+∠(zt ; x^) [deg]
+
+FPRM
+
+wall
+goal
+start
+
+80
+
+free, becomes path
+
+100
+90 ± orthogonal
+
+90
+
+start
+goal
+
+70
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+at t = 999
+
+0
+
+200
+
+fixed-point iteration t
+
+400
+
+at t = 999
+
+800
+
+(b) Maze test maze 1
+FPRM
+
+orthogonal
+
+∠(zt ; x^) [deg]
+
+90
+
+90
+
+±
+
+free, becomes path
+free, stays empty
+
+80
+goal
+wall
+start
+
+70
+
+halt t = 35
+
+FPRM
+
+90 ± orthogonal
+
+90
+
+free, becomes path
+free, stays empty
+
+80
+goal
+wall
+start
+
+70
+
+60
+
+60
+at t = 999
+
+SFPRM
+halt t = 427
+
+free, stays empty
+
+110
+free, becomes path
+
+100
+90 ± orthogonal
+
+90
+
+∠(zt ; x^) [deg]
+
+110
+
+at t = 999
+
+SFPRM
+120
+
+halt t = 20
+
+∠(zt ; x^) [deg]
+
+600
+
+fixed-point iteration t
+
+(a) Maze test maze 0
+
+∠(zt ; x^) [deg]
+
+wall
+
+80
+
+70
+
+120
+
+free, stays empty
+
+wall
+goal
+start
+
+80
+70
+
+free, stays empty
+free, becomes path
+
+100
+90
+
+90
+
+±
+
+orthogonal
+
+wall
+goal
+start
+
+80
+70
+
+0
+
+100
+
+200
+
+300
+
+400
+
+500
+
+at t = 999
+
+0
+
+fixed-point iteration t
+
+10
+
+20
+
+30
+
+40
+
+at t = 999
+
+fixed-point iteration t
+
+(c) Maze test maze 2
+
+(d) Maze test maze 3 (fig. 6)
+
+Figure 16: Anchor angles by cell class on Maze-Hard. Four test puzzles, FPRM above and SFPRM below in each pair, with the conventions of Figure 15. On every maze SFPRM settles walls at
+≈90◦ , free cells that stay empty at ≈113◦ , free cells that become path at ≈102◦ , and start and goal
+at ≈80◦ , whereas FPRM keeps all classes within 70–87◦ and separates the two free-cell classes by
+only a few degrees.
+Anderson acceleration (Anderson, 1965; Walker & Ni, 2011) replaces the latest state by the combination of the last m + 1 states whose residuals cancel best. With the columns of ∆Gi and ∆ e
+Zi
+the m differences of consecutive stored residuals and images,
+
+e i ωi ,
+ω i = arg minm ∥gi − ∆Gi ω∥22 + δ∥ω∥22 ,
+zi+1 = Π e
+zi − ∆ Z
+ω∈R
+
+with a small ridge δ > 0. The least-squares problem learns, from the recent iterates alone, how the
+residual responds to a change of state, and the combination removes the components that the plain
+step overshoots, so an oscillation across the fixed point, for example, cancels between consecutive
+states. We use memory m = 3.
+Broyden’s method (Broyden, 1965), the solver commonly used for deep equilibrium models (Bai
+et al., 2019), takes quasi-Newton steps on g(z) = Fθ (z; x) − z with an estimate Bi of the inverse
+Jacobian of g:
+
+zi+1 = Π zi − Bi gi ,
+
+Bi = Bi−1 +
+
+28
+
+(si − Bi−1 yi ) s⊤
+i Bi−1
+,
+⊤
+si Bi−1 yi
+
+Table 5: Inference-time fixed-point solvers on the trained models. Every example runs 1000
+steps from its own random start, shared by the four solvers; each step is one evaluation of Fθ , and
+an example halts at the first iterate with residual below τ . Halting: share of examples that halt (%),
+median and mean halting step over those, and mean F evaluations over all examples. Exact at halt:
+accuracy over all examples, exact binomial test against the default solver (p), and accuracy among
+halted examples. Open loop: accuracy with halting disabled, at its best step and at t = 1000. Maze:
+all 1000 test mazes; Sudoku: 1000 puzzles evenly spaced over the test set. Best within each block:
+exact accuracy, share halted, fewest halting steps.
+Halting
+
+Exact at halt (%)
+
+% med. t mean t F evals
+
+Solver
+
+all
+
+SFPRM, Maze (λ=0.575, τc =0.01)
+Adaptive (default) 99.2
+27
+96.3
+Fixed, η=1
+63.1
+23
+25.8
+Anderson, m=3 100.0
+13
+13.8
+Broyden, m=5
+99.4
+14
+14.0
+
+104.5
+386.3
+14.8
+20.9
+
+87.8
+87.8
+86.8
+87.4
+
+SFPRM, Sudoku (λ=0.1, τc =0.01)
+Adaptive (default) 75.0
+435 469.9
+Fixed, η=1
+0.0
+–
+–
+Anderson, m=3
+95.4
+37
+71.3
+Broyden, m=5
+89.8
+24
+49.9
+
+603.5
+1001.0
+115.1
+147.8
+
+FPRM, Maze (τE =0.1)
+Adaptive (default) 95.9
+Fixed, η=1
+51.4
+Anderson, m=3 100.0
+Broyden, m=5
+98.6
+
+55
+32
+17
+16
+
+129.3
+51.9
+18.0
+21.1
+
+FPRM, Sudoku (τE =0.1)
+Adaptive (default) 91.5
+Fixed, η=1
+43.8
+Anderson, m=3
+89.2
+Broyden, m=5
+18.3
+
+50
+39
+34
+344
+
+125.0
+82.6
+91.1
+389.7
+
+p halted
+–
+1.00
+0.04
+0.39
+
+87.9
+87.3
+86.8
+87.9
+
+Open loop (%)
+peak (t) t=1000
+87.8 (20)
+87.8 (20)
+87.4 (19)
+87.9 (16)
+
+87.8
+87.8
+86.7
+51.5
+
+95.9
+–
+93.2 <0.001
+95.3
+0.34
+90.0 <0.001
+
+100.0 95.9 (933)
+– 93.2 (973)
+99.9 95.3 (909)
+99.7 69.6 (27)
+
+95.9
+93.2
+95.3
+1.5
+
+166.0
+513.7
+19.0
+35.8
+
+86.0
+85.4
+86.1
+86.0
+
+–
+0.07
+1.00
+1.00
+
+86.8 86.1 (102)
+92.0 85.8 (24)
+86.1 86.0 (64)
+87.1 86.1 (19)
+
+86.0
+85.4
+86.0
+32.8
+
+200.3
+599.2
+190.2
+889.3
+
+88.0
+–
+80.9 <0.001
+88.8
+0.38
+14.7 <0.001
+
+96.2 88.1 (972)
+100.0 80.9 (932)
+99.6 89.0 (984)
+79.2
+13.6 (8)
+
+88.1
+80.9
+89.0
+0.6
+
+where si = zi − zi−1 and yi = gi − gi−1 . Starting from B0 = −I, the estimate is stored as the last
+m = 5 rank-one corrections.
+Neither Anderson’s nor Broyden’s method computes a Jacobian or any gradient. Both are quasiNewton methods that infer curvature from secants, the observed changes of state and residual between steps, so each step still costs one evaluation of Fθ . With an empty memory both take exactly
+the fixed step. Both act on the whole state of an example at once, all tokens flattened into one vector,
+with one history per example in a batch. Their extrapolated points leave the sphere and are projected
+back by Π. The extra work per step is a few vector operations on the state and an m × m linear
+solve, and the extra memory is m stored copies of the state, both small next to an evaluation of Fθ .
+As safeguards, a non-finite extrapolation falls back to the fixed step, and Broyden skips an update
+whose denominator is near zero. Both methods use the step size η = 1 (no damping).
+C.5.2
+
+R ESULTS
+
+We run every solver on all 1000 Maze test examples and on 1000 Sudoku test puzzles spaced evenly
+over the 422,786-puzzle test set, in fp32, with SFPRM at its trained injection fraction (λ = 0.575
+on Maze, λ = 0.1 on Sudoku) and FPRM from its released checkpoints. Each example starts from
+its own random state (uniform on the sphere for SFPRM, the truncated normal of the FPRM solver
+for FPRM), shared by the four solvers, and is iterated for 1000 steps. We then apply the halting rule
+to each example separately: the answer is the first iterate whose residual is below τ , and an example
+that never halts is answered by its iterate at step 1000. Table 5 reports the results, and Figures 5
+and 17 show accuracy and residual over the iterations in the four settings.
+29
+
+0.9
+
+Broyden
+
+0.6
+
+halting residual rt
+
+10
+
+0
+
+¿ = 0:01
+
+10 ¡2
+
+10 ¡4
+median
+75th percentile
+half halted
+
+10 ¡6
+
+1
+
+10
+
+fp32 floor
+
+100
+
+fixed-point iteration t
+
+1000
+
+Adaptive ´0 = 1
+and Anderson
+
+0.86
+
+Fixed ´ = 1
+
+0.84
+Broyden
+0.82
+
+0.8
+Anderson
+
+0.6
+
+10 1
+
+10 1
+¿ = 0:1
+
+10 ¡1
+
+10 ¡3
+
+10 ¡5
+
+10 ¡7
+
+median
+75th percentile
+half halted
+
+1
+
+10
+
+100
+
+fixed-point iteration t
+
+1000
+
+Adaptive ´0 = 1
+Fixed ´ = 1
+
+0.7
+
+0.80
+
+relative residual rt
+
+0.7
+
+exact accuracy
+
+0.8
+
+relative residual rt
+
+exact accuracy
+
+Adaptive ´0 = 1
+Anderson
+Fixed ´ = 1
+
+exact accuracy
+
+0.88
+0.9
+
+Broyden: at most 0.14
+
+¿ = 0:1
+
+10 ¡1
+
+10 ¡3
+
+10 ¡5
+
+10 ¡7
+
+median
+75th percentile
+half halted
+
+1
+
+10
+
+100
+
+1000
+
+fixed-point iteration t
+
+Figure 17: Accuracy and halting residual over the iterations for the remaining settings of Table 5. SFPRM on Sudoku (λ = 0.1, left), FPRM on Maze (middle) and FPRM on Sudoku (right);
+SFPRM on Maze is Figure 5. Same 1000 examples and solvers as the table. Top: exact accuracy
+of the iterate with halting disabled. Bottom: each model’s halting residual, median (solid) and 75th
+percentile (dotted) over the examples, its threshold (dashed), and the iteration by which half of the
+examples have halted (circle).
+
+The undamped step does not halt reliably. The fixed step never reaches τ on 37%, 100%, 49%
+and 56% of the examples in the four settings. For SFPRM on Maze its answers are identical to the
+default solver’s, but on Sudoku it is less accurate for both models. For SFPRM on Sudoku a quarter
+of the puzzles do not halt within 1000 steps.
+Anderson acceleration matches the default solver at a fraction of the cost. Its accuracy at the
+halt is within one point of the default solver’s in all four settings. Anderson halts earlier in every
+setting, with a striking 37 against 435 for SFPRM on Sudoku. Averaged over all examples, this is 9×
+fewer evaluations of Fθ . For FPRM on Sudoku the saving disappears (190 against 200 evaluations):
+10.8% of the puzzles never reach τ under Anderson, and all of them are answered incorrectly.
+Broyden’s method reaches the tolerance threshold quickly but does not stay there. On Maze it
+halts as early as Anderson (14 and 16 median steps), and its halted answers are as accurate as the
+default solver’s. By continuing to iterate beyond the tolerance, however, it leaves the fixed point and
+its accuracy degrades, making it usable only with halting.
+On Sudoku, halting certifies the answer. For SFPRM on Sudoku, 99.7–100% of the puzzles a
+solver halts on are solved exactly, so the accuracy differences come entirely from the puzzles it fails
+to halt on. The same holds less strictly for FPRM (96.2% of the default solver’s halted puzzles
+are solved, 99.6% of Anderson’s). On Maze, halting does not certify the answer: incorrect mazes
+converge too, and for the solvers that halt on almost every example the accuracy among halted
+examples is about the same as the overall accuracy.
+Trajectories in the principal plane. Figure 18 shows the four solvers at the trained λ in the plane
+construction of Figure 4b, on a single test example from each task, from eight initializations. The
+reference z⋆ is Anderson’s end point, a fixed point to fp32 precision that decodes both examples
+exactly. On Maze, Anderson halts at iteration 13 from all eight initializations, the default solver
+crosses the tolerance at a median of 140 iterations but ends 0.06 rad away, and fixed η = 1 never
+crosses it. On the Sudoku puzzle only Anderson halts (median 40), while the default and fixed
+solvers end 0.16 and 0.33 rad from z⋆ and still decode the puzzle exactly. Broyden reaches the
+tolerance as early as Anderson and then leaves from most starts.
+Trajectories in polar coordinates. Figures 19 and 20 follow one token per cell class under each
+solver in the polar view of Figure 5b, for the maze of that panel and for a Sudoku puzzle. The radius
+is the geodesic angle to a common reference, Anderson’s end point after 2000 iterations, a fixed
+point to fp32 precision that decodes both examples exactly. Inward is convergence toward z⋆ , a held
+radius is orbiting, and outward is leaving. Anderson ends within 10−4 degrees of the reference. The
+default solver ends 0.005–0.14◦ away on the mazes and up to 2.1◦ on the Sudoku puzzles, after
+orbiting for hundreds of iterations; fixed η = 1 stays up to 0.64◦ and 4–17◦ away and never halts;
+and Broyden reaches the tolerance first and then leaves to 60–103◦ .
+30
+
+principal direction 2
+
+20
+
+Anderson (m = 3)
+40
+
+20
+
+20
+
+0
+
+0
+
+¡20
+
+¡20
+
+¡40
+
+¡40
+
+¡40
+
+0
+
+¡25
+
+25
+
+0
+
+0
+
+0
+
+principal direction 1
+
+fixed (´ = 1)
+
+Anderson (m = 3)
+15
+
+10
+
+10
+
+5
+
+5
+
+z⋆
+z0
+halt
+
+0
+
+0
+
+¡5
+
+¡5
+
+¡10
+
+¡10
+
+¡10
+
+10
+
+¡15
+
+¡10
+
+50
+
+principal direction 1
+
+Broyden (m = 5)
+20
+
+1.00
+
+10
+
+0.75
+
+0
+
+0.50
+
+¡10
+
+0.25
+
+5
+
+0
+
+0
+
+0
+
+10
+
+¡5
+
+principal direction 1
+
+0.00
+¡50
+
+25
+
+principal direction 1
+15
+
+0.25
+
+¡60
+¡25
+
+25
+
+0.50
+
+¡40
+
+principal direction 1
+15
+
+0.75
+
+¡20
+
+adaptive (´0 = 1)
+
+¡10
+
+1.00
+
+20
+
+¡20
+
+¡15
+
+Broyden (m = 5)
+60
+40
+
+0
+
+¡25
+
+principal direction 2
+
+fixed (´ = 1)
+40
+
+token accuracy
+
+z⋆
+z0
+halt
+
+0
+
+10
+
+¡15
+
+principal direction 1
+
+¡10
+
+0
+
+10
+
+principal direction 1
+
+¡20
+¡20
+
+token accuracy
+
+adaptive (´0 = 1)
+40
+
+0.00
+0
+
+20
+
+principal direction 1
+
+Figure 18: The four solvers in the principal plane through the fixed point, for test example 0 of
+Maze-Hard (top, λ = 0.575) and of Sudoku-Extreme (bottom, λ = 0.1). Axes and markers as in
+Figure 4b, with z⋆ the end point of Anderson acceleration; every solver runs from the same eight
+initializations (squares) and six further starts placed on its plane. Each panel uses the top-2 principal
+directions of that solver’s own iterates, so the background landscapes differ between panels.
+C.6
+
+ARC-AGI-2 R ESULTS
+
+C.7
+
+A LGORITHMIC A BLATIONS
+
+Table 6: SFPRM ablations on Mini-ARC.
+Pass@1 accuracy at an iteration cap of 200. Each
+We compute the Pass@2 on the 120 evaluation row changes one component of the full model.
+tasks of ARC-AGI-2. All models remain far ∆: change relative to the full model.
+from solving the benchmark. The best recurVariant
+Pass@1
+∆
+rent reasoner, TRM, reaches 7.8%, and SFPRM
+SFPRM (full)
+59.1
+–
+reaches 3.8%. The gaps nonetheless amount to
+w/o QK normalization
+26.2
+−32.9
+only a few tasks, so we do not draw strong conw/o damping (η = 1)
+47.7
+−11.4
+clusions from them. At 7M parameters, SFFixed injection fraction (λ = 0.1)
+49.7
+−9.4
+PRM still outperforms reasoning LLMs, includACT halting instead of chordal residual
+54.4
+−4.7
+Fixed eigen learning rates (αA = αM = 0.5)
+55.0
+−4.0
+ing o3-mini-high (3.0%), DeepSeek-R1 (1.3%)
+w/o logit scale (sz = 1)
+55.7
+−3.4
+and Claude 3.7 (0.7%).
+w/o weight normalization
+56.4
+−2.7
+
+Table 6 retrains the Mini-ARC model with one component of SFPRM changed at a time. QK
+normalization is essential, and removing the step damping (η = 1) or fixing the input-injection
+fraction costs 11.4 and 9.4 points, respectively. The remaining changes, including ACT halting in
+place of the chordal residual, cost at most 4.7 points.
+
+D
+
+L IMITATIONS
+
+On the theory side, Theorem 1 certifies a step-size window but not that the patience rule finds it, and
+Theorem 2 covers only strong injection. On the experimental side, every run uses a single seed and
+neither model was tuned beyond FPRM’s recipe: a broader hyperparameter search, stronger regularization, and optimizers that exploit the spherical geometry further would likely improve both. Two
+directions remain open. Attention-free MLP-Mixer blocks have been reported to beat Transformer
+blocks on some of these puzzles (Jolicoeur-Martineau, 2025; Sghaier et al., 2026; Suleymanzade
+et al., 2026); the spherical loop is agnostic to the block and could be combined with them. And
+we have not applied SFPRM to language modeling, where looped Transformers are gaining ground
+(Geiping et al., 2025; Prairie et al., 2026) and where halting on a fixed angular tolerance may be
+most valuable.
+31
+
+wall
+
+empty
+
+path
+
+goal
+
+Adaptive ´0 = 1
+halts at t = 279
+
+Fixed ´ = 1
+no halt in 1000
+
+Anderson
+halts at t = 13
+
+Broyden
+halts at t = 15
+
+0
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+fixed-point iteration t
+
+Figure 19: SFPRM on Maze-Hard: State trajectories in polar coordinates. The four solvers
+(rows, with each one’s halting step) on the maze of Figure 5b, one token per cell class (columns).
+Radius: geodesic angle to the reference fixed point, log-scaled from 0.1◦ at the centre to 180◦ at the
+rim, rings at 1, 10 and 100◦ ; azimuth: the top-2 principal plane of that token’s component orthogonal
+to the reference; square: start, dot: end of the 1000-iteration run; colour: iteration. Anderson ends
+at the centre, the default and fixed steps orbit at a small radius, and Broyden leaves for the rim.
+
+32
+
+clue
+
+blank, early
+
+blank, median
+
+blank, late
+
+Adaptive ´0 = 1
+halts at t = 435
+
+Fixed ´ = 1
+no halt in 1000
+
+Anderson
+halts at t = 34
+
+Broyden
+halts at t = 21
+
+0
+
+200
+
+400
+
+600
+
+800
+
+1000
+
+fixed-point iteration t
+
+Figure 20: SFPRM on Sudoku-Extreme: State trajectories in polar coordinates. A puzzle on
+which the default solver halts at its median step (435); columns: the middle clue cell and the blank
+cells whose decode settles earliest, at the median and last. Anderson and Broyden reach the tolerance
+early, the default solver orbits for hundreds of iterations before halting, fixed η = 1 never halts, and
+Broyden fills the disc after leaving.
+
+33
+
+FPRM
+
+puzzle 0
+
+t=0
+
+puzzle 1
+puzzle 2
+
+SFPRM
+t = 39
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+t=2
+
+t = 11
+
+t = 39
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+t = 39
+
+t=2
+
+t = 11
+
+t = 39
+
+t=2
+
+t = 11
+
+t = 39
+
+1 2294
+77
+1 7 97 5 6
+6 8 7 6= 1given
+5 2 9 7 68 3 41 5 2 9 7 68 3 41
+6 7 9 6board
+9 1digit
+7decoded
+6 6 (top
+6 6 row):
+5 6 3bold
+4 2 4 4 7 6(clue)
+39 1 42 8 5 76 39 1 42 8 5
+1003 9 6 7
+699
+9 6 3since1 t4¡81 5 2 3609 6 7 801 4 8 5 2
+changed
+constraint
+violation
+69 692 6
+14 352 6
+435
+9 9 6 6 2 1 1 1 2 4 2 5 6 8 1 3 9 9anchor
+6 7∠(z
+6 7 1row)
+1 ;8^x2) 9
+8 2 9[deg]
+angle
+per 4
+cell3 5
+(bottom
+2 5 2 2 5 5 5 5 5 2 9 3 8 4 5 3 2 6 8 9 2 3 4 5 t7 1 6 8 9 2 3 4 5 7 1 6
+5 5 5 5555 8 6 6 3 6 3924 5 5 6 1 7 8924 5 3 6 1 7 8924 5 3
+5 5 5 8 6 6 67 8 9 8 6 3 5 3 57 2 9 8 4 1 3 6 57 2 9 8 4 1 3 6 57 2
+6 6 7 6 6 6 33 3 6 7 4 4 5 9 53 2 2 7 6 4 5 9 13 8 2 7 6 4 5 9 13 8
+66 33 6 3 2 3 35 42 8 96 9 9 35 12 8 76 9 4 35 12 8 76 9 4
+
+t=0
+
+5decoded
+6 1 8 3 2 2 (top
+561 83 7 4 7 9 561 83 2 4 7 9
+2 2 5 6 1bold
+8 3 2 4 2= 9given
+2 8 2 8 8board
+8 8 8 8 row):
+9 8 4 1 7digit
+5 7 2 3 3 8(clue)
+4129675 284179763
+122
+1 2 5since9 t7¡21 6755 4 1 8803 9 7858 6 5 4 1 2 3
+changed
+constraint
+violation
+87 8 8 84
+97 3 6 54
+5 6∠(z
+5 2 7row)
+2 8 9 5 8 2 8 8 6 7 4 9 5 6 7 3 1 1anchor
+4 49
+7 ;3^x6) 1
+3 3 1[deg]
+angle
+per 4
+cell4 9
+(bottom
+8 5 8 8 8 1 7 4 2 7 5 8 3 9 1 9 4 2 7 5 8 3 9 1 t8 4 2 7 5 6 3 9 1 8 4 2
+83 84 68 157 13 64 98 957 13 24 28 957 13 24 68 957
+2172 63 8 8 6 8172 43 5 9 5 8172 43 5 9 6 8172 43 5 9 6
+6 8 8 6 8 7 1 24 6 2 6 9 8 5 7 14 6 2 3 9 8 5 7 14 6 2 3 9 8 5 7 14
+2 3 8 7162 38 3 4 5 7162 38 4 9 5 7162 38 9 4 5 7162 38
+
+t = 11
+
+77 3 7 7 8 8 79 79 7 5 2 1 7 83 29 7 4 5 6 1 83 29 7 4 5 6 1 83
+9 9(top6 3
+9 6 7 3 4(clue)
+96
+5 68 6
+525
+5 28 19 6 7 3 4 5 28 19 6 7
+decoded
+board
+row):
+bold8 1
+digit
+3 2 4= 5given
+1 6 6 6constraint
+9 6 2 6violation
+9 4 6 1 7 9changed
+8 t6¡11 7 9 3602 4 5 808 6 1 7100
+932 4 5
+4 6 2∠(z
+5 7 1 8 cell
+2 29 2 96 2 28
+9 3 4 6 6 5 7 9 8since
+9 3 angle
+9 3 4 6 2 5row)
+7 18
+anchor
+2 2 2 2 5 5 5 5 5 5 7 9 8 7 8 6 3 2 5 1 2 8 7 4 t6; ^x3) per
+9 5 1(bottom
+2 8 7 4 6 3 9[deg]
+5 5 5 8 55 55 7 8 3 6 8 39 45 2 6 7 8 1 39 45 2 6 7 8 1 39 45 2
+78 7 71 3 6 68 78 7 51 2 3 94 78 6 51 2 3 94 78 6 51 2 3 94
+1 7 7 8 7788 7 1 4 9 3 3782 9 1 5 9 3 4782 6 1 5 9 3 4782 6
+6869 8 93 3 4239 5 8 17 1 4239 6 8 57 1 4239 6 8 57 1
+
+t=0
+
+1 5294
+27
+8 2 88 2 7
+6 8 7 5= 1given
+5 2 9 7 68 3 41 5 2 9 7 68 3 41
+6 8 9 1board
+9 1digit
+2decoded
+7 2 (top
+8 8 row):
+5 6 8bold
+4 2 4 4 7 6(clue)
+39 1 42 8 5 76 39 1 42 8 5
+922
+9 8 3since1 t4¡81 5752 3 9 806 7 1 485 8 5 2903 9 6 7
+changed
+constraint
+violation
+84 852 7
+14 352 1
+4 8 8 6 8 8 1 1 8 4 1 5 6 8 3 3 9 9anchor
+435
+6 7∠(z
+6 7 1row)
+1 ;8^x2) 9
+8 2 9[deg]
+angle
+per 4
+cell3 5
+(bottom
+8 9 8 8 4 5 1 8 6 2 9 3 3 4 5 3 1 6 8 9 2 3 4 5 t7 1 6 8 9 2 3 4 5 7 1 6
+8 1 8 8924 1 1 6 3 6 7924 5 5 6 1 7 8924 5 3 6 1 7 8924 5 3
+9 8 8 1 1 8 87 8 9 8 6 3 5 6 57 2 9 8 4 1 3 6 57 2 9 8 4 1 3 6 57 2
+8 8 8 1 1 1 13 2 6 7 4 4 5 9 53 2 2 7 6 4 5 9 13 8 2 7 6 4 5 9 13 8
+35 82 8 86 8 8 35 72 7 76 9 4 35 12 8 76 9 4 35 12 8 76 9 4
+
+t=2
+
+19 7 9 712 8 7 89 8 6 612 3 5 59 8 4 612 7 3 59 8 4 612 7 3
+96 9 9919 96 73 1 5284 96 73 1 5284 96 73 1 5284 96
+86 9 6 6 6 56 6 26 2 4 7 7 38 1 26 4 3 9 7 58 1 26 4 3 9 7 58 1
+66 6 6 1 616 2 67 9 3 6 214 5 87 9 6 3 214 5 87 9 6 3 214 5
+15 5 65 75 5 4 12 1 15 47 6 8 12 6 15 97 3 8 42 6 15 97 3 8
+5 75 7 5 4 4 57 4 53 1 7 7 8 62 1 53 8 7 4 9 62 1 53 8 7 4 9 62
+75 57 7 7 7 8 7 21 59 8 4 6 2 7 61 59 4 3 8 2 7 61 59 4 3 8 2 7
+6 6 66 66 3 6 6 3 4 97 85 6 2 1 3 4 27 85 6 1 9 3 4 27 85 6 1 9
+6866 6 3 63 3872 16 5 94 9872 16 3 54 9872 16 3 54
+
+t=0
+
+89 8 1 2 1 1 23 89 1 5 2 6 7 83 29 7 5 6 6 5 83 29 7 4 5 6 1 83
+9 8(top1 3
+9 4 7 3 5(clue)
+22
+2 18 8
+525
+2 48 19 6 7 3 4 5 28 19 6 7
+decoded
+board
+row):
+bold8 1
+digit
+3 2 8= 5given
+2 6 1 7constraint
+1 3 2 1violation
+2 4 6 1 7 9changed
+4 t6¡11 7759 3 2 8805 8 6851 7 9 3 2 4 5
+4 6 2∠(z
+5 7 1 8 cell
+2 14 8 25 1 18
+9 3 4 6 2 5 7 1 8since
+9 3 angle
+9 3 4 6 2 5row)
+7 18
+anchor
+5 1 1 8 8 1 6 3 2 5 1 9 8 7 4 6 3 9 5 1 2 8 7 4 t6; ^x3) per
+9 5 1(bottom
+2 8 7 4 6 3 9[deg]
+7 7 7 8 89 25 2 8 1 8 8 39 45 2 8 1 6 3 39 45 2 6 7 8 1 39 45 2
+28 2 21 8 3 64 78 7 21 2 3 64 78 5 21 2 3 94 78 6 51 2 3 94
+1 6 6 2 6782 2 1 4 9 3 3782 6 1 4 9 3 5782 6 1 5 9 3 4782 6
+2239 1 8 67 8 4239 4 8 17 1 6239 4 8 57 1 4239 6 8 57 1
+
+t=0
+
+puzzle 3
+
+t = 11
+
+89 8 8 712 7 1 49 8 6 612 7 5 59 8 4 612 7 3 59 8 4 612 7 3
+23 8 8284 76 73 1 5284 96 73 1 5284 96 73 1 5284 96
+16 8 1 1 7 28 1 26 2 3 7 7 58 1 26 4 3 9 7 58 1 26 4 3 9 7 58 1
+27 8 8 8 314 3 67 9 8 6 214 5 87 9 6 3 214 5 87 9 6 3 214 5
+82 8 85 87 6 8 12 6 15 47 6 9 42 6 15 97 3 8 42 6 15 97 3 8
+8 63 8 8 8 2 22 1 53 1 7 7 8 62 1 53 8 7 4 9 62 1 53 8 7 4 9 62
+21 89 6 8 8 8 8 21 59 4 4 6 2 7 61 59 4 3 8 2 7 61 59 4 3 8 2 7
+6 6 67 15 1 1 2 3 4 97 85 6 2 1 3 4 27 85 6 1 9 3 4 27 85 6 1 9
+2872 16 1 84 3872 16 5 54 9872 16 3 54 9872 16 3 54
+
+t=0
+
+puzzle 4
+
+t=2
+
+t=2
+
+t = 11
+
+t = 39
+
+5decoded
+6 1 3 1 7 9 (top
+561 83 7 4 2 9 561 73 2 4 8 9
+1 3 5 6 1bold
+8 3 2 4 2= 9given
+7 6 8 5 9board
+9 6 9 9 row):
+3 9 4 1 5digit
+5 7 2 3 2 8(clue)
+4179765 284159763
+699
+1 2 5since9 t7¡81 6 5 4601 2 3 809 7 3 6 100
+changed
+constraint
+violation
+68 6 6 69
+97 3 6 54
+841 2 5
+5 6∠(z
+5 6 7row)
+8 6 9 5 9 1 5 5 1 7 4 9 5 2 2 8 1 1anchor
+4 89
+2 ;3^x6) 1
+8 3 1[deg]
+angle
+per 4
+cell2 9
+(bottom
+1 1 2 1 5 5 1 5 2 7 5 8 3 7 1 8 4 2 7 5 8 3 9 1 t8 4 2 7 5 8 3 9 1 6 4 2
+25 55 55 555 13 24 28 957 13 24 98 957 13 64 28 957
+5175 56 8 6 7 8172 43 5 9 5 8172 43 5 9 6 8172 43 5 9 6
+8 7 7 6 7 7 7 63 6 2 6 8 8 5 7 14 6 9 3 7 8 5 7 14 6 9 2 8 7 5 3 14
+3 9 3 87 9 33 3 4 5 7162 78 4 4 5 9162 38 3 4 5 9162 78
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+4decoded
+4 1 2bold
+4 1(clue)
+1 8 8 7board
+8 5 (top
+2 2 row):
+3 7digit
+6 5 2= 2given
+2 37 95 2 6 4 1 2 97 65 1 3
+1 8 5 4 9 3 3 761 5 5 4 8 7
+2 861 8 8
+387 2
+761 5 9
+4 8 7 2 76
+85 7 4 6 90
+2197
+changed
+constraint
+violation
+75 3 8 82
+112
+35 7 4 32
+1 9 7since3 t5¡91 4 6 2 1 808 7 1 5
+8 6 5[deg]
+2 7 7 7 1 3 8 1 5 1 4 4 9 1 3 8 2 5anchor
+147
+9 2 3 t8; ^x6) 5
+9 2 3row)
+angle
+per 6
+cell4 4
+(bottom
+8 3 6 1 4 1 1 7 6 8 1 3 2 4 6 1 7 2 8 9 3 5 4∠(z
+6 27 1 8 1 3 54 5 17 6
+12 8 8 8 89 24 52 7 7 1 89 34 62 5 7 1 89 34 52 5 7 1 89 34
+7 8 8 29 8 2 28 7 6 2 39 1 1 58 7 6 4 39 1 3 58 7 6 2 39 1 3 58
+2 21 2 27 2 2 2 6 81 5 37 6 5 9 9 81 2 37 6 4 9 6 81 5 37 3 4 6
+23 86 1 87 8 2 23 86 2 47 4 1 93 86 8 47 1 9 53 86 8 47 5 9
+
+4 1 2bold
+4 1(clue)
+1decoded
+7 4 4 7board
+9 5 (top
+1 5 row):
+3 7digit
+6 5 8= 6given
+2 87 65 9 2 4 1 2 37 95 8 6
+1 5 9 4 8 3 2 761 5 4 4 9 7
+9 991 9 6
+666 2
+761 5 4
+4 8 7 2 76
+1002 4 1 7
+changed
+constraint
+violation
+66 6 6 92
+669
+15 7 4 62
+1 8 7since9 t5¡81 4 6 2604 1 7 803 5 8 4 6
+8 2 5[deg]
+9 9 2 9 9 2 8 2 2 6 4 4 7 2 3 8 2 5anchor
+147
+9 6 3 t8; ^x2) 5
+9 1 3row)
+angle
+per 6
+cell7 4
+(bottom
+1 2 5 1 5 5 5 5 1 8 1 5 5 4 9 1 7 3 8 9 3 2 4∠(z
+5 17 6 8 9 3 24 6 17 3
+55 5 5 5 55 55 52 7 7 1 89 34 12 5 7 1 89 34 12 3 7 8 89 64
+7 5 8 67 8 6 86 7 6 2 39 1 1 58 7 6 4 39 1 2 58 7 6 2 39 1 3 38
+8 66 8 87 8 7 6 5 81 5 27 4 5 9 6 81 5 27 3 4 9 6 81 8 37 6 5 9
+63 33 6 3 3 3 53 86 2 47 4 9 23 96 8 47 5 1 53 96 2 87 5 1
+
+decoded board (top row): bold digit = given (clue)
+80
+85
+90
+changed since t ¡ 1 75
+constraint violation
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+decoded board (top row): bold digit = given (clue)
+60
+80
+100
+changed since t ¡ 1
+constraint violation
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+Figure 21: Filmstrip gallery on Sudoku-Extreme. Test puzzles 0–4. One test puzzle per row,
+rolled open-loop for 40 iterations and rendered at i = 0, 2, 11, 39 (protocol in Appendix C.4), for
+FPRM (left) and SFPRM (right): decoded board on top, each cell’s angle to its input anchor below.
+
+34
+
+FPRM
+t=0
+
+t=2
+
+puzzle 0
+
+G
+
+G
+
+S
+
+t = 39
+
+G
+
+S
+
+t=0
+
+SFPRM
+
+t = 11
+
+G
+
+S
+
+t=2
+
+t=0
+
+G
+
+S
+
+t = 11
+
+t=0
+
+puzzle 1
+
+S
+
+S
+
+S
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+decoded board G
+(top S
+row):
+path cell on the true path
+false step
+
+S
+dark = wallG S
+G
+missed path cell
+80
+90
+70
+start / goal
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+G
+
+S
+
+t=2
+
+S
+
+t = 11
+
+t = 39
+
+decoded board (top row): dark = wall
+path cell on the true path
+missed path cell
+80
+100
+false step
+start / goal
+G
+G
+anchorGangle ∠(zt ; ^
+x) per cell G
+(bottom row) [deg]
+
+G
+
+S
+
+S
+
+S
+
+S
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+S
+
+S
+
+S
+
+S
+
+decoded board G
+(top S
+row):
+path cell on the true path
+false step
+
+S
+dark = wallG S
+G
+missed path cell
+80
+100
+start / goal
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+S
+
+puzzle 2
+
+S
+
+t = 39
+
+G
+
+S
+
+t = 39
+
+S
+
+t = 11
+
+G
+
+S
+
+decoded board (top row): dark = wall
+path cell on the true path
+missed path cell
+80
+90
+70
+false step
+start / goal
+G
+G
+anchorGangle ∠(zt ; ^
+x) per cell G
+(bottom row) [deg]
+
+G
+
+t=2
+
+t=0
+
+t = 11
+
+t = 39
+
+dark = wall
+missed path cell
+80
+90
+70
+start / G
+goal
+S
+S
+G
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+G
+
+decoded board (top row):
+path cell on the true path
+false
+S step
+S
+G
+
+dark = wall
+missed path cell
+80
+100
+start / G
+goal
+S
+S
+G
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+puzzle 3
+
+G
+
+t=2
+
+decoded board (top row):
+path cell on the true path
+false
+S step
+S
+G
+
+t=0
+
+t=2
+
+t = 11
+
+t = 39
+
+S
+
+S
+
+S
+
+S
+
+dark = wall
+missed
+path cell
+G
+G
+G
+60
+80
+90
+70
+start / goal
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+decoded board (top row):
+path cell on the
+true path
+G
+false step
+
+dark = wall
+missed path cell
+60
+80
+100
+start / goal
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+decoded board (top row):
+path cell on the true path
+false step
+
+dark = wall
+missed
+path cell
+G
+G
+G
+80
+100
+start / goal
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+puzzle 4
+
+decoded board (top row):
+path cell on the
+true path
+G
+false step
+
+decoded board (top row):
+path cell on the true path
+false step
+
+dark = wall
+missed path cell
+80
+100
+start / goal
+anchor angle ∠(zt ; ^
+x) per cell (bottom row) [deg]
+
+Figure 22: Filmstrip gallery on Maze-Hard. Test puzzles 0–4. One 30×30 test maze per row,
+rolled open-loop for 40 iterations and rendered at i = 0, 2, 11, 39 (protocol in Appendix C.4), for
+FPRM (left) and SFPRM (right): decoded path on top, each cell’s angle to its input anchor below.
+
+35
+
+FPRM
+t=0
+
+t=3
+
+SFPRM
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 0
+
+input
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+75 ±
+
+80 ±
+
+85 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+89:8 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+71:1 ±
+
+75 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+95:8 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 1
+
+input
+
+72:7 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+80 ±
+
+85 ±
+
+90 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+96:8 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+78:9 ±
+
+85 ±
+
+90 ±
+
+95 ± 97:5 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 2
+
+input
+
+73:0 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+75 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+93:3 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+67:0 ±
+
+75 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+96:0 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 3
+
+input
+
+72:1 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+75 ±
+
+80 ±
+
+85 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+87:9 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+76:6 ± 80 ±
+
+85 ±
+
+90 ±
+
+95 ±
+
+100 ± 103:7 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 4
+
+input
+
+68:4 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+80 ±
+
+85 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+88:6 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+72:4 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+95 ±
+
+101:1 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 5
+
+input
+
+73:6 ±
+
+target
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+target
+69:7 ±
+
+75 ±
+
+80 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+86:8 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+69:8 ±
+
+75 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+94:5 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+Figure 23: Filmstrip gallery on Mini-ARC. One test task per row, rolled out open-loop for 200
+iterations. Left: FPRM; right: SFPRM. Each row starts with the test input (top) and its target
+(bottom), followed by five iterations from t = 0 to t = 199. At each iteration the decoded grid
+is shown on top, with × marking cells that differ from the target, and each cell’s angle to its input
+anchor, ∠(zt , x̂), below.
+
+36
+
+FPRM
+t=0
+
+t=3
+
+SFPRM
+
+t = 13
+
+t = 52
+
+t = 199
+
+80 ±
+
+86:4 ±
+
+input
+
+t=0
+
+t=3
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 6
+
+input
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+76:3 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+97:0 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 7
+
+input
+
+73:3 ± 75 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+80 ±
+
+85 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+86:5 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+80:8 ±
+
+85 ±
+
+90 ±
+
+95 ±
+
+100:2 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 8
+
+input
+
+76:7 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+80 ±
+
+85 ±
+
+90 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+93:3 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+75:2 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+97:5 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 9
+
+input
+
+73:4 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+75 ±
+
+80 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+85:7 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+79:4 ±
+
+85 ±
+
+90 ±
+
+95 ±
+
+100 ±
+
+105:5 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 10
+
+input
+
+72:1 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+75 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+93:9 ±
+
+^ ) per cell (bottom row)
+anchor angle ∠(zt ; x
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+71:0 ±
+
+75 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+97:1 ±
+
+^ ) per cell (bottom row)
+anchor angle ∠(zt ; x
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 11
+
+input
+
+71:2 ±
+
+target
+
+target
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+t=0
+
+t=3
+
+80 ±
+
+85 ±
+
+90 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+93:1 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+input
+
+t=0
+
+t=3
+
+74:0 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+97:3 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+t = 13
+
+t = 52
+
+t = 199
+
+puzzle 12
+
+input
+
+72:6 ±
+
+target
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+target
+73:3 ±
+
+80 ±
+
+85 ±
+
+decoded grid (top row): ARC colours; £ = cell differs from the target
+
+90:2 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+72:3 ±
+
+80 ±
+
+85 ±
+
+90 ±
+
+96:6 ±
+
+anchor angle ∠(zt ; ^
+x) per cell (bottom row)
+
+Figure 24: Filmstrip gallery on Mini-ARC (continued). Same caption as in Figure 23.
+
+37
+
+
