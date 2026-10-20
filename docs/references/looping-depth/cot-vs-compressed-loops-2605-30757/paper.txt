@@ -1,0 +1,1616 @@
+arXiv:2605.30757v1 [cs.LG] 29 May 2026
+
+Chain-of-Thought and Compressed Looped Transformers:
+A Memory-Budget Separation
+Haozhou Zhang
+Department of Mathematics and Statistics
+University of Idaho
+zhan3063@vandals.uidaho.edu
+June 1, 2026
+
+Abstract
+Chain-of-thought prompting and looped Transformers both give a fixed model more testtime computation, but they differ in what they remember. Chain-of-thought stores intermediate
+state in generated tokens that remain in the context, whereas a looped Transformer carries state
+through recurrent hidden activations. We argue that this persistent mutable memory is a central
+resource for test-time reasoning.
+We compare three memory regimes, the compressed latent loop, the full sequence-state loop,
+and the chain-of-thought scratchpad. Our main result shows that a compressed loop is limited
+by the size of its recurrent state. Running the loop longer adds computation but does not by
+itself create a growing scratchpad, so a loop with a small recurrent state remains a small-space
+reasoner even when run for many steps. Under a standard complexity assumption, such loops
+cannot decide problems that are P-complete under logspace reductions, whereas polynomiallength chain-of-thought can.
+The separation is specific to compressed loops, as full sequence-state loops carry state at
+every input position and live in a memory-rich regime closer to explicit scratchpads. Controlled
+pointer-chasing and associative-recall sweeps illustrate this memory-budget view, with performance sensitive to whether the persistent-state budget matches the task’s working-memory
+demand.
+
+1
+
+Introduction
+
+Chain-of-thought (CoT) prompting and recurrent-depth Transformers are two ways of giving a fixed
+model more computation at test time. In CoT, the model writes intermediate state into generated
+tokens and later reads those tokens back from the context. In a looped Transformer, the model
+instead reuses a block on hidden activations, carrying intermediate state through the recurrent
+hidden state. These two mechanisms both add iteration, but they store intermediate information
+in different places.
+This distinction matters for serial reasoning. Li et al. (2024) show that CoT can supply sequential computation, since with enough generated steps constant-depth Transformers simulate increasingly large Boolean circuits, and Merrill and Sabharwal (2024) characterise the polynomial-length
+scratchpad regime as P. Looped and latent-thought models have also been shown to be powerful,
+but the strongest formal comparisons usually study memory-rich loops: the recurrent state contains
+a full hidden sequence, and therefore grows with the input length or with appended scratch positions. In that regime, looped Transformers can act as programmable computers (Giannou et al.,
+1
+
+2023), simulate CoT by appending tokens (Saunshi et al., 2025), and in some parallel-evaluable
+settings outperform explicit token-by-token reasoning (Xu and Sato, 2026).
+The question we study is what remains true when the recurrent state is not a full sequence. A
+loop may be run for many iterations, but if it carries only a small persistent state from one iteration
+to the next, then recurrence adds time without adding much mutable memory. We therefore
+separate the amount of computation performed from the amount of state preserved across steps.
+Throughout, n denotes the input length, d the hidden width, p the number of bits used to store
+each activation, s the number of compressed recurrent slots, T the number of loop iterations, and
+ℓ the number of generated CoT tokens. We write M for the number of persistent mutable bits
+carried from one reasoning step to the next. With this accounting, a compressed latent loop has
+M = s d p; a sequence-state loop has M = n d p, since it stores a hidden vector at every input
+position; and a CoT scratchpad has M = Θ(ℓ log |Σ|) (Θ(ℓ) for a fixed vocabulary), since generated
+tokens are appended to the context and re-read later.
+Our formal result isolates the compressed-loop regime. Write DSPACE(f ) for the class of lanO(1) ,
+guages a deterministic Turing
+S machine decidesc using O(f ) work space, polylog(n) = (log n)
+and DSPACE(polylogn) = c≥1 DSPACE (log n) . A compressed loop with s recurrent slots, width
+d, precision p, and T iterations is then simulated in
+
+DSPACE O(s d p + log n + log T ) .
+The simulation stores the recurrent state, streams over the read-only input whenever attention needs
+to inspect it, and reuses the same scratch space at each iteration. Thus, if the persistent state is
+polylogarithmic in the input length and the loop runs for at most quasi-polynomially many steps (so
+the iteration counter needs only polylogarithmic space), the loop remains a polylogarithmic-space
+machine.
+This gives a conditional separation from CoT in the memory-constrained regime. Assuming the
+standard but unproven separation P ̸⊆ DSPACE(polylogn), such compressed loops cannot decide
+P-complete serial tasks, whereas polynomial-length CoT can under standard expressivity results.
+This separation is specific to the compressed case. Full sequence-state loops carry n d p persistent
+bits and lie in a different, memory-rich regime, so what the bound isolates is the limited persistent
+memory rather than recurrence in general.
+Concretely, the paper makes the following five contributions:
+• We formalise persistent mutable memory as a resource for comparing CoT, full sequence-state
+loops, and compressed latent loops.
+• We prove that compressed latent loops are small-space machines: a loop with only a compressed recurrent state can be simulated by storing that state, streaming over the read-only
+input, and reusing scratch space across iterations.
+• We show why this argument does not extend to full sequence-state loops in the same way.
+Once the loop carries hidden state at every input position, the corresponding memory budget
+is linear in the sequence length, placing these models in the memory-rich regime studied by
+prior looped-Transformer work.
+• We derive a conditional separation between polylogarithmic-memory compressed loops and
+polynomial-length CoT on serial polynomial-time tasks, assuming polynomial time is not
+contained in polylogarithmic space.
+
+2
+
+• We connect prior memory-token results on Sudoku to the persistent-memory lens as external
+motivation, and provide two controlled finite-size probes, a pointer-chasing slot sweep and an
+associative-recall state-size sweep.
+The rest of the paper is structured as follows. Section 2 reviews related work, and Section 3 defines
+the three reasoners and their memory budgets. Section 4 develops the formal separation in three
+steps: the small-space bound for compressed loops, the sequence-state endpoint, and the separation
+from CoT, with detailed proofs deferred to Appendices B to E. Section 5 presents the empirical
+studies, and Section 6 discusses the scope of the result.
+
+2
+
+Related work
+
+Expressivity of CoT. Li et al. (2024) show CoT supplies sequential computation. With ℓ generated steps, constant-depth Transformers simulate Boolean circuits of size ℓ. Merrill and Sabharwal
+(2024) give a length-parameterised characterisation of decoders with scratchpads, identifying the
+polynomial-step regime with P under their model assumptions, and Amiri et al. (2025) prove lower
+bounds on the number of CoT steps required in the hard-attention setting. These works identify
+the CoT scratchpad as a growing computational resource; in our notation this is the endpoint
+MCoT = Θ(ℓ) for a fixed token alphabet. Yang et al. (2025) instead modify the scratchpad interface, adding a reduction rule that erases intermediate thoughts to achieve space-efficient universal
+computation; our CoT endpoint is the standard append-only scratchpad, so erasure or reduction
+occupies a different point on the same memory axis.
+Looped and recurrent-depth Transformers. Giannou et al. (2023) construct looped Transformers as programmable computers whose input acts as both instruction stream and memory.
+Saunshi et al. (2025) show looped Transformers solve group-composition-style iterative tasks with
+logarithmically many loops and can simulate CoT using appended scratch positions. Back de Luca
+and Fountoulakis (2024) construct looped Transformers that simulate classical graph algorithms
+(BFS, DFS, Dijkstra, Kosaraju) and, with extra attention heads, are Turing-complete, while Yang
+et al. (2024) show looped Transformers can emulate iterative learning algorithms with substantially fewer parameters than standard Transformers on data-fitting tasks. These constructions
+are memory-rich in the sense relevant here: the loop maintains a full sequence state, padding or
+scratch positions, or graph-interaction state, rather than only a fixed compressed latent vector,
+which our Proposition 4.3 recovers as the memory-rich endpoint. Merrill and Sabharwal (2025b,a)
+further study depth, padding, and looping as parallelisable forms of test-time compute, with logdepth already adding expressive power for regular languages and graph connectivity, while padding
+combined with looping yields exact characterisations in threshold-circuit classes.
+Memory tokens and the depth-state trade-off. Sapunov (2026) studies a single-block Universal Transformer with adaptive computation time and a variable number r of learned memory
+tokens on Sudoku-Extreme. The reported threshold between zero and eight memory tokens, the
+plateau, the dilution boundary, and the substitution between memory size and halt depth are
+suggestive of a persistent-memory effect, and our space-complexity lens predicts such thresholds
+when the effective working-state demand exceeds the persistent state available to the model. The
+architecture also carries sequence-state activations, however, so it is not a clean instance of our
+compressed-loop model, and we treat it as external motivation rather than a diagnostic test of
+the separation. Lu et al. (2025) analyse the depth-recurrent model of Geiping et al. (2025), finding only marginal gains from added recurrence depth and limited evidence of interpretable latent
+3
+
+CoT. Relatedly, Blayney et al. (2026) mechanistically analyse looped-reasoning models, reporting
+cyclic fixed points and attention stabilisation across recurrences. These works support the view
+that recurrence can reorganise computation without necessarily increasing the amount of persistent
+state.
+Recall-memory trade-offs in efficient attention. A separate line of work measures the state
+needed for associative recall in efficient sequence models. Arora et al. (2024a) introduce multiquery associative recall as a diagnostic for efficient language models and attribute much of the
+gap between attention and gated-convolution models to recall ability, while Arora et al. (2024b)
+identify a recall-throughput trade-off in which fixed-state recurrent alternatives recover recall as the
+recurrent state or feature dimension grows, at a corresponding memory cost. Okpekpe and Orvieto
+(2025) further show that the learning rate strongly affects recurrent-model recall, so reported recall
+gaps partly reflect optimisation. Our associative-recall sweep in Section 5.2 uses this setting as a
+controlled probe of the same persistent-memory axis; the formal separation concerns compressed
+looped Transformers and append-only CoT.
+CoT versus latent or looped thought. Xu and Sato (2026) formally compare CoT with
+latent-thought reasoning, including looped and continuous hidden-state computation, the latter
+exemplified by the continuous-thought model of Hao et al. (2025). Their results separate the
+two interfaces along two axes, with latent thought holding an advantage for parallel computation
+and CoT a separate advantage from stochastic decoding and approximate counting. We study a
+different axis. Holding attention on deterministic serial computation, we ask what happens when
+the looped reasoner does not carry a full hidden sequence but only a bounded persistent state; in
+that memory-constrained regime, the limiting resource is persistent memory rather than parallel
+depth.
+Circuit complexity of Transformers. Merrill and Sabharwal (2023) place log-precision Transformers in logspace-uniform TC0 , providing the circuit-complexity background for the comparisons
+above. We use the same log-precision, logspace-uniform setting to upper-bound compressed latent
+loops by their persistent mutable memory budget.
+
+3
+
+Models and memory accounting
+
+We now define the three idealised reasoners used in the separation. As above, n is the input length,
+d the hidden width, and p the number of bits used to store each activation; let Fp denote the
+p-bit fixed-point activation set, defined precisely in Appendix A. The memory budget M counts
+mutable activation state that persists across reasoning steps; it does not count the fixed parameters,
+the read-only input x ∈ Σn , or temporary workspace recomputed within a step. A block Bθ is a
+constant number of multi-head attention and multi-layer-perceptron (MLP) sublayers at precision
+p; we assume the log-precision regime p = O(log n) and a logspace-uniform parameter family,
+following Merrill and Sabharwal (2023).
+Definition 3.1 (Compressed latent loop CLL[s, d, p, T ]). The mutable state is zt ∈ (Fpd )s , holding
+s persistent slots, initialised by z0 = initθ (x), which is either fixed learned memory or computable
+from the read-only input in O(s d p + log n) space. The update
+t = 0, . . . , T − 1,
+
+zt+1 = Bθ (zt ; x),
+
+4
+
+lets the s state-slots act as attention queries against the n read-only input tokens as keys and
+values. The input side is read-only at every sublayer, where the key and value for input position i
+are logspace-computable functions of xi , the position index, and the parameters, and the block never
+materialises or updates an n-position hidden sequence. Only the s latent slots are mutable across
+sublayers and iterations; slot-to-slot self-attention among them is permitted, since those slots are
+already stored in O(s d p) space. The output is decoded from zT , and no per-input-token persistent
+state is carried between iterations. Its persistent memory is MCLL = s d p bits.
+Definition 3.2 (Sequence-state loop SSL[d, p, T ]). The mutable state is Ht ∈ (Fpd )n , the full lengthn hidden sequence, initialised by H0 = embedθ (x). Each update Ht+1 = Bθ (Ht ) is a full selfattention pass that updates all n positions, with the input embeddings and positions available as
+fixed features. This is the standard looped Transformer of Giannou et al. (2023); Saunshi et al.
+(2025); if padding or scratch positions are appended, they are included in the sequence length n. Its
+persistent memory is MSSL = n d p bits.
+Definition 3.3 (CoT scratchpad CoT[d, p, ℓ]). The model autoregressively emits tokens y1 , . . . , yℓ ∈
+Σ, each
+
+yt = decode Bθ ([x ; y<t ]) ,
+appended to the context and re-read at later steps. Its persistent memory is the scratchpad, MCoT =
+Θ(ℓ log |Σ|) bits (Θ(ℓ) for a fixed vocabulary); we count the externally written scratchpad tokens,
+not implementation-level caches used to accelerate decoding.
+For the comparison below, the relevant difference between the three is the persistent mutable
+memory carried across reasoning steps, fixed by the slot count in a compressed loop, growing with
+the sequence length in a sequence-state loop, and growing with the scratchpad in chain-of-thought.
+
+4
+
+Space bounds and the memory-budget separation
+
+We prove the separation in three steps: compressed loops admit a small-space simulation; full
+sequence-state loops instead carry linear state; and combining these with standard chain-of-thought
+expressivity separates the two in the compressed-memory regime.
+
+4.1
+
+Compressed loops admit a small-space simulation
+
+The memory accounting of Section 3 becomes useful once it is turned into a space simulation. Since
+a compressed loop carries no mutable state at the input positions, a simulator only needs to store
+the s recurrent slots. Attention over the input can be recomputed by streaming over the read-only
+input tape, and the scratch space can be reused across slots, layers, and iterations. Thus recurrence
+adds time, but not persistent mutable memory, apart from the counter used to track the loop steps.
+The full one-block simulation is in Appendix B and the iteration argument in Appendix C.
+Lemma 4.1 (One compressed-loop update in small space). Under the log-precision, logspaceuniform regime, one update z 7→ Bθ (z ; x) of a CLL[s, d, p, T ] is computable in deterministic workspace O(s d p + log n), given z stored on the work tape and x on a read-only input tape.
+Proof intuition. A compressed loop never materialises an n-position hidden sequence. To update
+one latent slot, the simulator streams over the read-only input, computing the attention numerator
+and denominator with a constant number of passes and a few p-bit registers. Once the slot’s
+readout has been accumulated, the MLP and residual updates are local computations on O(dp)
+5
+
+bits. The same scratch is reused for every slot, so the only persistent workspace is the s d p-bit latent
+state, plus O(log n) addressing and arithmetic scratch. Appendix B gives the full finite-precision
+simulation.
+Theorem 4.2 (Compressed loops are space-bounded). For any CLL[s, d, p, T ] in the log-precision
+logspace-uniform regime,
+
+CLL[s, d, p, T ] ⊆ DSPACE O(s d p + log n + log T ) .
+In particular, if s d p = polylog(n) and log T = polylog(n) (e.g. for polynomially many iterations),
+then CLL ⊆ DSPACE(polylogn).
+The displayed bound assumes O(p)-space p-bit arithmetic; under general logspace-uniform arithmetic it carries an additive poly(p) term, still polylogarithmic when p = O(log n) (see Appendix A).
+Proof intuition. The simulator runs the loop literally: it stores the current compressed state, computes the next state using Lemma 4.1, overwrites the old state, and advances a log T -bit counter.
+The input may be rescanned at every iteration, but because it is read-only this increases time, not
+workspace. Iteration thus adds a counter but no persistent mutable memory. The full proof is in
+Appendix C.
+
+4.2
+
+The sequence-state endpoint
+
+Section 4.1 bounded compressed loops by the space needed to store their recurrent slots. For
+sequence-state loops, the same accounting gives a different scale. The recurrent state is the whole
+hidden sequence: one d-dimensional p-bit vector for each of the n positions, so the persistent state
+has n d p bits. A simulator can store this sequence and run the same step-by-step argument as
+before, but the resulting bound is linear in the sequence length. This is the memory-rich regime
+used by standard looped-Transformer expressivity constructions. Appendix D gives the proof of
+Proposition 4.3.
+Proposition 4.3 (Sequence-state loops are memory-rich). For SSL[d, p, T ], the persistent memory
+is MSSL = n d p, and the simulation argument of Theorem 4.2 gives
+SSL[d, p, T ] ⊆ DSPACE(O(n d p + log n + log T )).
+For fixed d, p this is Θ(n) space, linear in the sequence length up to the width and precision factors d
+and p. This linear-state endpoint is genuinely memory-rich. The programmable-computer construction of Giannou et al. (2023), combined with the CoT simulation of Saunshi et al. (2025) and the
+CoT-to-circuits result of Li et al. (2024), places P-complete tasks such as the circuit value problem
+(CVP) within the sequence-state endpoint. Here n denotes the total sequence length available to the
+loop, including any padding or dummy scratch positions. Hence, under P ̸⊆ DSPACE(polylogn),
+SSL ̸⊆ DSPACE(polylogn).
+What separates the two regimes is the scale of the persistent state. Compressed loops keep s d p
+recurrent bits; sequence-state loops keep n d p recurrent bits. Increasing the number of iterations
+affects time and adds only the loop counter, while the amount of persistent mutable state is fixed
+by the recurrent representation. Section 4.3 uses this difference to state the separation from CoT
+in the compressed-memory regime.
+
+6
+
+4.3
+
+Separation from chain-of-thought
+
+The small-space simulation now gives the separation. A compressed loop whose persistent state
+is polylogarithmic, run for at most quasi-polynomially many steps, is a polylogarithmic-space machine. A chain-of-thought scratchpad grows in a different way. Each generated token is written
+into the context and remains available to later steps. Combining this space bound with standard
+expressivity results for polynomial-length CoT (Li et al., 2024; Merrill and Sabharwal, 2024) yields
+a conditional separation on P-complete serial tasks. The formal proof is in Appendix E.
+Theorem 4.4 (Compressed-loop/chain-of-thought separation). Assume P ̸⊆ DSPACE(polylogn),
+and let L be P-complete under logspace reductions. No logspace-uniform compressed-loop family
+with
+s d p = polylog(n),
+log T = polylog(n)
+decides L. By contrast, under standard chain-of-thought expressivity results, L is decidable by a
+chain-of-thought family with polynomially many generated tokens.
+Proof intuition. By Theorem 4.2, a compressed loop with s d p = polylog(n) and log T =
+polylog(n) lies in DSPACE(polylogn). If such a loop decided a P-complete language, then every
+language in P would be decidable in polylogarithmic space, contradicting the assumption. CoT
+is not subject to this compressed-state bound: its scratchpad grows as tokens are generated, and
+polynomial-length scratchpads reach the polynomial-time regime under the standard expressivity
+results (Li et al., 2024; Merrill and Sabharwal, 2024). The full proof is in Appendix E.
+The theorem addresses the compressed-state endpoint. The memory-rich endpoint has a different budget, since sequence-state loops carry n d p persistent bits. This is the setting of the formal
+latent-thought comparison of Xu and Sato (2026), where looped or latent thought can outperform CoT on parallel-evaluable computations. The two conclusions therefore apply to different
+persistent-state budgets.
+
+5
+
+Empirical studies
+
+The space bound suggests a concrete diagnostic. In a compressed loop, extra iterations let the
+model revisit the input and refine the same recurrent state, but they add no new places to store
+independent pieces of information. If this accounting carries over to trained finite models, then a
+task whose working-memory load can be dialled up should show a state-budget transition, with more
+persistent state helping as the load grows and added recurrence failing to relieve an undersized-state
+bottleneck.
+We study two controlled settings in which the task load and the persistent-state budget vary
+independently. In pointer chasing the load is the number of independent chains tracked to a single
+final decode, and the budget is the number of compressed slots; in associative recall the load is the
+number of key-value pairs, and the budget is the recurrent state dimension. Both are finite-size
+probes of that prediction, with recurrence depth and training budget held fixed so that only the
+state knob varies. All seed-level numbers behind the two sweeps, with no run excluded from any
+reported aggregate, are tabulated in Appendix F.
+
+5.1
+
+A controlled slot sweep
+
+Pointer chasing varies concurrent working-memory demand directly, with the number of compressed
+slots s as the persistent-memory knob we sweep. The task is parameterised by k, the number
+of independent pointer chains whose states must be maintained at once. Each instance gives a
+7
+
+functional graph on n = 16 cells, k start cells, and asks for the cell each chain reaches after
+a fixed number of hops. Under the single-final-decode protocol used here, a direct concurrent
+algorithm stores all k current chain states at once, Θ(k log n) bits; the experiment tests whether the
+compressed slots behave like such concurrent working memory. We compare compressed latent loops
+CLL[s] with s persistent slots against a sequence-state loop (SSL, M = Θ(n)) control, sweeping
+s ∈ {1, 2, 4, 8, 16} and k ∈ {1, 2, 4, 8}, T = 16 iterations, ten seeds. Both models instantiate the
+reasoners of Section 3. The compressed loop carries only its s slots across the iterations, attending
+at each step to a cell table that is recomputed from the read-only input and never updated, so
+its persistent budget is MCLL = s d p in the sense of Definition 3.1, and each chain is read out by
+a query against the slots after the final iteration. The sequence-state control instead updates a
+hidden vector at all n cells, matching Definition 3.2.
+The finite-size prediction is deliberately one-sided. When the persistent state falls below the
+task’s concurrent-state demand, recurrence alone cannot repair the bottleneck, while sufficient
+nominal state does not by itself guarantee that training finds a solution. The slot count s is a
+register-count bottleneck for the k chains, so the subdiagonal regime s < k is the stress test. In
+this experiment s should be read as a register count, not a literal bit budget. Formally, s < k is
+a bit-space lower bound only when d p = Θ(log n) and each slot holds O(1) chain states, whereas
+here n = 16 makes log n small relative to d p. The theory does not assert a trainable threshold at
+s = k; its converse (Lemma E.1) is conditional on sufficient iteration, routing, and trainability.
+Figure 1 shows the 10-seed sweep. In the subdiagonal regime s < k the collapse is robust, with
+mean cell accuracy 0.041 and maximum cell-mean 0.129. The collapse is also low-variance in the
+genuinely subcritical cells, with standard deviations between 0.00 and 0.02 for k ∈ {2, 4, 8} below
+the diagonal, so the failure below the slot budget is not a seed accident. The sequence-state control
+is essentially saturated, reaching 0.999 mean accuracy for k = 2, 4, 8; at k = 1, nine of ten SSL
+seeds reach ≈ 1.00 while one fails to train, giving a mean of 0.936. We therefore treat the SSL
+result as a saturated control up to a single optimisation outlier.
+The 10-seed sweep also shows that the above-threshold regime is not smooth. Some cells are
+reliably solved (k=2 with s ≥ 2, k=4 with s ∈ {4, 8}), but others are seed-dependent: for k=1, s=1
+the runs split into six high seeds and four low seeds with little mass between them, and the overprovisioned s=16 column is unstable, with k=8, s=16 ranging from near failure to near-perfect
+accuracy. These high-variance cells look less like noisy estimates of a single mean and more like
+mixtures of successful and failed training runs. Our interpretation is that, once the hard memory
+bottleneck is removed, the remaining failures are mostly about whether training finds a usable
+routing scheme, not a contradiction of the lower-bound direction. It is the same phenomenon as
+the router-initialisation trap of Sapunov (2026), where above the memory threshold success still
+depends on finding the right recurrent routing solution.
+
+8
+
+0.70
+±0.26
+
+0.93
+±0.06
+
+0.94
+±0.04
+
+k=2
+
+0.13
+±0.02
+
+1.00
+±0.00
+
+k=4
+
+0.03
+±0.00
+
+k=8
+
+k=1
+
+0.88
+±0.15
+
+0.84
+±0.17
+
+1.00
+±0.00
+
+1.00
+±0.00
+
+0.94
+±0.07
+
+0.05
+±0.01
+
+1.00
+±0.00
+
+1.00
+±0.00
+
+0.54
+±0.12
+
+0.01
+±0.00
+
+0.01
+±0.00
+
+0.01
+±0.00
+
+0.04
+±0.00
+
+0.54
+±0.29
+
+s=1
+
+s=2
+s=4
+s=8
+compressed-loop slots s (memory budget)
+
+s = 16
+
+1.0
+
+0.8
+
+exact-match accuracy
+
+concurrent chains k (working-memory demand)
+
+Compressed-loop accuracy, 10-seed mean ± std
+robust collapse below s = k; above-threshold cells show seed-dependent training
+
+0.6
+
+0.4
+
+0.2
+
+0.0
+
+Figure 1: Compressed-loop accuracy on k-concurrent pointer chasing, as a function of persistent
+slots s and concurrency k. Each cell shows exact-match accuracy, mean ± standard deviation over
+10 seeds. The subdiagonal cells s < k collapse to low accuracy (mean 0.041, maximum cell-mean
+0.129), while the sequence-state loop control is essentially saturated: it reaches ≈ 1.00 for k = 2, 4, 8
+and 0.94 for k = 1, where one of ten seeds failed to train. Above and near the diagonal, several cells
+show seed-dependent success/failure behaviour; these optimisation effects are not claimed as a tight
+achievability threshold. The full ten-seed table for every compressed-loop cell and the sequencestate control appears in Tables 1 and 2.
+
+Associative recall with finite recurrent state
+
+associations N (recall load)
+
+Gated linear attention: associative recall, 5-seed mean ± std
+accuracy rises with state size; the threshold shifts right as N grows
+N=8
+
+0.84
+±0.09
+
+0.93
+±0.08
+
+0.98
+±0.01
+
+1.00
+±0.00
+
+1.00
+±0.00
+
+1.00
+±0.00
+
+N = 16
+
+0.23
+±0.13
+
+0.42
+±0.15
+
+0.67
+±0.23
+
+0.89
+±0.07
+
+0.98
+±0.00
+
+0.99
+±0.00
+
+1.0
+0.8
+
+query-token accuracy
+
+5.2
+
+0.6
+0.4
+
+N = 24
+
+0.10
+±0.02
+
+0.20
+±0.12
+
+m=4
+
+m=8
+
+0.38
+±0.19
+
+0.80
+±0.10
+
+0.91
+±0.03
+
+0.96
+±0.03
+
+m = 32
+m = 16
+m = 64
+recurrent state dimension m (memory budget)
+
+m = 128
+
+0.2
+0.0
+
+Figure 2: Gated linear-attention query-token accuracy on associative recall with N key-value pairs,
+as a function of recurrent state dimension m, mean ± standard deviation over five seeds. The
+mean accuracy rises monotonically with m at each N , and the threshold shifts right as N grows.
+Full softmax attention is essentially saturated (mean ≥ 0.999 in every cell); vanilla linear attention
+remains low for N =16, 24, even when taking the best m in the sweep. Appendix F reports the full
+five-seed table, the per-seed mcrit values, and the control summaries.
+
+9
+
+As a second controlled check, and following the recall-memory literature on efficient attention
+(Arora et al., 2024a,b), we test the same memory-budget prediction in an associative-recall setting.
+Each example contains N key-value associations, and the model must retrieve the correct value
+from a query. We vary the state dimension m, so the recurrent state size is proportional to m d
+for fixed width d, in a gated linear-attention model; full softmax attention serves as a memory-rich
+control, and vanilla linear attention as a compressed-state negative control. For each seed and
+association load N , let mcrit be the smallest state dimension m whose accuracy reaches 0.9.
+The result is a state-dimension crossover (Figure 2). The five-seed mean accuracy increases
+monotonically with m for each association load N , and the transition shifts to larger m as N
+increases. Full softmax attention is essentially saturated in every setting. Vanilla linear attention,
+even taking the best m in the sweep, solves only the smallest association load and remains low for
+larger loads. As in the pointer-chasing sweep, the saturated and failed cells are stable across seeds,
+whereas transition cells show seed-dependent success/failure behaviour. We therefore report mcrit
+as a range across seeds rather than a sharp threshold: N =8 has median 8 and range 4 to 16, N =16
+has median 32 and range 16 to 64, and N =24 has median 64 and range 32 to 128.
+
+6
+
+Discussion and limitations
+
+The separation suggests a simple design principle. Test-time recurrence should be specified together
+with the state that persists across recurrences. A loop whose state is compressed can spend more
+time refining the same memory, but it does not acquire the growing scratchpad that CoT obtains
+by writing tokens. Full sequence-state loops and padded latent-thought constructions sit in a
+different regime, because their recurrent state scales with the sequence length or with added scratch
+positions. Persistent memory is therefore a resource of test-time compute alongside depth, width,
+and generated-token length.
+For practical looped language models (Zhu et al., 2025; Jeddi et al., 2026), this separates two
+notions of memory efficiency. Sharing a key-value (KV) cache across loop depth, as in Conchello
+Vendrell et al. (2026), decouples memory from the number of recurrent iterations, but it does not
+by itself make the persistent state small relative to the input or context length. The compressedloop bound applies most directly to models whose recurrent state is capped, pooled, low-rank, or
+otherwise sublinear in context length. A concrete experimental target is to expose the persistentstate budget as a controllable knob (the number of memory tokens, recurrent slots, state dimension,
+or cache rank) and measure how the critical budget scales with task load. The pointer-chasing and
+associative-recall sweeps in Section 5 are small examples of this type of measurement. Concurrent
+empirical work on adaptive looping and gated memory banks (Frey et al., 2026) asks a related
+architectural question, whether a looped Transformer should refine its hidden state for longer
+or add explicit learned storage; our separation isolates a complementary resource, the mutable
+activation state that persists across recurrences.
+The experiments also point to an optimisation question. Once the state budget is large enough,
+success is not automatic, as threshold cells can be seed-dependent and over-provisioned memory
+can make routing unstable. Future work should separate capacity from trainability by measuring
+not only whether a state budget is sufficient in principle, but how reliably a model learns to use
+that state. Mechanistic analyses of routing, halting, memory-token specialisation, and recurrent
+fixed points (Blayney et al., 2026) would make this account more predictive.
+Limitations and next steps. The formal separation is asymptotic and conditional. It relies
+on the standard assumption P ̸⊆ DSPACE(polylogn), the log-precision, logspace-uniform model,
+
+10
+
+and a compressed-loop definition in which the persistent recurrent state is capped independently
+of the input length. It does not lower-bound full sequence-state loops, loops with appended scratch
+positions, stochastic decoding, or architectures whose persistent state grows with the context. The
+experiments are finite-size probes of the state-budget effect rather than tests of the asymptotic
+theorem, and they do not prove task-level lower bounds for Sudoku, pointer chasing, or associative
+recall. A natural next step is to prove lower bounds for explicit task families and to scale the
+controlled experiments until the bit-level memory regime itself becomes active; the intermediate
+budgets between the s d p compressed and n d p sequence-state regimes, where many practical looped
+language models sit, are the most relevant targets.
+The point, then, is to separate the resources these interfaces provide, not to rank looped Transformers against chain-of-thought. Recurrence, generated tokens, and full sequence state are different
+ways of buying test-time computation, but they buy different resources. Depth determines how
+many updates a model can perform; persistent memory determines what those updates can continue to remember. Any comparison of test-time reasoning interfaces should therefore specify both
+the computation performed and the state preserved across steps.
+
+11
+
+References
+Amiri, A., Huang, X., Rofin, M. and Hahn, M. (2025). Lower bounds for chain-of-thought
+reasoning in hard-attention transformers. In Forty-second International Conference on Machine
+Learning.
+URL https://openreview.net/forum?id=Oh9sG5ae2b
+Arora, S., Eyuboglu, S., Timalsina, A., Johnson, I., Poli, M., Zou, J., Rudra, A. and
+Re, C. (2024a). Zoology: Measuring and improving recall in efficient language models. In The
+Twelfth International Conference on Learning Representations (ICLR).
+URL https://openreview.net/forum?id=LY3ukUANko
+Arora, S., Eyuboglu, S., Zhang, M., Timalsina, A., Alberti, S., Zou, J., Rudra, A. and
+Re, C. (2024b). Simple linear attention language models balance the recall-throughput tradeoff.
+In Forty-first International Conference on Machine Learning (ICML).
+URL https://openreview.net/forum?id=e93ffDcpH3
+Back de Luca, A. and Fountoulakis, K. (2024). Simulation of graph algorithms with looped
+transformers. In Forty-first International Conference on Machine Learning (ICML).
+URL https://openreview.net/forum?id=aA2326y3hf
+Blayney, H., Arroyo, Á., Obando-Ceron, J., Castro, P. S., Courville, A., Bronstein,
+M. M. and Dong, X. (2026). A mechanistic analysis of looped reasoning language models.
+arXiv preprint arXiv:2604.11791 .
+Conchello Vendrell, V., Masdemont, A. P., Grillo, N., Ros-Giralt, J., Behboodi, A.
+and Massoli, F. V. (2026). Memory-efficient looped transformer: Decoupling compute from
+memory in looped language models. arXiv preprint arXiv:2605.07721 .
+Frey, M., Shomali, B., Bashir, A. H., Berghaus, D., Koehler, J. and Ali, M. (2026).
+Adaptive loops and memory in transformers: Think harder or know more? In Workshop on
+Latent & Implicit Thinking – Going Beyond CoT Reasoning.
+URL https://openreview.net/forum?id=F87X9c107e
+Geiping, J., McLeish, S. M., Jain, N., Kirchenbauer, J., Singh, S., Bartoldson, B. R.,
+Kailkhura, B., Bhatele, A. and Goldstein, T. (2025). Scaling up test-time compute with
+latent reasoning: A recurrent depth approach. In The Thirty-ninth Annual Conference on Neural
+Information Processing Systems.
+URL https://openreview.net/forum?id=S3GhJooWIC
+Giannou, A., Rajput, S., Sohn, J.-y., Lee, K., Lee, J. D. and Papailiopoulos, D. (2023).
+Looped transformers as programmable computers. In International Conference on Machine
+Learning (ICML).
+URL https://proceedings.mlr.press/v202/giannou23a.html
+Hao, S., Sukhbaatar, S., Su, D., Li, X., Hu, Z., Weston, J. E. and Tian, Y. (2025). Training
+large language models to reason in a continuous latent space. In Second Conference on Language
+Modeling (COLM).
+URL https://openreview.net/forum?id=Itxz7S4Ip3
+Jeddi, A., Ciccone, M. and Taati, B. (2026). Loopformer: Elastic-depth looped transformers
+for latent reasoning via shortcut modulation. In The Fourteenth International Conference on
+12
+
+Learning Representations (ICLR).
+URL https://openreview.net/forum?id=RzYXb5YWBs
+Li, Z., Liu, H., Zhou, D. and Ma, T. (2024). Chain of thought empowers transformers to solve
+inherently serial problems. In The Twelfth International Conference on Learning Representations
+(ICLR).
+URL https://openreview.net/forum?id=3EWTEy9MTM
+Lu, W., Yang, Y., Lee, K., Li, Y. and Liu, E. (2025). Latent chain-of-thought? decoding the
+depth-recurrent transformer. arXiv preprint arXiv:2507.02199 .
+Merrill, W. and Sabharwal, A. (2023). The parallelism tradeoff: Limitations of log-precision
+transformers. Transactions of the Association for Computational Linguistics (TACL) 11 531–
+545. ArXiv:2207.00729.
+Merrill, W. and Sabharwal, A. (2024). The expressive power of transformers with chain of
+thought. In The Twelfth International Conference on Learning Representations (ICLR).
+URL https://openreview.net/forum?id=NjNGlPh8Wh
+Merrill, W. and Sabharwal, A. (2025a). Exact expressive power of transformers with padding.
+In The Thirty-ninth Annual Conference on Neural Information Processing Systems (NeurIPS).
+URL https://openreview.net/forum?id=O1abxStFcy
+Merrill, W. and Sabharwal, A. (2025b). A little depth goes a long way: The expressive
+power of log-depth transformers. In The Thirty-ninth Annual Conference on Neural Information
+Processing Systems (NeurIPS).
+URL https://openreview.net/forum?id=5pHfYe10iX
+Okpekpe, D. and Orvieto, A. (2025). Revisiting associative recall in modern recurrent models.
+arXiv preprint arXiv:2508.19029 .
+Sapunov, G. (2026). Universal transformers need memory: Depth-state trade-offs in adaptive
+recursive reasoning. arXiv preprint arXiv:2604.21999 .
+Saunshi, N., Dikkala, N., Li, Z., Kumar, S. and Reddi, S. J. (2025). Reasoning with latent
+thoughts: On the power of looped transformers. In The Thirteenth International Conference on
+Learning Representations (ICLR).
+URL https://openreview.net/forum?id=din0lGfZFd
+Xu, K. and Sato, I. (2026). A formal comparison between chain of thought and latent thought.
+arXiv preprint arXiv:2509.25239 .
+URL https://arxiv.org/abs/2509.25239
+Yang, C., Srebro, N., McAllester, D. and Li, Z. (2025). PENCIL: Long thoughts with short
+memory. In Forty-second International Conference on Machine Learning (ICML).
+URL https://openreview.net/forum?id=6wglsDXIei
+Yang, L., Lee, K., Nowak, R. D. and Papailiopoulos, D. (2024). Looped transformers are
+better at learning learning algorithms. In The Twelfth International Conference on Learning
+Representations (ICLR).
+URL https://openreview.net/forum?id=HHbRxoDTxE
+
+13
+
+Zhu, R.-J., Wang, Z., Hua, K., Zhang, T., Li, Z., Que, H., Wei, B., Wen, Z., Yin, F.,
+Xing, H., Li, L., Shi, J., Ma, K., Li, S., Kergan, T., Smith, A., Qu, X., Hui, M., Wu,
+B., Min, Q., Huang, H., Zhou, X., Ye, W., Liu, J., Yang, J., Shi, Y., Lin, C., Zhao,
+E., Cai, T., Zhang, G., Huang, W., Bengio, Y. and Eshraghian, J. (2025). Scaling latent
+reasoning via looped language models. arXiv preprint arXiv:2510.25741 .
+
+14
+
+A
+
+Computational conventions
+
+All results use the following standard conventions.
+• The input x ∈ Σn is on a read-only tape addressed by an O(log n)-bit register; only the
+read/write work tape counts toward space.
+• Activations are p-bit fixed-point numbers in Fp = {a 2−p : a ∈ Z, |a| ≤ 22p }, so each uses
+Θ(p) bits, and we work in the log-precision regime p = O(log n) (Merrill and Sabharwal,
+2023).
+• Arithmetic, softmax exponentials, and reciprocals are deterministic p-bit operations computed
+by specified logspace-uniform circuits, so the simulator reproduces the finite-precision block
+exactly with no approximation gap. In full generality the space bounds carry an additive
+poly(p) term, still polylogarithmic under p = O(log n); the sharper O(s d p + log n) one-step
+bound of Lemma 4.1 assumes O(p)-space arithmetic.
+• A block Bθ is a constant-size composition of multi-head attention and MLP sublayers with
+logspace-uniform weights (each weight bit computable from its index in O(log n) space).
+The three reasoners are those of Definitions 3.1 to 3.3. For language recognition, a family
+decides L ⊆ Σ∗ if a fixed threshold on the decoder output equals 1{x∈L} for every input x.
+
+B
+
+Proof of Lemma 4.1
+
+Lemma 4.1 (One compressed-loop update in small space). Under the log-precision, logspaceuniform regime, one update z 7→ Bθ (z ; x) of a CLL[s, d, p, T ] is computable in deterministic workspace O(s d p + log n), given z stored on the work tape and x on a read-only input tape.
+Proof. The update z 7→ Bθ (z ; x) is a constant-depth composition of attention and MLP sublayers;
+it suffices to bound one attention sublayer, since the constantly many sublayers reuse the same
+scratch and add only a constant factor. Fix a query slot j ∈ [s] and a head h ∈ [H] with head
+dimension dh = d/H.
+Query. The query qj,h = WQ,h norm(zj ) ∈ Fpdh is a fixed linear map of the slot vector zj (dp
+bits, on the work tape), computable in O(dp) space.
+Streaming the softmax readout. Let K = [n] ⊔ [s] index the n read-only input keys and the s
+old-slot keys. For u ∈ K let ku , vu be the corresponding finite-precision key and value: for an input
+position they are logspace-computable from xi , the position, and the parameters; for a slot position
+they are read from the stored old-slot buffer (Definition 3.1). The readout is
+outj,h =
+
+X
+u∈K
+
+αu vu ,
+
+exp(ℓu − m)
+,
+u′ ∈K exp(ℓu′ − m)
+
+αu = P
+
+ℓu =
+
+⟨qj,h , ku ⟩
+√
+,
+dh
+
+with m = maxu∈K ℓu . Finite-precision addition is not associative, so we fix a deterministic summation order, by increasing index over K, using the same rounded fixed-point addition as the block;
+the block’s attention sums are defined in this order, so the simulator reproduces them exactly. We
+compute the readout in three read-only passes over K, storing no per-key quantity:
+• Pass 1 computes m = maxu∈K ℓu : for each u read its source (an input token xi via the
+O(log n)-bit address register, or a stored slot), form ku in O(dp) space, compute ℓu from qj,h
+and ku , and update the running maximum.
+15
+
+P
+• Pass 2 computes Z = u∈K exp(ℓu − m) in the fixed order, recomputing each ℓu , in one
+register holding a sum of up to n + s terms in [0, 1]; this fits in O(p + log(n + s)) bits,
+absorbed by O(sdp + log n).
+• Pass 3 accumulates outj,h into a dh -dimensional Fp register (O(dh p) bits): for each u recompute ℓu (not stored), form αu = exp(ℓu − m)/Z, and add αu vu in the same order.
+Each pass uses O(dp + log n) work-space and reuses it across keys; the number of passes affects time
+but not space. Finishing all H heads of slot j and concatenating gives outj ∈ Fpd in O(dp + log n)
+reused scratch.
+Residual, MLP, write-back. The residual add and the width-d MLP are a fixed circuit on the
+O(dp)-bit vector, computable in O(dp) space; the result is written to slot j of a new buffer.
+Synchronous update and aggregate. Because a sublayer may include slot-to-slot attention, each
+output slot must be computed from the old slot values. We therefore keep two s d p-bit buffers,
+z old and z new : every output slot is written into z new while all slot reads draw from z old , and the
+buffers are swapped after the sublayer (matching the z cur /z new regions of Appendix C). This costs
+2sdp = O(sdp) persistent space; the per-slot scratch (O(dp + log n)) is reused across the s slots, so
+the total work-space is O(s d p + log n).
+Precision. Every quantity is computed to precision p, matching the block’s definition, so the
+simulation outputs exactly Bθ (z ; x); there is no accumulated approximation error to control.
+
+C
+
+Proof of Theorem 4.2
+
+Theorem 4.2 (Compressed loops are space-bounded). For any CLL[s, d, p, T ] in the logprecision logspace-uniform regime, CLL[s, d, p, T ] ⊆ DSPACE(O(s d p+log n+log T )). In particular,
+if s d p = polylog(n) and log T = polylog(n), then CLL ⊆ DSPACE(polylogn).
+Proof. The simulator keeps two s d p-bit regions z cur , z new and a counter t of ⌈log T ⌉ bits. It
+writes the seed z0 = initθ (x) into z cur (the initialiser, computable in O(sdp + log n) space). For
+t = 0, . . . , T − 1 it computes z new = Bθ (z cur ; x) by Lemma 4.1 in O(sdp + log n) space, copies
+z new over z cur , and increments t. After T steps it applies the decoder to z cur (O(sdp) space) and
+thresholds. The input tape is re-scanned each iteration and is free. Work-space is reused across
+iterations, so the total is
+O(s d p) + O(s d p + log n) + O(log T ) = O(s d p + log n + log T ).
+Thus the decided language lies in DSPACE(O(sdp + log n + log T )). For s d p = polylog(n) and
+log T = polylog(n), in particular for T = poly(n), this is DSPACE(polylogn). With general p-bit
+arithmetic the bound gains an additive poly(p) term, still polylogarithmic under p = O(log n)
+(Appendix A).
+
+D
+
+Proof of Proposition 4.3
+
+Proposition 4.3 (Sequence-state loops are memory-rich). For SSL[d, p, T ] the persistent
+memory is MSSL = n d p, and SSL[d, p, T ] ⊆ DSPACE(O(n d p+log n+log T )), linear in the sequence
+length for fixed d, p. Moreover, under P ̸⊆ DSPACE(polylogn), the class of sequence-state loop
+families with polynomially many positions is not contained in DSPACE(polylogn).
+
+16
+
+Proof. For SSL[d, p, T ] the persistent state is the full hidden sequence Ht ∈ Fpd×n , of n d p bits.
+Treating the n positions as the slots of Theorem 4.2 gives SSL[d, p, T ] ⊆ DSPACE(O(ndp + log n +
+log T )), Θ(n) for fixed d, p. This O(ndp) bound is memory-rich rather than tight: we do not
+claim every SSL needs linear space, but establish a class-level lower bound by importing two constructions. Giannou et al. (2023) realise an SSL that executes an arbitrary instruction stream
+encoded in the input, and Saunshi et al. (2025) show an SSL emulates a length-m CoT by appending m dummy positions, so that SSL with m = poly(n) positions and T = poly(n) iterations decides every language reached by polynomial-length CoT. By Li et al. (2024), polynomiallength CoT simulates polynomial-size Boolean circuits, and by Merrill and Sabharwal (2024), under
+their transformer-decoder assumptions polynomial-step CoT recognises exactly P; hence the languages reachable by polynomial-length CoT include all of P, in particular the P-complete CVP. If
+SSL ⊆ DSPACE(polylogn) then CVP ∈ DSPACE(polylogn), and since CVP is P-complete under
+logspace reductions this would give P ⊆ DSPACE(polylogn), contradicting the hypothesis. Hence
+SSL ̸⊆ DSPACE(polylogn).
+
+E
+
+Proof of Theorem 4.4
+
+We first bound a compressed loop’s space by its memory budget, which clarifies why iteration count
+alone does not suffice.
+Lemma E.1 (Memory budget upper-bounds reachable space). Write LOOP[M ] for a compressed
+loop with M = s d p bits of persistent state, log-precision, and T iterations. Then LOOP[M ] ⊆
+DSPACE(O(M + log n + log T )); for T = poly(n) the counter costs log T = O(log n) and the bound
+becomes DSPACE(O(M + log n)).
+Proof. This is Theorem 4.2 with M = sdp, the iteration counter staying within the same budget.
+Remark E.2 (Converse intuition). Conversely, a deterministic computation using space w(n) and
+halting within τ steps can be represented by a LOOP[M ] with M = O(w(n)) and T = τ , provided
+the block realises the machine’s transition map. We use this only as intuition for why M , rather
+than T alone, is the governing resource; the separation below uses only the forward inclusion.
+Theorem 4.4 (Compressed-loop/chain-of-thought separation).
+Assume P ̸⊆
+DSPACE(polylogn), and let L be P-complete under logspace reductions. No logspace-uniform
+compressed-loop family with s d p = polylog(n) and log T = polylog(n) decides L; by contrast,
+under standard expressivity results L is decidable by a chain-of-thought family with polynomially
+many generated tokens.
+Proof. For s d p = polylogn and log T = polylogn, LOOP[M ] ⊆ DSPACE(polylogn) by Lemma E.1,
+the iteration counter staying within the same budget. Let L be P-complete under logspace reductions. If such a compressed loop decided L, then L ∈ DSPACE(polylogn). Every language in P
+reduces to L by a logspace-computable reduction f of polynomial output length, and the composition stays in polylogarithmic space, since each queried bit of f (x) is recomputed in O(log n) space
+and polylog(|f (x)|) = polylog(n) as |f (x)| is polynomial in n. Hence P ⊆ DSPACE(polylogn),
+contradicting the assumption. Under standard chain-of-thought expressivity results, polynomiallength CoT decides L: Li et al. (2024) give the simulation of size-T Boolean circuits by T -step
+CoT, and Merrill and Sabharwal (2024) characterise the polynomial-step regime as exactly P under
+their model assumptions. Since L ∈ P, this gives the separation.
+
+17
+
+Remark E.3 (Endpoints and the governing quantity). More generally, by the forward inclusion of
+Lemma E.1 a language with deterministic space lower bound w(n) cannot be decided by LOOP[M ]
+whenever M + log n + log T = o(w(n)); for poly(n) iterations and w(n) ≫ log n this requires
+M = Ω(w(n)), while CoT supplies Θ(ℓ) growing scratch and reaches such tasks at ℓ = poly(n). The
+relative power is therefore governed by M versus w(n). At the memory-rich endpoint M = Θ(ndp)
+(Θ(n) for fixed d, p), LOOP[M ] is the sequence-state loop, the latent-thought regime discussed in
+Section 2; our separation concerns the opposite, memory-constrained endpoint.
+
+F
+
+Experimental details and seed-level results
+
+This appendix reports the seed-level results underlying Figures 1 and 2. The tables are included
+only for reproducibility: every mean and standard deviation in Section 5 is computed over the
+listed seeds, with no failed, low, or outlier run excluded. Labels such as “failed seed”, “high seed”,
+and “low seed” are post-hoc descriptive terms for interpreting optimisation regimes, not filtering
+criteria.
+Experimental setup. Both sweeps train with Adam at learning rate 3 × 10−4 , batch size 64,
+for 12,000 steps, and evaluate exact accuracy on 5120 held-out examples (20 batches of 256).
+Pointer chasing uses functional graphs on n = 16 cells with 4-hop chains, hidden width d = 64, 4
+attention heads, and T = 16 loop iterations; the compressed loop sweeps s ∈ {1, 2, 4, 8, 16} slots
+against k ∈ {1, 2, 4, 8} chains, and an instance is correct only if all k endpoints match. Associative
+recall uses inline multi-query associative recall with vocabulary K = 64, four queries per example,
+width d = 128 and four blocks, and a gated linear-attention block with a short causal depthwise
+convolution, sweeping state dimension m ∈ {4, 8, 16, 32, 64, 128} against N ∈ {8, 16, 24} associations
+and scoring per-query-token accuracy. Seeds 0–9 (pointer chasing) and 0–4 (associative recall) are
+independent random initialisations and data orders.
+
+F.1
+
+Pointer chasing
+
+Table 1 gives every compressed-loop cell, and Table 2 the sequence-state control, each over the ten
+seeds.
+
+18
+
+k
+
+1
+1
+1
+1
+1
+2
+2
+2
+2
+2
+4
+4
+4
+4
+4
+8
+8
+8
+8
+8
+
+s
+
+seed
+
+1
+2
+4
+8
+16
+1 (s < k)
+2
+4
+8
+16
+1 (s < k)
+2 (s < k)
+4
+8
+16
+1 (s < k)
+2 (s < k)
+4 (s < k)
+8
+16
+
+mean std
+
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+0.86
+0.99
+0.94
+0.97
+0.92
+0.11
+1.00
+1.00
+1.00
+1.00
+0.03
+0.06
+1.00
+1.00
+0.45
+0.01
+0.01
+0.01
+0.04
+0.73
+
+0.37
+0.92
+0.94
+0.99
+0.89
+0.12
+1.00
+1.00
+1.00
+0.92
+0.04
+0.05
+1.00
+1.00
+0.53
+0.01
+0.01
+0.02
+0.05
+0.81
+
+0.43
+0.95
+0.98
+0.92
+0.36
+0.16
+1.00
+1.00
+0.99
+1.00
+0.04
+0.06
+1.00
+1.00
+0.89
+0.01
+0.01
+0.02
+0.05
+0.36
+
+0.94
+0.96
+0.95
+0.94
+0.87
+0.13
+1.00
+1.00
+1.00
+1.00
+0.03
+0.05
+1.00
+1.00
+0.50
+0.01
+0.01
+0.02
+0.04
+0.99
+
+0.92
+0.95
+0.98
+0.90
+0.99
+0.11
+1.00
+1.00
+1.00
+1.00
+0.03
+0.05
+1.00
+1.00
+0.50
+0.01
+0.01
+0.01
+0.04
+0.74
+
+0.34
+0.90
+0.99
+0.90
+0.86
+0.12
+1.00
+1.00
+1.00
+0.84
+0.03
+0.03
+1.00
+1.00
+0.51
+0.01
+0.01
+0.01
+0.05
+0.14
+
+0.93
+0.92
+0.91
+0.94
+0.95
+0.13
+1.00
+0.99
+1.00
+0.78
+0.03
+0.05
+1.00
+1.00
+0.52
+0.01
+0.01
+0.02
+0.04
+0.31
+
+0.93
+0.77
+0.86
+0.94
+0.85
+0.12
+0.99
+1.00
+1.00
+0.92
+0.03
+0.05
+1.00
+1.00
+0.52
+0.01
+0.01
+0.02
+0.04
+0.11
+
+0.40
+0.96
+0.97
+0.87
+0.86
+0.15
+1.00
+1.00
+1.00
+1.00
+0.03
+0.05
+0.99
+1.00
+0.52
+0.01
+0.01
+0.01
+0.04
+0.70
+
+0.90
+0.94
+0.93
+0.43
+0.86
+0.14
+1.00
+0.98
+1.00
+0.92
+0.03
+0.05
+0.99
+0.99
+0.44
+0.01
+0.01
+0.02
+0.05
+0.54
+
+0.70
+0.93
+0.94
+0.88
+0.84
+0.13
+1.00
+1.00
+1.00
+0.94
+0.03
+0.05
+1.00
+1.00
+0.54
+0.01
+0.01
+0.01
+0.04
+0.54
+
+0.26
+0.06
+0.04
+0.15
+0.17
+0.02
+0.00
+0.00
+0.00
+0.07
+0.00
+0.01
+0.00
+0.00
+0.12
+0.00
+0.00
+0.00
+0.00
+0.29
+
+Table 1: Seed-level exact-match accuracy for the compressed-loop pointer-chasing sweep (Figure 1).
+Columns 0–9 are the ten seeds; the mean and standard deviation are over all ten, with no seed
+excluded.
+
+k
+
+1
+2
+4
+8
+
+seed
+
+mean std
+
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+1.00
+1.00
+1.00
+1.00
+
+1.00
+1.00
+0.99
+1.00
+
+1.00
+1.00
+1.00
+1.00
+
+0.99
+1.00
+1.00
+1.00
+
+1.00
+1.00
+1.00
+1.00
+
+0.38
+1.00
+1.00
+1.00
+
+1.00
+1.00
+1.00
+1.00
+
+1.00
+1.00
+1.00
+1.00
+
+1.00
+1.00
+1.00
+1.00
+
+1.00
+1.00
+1.00
+1.00
+
+0.94
+1.00
+1.00
+1.00
+
+0.19
+0.00
+0.00
+0.00
+
+Table 2: Seed-level exact-match accuracy for the sequence-state loop control (Figure 1). The single
+k = 1 seed that failed to train is included in the mean and standard deviation.
+
+F.2
+
+Associative recall
+
+Table 3 gives the gated-linear-attention cells, Table 4 the per-seed critical state dimension mcrit ,
+and Table 5 the softmax and vanilla-linear controls, each over the five seeds.
+
+19
+
+N
+
+m
+
+8
+8
+8
+8
+8
+8
+16
+16
+16
+16
+16
+16
+24
+24
+24
+24
+24
+24
+
+4
+8
+16
+32
+64
+128
+4
+8
+16
+32
+64
+128
+4
+8
+16
+32
+64
+128
+
+seed
+0
+
+1
+
+2
+
+3
+
+4
+
+0.81
+0.98
+0.98
+0.99
+1.00
+1.00
+0.47
+0.43
+0.69
+0.96
+0.99
+1.00
+0.13
+0.42
+0.43
+0.84
+0.88
+0.98
+
+0.92
+0.98
+0.96
+1.00
+1.00
+1.00
+0.20
+0.62
+0.92
+0.78
+0.98
+0.99
+0.12
+0.23
+0.59
+0.66
+0.91
+0.94
+
+0.69
+0.77
+0.99
+0.99
+1.00
+1.00
+0.16
+0.51
+0.35
+0.93
+0.98
+0.99
+0.09
+0.16
+0.16
+0.95
+0.96
+0.98
+
+0.86
+0.95
+0.99
+1.00
+1.00
+1.00
+0.12
+0.17
+0.47
+0.84
+0.98
+0.99
+0.09
+0.11
+0.58
+0.72
+0.94
+0.93
+
+0.93
+0.95
+0.99
+1.00
+1.00
+1.00
+0.17
+0.36
+0.92
+0.94
+0.98
+0.99
+0.09
+0.10
+0.16
+0.83
+0.89
+0.99
+
+mean
+
+std
+
+0.84
+0.93
+0.98
+1.00
+1.00
+1.00
+0.23
+0.42
+0.67
+0.89
+0.98
+0.99
+0.10
+0.20
+0.38
+0.80
+0.91
+0.96
+
+0.09
+0.08
+0.01
+0.00
+0.00
+0.00
+0.13
+0.15
+0.23
+0.07
+0.00
+0.00
+0.02
+0.12
+0.19
+0.10
+0.03
+0.03
+
+Table 3: Seed-level query-token accuracy for gated linear attention on associative recall (Figure 2).
+Columns 0–4 are the five seeds; the mean and standard deviation are over all five.
+
+N
+
+8
+16
+24
+
+seed
+0
+
+1
+
+2
+
+3
+
+4
+
+8
+32
+128
+
+4
+16
+64
+
+16
+32
+32
+
+8
+64
+64
+
+4
+16
+128
+
+median
+
+range
+
+8
+32
+64
+
+[4,16]
+[16,64]
+[32,128]
+
+Table 4: Per-seed critical state dimension mcrit , the smallest m whose query-token accuracy is at
+least 0.9 (Figure 2).
+
+model
+
+setting
+
+accuracy
+
+full softmax attention
+full softmax attention
+full softmax attention
+vanilla linear attention
+vanilla linear attention
+vanilla linear attention
+
+N =8
+N = 16
+N = 24
+N = 8, best m = 128
+N = 16, best m = 8
+N = 24, best m = 16
+
+1.00 ± 0.00
+1.00 ± 0.00
+1.00 ± 0.00
+0.98 ± 0.02
+0.11 ± 0.00
+0.09 ± 0.00
+
+Table 5: Control summaries for associative recall, mean ± std over the five seeds. Softmax attention
+is the memory-rich control (independent of m); vanilla linear attention is the compressed-state
+negative control, reported at the best m in the sweep for each N .
+
+20
+
+
