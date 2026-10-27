@@ -15,6 +15,8 @@ Wolfe, 2026-10-24 and 2026-10-26:
   span-level credit assignment.
 - The span loop has to think about the future, not only summarize the past.
 - The bar: K1-K6 clearly above the span controls, about 0.01 or more.
+  - Measured 2026-10-27 (stage 3c): K1-K6 can clear this bar with no CE gain. The 160k split read reached +0.0110 and tied its
+    parameter-matched flat twin. A span-loop arm also needs a paired CE lead over that flat twin (proposed; Wolfe's call).
 
 Why it matters for the cloud run: the budget is 6B to 60B tokens in 3 days on 4x5090 or 2xH100, a 3B model pruned to 1B. A token-rate
 loop cannot reach 6B tokens at 3B. A loop that runs once per span costs a fraction of one. Some CE and some loop contribution are an
@@ -43,14 +45,15 @@ Loop contribution = share x serial benefit.
 - Serial benefit is how much a second, third, sixth pass adds. A job that one pass can finish (pooling, a linear scan, a summary)
   earns no depth however much load it carries.
 
-## Where the line stands (2026-10-27, evening)
+## Where the line stands (2026-10-27, 16:30)
 
 ```
 share:   side channel 0.002-0.011 nats  ->  series 0.12-0.14 nats (zeroing 0.20-0.25)   SOLVED by the series cut
 serial:  K1-K6 +0.0015  ->  +0.003 with a one-span read                                 1/3 of the 0.01 bar
          read width 5 and 2-4 loop cells per span: still +0.003 at 5k (cells fill in pass 1)   width is NOT the limit
          training length: split read 5 at 160k steps (983M tokens): +0.0110 [+0.0104, +0.0116]   OVER THE BAR (2026-10-27)
-         open: does the loop beat a flat span core with the same objective? flat twins, 5k pilot then 160k
+         flat twin at 160k (6 layers, one pass): ties the loop, +0.0006 [-0.0016, +0.0027], 1.38x faster   NO CE GAIN
+         so the +0.0110 is depth dependence, not depth gain: serial benefit is still 0, the job is still the open factor
 compression: one 1024-d state per span as the ONLY path from the past (no pointer) still
              gives K1-K6 +0.0032 and CE 4.32 (0.12 behind a pointer-free model with a 64-token window)   NOT a wall at 5k
 copy:    the pointer head is worth 0.31 (side channel) to 0.405 (series) nats; spans keep meaning, not exact tokens
@@ -166,6 +169,22 @@ Flat twins at 5k (filed failure `parcae-wt-series` e2897f6): CE@6 loop 3.9145, f
 (154 ms, 2.1x the loop at equal linear-layer FLOPs). The flat twin trained at one pass beats the loop scored at one pass by 0.0021 [0.0006,
 0.0037]: two thirds of the loop's 5k K1-K6 is that handicap. The 160k flat twin decides whether the loop's +0.0110 is a CE gain.
 
+Flat twin at 160k (filed failure `parcae-wt-series` cc291fd, `docs/experiments/failures/2026-10-27-parcae-series-split-read-flat-160k.md`):
+the parameter-matched flat core (6 layers, one pass), same data order and init draws, 2 h 33 min at 113.2k tok/s.
+
+```
+paired, 480 rows   depth:    1        2        3        4        6        8
+looped CE                 3.3988   3.3906   3.3885   3.3880   3.3878   3.3879
+flat CE (one pass)        3.3883 at every depth
+flat - loop              -0.0104  -0.0023  -0.0002  +0.0004  +0.0006 [-0.0016, +0.0027]  +0.0005
+val CE@6 gap, mean over 16 readings: -0.0004 (constant LR half), -0.0004 (cooldown half); no trend
+```
+
+Reading: at equal parameters one pass reaches the loop's CE, and it trains 1.38x faster. The loop's whole +0.0110 is a depth-1 handicap:
+the loop learns to need about three passes to reach what one pass of a core trained at one pass already reads. K1-K6 measured depth
+dependence, and the flat twin measures the gain, which is 0 here. Caveat: one seed per arm. The compute-matched flat twin (36 layers,
+about 6.8 h) is written and held for Wolfe's go (`abq/flat36-160k/run.sh`).
+
 ### Context: token-resolution span loops (2026-10-23, not span-only)
 
 Full-width token layers with a span loop beside them (`spanloop_local*`, span cap 8). CE@6 3.703 to 3.718, K1-K6 0.000 to 0.005. These
@@ -186,6 +205,8 @@ line; they bound what a token path at full width buys.
    and is where the later passes' work shows up. The span loop's +0.003 is set by its job, not by its width (2026-10-27).
 7. Training length moves the span loop where width does not: 5k K1-K6 +0.003 grows to +0.011 by 160k steps, fastest in the LR cooldown.
    A 5k reading of a span loop is a floor, not its value (2026-10-27).
+8. K1-K6 is depth dependence, not depth gain. A looped core and a flat core with the same weights and objective tie on CE at 160k while
+   the loop's K1-K6 reads +0.011. Only a flat twin measures what the passes buy, so every span-loop arm needs one (2026-10-27).
 
 ## Variants to probe (planning, 2026-10-26)
 
@@ -200,7 +221,8 @@ serial benefit (the open factor)
 │   └── 4 cells, no pointer (span-only twin)                    capinv_b_series_r1_cells4_nopointer +0.0030, CE -0.005
 ├── A2. training length        RUN 2026-10-27, SUPPORTED: K1-K6 +0.0110 [+0.0104, +0.0116] at 160k (stage 3c)
 ├── A3. flat twins             5k RUN 2026-10-27, not supported: all three span cores tie (flat - loop +0.0008 [-0.0007, +0.0025]; 36-layer flat -0.0015,
-│                              154 ms); the loop's 5k K1-K6 is mostly a depth-1 handicap. 160k param-matched flat twin RUNNING (2.4 h)
+│                              154 ms); the loop's 5k K1-K6 is mostly a depth-1 handicap. 160k param-matched: RUN, not supported, ties
+│                              (+0.0006 [-0.0016, +0.0027], 1.38x faster). 160k compute-matched (36 layers): written, held for Wolfe's go (6.8 h)
 ├── B. variable cell count     Wolfe's idea (2026-10-05): parked; cells fill in one pass, so more cells at inference has nothing to add yet
 ├── C. training signal         one-document 4096 rows (4x spans per row); span cap 8 (more span positions per step)
 ├── D. thinner renderer        decoder 3 -> 1 layer: the span state must hold more of the next span
@@ -216,7 +238,8 @@ speed and decode
 ## Open questions
 
 - Is +0.003 a ceiling of this chassis at 5k, or of the job? Neither: training length moves it to +0.011 (A2). Width (A) does not.
-- Does the loop beat a flat span core with the same objective at equal parameters, and at equal compute (A3)?
+- Does the loop beat a flat span core with the same objective? At equal parameters, no: a tie at 160k (A3). At equal compute: the
+  36-layer twin at 160k, held. What job gives the span loop work that one pass of the same weights cannot do (C, E)?
 - Does the curve keep rising past 160k, and how does it scale at the cloud's tokens per parameter? One seed so far.
 - Does a span-only model need its own copy path, or does the gap shrink with scale?
 - What is the CE gap to the token-rate references (3.70 to 3.72 at full width) at the cloud's tokens per parameter, not at 5k?
