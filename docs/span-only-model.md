@@ -227,6 +227,8 @@ copy (law 4)
 speed and decode
 ├── H. cost per token          layer-equivalents of each arm (`lxtul/flop_tally.py`); series read-one-span is 74 ms vs 116 for capinv
 └── I. cached span decode      series decodes a span from fixed span states: the span stack runs once per span at decode
+    J. DITTO decode phase       RUN 2026-10-27, SUPPORTED (`parcae-wt-series` 5f4fba9): 1000 steps at 0.1x LR on both 160k models, greedy 4-gram
+                                repeat 0.72 -> 0.60, longest copy 82 -> 52 tokens, CE +0.06/+0.07 vs matched controls; still loops, ratio under-converged
 ```
 
 ## Open questions
