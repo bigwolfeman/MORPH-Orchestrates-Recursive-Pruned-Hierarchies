@@ -43,13 +43,14 @@ Loop contribution = share x serial benefit.
 - Serial benefit is how much a second, third, sixth pass adds. A job that one pass can finish (pooling, a linear scan, a summary)
   earns no depth however much load it carries.
 
-## Where the line stands (2026-10-27)
+## Where the line stands (2026-10-27, evening)
 
 ```
 share:   side channel 0.002-0.011 nats  ->  series 0.12-0.14 nats (zeroing 0.20-0.25)   SOLVED by the series cut
 serial:  K1-K6 +0.0015  ->  +0.003 with a one-span read                                 1/3 of the 0.01 bar
-         read width 5 and 2-4 loop cells per span: still +0.003 (cells fill in pass 1)   width is NOT the limit
-         open: does training length move it? split read 5 at 160k steps, running 2026-10-27
+         read width 5 and 2-4 loop cells per span: still +0.003 at 5k (cells fill in pass 1)   width is NOT the limit
+         training length: split read 5 at 160k steps (983M tokens): +0.0110 [+0.0104, +0.0116]   OVER THE BAR (2026-10-27)
+         open: does the loop beat a flat span core with the same objective? flat twins, 5k pilot then 160k
 compression: one 1024-d state per span as the ONLY path from the past (no pointer) still
              gives K1-K6 +0.0032 and CE 4.32 (0.12 behind a pointer-free model with a 64-token window)   NOT a wall at 5k
 copy:    the pointer head is worth 0.31 (side channel) to 0.405 (series) nats; spans keep meaning, not exact tokens
@@ -145,6 +146,22 @@ benefit, at 1.4-1.9x the step time. The split read is free, and its extra rows c
 work reaches the decoder through a wide read of one state. Generation samples (nucleus 0.95): no arm loops; span arms read gen-PPL
 93-107 under the plain token loop vs 59 for plain itself, the same order as the 0.2-nat CE gap. Greedy loops in every pointer arm.
 
+#### Stage 3c. Training length: split read 5 at 160k steps (2026-10-27)
+
+One run, seed 1, 160k steps (983M tokens, 3 h 25 min at 81.8k tok/s, LR flat to 80k then linear cooldown). Filed success `parcae-wt-series`
+2ccf2c1 (`docs/experiments/successes/2026-10-27-parcae-series-split-read-160k.md`). `val/k1_k6` on all 480 rows every 5k steps:
+
+```
+K1-K6  5-20k +0.0026 | 25-50k +0.0043 | 55-80k +0.0052 | cooldown 85-105k +0.0066 | 110-135k +0.0086 | 140-160k +0.0106
+CE@6   4.07 (5k) -> 3.76 (80k) -> 3.3878 (160k)
+final sweep: K1-K6 +0.0110 [+0.0104, +0.0116]; K2-K6 +0.0028; K3-K6 +0.0008; K4-K6 inside 0   (5k: +0.0030 [+0.0027, +0.0032])
+```
+
+Reading: the 5k +0.003 was a training-length reading. The span loop's contribution grows 3.7x and crosses the 0.01 bar with its whole interval,
+and it grows faster while the LR cools (+0.0054 over the cooldown vs +0.0029 over the flat half). The loop uses about 4 of its mean 6 passes.
+Caveats: one seed; K1-K6 compares the loop with itself at depth 1, so whether the passes buy CE over a flat span core trained at its own depth is
+the flat-twin question (variant A3).
+
 ### Context: token-resolution span loops (2026-10-23, not span-only)
 
 Full-width token layers with a span loop beside them (`spanloop_local*`, span cap 8). CE@6 3.703 to 3.718, K1-K6 0.000 to 0.005. These
@@ -163,6 +180,8 @@ line; they bound what a token path at full width buys.
 5. Two-stage interfaces (VAE latent, frozen decoder) lose more than they give at this scale. End-to-end series training works.
 6. Width is not depth. Extra loop positions per span (cells) take share and fill in one pass; a wider read of one loop state is free
    and is where the later passes' work shows up. The span loop's +0.003 is set by its job, not by its width (2026-10-27).
+7. Training length moves the span loop where width does not: 5k K1-K6 +0.003 grows to +0.011 by 160k steps, fastest in the LR cooldown.
+   A 5k reading of a span loop is a floor, not its value (2026-10-27).
 
 ## Variants to probe (planning, 2026-10-26)
 
@@ -175,7 +194,8 @@ serial benefit (the open factor)
 │   ├── 2 loop cells                                            capinv_b_series_r1_cells2          +0.0028, 102 ms
 │   ├── read width 5 from ONE loop state (wider mem_proj)       capinv_b_series_r1_split5          +0.0030, 75 ms, best CE
 │   └── 4 cells, no pointer (span-only twin)                    capinv_b_series_r1_cells4_nopointer +0.0030, CE -0.005
-├── A2. training length        RUNNING: split read 5, 160k steps (983M tokens), val/k1_k6 every 5k (prereg 2026-10-27-...-160k.md)
+├── A2. training length        RUN 2026-10-27, SUPPORTED: K1-K6 +0.0110 [+0.0104, +0.0116] at 160k (stage 3c)
+├── A3. flat twins             BUILT 2026-10-27 (capinv.span_passes / span_core_layers): param-matched (6 layers once) and compute-matched (36 once); 5k pilot, then 160k
 ├── B. variable cell count     Wolfe's idea (2026-10-05): parked; cells fill in one pass, so more cells at inference has nothing to add yet
 ├── C. training signal         one-document 4096 rows (4x spans per row); span cap 8 (more span positions per step)
 ├── D. thinner renderer        decoder 3 -> 1 layer: the span state must hold more of the next span
@@ -190,8 +210,9 @@ speed and decode
 
 ## Open questions
 
-- Is +0.003 a ceiling of this chassis at 5k, or of the job? Width (A) is ruled out. Training length (A2, running) and the signal arms
-  (C, E) are left.
+- Is +0.003 a ceiling of this chassis at 5k, or of the job? Neither: training length moves it to +0.011 (A2). Width (A) does not.
+- Does the loop beat a flat span core with the same objective at equal parameters, and at equal compute (A3)?
+- Does the curve keep rising past 160k, and how does it scale at the cloud's tokens per parameter? One seed so far.
 - Does a span-only model need its own copy path, or does the gap shrink with scale?
 - What is the CE gap to the token-rate references (3.70 to 3.72 at full width) at the cloud's tokens per parameter, not at 5k?
 
