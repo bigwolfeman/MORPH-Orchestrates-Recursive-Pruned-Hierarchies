@@ -162,6 +162,10 @@ and it grows faster while the LR cools (+0.0054 over the cooldown vs +0.0029 ove
 Caveats: one seed; K1-K6 compares the loop with itself at depth 1, so whether the passes buy CE over a flat span core trained at its own depth is
 the flat-twin question (variant A3).
 
+Flat twins at 5k (filed failure `parcae-wt-series` e2897f6): CE@6 loop 3.9145, flat 6 layers once 3.9153 (53 ms), flat 36 layers once 3.9130
+(154 ms, 2.1x the loop at equal linear-layer FLOPs). The flat twin trained at one pass beats the loop scored at one pass by 0.0021 [0.0006,
+0.0037]: two thirds of the loop's 5k K1-K6 is that handicap. The 160k flat twin decides whether the loop's +0.0110 is a CE gain.
+
 ### Context: token-resolution span loops (2026-10-23, not span-only)
 
 Full-width token layers with a span loop beside them (`spanloop_local*`, span cap 8). CE@6 3.703 to 3.718, K1-K6 0.000 to 0.005. These
@@ -195,7 +199,8 @@ serial benefit (the open factor)
 │   ├── read width 5 from ONE loop state (wider mem_proj)       capinv_b_series_r1_split5          +0.0030, 75 ms, best CE
 │   └── 4 cells, no pointer (span-only twin)                    capinv_b_series_r1_cells4_nopointer +0.0030, CE -0.005
 ├── A2. training length        RUN 2026-10-27, SUPPORTED: K1-K6 +0.0110 [+0.0104, +0.0116] at 160k (stage 3c)
-├── A3. flat twins             BUILT 2026-10-27 (capinv.span_passes / span_core_layers): param-matched (6 layers once) and compute-matched (36 once); 5k pilot, then 160k
+├── A3. flat twins             5k RUN 2026-10-27, not supported: all three span cores tie (flat - loop +0.0008 [-0.0007, +0.0025]; 36-layer flat -0.0015,
+│                              154 ms); the loop's 5k K1-K6 is mostly a depth-1 handicap. 160k param-matched flat twin RUNNING (2.4 h)
 ├── B. variable cell count     Wolfe's idea (2026-10-05): parked; cells fill in one pass, so more cells at inference has nothing to add yet
 ├── C. training signal         one-document 4096 rows (4x spans per row); span cap 8 (more span positions per step)
 ├── D. thinner renderer        decoder 3 -> 1 layer: the span state must hold more of the next span
