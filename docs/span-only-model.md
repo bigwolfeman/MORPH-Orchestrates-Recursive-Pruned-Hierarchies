@@ -43,11 +43,13 @@ Loop contribution = share x serial benefit.
 - Serial benefit is how much a second, third, sixth pass adds. A job that one pass can finish (pooling, a linear scan, a summary)
   earns no depth however much load it carries.
 
-## Where the line stands (2026-10-26)
+## Where the line stands (2026-10-27)
 
 ```
-share:   side channel 0.002-0.011 nats  ->  series 0.12-0.14 nats (zeroing 0.20-0.24)   SOLVED by the series cut
+share:   side channel 0.002-0.011 nats  ->  series 0.12-0.14 nats (zeroing 0.20-0.25)   SOLVED by the series cut
 serial:  K1-K6 +0.0015  ->  +0.003 with a one-span read                                 1/3 of the 0.01 bar
+         read width 5 and 2-4 loop cells per span: still +0.003 (cells fill in pass 1)   width is NOT the limit
+         open: does training length move it? split read 5 at 160k steps, running 2026-10-27
 compression: one 1024-d state per span as the ONLY path from the past (no pointer) still
              gives K1-K6 +0.0032 and CE 4.32 (0.12 behind a pointer-free model with a 64-token window)   NOT a wall at 5k
 copy:    the pointer head is worth 0.31 (side channel) to 0.405 (series) nats; spans keep meaning, not exact tokens
@@ -121,6 +123,28 @@ Reading: the series cut solves share. The decoder's multi-span read was a second
 The scan's earlier lead was its narrow read. Every narrow-read arm sits near +0.003. Zeroing at depth 1 reads within 0.005 of depth 6:
 the span stack's value is still present after one pass.
 
+#### Stage 3b. Forecast width: loop cells and a split read (2026-10-27)
+
+Read-one-span plus C loop cells per span (each enters as the span's summary plus a learned offset, loops with the span core, read only by
+the next span), or one loop state read as 5 K/V rows (`read_split`). Filed failure `parcae-wt-series` e97b5b7
+(`docs/experiments/failures/2026-10-26-parcae-series-span-cells-5k.md`). Paired, 480 rows, bootstrap 95 %.
+
+| Arm | CE@6 | K1-K6 | decoder zeroing @6 | cells zeroing @6; its depth part | ms/step |
+|---|---|---|---|---|---|
+| read-one-span, seed 1 / seed 2 | 3.9157 / 3.9176 | +0.0029 / +0.0030 | +0.195 / +0.198 | n/a | 74 |
+| **split read 5 (one state, 5 read rows)** | **3.9145** | **+0.0030** | +0.224 | rows 2-5: +0.167; **+0.0017** | **75** |
+| 2 cells | 3.9178 | +0.0028 | +0.218 | +0.037; -0.0002 | 102 |
+| 4 cells | 3.9184 | +0.0028 | +0.222 | +0.045; +0.0002 | 140 |
+| 4 cells, no pointer | 4.3158 | +0.0030 | +0.250 | +0.047; -0.0002 | 136 |
+
+Paired: read-one-span seed spread dCE@6 +0.0019 [+0.0002, +0.0038], K1-K6 0.0001. 4 cells minus split read 5: dCE@6 +0.0039
+[+0.0023, +0.0054]. 4 cells no pointer minus read-one-span no pointer: dCE@6 -0.0048 [-0.0065, -0.0030].
+
+Reading: cells raise share (the decoder leans on the read harder) and carry 0.04 nats, all of it present after pass 1; no serial
+benefit, at 1.4-1.9x the step time. The split read is free, and its extra rows carry over half of the arm's K1-K6: the later passes'
+work reaches the decoder through a wide read of one state. Generation samples (nucleus 0.95): no arm loops; span arms read gen-PPL
+93-107 under the plain token loop vs 59 for plain itself, the same order as the 0.2-nat CE gap. Greedy loops in every pointer arm.
+
 ### Context: token-resolution span loops (2026-10-23, not span-only)
 
 Full-width token layers with a span loop beside them (`spanloop_local*`, span cap 8). CE@6 3.703 to 3.718, K1-K6 0.000 to 0.005. These
@@ -137,6 +161,8 @@ line; they bound what a token path at full width buys.
 3. One span state is enough to carry the past at 5k. Compression costs 0.12 nats against a 64-token window, not a collapse.
 4. Exact copy does not fit in a pooled span state. A span-only model without a copy path pays 0.3 to 0.4 nats on web text.
 5. Two-stage interfaces (VAE latent, frozen decoder) lose more than they give at this scale. End-to-end series training works.
+6. Width is not depth. Extra loop positions per span (cells) take share and fill in one pass; a wider read of one loop state is free
+   and is where the later passes' work shows up. The span loop's +0.003 is set by its job, not by its width (2026-10-27).
 
 ## Variants to probe (planning, 2026-10-26)
 
@@ -144,12 +170,13 @@ Ordered by what each one tests. Each needs a prereg before any run.
 
 ```
 serial benefit (the open factor)
-├── A. forecast width          BUILT, CPU-tested, not run (prereg 2026-10-26-parcae-series-span-cells-5k.md)
-│   ├── 4 loop cells per span, read only by the next span      capinv_b_series_r1_cells4
-│   ├── 2 loop cells                                            capinv_b_series_r1_cells2
-│   ├── read width 5 from ONE loop state (wider mem_proj)       capinv_b_series_r1_split5
-│   └── 4 cells, no pointer (span-only twin)                    capinv_b_series_r1_cells4_nopointer
-├── B. variable cell count     Wolfe's idea (2026-10-05): Poisson cell count at train, more cells at inference; if A holds
+├── A. forecast width          RUN 2026-10-27, not supported (stage 3b): K1-K6 +0.003 in every arm; split read 5 is the new base
+│   ├── 4 loop cells per span, read only by the next span      capinv_b_series_r1_cells4          +0.0028, 140 ms
+│   ├── 2 loop cells                                            capinv_b_series_r1_cells2          +0.0028, 102 ms
+│   ├── read width 5 from ONE loop state (wider mem_proj)       capinv_b_series_r1_split5          +0.0030, 75 ms, best CE
+│   └── 4 cells, no pointer (span-only twin)                    capinv_b_series_r1_cells4_nopointer +0.0030, CE -0.005
+├── A2. training length        RUNNING: split read 5, 160k steps (983M tokens), val/k1_k6 every 5k (prereg 2026-10-27-...-160k.md)
+├── B. variable cell count     Wolfe's idea (2026-10-05): parked; cells fill in one pass, so more cells at inference has nothing to add yet
 ├── C. training signal         one-document 4096 rows (4x spans per row); span cap 8 (more span positions per step)
 ├── D. thinner renderer        decoder 3 -> 1 layer: the span state must hold more of the next span
 └── E. span-level main loss    a whole-next-span decoder as THE loss of a span-only model (not an aux term)
@@ -163,7 +190,8 @@ speed and decode
 
 ## Open questions
 
-- Is +0.003 a ceiling of this chassis at 5k, or of the job? The cells arms (A) and the signal arms (C) split that.
+- Is +0.003 a ceiling of this chassis at 5k, or of the job? Width (A) is ruled out. Training length (A2, running) and the signal arms
+  (C, E) are left.
 - Does a span-only model need its own copy path, or does the gap shrink with scale?
 - What is the CE gap to the token-rate references (3.70 to 3.72 at full width) at the cloud's tokens per parameter, not at 5k?
 
