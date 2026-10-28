@@ -43,7 +43,7 @@ Loop contribution = share x serial benefit.
 - Serial benefit is how much a second, third, sixth pass adds. A job that one pass can finish (pooling, a linear scan, a summary)
   earns no depth however much load it carries.
 
-## Where the line stands (2026-10-27, 16:30)
+## Where the line stands (2026-10-28, 02:00)
 
 ```
 share:   side channel 0.002-0.011 nats  ->  series 0.12-0.14 nats (zeroing 0.20-0.25)   SOLVED by the series cut
@@ -54,6 +54,7 @@ serial:  K1-K6 +0.0015  ->  +0.003 with a one-span read                         
 compression: one 1024-d state per span as the ONLY path from the past (no pointer) still
              gives K1-K6 +0.0032 and CE 4.32 (0.12 behind a pointer-free model with a 64-token window)   NOT a wall at 5k
 copy:    the pointer head is worth 0.31 (side channel) to 0.405 (series) nats; spans keep meaning, not exact tokens
+latent:  a KL-priced code per span sits on the free-bits floor (1.0-1.6 nats); 0.07-0.10 judge bpb behind the series model (2026-10-28)
 ```
 
 ## Results ledger
@@ -181,6 +182,31 @@ Reading: the two span cores tie on CE, and the flat one trains 1.38x faster. Wol
 at this stage, not a verdict on its depth. One seed per arm. The compute-matched flat twin (36 layers, about 6.8 h) is written and held for
 Wolfe's go (`abq/flat36-160k/run.sh`).
 
+### Stage 4. Span latent: a KL-priced code per span, trained end to end (2026-10-27/28)
+
+The series split read 5 model with each span's pooled feature replaced by a sampled code: posterior from the span's own tokens, prior from the
+loop state of the span before, the decoder reads the span's own code (5 K/V rows), one loss (the negative ELBO, free bits 1 nat per span per
+level). Three hierarchies (one code; one level per loop pass; a slow group code per 4 spans) x the decoder residual (the loop's state) on/off.
+Filed failure `parcae-wt-latent` c001ef6 (`docs/experiments/failures/2026-10-27-parcae-span-latent-grid-5k.md`); design note
+`.agents/notes/proposed/architecture/2026-10-27-span-latent-hierarchy.md`. 5k, seed 1, 480 rows and 480 prompts:
+
+```
+                      IWAE@6   rate (nats/span)       judge bpb, sampled p0.95   MAUVE
+series reference      3.9145*  -                      1.895 [1.873, 1.919]      0.44
+one code, residual    4.027    1.20                   1.971                     0.34
+one code, code only   4.064    1.30                   1.965                     0.34
+per-pass, residual    4.126    1.0-1.2 x 6 levels      1.991                     0.42
+nested, residual      4.032    span 1.27, group 1.39  1.974                     0.36
+* exact CE, not a bound          (REAL text 0.890 bpb; every latent arm trails the reference by 0.07-0.10 bpb, CIs exclude 0)
+```
+
+Reading: every code sits on the free-bits floor. The ELBO prices a code nat 1:1 against the decoder's free token path, and a code-fed loop sees
+each past span through about 1 nat (`val/span_state_cos` 0.53-0.74 against 0.37 for the reference). The residual does not change sampled bpb
+(+0.005 [-0.020, +0.030], main prediction not supported). Per-pass levels each buy about 0.74 nats for their 1-nat price (ELBO K1-K6 -0.07).
+Next, planned 2026-10-28 (`docs/experiments/planned/2026-10-28-parcae-span-code-fsq-feature-5k.md`, Wolfe's codebook idea): a fixed-rate FSQ
+code (64k codes, about 11 nats per span) with an exact per-dimension categorical prior on detached codes, and a loop fed the pooled features
+instead of codes.
+
 ### Context: token-resolution span loops (2026-10-23, not span-only)
 
 Full-width token layers with a span loop beside them (`spanloop_local*`, span cap 8). CE@6 3.703 to 3.718, K1-K6 0.000 to 0.005. These
@@ -201,6 +227,8 @@ line; they bound what a token path at full width buys.
    and is where the later passes' work shows up. The span loop's +0.003 is set by its job, not by its width (2026-10-27).
 7. Training length moves the span loop where width does not: 5k K1-K6 +0.003 grows to +0.011 by 160k steps, fastest in the LR cooldown.
    A 5k reading of a span loop is a floor, not its value (2026-10-27).
+8. A KL-priced span code sits on whatever free-bits floor you give it when the decoder has a token path inside the span. Hierarchy and a
+   decoder residual do not move it (stage 4, 2026-10-28).
 
 ## Variants to probe (planning, 2026-10-26)
 
@@ -229,6 +257,9 @@ speed and decode
 └── I. cached span decode      series decodes a span from fixed span states: the span stack runs once per span at decode
     J. DITTO decode phase       RUN 2026-10-27, SUPPORTED (`parcae-wt-series` 5f4fba9): 1000 steps at 0.1x LR on both 160k models, greedy 4-gram
                                 repeat 0.72 -> 0.60, longest copy 82 -> 52 tokens, CE +0.06/+0.07 vs matched controls; still loops, ratio under-converged
+latent interface (stage 4)
+├── K. KL-priced span code      RUN 2026-10-28, not supported: every code on the free-bits floor, 0.07-0.10 bpb behind the reference
+└── L. fixed-rate FSQ code and feature-fed loop   PLANNED 2026-10-28 (`parcae-wt-fsq`, queued behind K)
 ```
 
 ## Open questions
