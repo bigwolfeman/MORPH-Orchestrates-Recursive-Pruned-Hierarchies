@@ -43,7 +43,7 @@ Loop contribution = share x serial benefit.
 - Serial benefit is how much a second, third, sixth pass adds. A job that one pass can finish (pooling, a linear scan, a summary)
   earns no depth however much load it carries.
 
-## Where the line stands (2026-10-28, 02:00)
+## Where the line stands (2026-10-28, 03:15)
 
 ```
 share:   side channel 0.002-0.011 nats  ->  series 0.12-0.14 nats (zeroing 0.20-0.25)   SOLVED by the series cut
@@ -55,6 +55,7 @@ compression: one 1024-d state per span as the ONLY path from the past (no pointe
              gives K1-K6 +0.0032 and CE 4.32 (0.12 behind a pointer-free model with a 64-token window)   NOT a wall at 5k
 copy:    the pointer head is worth 0.31 (side channel) to 0.405 (series) nats; spans keep meaning, not exact tokens
 latent:  a KL-priced code per span sits on the free-bits floor (1.0-1.6 nats); 0.07-0.10 judge bpb behind the series model (2026-10-28)
+         a fixed-rate FSQ code is unpredictable (prior learns 0.6 of 11 nats/span): worse; feature-fed loop + residual: 0.025 bpb behind
 ```
 
 ## Results ledger
@@ -203,9 +204,23 @@ nested, residual      4.032    span 1.27, group 1.39  1.974                     
 Reading: every code sits on the free-bits floor. The ELBO prices a code nat 1:1 against the decoder's free token path, and a code-fed loop sees
 each past span through about 1 nat (`val/span_state_cos` 0.53-0.74 against 0.37 for the reference). The residual does not change sampled bpb
 (+0.005 [-0.020, +0.030], main prediction not supported). Per-pass levels each buy about 0.74 nats for their 1-nat price (ELBO K1-K6 -0.07).
-Next, planned 2026-10-28 (`docs/experiments/planned/2026-10-28-parcae-span-code-fsq-feature-5k.md`, Wolfe's codebook idea): a fixed-rate FSQ
-code (64k codes, about 11 nats per span) with an exact per-dimension categorical prior on detached codes, and a loop fed the pooled features
-instead of codes.
+Stage 4b, the code interface (filed failure `parcae-wt-latent` ee82f74, `docs/experiments/failures/2026-10-28-parcae-span-code-fsq-feature-5k.md`;
+Wolfe's codebook idea): a fixed-rate FSQ code (64k codes, at most 11.07 nats per span, exact per-dimension categorical prior on detached codes),
+and a loop fed the pooled span features instead of codes.
+
+```
+                          bound@6          code cost/span   judge bpb, sampled   prompt_dep
+series reference          3.9145 exact     -                1.895                0.055
+feature-fed, residual     3.946 IWAE       1.01 (KL)        1.920 (+0.025 [0.001, 0.049] vs reference)   0.055
+Gaussian code-fed, res.   4.027 IWAE       1.20 (KL)        1.971                0.040
+FSQ, code only            4.293 exact      10.33 (code CE)  2.049 (+0.083 vs the Gaussian code only, main not supported)
+```
+
+Reading: the FSQ code is used hard by the mouth (code-off +0.87-0.95 nats per token) but the prior learns only 0.5-0.7 of its 11 nats per
+span, so generation hands the mouth near-random codes. Feeding the loop the features opens the history channel (bound -0.08 with the
+residual), and once the loop holds history the residual is worth -0.106 on the bound and -0.047 bpb. The feature-fed residual arm is the best
+latent model, with the reference's prompt dependence. The missing piece is a code priced by its predictability (FSQ with the code CE into the
+encoder at beta < 1, or Gaussian Quant); not yet planned.
 
 ### Context: token-resolution span loops (2026-10-23, not span-only)
 
@@ -229,6 +244,8 @@ line; they bound what a token path at full width buys.
    A 5k reading of a span loop is a floor, not its value (2026-10-27).
 8. A KL-priced span code sits on whatever free-bits floor you give it when the decoder has a token path inside the span. Hierarchy and a
    decoder residual do not move it (stage 4, 2026-10-28).
+9. A span code trained only for the decoder holds what the context cannot predict. Feed the loop the span's features for history; the code
+   is only worth its predictable part (stage 4b, 2026-10-28).
 
 ## Variants to probe (planning, 2026-10-26)
 
@@ -259,7 +276,8 @@ speed and decode
                                 repeat 0.72 -> 0.60, longest copy 82 -> 52 tokens, CE +0.06/+0.07 vs matched controls; still loops, ratio under-converged
 latent interface (stage 4)
 ├── K. KL-priced span code      RUN 2026-10-28, not supported: every code on the free-bits floor, 0.07-0.10 bpb behind the reference
-└── L. fixed-rate FSQ code and feature-fed loop   PLANNED 2026-10-28 (`parcae-wt-fsq`, queued behind K)
+├── L. fixed-rate FSQ code and feature-fed loop   RUN 2026-10-28, not supported: FSQ +0.083 bpb; feature-fed + residual 0.025 behind the reference
+└── M. predictability-priced code   FSQ with the code CE into the encoder (beta < 1) or Gaussian Quant, on the feature-fed residual base; not planned
 ```
 
 ## Open questions
