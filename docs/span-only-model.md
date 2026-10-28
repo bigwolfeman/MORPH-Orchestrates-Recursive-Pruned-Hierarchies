@@ -43,7 +43,7 @@ Loop contribution = share x serial benefit.
 - Serial benefit is how much a second, third, sixth pass adds. A job that one pass can finish (pooling, a linear scan, a summary)
   earns no depth however much load it carries.
 
-## Where the line stands (2026-10-28, 03:15)
+## Where the line stands (2026-10-28, 13:00)
 
 ```
 share:   side channel 0.002-0.011 nats  ->  series 0.12-0.14 nats (zeroing 0.20-0.25)   SOLVED by the series cut
@@ -56,6 +56,8 @@ compression: one 1024-d state per span as the ONLY path from the past (no pointe
 copy:    the pointer head is worth 0.31 (side channel) to 0.405 (series) nats; spans keep meaning, not exact tokens
 latent:  a KL-priced code per span sits on the free-bits floor (1.0-1.6 nats); 0.07-0.10 judge bpb behind the series model (2026-10-28)
          a fixed-rate FSQ code is unpredictable (prior learns 0.6 of 11 nats/span): worse; feature-fed loop + residual: 0.025 bpb behind
+cost:    EQUAL GPU TIME (3 h 25 min): plain token Parcae + pointer beats the span model by 0.314 nats CE@6, judge bpb -0.121 (2026-10-28)
+         the span model trains 3.8x the tokens/s, plain needs ~6x fewer tokens for the same CE   THE SPAN LINE LOSES ITS COST CASE
 ```
 
 ## Results ledger
@@ -222,6 +224,23 @@ residual), and once the loop holds history the residual is worth -0.106 on the b
 latent model, with the reference's prompt dependence. The missing piece is a code priced by its predictability (FSQ with the code CE into the
 encoder at beta < 1, or Gaussian Quant); not yet planned.
 
+### Stage 5. Equal wall clock against plain token Parcae (2026-10-28)
+
+The test that decides the cloud case. Plain token Parcae with the same pointer head (`plain_pointer`, Poisson depth mean 6), 42k steps,
+258M tokens, 3 h 24 min, against the split read 5 span model at 160k steps, 983M tokens, 3 h 25 min. Each arm ran its own full schedule.
+Filed failure `parcae-wt-series` e9c506b (`docs/experiments/failures/2026-10-27-parcae-plain-wallclock-3h.md`). 480 paired rows, 480 prompts:
+
+```
+                     CE@6      K1-K6      judge bpb, sampled p0.95   prompt_dep   MAUVE
+plain token Parcae   3.0739    +0.1436    1.605 [1.575, 1.635]       0.109        0.749
+series span model    3.3878    +0.0110    1.726 [1.703, 1.749]       0.080        0.698
+span - plain         +0.3139 [+0.3092, +0.3187]   bpb +0.121 [+0.092, +0.152]
+```
+
+Reading: plain passes the span model's final CE near step 26.2k (161M tokens, at most 0.62 of the time; the crossing sits inside plain's
+cooldown). The span model's 3.8x token throughput does not cover its ~6x worse token efficiency. Plain's loop earns 13x the depth because it
+runs on every token. The span model saves the computation that earns (law 10).
+
 ### Context: token-resolution span loops (2026-10-23, not span-only)
 
 Full-width token layers with a span loop beside them (`spanloop_local*`, span cap 8). CE@6 3.703 to 3.718, K1-K6 0.000 to 0.005. These
@@ -246,6 +265,9 @@ line; they bound what a token path at full width buys.
    decoder residual do not move it (stage 4, 2026-10-28).
 9. A span code trained only for the decoder holds what the context cannot predict. Feed the loop the span's features for history; the code
    is only worth its predictable part (stage 4b, 2026-10-28).
+10. Token throughput is not CE per second. A span model that loops once per span trains 3.8x the tokens per second and still loses 0.31
+    nats to token Parcae at equal GPU time, because the per-token loop is where depth earns (K1-K6 +0.14 against +0.011). Law 1 at the
+    level of cost: skipping the loop on tokens skips its value (stage 5, 2026-10-28).
 
 ## Variants to probe (planning, 2026-10-26)
 
@@ -288,6 +310,9 @@ latent interface (stage 4)
 - Does the curve keep rising past 160k, and how does it scale at the cloud's tokens per parameter? One seed so far.
 - Does a span-only model need its own copy path, or does the gap shrink with scale?
 - What is the CE gap to the token-rate references (3.70 to 3.72 at full width) at the cloud's tokens per parameter, not at 5k?
+  Answered at equal GPU time for one scale (stage 5): 0.31 nats against plain token Parcae. An equal-token 1B plain run would only widen it.
+- Does the span line keep a place in the cloud plan, and in what role (a decode-time planner over a token model, not a token-model
+  replacement)? Wolfe's call.
 
 ## Sources
 
