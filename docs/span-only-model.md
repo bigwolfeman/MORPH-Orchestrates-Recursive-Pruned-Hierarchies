@@ -43,7 +43,7 @@ Loop contribution = share x serial benefit.
 - Serial benefit is how much a second, third, sixth pass adds. A job that one pass can finish (pooling, a linear scan, a summary)
   earns no depth however much load it carries.
 
-## Where the line stands (2026-10-28, 13:00)
+## Where the line stands (2026-10-28, 19:45)
 
 ```
 share:   side channel 0.002-0.011 nats  ->  series 0.12-0.14 nats (zeroing 0.20-0.25)   SOLVED by the series cut
@@ -58,6 +58,8 @@ latent:  a KL-priced code per span sits on the free-bits floor (1.0-1.6 nats); 0
          a fixed-rate FSQ code is unpredictable (prior learns 0.6 of 11 nats/span): worse; feature-fed loop + residual: 0.025 bpb behind
 cost:    EQUAL GPU TIME (3 h 25 min): plain token Parcae + pointer beats the span model by 0.314 nats CE@6, judge bpb -0.121 (2026-10-28)
          the span model trains 3.8x the tokens/s, plain needs ~6x fewer tokens for the same CE   THE SPAN LINE LOSES ITS COST CASE
+meaning: graded on the next 1-4 spans (frozen encoder, free-running), plain is ahead at every horizon: best-of-8 +0.029 [+0.020, +0.039]
+         span model at 81-89 % of plain on the donor-to-truth scale; deficit flat from 1 to 4 spans   THE CE GAP IS CONTENT (2026-10-28)
 ```
 
 ## Results ledger
@@ -241,6 +243,25 @@ Reading: plain passes the span model's final CE near step 26.2k (161M tokens, at
 cooldown). The span model's 3.8x token throughput does not cover its ~6x worse token efficiency. Plain's loop earns 13x the depth because it
 runs on every token. The span model saves the computation that earns (law 10).
 
+### Stage 6. Span grade: meaning of the next spans instead of next-token CE (2026-10-28)
+
+Wolfe's question: graded on whole spans, how close to ground truth are the two stage 5 models? Teacher-forced span likelihood is summed
+token CE (chain rule), so the grade is free-running: each model writes the next 4 spans from 480 contexts cut on a span edge (greedy + 8
+nucleus samples), and Qwen3-Embedding-0.6B scores the meaning against the true spans. `sem_norm` puts another row's true spans (donor) at 0
+and the truth at 1. A ranking pool (true span vs 4 other-row spans, vs 3 later spans of the same row) checks order. Filed success
+`parcae-wt-spangrade` 8e371fb (`docs/experiments/successes/2026-10-28-parcae-span-grade.md`, tool `lxtul/span_grade.py`):
+
+```
+                     sem best-of-8 h1   sem_norm greedy h1 / h4   topic rank   order rank   true-span mean lp
+plain token Parcae   0.473              0.231 / 0.266             0.727        0.554        -3.013
+series span model    0.443              0.197 / 0.223             0.658        0.521        -3.317
+plain - span         +0.029 [+0.020, +0.039]   +0.034 / +0.043    +0.069       +0.033 [+0.000, +0.067]
+```
+
+Reading: the span grade restates CE's ordering. The span model knows less about what comes next, not only how to say it, and planning once
+per span buys no long-horizon edge (deficit h4 minus h1: +0.000 [-0.013, +0.013] best-of-8). Both models score under the echo baseline
+(repeat the context's last spans) at h = 4, so the encoder grades topic and content, not fluency (law 11).
+
 ### Context: token-resolution span loops (2026-10-23, not span-only)
 
 Full-width token layers with a span loop beside them (`spanloop_local*`, span cap 8). CE@6 3.703 to 3.718, K1-K6 0.000 to 0.005. These
@@ -268,6 +289,9 @@ line; they bound what a token path at full width buys.
 10. Token throughput is not CE per second. A span model that loops once per span trains 3.8x the tokens per second and still loses 0.31
     nats to token Parcae at equal GPU time, because the per-token loop is where depth earns (K1-K6 +0.14 against +0.011). Law 1 at the
     level of cost: skipping the loop on tokens skips its value (stage 5, 2026-10-28).
+11. The span model's CE gap is a content gap. Graded free-running on the meaning of the next 1-4 spans, it trails plain token Parcae at
+    every horizon by a flat margin (81-89 % of plain on the donor-to-truth scale). Span grading gives the span line no hidden credit
+    (stage 6, 2026-10-28).
 
 ## Variants to probe (planning, 2026-10-26)
 
@@ -311,6 +335,7 @@ latent interface (stage 4)
 - Does a span-only model need its own copy path, or does the gap shrink with scale?
 - What is the CE gap to the token-rate references (3.70 to 3.72 at full width) at the cloud's tokens per parameter, not at 5k?
   Answered at equal GPU time for one scale (stage 5): 0.31 nats against plain token Parcae. An equal-token 1B plain run would only widen it.
+- Does CE overstate the span model's deficit because it charges phrasing? No: a free-running meaning grade agrees with CE (stage 6).
 - Does the span line keep a place in the cloud plan, and in what role (a decode-time planner over a token model, not a token-model
   replacement)? Wolfe's call.
 
