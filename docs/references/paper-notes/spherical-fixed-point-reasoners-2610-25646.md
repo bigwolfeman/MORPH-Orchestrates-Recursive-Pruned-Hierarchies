@@ -46,3 +46,8 @@ Score 2. A mechanism and a sweep on injection strength and damping in a looped b
 Test ideas (control and predicted behavior):
 1. Anchor-angle instrument on the plain Parcae loop. Control: the same 480 paired rows at depths 1 to 8. Read the per-token angle between the pass state and the prelude output. Prediction: tokens with the largest angle change between depth 1 and depth 6 are the tokens where K1-K6 is largest; if the angle is flat and K1-K6 is not, the instrument is blind on text.
 2. Learned vs fixed injection strength on the slot-core DiagonalInjection (log_A already learned and has not left init). Control: the current learned-A run. Arm: A fixed at a stronger value. Prediction from Figure 4a: a stronger injection collapses the map toward one attractor and K1-K6 falls; a weaker one raises K1-K6 only if the blocks respond. Report with "floor + blocks' part" as in the READ-BEFORE-TUNING note.
+
+## 7. Update 2026-11-17 (halting questions)
+
+- 2026-11-17: Halting is an inference-only rule. The paper says so in its closing text ("which we have so far used only at inference"). Training is fixed K-step segments with a detach between them (Sec 3.2), so adaptive depth saves no TRAINING compute here. Training the solvers is future work (Table 5 text).
+- 2026-11-17: Check of our lessons-doc citation. "Halts at 33 passes on Sudoku" is the MEAN over the 452 of 512 puzzles that halted (60 did not halt); FPRM 89 over 422. The paper says accuracy is still rising after the mean halt, so the threshold fires early. Do not quote 33 as the depth the task needs.

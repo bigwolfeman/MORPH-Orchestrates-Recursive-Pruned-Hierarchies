@@ -33,3 +33,7 @@
 ## 5. Where our findings disagree
 
 - 2026-10-20: Paper: the late-training loss lead appears only after 13B tokens. Our rule (5k K1-K6 is the go/no-go, "K1-K6 grows with tokens") would reject a design whose benefit starts that late. Do not read a flat 5k K1-K6 as a verdict on this method.
+
+## 6. Check of the 13B claim (2026-11-17, mechanisms reader)
+
+- 2026-11-17: confirmed against local paper.txt. Sec 5.3 (line 563): "DiscoLoop surpasses the vanilla loop after training on roughly 13B tokens and maintains this advantage through the end of training." Appendix B (line 907, 949): early in training the vanilla loop has the lowest loss. Setting: 440M, 24 layers, loop 4, 20B tokens. The claim is about training LOSS of DiscoLoop vs the vanilla loop, not about looped vs non-looped.

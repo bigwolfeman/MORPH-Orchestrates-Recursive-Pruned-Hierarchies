@@ -55,3 +55,26 @@ Append only. One line per dated entry. Format:
 2026-10-20 | compress-recursive-reasoner-2606-26488 | Why we reference it, What the paper shows, Our speculation, Where our findings disagree | Read main text: naive INT4 drops TRM-MLP Sudoku 74.6 to 6.4, attention variant 73.1 to 68.3, calibrated INT4 74.5; H=1 nsup=8 gives 35.25 vs 36.00 at 6x fewer FLOPs; fidelity AUC 1.00 on 50 configs; appendices not read
 2026-10-20 | spherical-fixed-point-reasoners-2610-25646 | Why we reference it, What the paper shows, Our speculation, Where our findings disagree | Read main text, Table 6 and limits: unit-sphere FPRM reaches Sudoku 96.6, Maze 87.9, Mini-ARC 59.1 (ARC-1 tie), halts at 33 vs 89 passes on Sudoku, lambda >= 0.7 gives a unique fixed point that stops solving; one seed per row, puzzles only, no LM; proofs not read
 2026-10-28 | batched-gepa-reflective-loop-2610-36774 | Why we reference it, What the paper shows, Our speculation, Where our findings disagree | New note, read in full: prompt optimizer GEPA with P x N parallel proposals, LiveBench-Math 68.9 to 72.1 and HoVer 49.0 to 60.0 test, 3-4x wall-clock cut; no LM architecture content, one run per cell
+2026-11-17 | truncated-bptt-scaling-2610-26030 | all sections | New note (reader + orchestrator spot check of Table 10/11, App A, D.2): looped block worth g(T,B) params (1.91 at 2 loops, 2.50 at 4, 2.80 at 8, ceiling ~3.04); loop-count switch points 14-17, 312-413, 7,000-9,600 tokens per parameter; full BPTT favoured at equal compute; Sec 6.2 heading "Free model size: the law favors no looping" (body not read)
+2026-11-17 | lpt-shared-memory-2610-02383 | all sections | New note: later passes reading pass-1 KV beat loop-all by 0.38-1.09 ppl; detaching the read collapses it (33.21 vs 14.91); inference memory only, no training cost
+2026-11-17 | elr-elastic-latent-recurrence-2610-12582 | all sections | New note: one-loop tax 0.0225 above flat; rank override fixes depth 1 and trades full-depth gain; delayed switch 1.16x
+2026-11-17 | loom-looped-moe-2610-01153 | all sections | New note: stabiliser recipe for 12-loop MoE; gain plateaus at 4-5 loops; no token crossover reported
+2026-11-17 | benice-kv-sharing-2610-31633 | all sections | New note: KV sharing across Parcae loops near free after a post-train fix; inference memory only
+2026-11-17 | loopcd-paper-2610-02185 | all sections | New note beside the 2026-10-02 looping-depth note: decode-only contrast, no training change
+2026-11-17 | growing-to-looping-2602-16490 | all sections | New note: depth growing ~80 % compute; loop gains on reasoning primitives, not NLL; no timing data
+2026-11-17 | depth-growth-looping-icl-2610-31421 | all sections | New note: growing saves 22-26 % FLOPs; looped/grown ICL appears earlier on Omniglot; loop NLL above dense at 3B
+2026-11-17 | depth-grown-curse-of-depth-2512-08819 | all sections | New note: MIDAS 1.29x / LIDAS -23 % training cost at equal NLL, flat models only
+2026-11-17 | lesswrong-looping-no-cot | all sections | New note: loops 1 to 8 lift a no-CoT reasoning index, bpb flat after 2 loops; weak controls
+2026-11-17 | latent-cot-limits-2602-01148 | all sections | New note: latent error grows with step count under Lipschitz + Gaussian noise; argmax reset only for explicit CoT
+2026-11-17 | discoloop-looping-discrete-and-continuous-2607-00341 | appended sec 6 | 13B-token crossover against the vanilla loop confirmed in Sec 5.3 (440M, loop 4, 20B tokens)
+2026-11-17 | lift-latent-feedback-2609-38149 | all sections | New note: the fed-back state is a frozen teacher's next-token distribution fused into the next input embedding; no-teacher arm ties; +9.6 % training cost
+2026-11-17 | cram-energy-2611-17309 | all sections | New note: puzzle-only pairwise energy by pseudolikelihood; no LM or multi-hop result; Maze-Hard needs an added hidden field
+2026-11-17 | flow-reasoning-models-2606-29150 | all sections | New note: Fixed-Point Forcing trains the carry on detached rollouts; puzzles only
+2026-11-17 | lift-loop-flow-transformers-2610-05538 | all sections | New note: looped DiT trained at 2 loops runs 16; each pass has a flow-time coordinate; images only
+2026-11-17 | spherical-fixed-point-reasoners-2610-25646 | appended sec 7 | Halting is inference-only; "33 passes" is the mean over 452 of 512 halted puzzles, not a needed depth
+2026-11-17 | scoreclr-contrastive-dsm-2611-18469 | all sections | New note: image-only; anti-collapse at linear batch cost; target is a deterministic view pull
+2026-11-17 | binarydiff-candidate-set-2610-28543 | all sections | New note: candidate-set diffusion wins logic tasks, no winner on LM (MAUVE only), token level
+2026-11-17 | sbd-spherical-brownian-diffusion-2610-35101 | all sections | New note: token diffusion, no sentence latent
+2026-11-17 | gtf-deer-parallel-in-time-rnn-2605-12683 | all sections | New note: does not transfer to a depth-6 loop
+2026-11-17 | outer-nesterov-stability-2610-22623 | all sections | New note: off topic, abstract only
+2026-11-17 | ncm-next-concept-modeling-2610-14162, repr-paper-2610-20533, hybridagent-paper-2610-18861 | appended sec 6 | None gives a coarse state a multi-pass job

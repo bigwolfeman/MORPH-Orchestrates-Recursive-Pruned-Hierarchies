@@ -33,3 +33,7 @@ Read on 2026-10-14. Section and table numbers not recorded.
 ## 5. Where our findings disagree
 
 - None recorded yet.
+
+## 6. 2026-11-17 addendum (TUL loop contribution question)
+
+- Does HybridAgents give a coarse state a multi-pass job? Its latent steps are a time axis (one full forward per step), not tied depth. The second self-conditioned pass (+8.7 AIME25 at 14B, from the existing note) is a two-pass refine on the model's own latents, with a text target to check against. The job exists because chain-of-thought tokens are the target. Our OWT span state has no such target, so no multi-pass job transfers.
