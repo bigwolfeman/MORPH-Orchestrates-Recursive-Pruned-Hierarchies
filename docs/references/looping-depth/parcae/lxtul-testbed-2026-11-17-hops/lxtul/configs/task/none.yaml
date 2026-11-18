@@ -1,0 +1,2 @@
+# No hop task: every batch is the ordinary OWT batch (the default).
+kind: none

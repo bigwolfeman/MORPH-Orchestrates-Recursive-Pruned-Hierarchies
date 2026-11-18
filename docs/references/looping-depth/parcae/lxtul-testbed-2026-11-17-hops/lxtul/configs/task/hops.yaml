@@ -1,0 +1,48 @@
+# @package _global_
+# Hop task (lxtul/hops/): hop-demanding documents replace part of every batch; accuracy is read at the marked
+# answer positions by the number of hops the answer needs and by eval loop depth. The loss stays plain
+# next-token CE on every token. Select with `task=hops`.
+#   max_slots         slot capacity of the SLOT arms for this task: model `max_slots`, block_size = 1024 + cells * 256
+#                     (1280 at one cell), and the layout hop rows are packed with. A 4-token statement is one span, so
+#                     a 1024-token row holds up to 256 spans. The MORPH config stays stock (tul.max_slots 64): OWT rows
+#                     are packed exactly as without the task, and the slot arms get them WIDENED to this layout (same
+#                     tokens, slots and labels, extra tail pads). Flat arms: untouched.
+#   row_share         fraction of the rows of each batch (batch 6: a seeded draw per row; B * share a whole
+#                     number: exact, seeded positions). Hop row r of source s depends on (seed, s, r) only.
+#   eval              fixed rows from eval_seed (never the training seed). Chain: `rows_per_bucket` rows per hop count.
+#                     Graph: `graph.rows` rows of MIXED documents (accuracy is bucketed per answer, not per document).
+#                     Row counts must make a multiple of eval.batch_size. The first `val_rows_per_bucket` rows of each
+#                     bucket (graph: `val_rows`) are scored at every training val, all rows at the end at every depth.
+task:
+  kind: hops
+  seed: 20261117
+  eval_seed: 777
+  max_slots: 256
+  sources:
+    chain:
+      row_share: 0.25
+      k_range: [2, 5]            # chains per document
+      len_caps: [1, 2, 4, 8, 16] # per document a size cap drawn from this list, then each chain length ~ U(1, cap)
+      ask: nodes_all_but_one     # K - 1 chains asked, each once, at a random node (hop label = lookups from the value)
+      n_names: 1024
+      n_values: 256
+    graph:
+      row_share: 0.25
+      n_choices: [4, 6, 8, 12, 16, 24, 32, 40]   # nodes: drawn uniformly per document
+      questions_max: 12          # per document clip(n // 3, 2, questions_max) questions
+      task_weights: {reachability: 0.5, shortest_path: 0.3, edge_existence: 0.2}
+      reach_dist: [1, 12]
+      sp_dist: [1, 9]            # the answer is ONE digit token: at most 9
+      names: 128
+  eval:
+    rows_per_bucket: 12
+    val_rows_per_bucket: 6
+    depths: [1, 2, 3, 4, 6, 8, 12, 16]
+    chain: {k: 4, hops: [1, 2, 3, 4, 6, 8, 12, 16, 24, 32]}
+    graph:                       # ONE row set of mixed documents; buckets are per answer, never per document
+      n: 40                      # nodes; a path of max(reach_dists) = 24 edges is planted in tree 1 (25 to 38 nodes) beside tree 2
+      per_doc: {reach: 6, sp: 4, edge: 4}    # questions per document, random order; reach and edge: a fair Yes / No coin per question
+      rows: 120
+      val_rows: 24
+      reach_dists: [1, 2, 3, 4, 6, 8, 12, 16, 24]
+      sp_dists: [1, 2, 3, 4, 5, 6, 7, 8, 9]
