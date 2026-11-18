@@ -327,3 +327,66 @@ untested here.
 - Span decoder on the LXTUL fast base: +0.07 nats; on the ungraded fan: -0.022. The bases disagree on sign.
 - The paid loop listed as a standing positive (9-26 ledger) vs rejected as "not TUL".
 - Span loop K1-K6 +0.011 at 160k as a contribution (span-only doc law 7) vs mostly a depth-1 handicap (flat-twin filings).
+
+---
+
+## 2026-11-17 additions
+
+These came after the hand-off date. The same reading rule applies: performance verdicts are inconclusive, and mechanisms and measured
+readings are what this section keeps.
+
+### A. Proposed law: the slot is blind to the next span's query **[speculation]**
+
+Status: proposed, from an external review (Carbon, 2026-11-17, `references/external-reviews/2026-11-17-carbon-loop-amortization-ideas.md`).
+Not tested as a law here.
+
+Statement. A slot finishes all its loop passes at the end of its span, before any token of the next span exists. So the slot can only
+hold a summary of the past that does not depend on what the next span asks. A token in the next span has already seen the words before
+its prediction, so a loop on tokens can condition each pass on that query. A summary that does not depend on a query is gathered in
+one attention pass, and later passes have little left to do.
+
+Consistent with:
+
+- The series span stack has its value at pass 1: zeroing the read costs +0.195 nats while K1-K6 is +0.0029 (`span-only-model.md`,
+  the "series, decoder reads 1 span state" rows).
+- The reader has capacity and the writer puts nothing into the directions it reads (section 3: the gradient-fitted z readings, which
+  used the answer and are hindsight, and the entry and exit states read alike).
+- The same six core blocks read K1-K6 +0.0102 on span-restricted tokens and +0.0005 on slot states
+  (`../lab/experiments/failures/2026-09-13-arc-loop-reads-tokens.md`).
+
+What would test it: a slot arm whose later passes can see the next span's tokens, or a task where the query is known before the slot
+runs, against its depth-1 twin.
+
+### B. Measured: a lookup circuit did not form from random weights at batch 6 **[robust within one model, one seed per run]**
+
+Parcae testbed, hop-task work of 2026-11-17 (branch `lxtul/hops`; plan file with two dated Method amendments in the snapshot
+`references/looping-depth/parcae/lxtul-testbed-2026-11-17-hops/`; the later commits efd66d4 and 4e126af are local to the testbed).
+The flat 8-layer model with a pointer head, batch 6 x 1024 tokens, chance on 1-hop chains 0.25:
+
+| Start | Training stream | Steps | 1-hop chain accuracy |
+|---|---|---|---|
+| random | web text 0.5, chains 0.25, graphs 0.25 | 20,000 | 0.237 |
+| random | hop rows only | 5,000 | about 0.26 |
+| random | hop rows only, dense and size-mixed documents (58 % of chain answers at 1 hop) | 5,000 | 0.235 |
+| random | 1-hop chains only | 3,000 | 0.250 |
+| random | 1-hop chains only, loss on the answer tokens only | 3,000 | 0.289 (the "never repeat an answer" shortcut; its chance is 0.29) |
+| web-text weights (the 20,000-step mixed run above) | 1-hop chains only | 3,000 | 1.000 from step 750 |
+| web-text weights (5,000 steps of web text) | mixed stream, dense documents | 20,000 | 1.000 at 1 hop, 1.000 at 2 hops, 0.465 at 4 hops |
+
+A CPU audit of the training rows, the label shift and the pointer mask found no data defect. The web-text share, sparse easy cases
+and noise from unpredictable tokens were each removed in turn and none was the cause.
+
+Lesson. At this batch and budget, a lookup circuit needs weights that already model text. A hop task trained from random weights can
+read chance for a reason that has nothing to do with the arm under test. Start hop-task arms from web-text weights, and gate on the
+flat arm before any graded run. The H-Net graph-search run met the same wall and passed it with small instances and dense targets at
+512 rows per step; here those two changes alone did not pass it.
+
+### C. Three corrections an external review raised to our record
+
+| Correction | Do our own files agree? |
+|---|---|
+| LXTUL's K1-K6 on Parcae came from a worse depth 1, not a better depth 6 | Agrees. Minimal fan reads K1-K6 0.0000; minimal fan + epivol reads +0.0462 with a worse depth-1 CE (`references/looping-depth/parcae/lxtul-testbed-2026-10-16/filings/2026-10-14-parcae-epivol-vs-stabilisers-5k.md`) |
+| Most of a plain loop's K1-K6 is scale building from the entry; a skip around the loop removes it while CE improves. Only the lead over a depth-1 twin is value | Agrees. The token-level skip loop reads K1-K6 +0.0008 at CE@6 3.7112 (`references/looping-depth/parcae/lxtul-testbed-2026-10-16/filings/2026-10-15-parcae-chunk-loop-5k.md`) |
+| "Token-loop depth gain is private" (section 2) is over-read, because the probe froze neighbours in a model never trained to read shallow neighbour states | Open. Our probe is eval-only. LPT trains later passes to read pass-1 keys and values and reports a gain (arXiv 2610.02383, `references/paper-notes/lpt-shared-memory-2610-02383.md`). No run of ours tests the trained case |
+
+The ideas that follow from these points, and their test status, are in [`loop-amortization-ideas-tracker.md`](loop-amortization-ideas-tracker.md).
