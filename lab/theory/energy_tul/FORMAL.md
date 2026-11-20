@@ -237,13 +237,25 @@ Also open: why both token loops answer graph questions worse than their depth-1 
 hops per pass, and why the narrow loop falls from 24 to 16 solved hops between depth 12 and 16, which is against a
 clean done set.
 
-## 5. Open questions for Wolfe
+## 5. Questions for Wolfe, with his answers of 2026-11-20
 
 1. Does a compute price in the training loss break "only the main loss buys depth"? It sets no depth target.
+   **Answer: allowed.** Without a price nothing tells the model to stop.
 2. Is a detached head that predicts future main-loss drop allowed as the halter?
+   **Answer: allowed.** A detached head cannot shape the map. Measured caution (signal-picked depth probe,
+   2026-11-19): on web text an oracle pick of a quarter of the sentences gets 57 % of the gain for 41 % of the
+   extra passes, so the most a halter can win there is about 1.4 times a random pick.
 3. Finished-state reads make training serial along thoughts. Is the plan synchronous sweeps in training and
    finished reads at inference, or serial training?
+   **Answer: synchronous sweeps in training, finished reads at inference.** First test of the cheap end of this:
+   the shallow token loop plan of 2026-11-20 (`parcae-wt-hops`, `2026-11-20-parcae-shallow-loop-finished-reads.md`).
 4. Does your interpretability evidence for Zeno steps hold per token, and with the injection decay removed?
+   **Open.** Measured half (Zeno per token, 2026-11-19): web tokens close about 64 % of the remaining loss per
+   pass; chain answers jump in one late pass. The decay-removed half is not tested.
 5. Must an old thought change after new tokens arrive? If not, requirement 6 becomes "read finished states".
+   **Answer: either can be built, but a thought that changes after later text has read it would probably break
+   the model (exposure bias: the readers trained on a state that no longer exists).** Working rule: a finished
+   thought is fixed, and requirement 6 is "read finished states".
 6. Which task tests halting? Chains amortise across arrival order (Proposition 2). The work must depend on the
    question.
+   **Open.**
